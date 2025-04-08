@@ -15,12 +15,9 @@ import contextlib
 import logging
 import os
 import warnings
-from contextlib import suppress
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
-
-from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
 from litdata.streaming.config import ChunksConfig, Interval
@@ -51,6 +48,7 @@ class PrepareChunksThread(Thread):
         self,
         config: ChunksConfig,
         item_loader: BaseItemLoader,
+        chunks_order: List[int],
         distributed_env: _DistributedEnv,
         max_cache_size: Optional[int] = None,
         max_pre_download: int = 2,
@@ -59,15 +57,19 @@ class PrepareChunksThread(Thread):
         super().__init__(daemon=True)
         self._config = config
         self._item_loader = item_loader
+        self._chunks_order = chunks_order  # order in which chunks are to be downloaded
+        self.current_downloading_chunk_index = -1
+        self.current_reading_chunk_index = -1
         self._max_pre_download = max_pre_download
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
 
-        self._chunks_index_to_be_deleted: List[int] = []
+        # self._chunks_index_to_be_deleted: List[int] = []
         self._max_cache_size = max_cache_size
         self._parent_cache_dir = os.path.dirname(self._config._cache_dir)
         self._to_download_queue: Queue = Queue()
         self._to_delete_queue: Queue = Queue()
+        self._delete_queue_received_none: bool = False
         self._force_stop_event = Event()
 
         # TODO: Find a real fix to this problem
@@ -78,118 +80,175 @@ class PrepareChunksThread(Thread):
         # Check whether a dataset slice fits on the node
         num_bytes_per_nodes = self._config.num_bytes // self._distributed_env.num_nodes
         self._delete_chunks_when_processed = num_bytes_per_nodes > max_cache_size if max_cache_size else False
+        # print(f"reader: {self._delete_chunks_when_processed=}")
+        # if self._delete_chunks_when_processed:
+        #     print(f"clearing cache dir {self._parent_cache_dir} because the dataset is too large to fit in memory")
+        #     # means we can't keep all chunks in the cache directory, so we should clear it to minimize the size
+        #     # clear the cache directory except the index.json file
+        #     for root, _, files in os.walk(self._parent_cache_dir):
+        #         for file in files:
+        #             if file != _INDEX_FILENAME:
+        #                 with contextlib.suppress(FileNotFoundError):
+        #                     os.remove(os.path.join(root, file))
         self._has_exited = False
 
-    def download(self, chunk_indexes: List[int]) -> None:
-        """Receive the list of the chunk indices to download for the current epoch."""
-        for chunk_index in chunk_indexes:
-            self._to_download_queue.put(chunk_index)
+    # def download(self, chunk_indexes: List[int]) -> None:
+    #     """Receive the list of the chunk indices to download for the current epoch."""
+    #     print(f"thread: got indexes to download -> {chunk_indexes=};")
+    #     for chunk_index in chunk_indexes:
+    #         self._to_download_queue.put(chunk_index)
 
     def delete(self, chunk_indexes: List[int]) -> None:
         """Receive the list of the chunk indices to delete for the current epoch."""
         for chunk_index in chunk_indexes:
             self._to_delete_queue.put(chunk_index)
 
-    def _remaining_locks(self, chunkpath: str) -> int:
-        countpath = chunkpath + ".cnt"
-        if not os.path.exists(countpath):
-            return 0
-        with open(countpath) as count_f:
-            try:
-                return int(count_f.read().strip())
-            except Exception:
-                return 1
+    # def _remaining_locks(self, chunkpath: str) -> int:
+    #     countpath = chunkpath + ".cnt"
+    #     if not os.path.exists(countpath):
+    #         return 0
+    #     with open(countpath) as count_f:
+    #         try:
+    #             return int(count_f.read().strip())
+    #         except Exception:
+    #             return 1
 
-    def _decrement_local_lock(self, chunk_index: int) -> int:
-        """Remove a count from the local lock, return the remaining count."""
-        chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+    # def _decrement_local_lock(self, chunk_index: int) -> int:
+    #     """Remove a count from the local lock, return the remaining count."""
+    #     chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
-        countpath = chunk_filepath + ".cnt"
-        with suppress(Timeout), FileLock(countpath + ".lock", timeout=3):
-            if not os.path.exists(countpath):
-                return 0
-            with open(countpath) as count_f:
-                try:
-                    curr_count = int(count_f.read().strip())
-                except Exception:
-                    curr_count = 1
-            curr_count -= 1
-            if curr_count <= 0:
-                with contextlib.suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath)
+    #     countpath = chunk_filepath + ".cnt"
+    #     with suppress(Timeout), FileLock(countpath + ".lock", timeout=3):
+    #         if not os.path.exists(countpath):
+    #             return 0
+    #         with open(countpath) as count_f:
+    #             try:
+    #                 curr_count = int(count_f.read().strip())
+    #             except Exception:
+    #                 curr_count = 1
+    #         curr_count -= 1
+    #         if curr_count <= 0:
+    #             with contextlib.suppress(FileNotFoundError, PermissionError):
+    #                 os.remove(countpath)
 
-                with contextlib.suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath + ".lock")
-            else:
-                with open(countpath, "w+") as count_f:
-                    count_f.write(str(curr_count))
-            return curr_count
-        return 0
+    #             with contextlib.suppress(FileNotFoundError, PermissionError):
+    #                 os.remove(countpath + ".lock")
+    #         else:
+    #             with open(countpath, "w+") as count_f:
+    #                 count_f.write(str(curr_count))
+    #         return curr_count
+    #     return 0
 
     def _apply_delete(self, chunk_index: int) -> None:
         """Inform the item loader of the chunk to delete."""
         # TODO: Fix the can_delete method
-        can_delete_chunk = self._config.can_delete(chunk_index)
+        # can_delete_chunk = self._config.can_delete(chunk_index)
+        # print(f"apply delete called -> {chunk_index} {can_delete_chunk=}; by {self._rank or 0}")
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
-        remaining_locks = self._remaining_locks(chunk_filepath)
-        if remaining_locks > 0:  # Can't delete this, something has it
-            if _DEBUG:
-                print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
-            return
+        # remaining_locks = self._remaining_locks(chunk_filepath)
+        # if remaining_locks > 0:  # Can't delete this, something has it
+        #     if _DEBUG:
+        #         print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
+        #     return
 
-        if _DEBUG:
-            with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
-                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+        # if _DEBUG:
+        #     with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
+        #         tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
-        self._item_loader.delete(chunk_index, chunk_filepath)
+        self._item_loader.safe_delete(
+            chunk_index, chunk_filepath, delete_original_file=self._delete_chunks_when_processed
+        )
 
-        if _DEBUG:
-            print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+        # if _DEBUG:
+        #     print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
-        for lock_extension in [".lock", ".cnt.lock"]:
-            try:
-                locak_chunk_path = chunk_filepath + lock_extension
-                if os.path.exists(locak_chunk_path):
-                    os.remove(locak_chunk_path)
-            except FileNotFoundError:
-                pass
+        # for lock_extension in [".lock", ".cnt.lock"]:
+        #     try:
+        #         locak_chunk_path = chunk_filepath + lock_extension
+        #         if os.path.exists(locak_chunk_path):
+        #             os.remove(locak_chunk_path)
+        #     except FileNotFoundError:
+        #         pass
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
-        self._to_download_queue.put(_END_TOKEN)
+        # self._to_download_queue.put(_END_TOKEN)
+        if self._delete_chunks_when_processed and not self._delete_queue_received_none:
+            # for chnk_idx in self._chunks_index_to_be_deleted:
+            #     self._apply_delete(chnk_idx)
+            # read from delete queue until None is received and delete the chunks
+            total_waiting_time = 0
+            while not self._delete_queue_received_none:  # parallelly it can be set true by thread's run method
+                try:
+                    chunk_index = self._to_delete_queue.get(timeout=_DEFAULT_TIMEOUT)
+                    if chunk_index is None:
+                        self._delete_queue_received_none = True
+                        break
+                    self._apply_delete(chunk_index)
+                    total_waiting_time = 0
+                except Empty:
+                    total_waiting_time += _DEFAULT_TIMEOUT
+                    if total_waiting_time > _LONG_DEFAULT_TIMEOUT * 2:  # wait for 10 seconds
+                        print("Timeout waiting for delete queue to be empty (None)")
+                        break
+        self.force_stop()
 
     def force_stop(self) -> None:
         self._force_stop_event.set()
 
     def _maybe_delete_chunks(self) -> None:
-        reached_pre_download = self._pre_download_counter == self._max_pre_download
+        # reached_pre_download = self._pre_download_counter == self._max_pre_download
+        # reached_max_pre_download = (
+        #     self.current_downloading_chunk_index < self.current_reading_chunk_index + self._max_pre_download
+        # )
+
+        # should_start_deleting_chunks = self._can_delete_chunk()
+        # if not should_start_deleting_chunks:
+        #     return
 
         # we have already pre-downloaded some chunks, we just need to wait for them to be processed.
-        chunk_index = _get_from_queue(
-            self._to_delete_queue, timeout=_LONG_DEFAULT_TIMEOUT if reached_pre_download else _DEFAULT_TIMEOUT
-        )
+        if self._delete_queue_received_none:
+            return
+        while True:
+            try:
+                chunk_index_to_be_deleted = self._to_delete_queue.get(timeout=_DEFAULT_TIMEOUT)
 
-        if chunk_index is not None:
-            self._pre_download_counter -= 1
+                if chunk_index_to_be_deleted is None:
+                    self._delete_queue_received_none = True
+                    return
+                    # self._pre_download_counter -= 1
 
-            # Store the current chunk index
-            self._chunks_index_to_be_deleted.append(chunk_index)
+                    # Store the current chunk index
+                    # self._chunks_index_to_be_deleted.append(chunk_index)
 
-        # Get the current cache size and decide whether we need to start cleanup. Otherwise, keep track of it
-        while self._max_cache_size and self._chunks_index_to_be_deleted and self._can_delete_chunk():
-            # Delete the oldest chunk
-            self._apply_delete(self._chunks_index_to_be_deleted.pop(0))
+                # Get the current cache size and decide whether we need to start cleanup. Otherwise, keep track of it
+                # Delete the oldest chunk
+                self._apply_delete(chunk_index_to_be_deleted)
+            except Empty:
+                # Timeout waiting for delete queue to be empty
+                break
+            except Exception as e:
+                raise RuntimeError(f"Error while deleting chunks: {e}") from e
 
         return
 
     def _can_delete_chunk(self) -> bool:
         if self._delete_chunks_when_processed:
-            return self._pre_download_counter >= self._max_pre_download - 1
+            # return self._pre_download_counter >= self._max_pre_download - 1
+            # if we have downloaded all chunks, we can delete the oldest one
+            if self.current_downloading_chunk_index == len(self._chunks_order) - 1:
+                return True
+            return self.current_downloading_chunk_index >= (self.current_reading_chunk_index + self._max_pre_download)
+
+        return False  # if complete dataset can be stored in the cache, we don't need to delete any chunk
         return (
             self._max_cache_size is not None
             and _get_folder_size(self._config._cache_dir, self._config) >= self._max_cache_size
         )
+
+    def _can_download_chunk(self) -> bool:
+        return not self._can_delete_chunk()
 
     def _pre_load_chunk(self, chunk_index: int) -> None:
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
@@ -202,7 +261,8 @@ class PrepareChunksThread(Thread):
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
                 print(f"Requested force download for {chunk_filepath} by {self._rank}")
 
-            self._config.download_chunk_from_index(chunk_index, skip_lock=True)
+            # skip counter_file logic and directly download the chunk
+            self._config._downloader.download_chunk_from_index(chunk_index)
 
             # Preload item if possible to gain some time but only
             # if this is one of the pre-downloaded chunk
@@ -220,25 +280,25 @@ class PrepareChunksThread(Thread):
 
             self._force_download()
 
-            if self._pre_download_counter < self._max_pre_download:
-                chunk_index = _get_from_queue(self._to_download_queue)
-                if chunk_index == _END_TOKEN:
-                    self._has_exited = True
-                    return
+            if self._can_download_chunk() and (self.current_downloading_chunk_index < len(self._chunks_order) - 1):
+                self.current_downloading_chunk_index += 1
+                # chunk_index = _get_from_queue(self._to_download_queue)
+                chunk_index = self._chunks_order[self.current_downloading_chunk_index]
+                # if chunk_index == _END_TOKEN:
+                #     self._has_exited = True
+                #     return
 
                 if chunk_index is not None:
                     self._config.download_chunk_from_index(chunk_index)
 
                     # Preload item if possible to gain some time but only
                     # if this is one of the pre-downloaded chunk
-                    if self._pre_download_counter > 0:
-                        self._pre_load_chunk(chunk_index)
+                    # if self._pre_download_counter > 0:
+                    #     self._pre_load_chunk(chunk_index)
 
                     # Avoid downloading too many chunks in advance at the risk of over using the disk space
-                    self._pre_download_counter += 1
-
-            if self._max_cache_size:
-                self._maybe_delete_chunks()
+                    # self._pre_download_counter += 1
+            self._maybe_delete_chunks()
 
 
 # The BinaryReader operates as the inverse of the data optimization process:
@@ -324,6 +384,24 @@ class BinaryReader:
         )
         return self._config
 
+    def prepare_downloader_thread(self, chunks_order: List[int]) -> None:
+        """Prepare the downloader thread and start downloading the first few chunks."""
+        if self._config is None and self._try_load_config() is None:
+            raise Exception("The reader index isn't defined.")
+
+        # Create and start the prepare chunks thread
+        if self._prepare_thread is None:
+            self._prepare_thread = PrepareChunksThread(
+                config=self._config,
+                item_loader=self._item_loader,
+                chunks_order=chunks_order,
+                distributed_env=self._distributed_env,
+                max_cache_size=self._max_cache_size,
+                max_pre_download=self._max_pre_download,
+                rank=self.rank,
+            )
+            self._prepare_thread.start()
+
     @property
     def config(self) -> ChunksConfig:
         if self._config is None:
@@ -349,37 +427,42 @@ class BinaryReader:
         if not isinstance(index, ChunkedIndex):
             raise ValueError("The Reader.read(...) method expects a chunked Index.")
 
-        # Load the config containing the index
-        if self._config is None and self._try_load_config() is None:
-            raise Exception("The reader index isn't defined.")
+        if self._config is None or self._prepare_thread is None:
+            raise Exception(
+                "Reader's downloading thread is not started. Please call `reader.prepare_downloader_thread()` first."
+            )
 
-        if self._config and (self._config._remote_dir or self._config._compressor):
+        # Load the config containing the index
+        # if self._config is None and self._try_load_config() is None:
+        #     raise Exception("The reader index isn't defined.")
+
+        if self._config and (self._config._remote_dir or self._config._compressor):  # noqa: SIM102
             # Create and start the prepare chunks thread
-            if self._prepare_thread is None and self._config:
-                self._prepare_thread = PrepareChunksThread(
-                    self._config,
-                    self._item_loader,
-                    self._distributed_env,
-                    self._max_cache_size,
-                    self._max_pre_download,
-                    self._rank,
-                )
-                # Attach the force download queue
-                self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
-                self._prepare_thread.start()
-                if index.chunk_indexes:
-                    self._prepare_thread.download(index.chunk_indexes)
-                    self._chunks_queued_for_download = True
+            # if self._prepare_thread is None and self._config:
+            #     self._prepare_thread = PrepareChunksThread(
+            #         self._config,
+            #         self._item_loader,
+            #         self._distributed_env,
+            #         self._max_cache_size,
+            #         self._max_pre_download,
+            #         self._rank,
+            #     )
+            #     # Attach the force download queue
+            #     self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
+            #     self._prepare_thread.start()
+            #     if index.chunk_indexes:
+            #         self._prepare_thread.download(index.chunk_indexes)
+            #         self._chunks_queued_for_download = True
 
             # Only request individual chunk download if:
             # 1. We haven't already queued all chunks for the download
             # 2. We're processing a new chunk (different from the last one)
-            if not self._chunks_queued_for_download and index.chunk_index != self._last_chunk_index:
-                assert self._prepare_thread
-                self._prepare_thread.download([index.chunk_index])
+            # if not self._chunks_queued_for_download and index.chunk_index != self._last_chunk_index:
+            #     assert self._prepare_thread
+            #     self._prepare_thread.download([index.chunk_index])
 
-            if self._last_chunk_index is None:
-                self._last_chunk_index = index.chunk_index
+            if self._last_chunk_index is None or index.chunk_index != self._last_chunk_index:
+                self._prepare_thread.current_reading_chunk_index += 1
 
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
@@ -395,32 +478,29 @@ class BinaryReader:
 
         # We need to request deletion after the latest element has been loaded.
         # Otherwise, this could trigger segmentation fault error depending on the item loader used.
-        if (
-            self._config
-            and (self._config._remote_dir or self._config._compressor)
-            and index.chunk_index != self._last_chunk_index
-        ):
-            assert self._prepare_thread
-            assert self._last_chunk_index is not None
-
-            # inform the chunk has been completely consumed
-            self._prepare_thread._decrement_local_lock(self._last_chunk_index)
-            self._prepare_thread.delete([self._last_chunk_index])
-
-        if index.chunk_index != self._last_chunk_index:
+        if self._last_chunk_index is None or index.chunk_index != self._last_chunk_index:
             # Close the memory-mapped file for the last chunk index
             if isinstance(self._item_loader, (TokensLoader, ParquetLoader)) and self._last_chunk_index is not None:
                 self._item_loader.close(self._last_chunk_index)
+
+            if self._config and (self._config._remote_dir or self._config._compressor):
+                assert self._prepare_thread
+                if self._last_chunk_index is not None:
+                    # inform the chunk has been completely consumed
+                    # self._prepare_thread._decrement_local_lock(self._last_chunk_index)
+                    self._prepare_thread.delete([self._last_chunk_index])
 
             # track the new chunk index as the latest one
             self._last_chunk_index = index.chunk_index
 
         if index.is_last_index and self._prepare_thread:
             # inform the thread it is time to stop
-            self._prepare_thread._decrement_local_lock(index.chunk_index)
-            self._prepare_thread.stop()
-            self._prepare_thread = None
+            # self._prepare_thread._decrement_local_lock(index.chunk_index)
             self._item_loader.close(self._last_chunk_index)
+            self._prepare_thread.delete([index.chunk_index, None])  # send this chunk for deletion
+            self._prepare_thread.stop()
+            self._prepare_thread.join()
+            self._prepare_thread = None
             self._last_chunk_index = None
             self._chunks_queued_for_download = False
 
@@ -495,7 +575,6 @@ def _get_folder_size(path: str, config: ChunksConfig) -> int:
                     f"Ignoring '{filename}': "
                     "This file doesn't appear to be a valid chunk file and has been excluded from the size calculation."
                 )
-
     return size
 
 

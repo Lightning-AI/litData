@@ -4,6 +4,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -61,6 +62,8 @@ def subsample_streaming_dataset(
         else:
             downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
+
+    time.sleep(0.5)  # Give some time for the file to be created
 
     if not os.path.exists(input_dir.path):
         raise FileNotFoundError(f"The provided dataset path `{input_dir.path}` does not exist.")

@@ -134,7 +134,7 @@ class CacheCollateFn:
 
 
 class _SingleProcessDataLoaderIterPatch(_SingleProcessDataLoaderIter):
-    """This is ç to inform the cache is done chunking."""
+    """This is to inform the cache is done chunking."""
 
     def _next_data(self) -> Any:
         try:
@@ -252,6 +252,7 @@ class _MultiProcessingDataLoaderIterPatch(_MultiProcessingDataLoaderIter):
             raise e
 
 
+#! TODO: This class is not being used anywhere.
 class CacheDataLoader(DataLoader):
     __doc__ = DataLoader.__doc__
 

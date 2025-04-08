@@ -80,7 +80,12 @@ class _DistributedEnv:
         return cls(world_size=num_workers * num_nodes, global_rank=int(global_rank), num_nodes=num_nodes)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(world_size: {self.world_size}, global_rank: {self.global_rank}\n)"
+        return (
+            f"{self.__class__.__name__}("
+            f"world_size={self.world_size}, "
+            f"global_rank={self.global_rank}, "
+            f"num_nodes={self.num_nodes})"
+        )
 
     def __str__(self) -> str:
         return repr(self)

@@ -22,7 +22,8 @@ logger = logging.Logger(__name__)
 
 @dataclass
 class ChunkedIndex:
-    """Represents an index within a chunked dataset.
+    """The docstring below is incorrect for `chunk_indexes`.
+    Represents an index within a chunked dataset.
 
     Attributes:
         index (int): The global index of the data point across all chunks.
@@ -48,6 +49,7 @@ class ChunkedIndex:
     is_last_index: bool = False
 
 
+#! TODO: This class is not being used. (Used in CacheDataLoader, but CacheDataLoader itself not being used)
 class CacheBatchSampler:
     def __init__(
         self,

@@ -35,6 +35,7 @@ from litdata.constants import (
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import PyTree, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
+from litdata.utilities.file_utils import decrement_file_count
 
 Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx", "chunk_end"])
 
@@ -109,6 +110,15 @@ class BaseItemLoader(ABC):
     @abstractmethod
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         """Delete a chunk from the local filesystem."""
+
+    def safe_delete(self, chunk_index: int, chunk_filepath: str, delete_original_file: bool = False) -> None:
+        """Decrement the file count and delete the chunk file if the count reaches 0."""
+        if os.path.exists(chunk_filepath + ".cnt"):
+            curr_count = decrement_file_count(chunk_filepath)
+            if curr_count == 0 and delete_original_file:
+                self.delete(chunk_index, chunk_filepath)
+        else:
+            self.delete(chunk_index, chunk_filepath)
 
     @abstractmethod
     def encode_data(self, data: List[bytes], sizes: List[int], flattened: List[Any]) -> Any:
@@ -250,7 +260,8 @@ class PyTreeLoader(BaseItemLoader):
         pair = fp.read(8)
         begin, end = np.frombuffer(pair, np.uint32)
 
-        fp.seek(begin)  # move the file pointer to the offset_start where the item starts
+        # move the file pointer to the offset_start where the item starts
+        fp.seek(begin)
         return fp.read(end - begin)  # read the item
 
     def mds_deserialize(self, raw_item_data: bytes, chunk_index: int) -> "PyTree":
@@ -675,7 +686,7 @@ class ParquetLoader(BaseItemLoader):
 
         # Return the specific row from the dataframe
         # Note: The `named=True` argument is used to return the row as a dictionary
-        return row_group_df.row(row_index_within_group, named=True)  # type: ignore
+        return row_group_df.row(row_index_within_group, named=True)
 
     def _get_item(self, chunk_index: int, chunk_filepath: str, index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk by loading the entire chunk into memory.

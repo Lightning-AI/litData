@@ -15,7 +15,7 @@ import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from litdata.constants import _INDEX_FILENAME
+from litdata.constants import _INDEX_FILENAME, _SUPPORTED_DOWNLOADERS
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -23,6 +23,7 @@ from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import tree_unflatten, treespec_loads
 from litdata.utilities.dataset_utilities import load_index_file
+from litdata.utilities.file_utils import increment_file_count
 
 
 class ChunksConfig:
@@ -117,7 +118,7 @@ class ChunksConfig:
     def skip_chunk_indexes_deletion(self, skip_chunk_indexes_deletion: List[int]) -> None:
         self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
-    def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
+    def download_chunk_from_index(self, chunk_index: int) -> None:
         assert self._chunks is not None
         chunk_filename = self._chunks[chunk_index]["filename"]
 
@@ -125,22 +126,27 @@ class ChunksConfig:
 
         if os.path.exists(local_chunkpath):
             self.try_decompress(local_chunkpath)
-            if self._downloader is not None and not skip_lock:
+            if self._downloader is not None and self._remote_dir.startswith(_SUPPORTED_DOWNLOADERS):
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
-                self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""))
-                pass
+                count = increment_file_count(local_chunkpath.replace(f".{self._compressor_name}", ""))
+                if count == 1:
+                    # weird, shouldn't happen
+                    # but if it does, we should start downloading the file
+                    self._downloader.download_chunk_from_index(chunk_index)
+                    self.try_decompress(local_chunkpath)
             return
 
-        if self._downloader is None:
+        if (self._downloader is None) or (not self._remote_dir.startswith(_SUPPORTED_DOWNLOADERS)):
             return
 
-        if not skip_lock:
-            self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""))
+        curr_count = increment_file_count(local_chunkpath.replace(f".{self._compressor_name}", ""))
 
-        self._downloader.download_chunk_from_index(chunk_index)
-
-        self.try_decompress(local_chunkpath)
+        if curr_count == 1:
+            # this is the first time we are downloading this file
+            # so we should actually download it
+            self._downloader.download_chunk_from_index(chunk_index)
+            self.try_decompress(local_chunkpath)
 
     def try_decompress(self, local_chunkpath: str) -> None:
         if self._compressor is None:
