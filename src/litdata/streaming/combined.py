@@ -13,7 +13,7 @@
 
 import random
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence
 
 from torch.utils.data import IterableDataset
 
@@ -86,6 +86,7 @@ class CombinedStreamingDataset(IterableDataset):
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
+        self.batching_method = "stratified"
 
     def get_len(self, num_workers: int, batch_size: int) -> Optional[int]:
         self.num_workers = num_workers
@@ -127,6 +128,14 @@ class CombinedStreamingDataset(IterableDataset):
         for dataset in self._datasets:
             dataset.set_batch_size(batch_size)
 
+    def set_batching_method(self, batching_method: Literal["stratified", "per_stream"]) -> None:
+        """Set the current batching method to the datasets.
+        When batching_method is "stratified" (default), batches consist of samples from all datasets.
+        When batching_method is "per_stream" batches consist of samples from one dataset,
+        which is selected at random.
+        """
+        self.batching_method = batching_method
+
     def set_num_workers(self, num_workers: int) -> None:
         """Set the current number of workers to the datasets."""
         for dataset in self._datasets:
@@ -166,6 +175,7 @@ class CombinedStreamingDataset(IterableDataset):
             self._weights,
             self._use_streaming_dataloader,
             num_samples_yielded,
+            self.batching_method,
             self._iterate_over_all,
         )
         return self._iterator
@@ -213,6 +223,7 @@ class _CombinedDatasetIterator(Iterator):
         weights: Sequence[Optional[float]],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
+        batching_method: Literal["stratified", "per_stream"],
         iterate_over_all: bool = False,
     ) -> None:
         self._datasets = datasets
@@ -223,6 +234,8 @@ class _CombinedDatasetIterator(Iterator):
         self._weights = deepcopy(weights)
         self._rng = random.Random(seed)  # noqa: S311
         self._iterate_over_all = iterate_over_all
+        self._batching_method = batching_method
+        self._cur_dataset_index = -1
         self._is_done = False
 
         if num_samples_yielded is not None:
@@ -244,6 +257,7 @@ class _CombinedDatasetIterator(Iterator):
                         dataset_index = self._get_dataset_index()
                     elif len(indexes_left) == 1:
                         dataset_index = indexes_left[0]
+                        self._cur_dataset_index = dataset_index
                     return self._get_sample(dataset_index)
                 except StopIteration as e:
                     if len(indexes_left) == 1:
@@ -260,11 +274,23 @@ class _CombinedDatasetIterator(Iterator):
         return self._get_sample(self._get_dataset_index())
 
     def _get_dataset_index(self) -> int:
+        if self._batching_method == "stratified":
+            # randomly select a dataset index
+            self._set_new_dataset_index()
+        elif self._batching_method == "per_stream":
+            # randomly select a dataset index, if no previous dataset index exists
+            if self._cur_dataset_index == -1:
+                self._set_new_dataset_index()
+        else:
+            raise ValueError(f"Invalid batching method: {self._batching_method}")
+        return self._cur_dataset_index
+
+    def _set_new_dataset_index(self):
         # randomly select a dataset index
         indexes = [index for index in self._dataset_indexes if index is not None]
         weights = [w for w in self._weights if w is not None]
         (dataset_index,) = self._rng.choices(indexes, weights=weights, k=1)
-        return dataset_index
+        self._cur_dataset_index = dataset_index
 
     def _get_sample(self, dataset_index: int) -> Any:
         # get the sample
