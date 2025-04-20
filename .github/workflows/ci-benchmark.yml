@@ -1,0 +1,60 @@
+name: Benchmark Bot
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  reply-to-hello:
+    if: |
+      github.event.comment.body == '@benchmark' &&
+      github.event.issue.pull_request &&
+      (
+        github.event.comment.user.login == 'tchaton' ||
+        github.event.comment.user.login == 'lantiga' ||
+        github.event.comment.user.login == 'justusschock' ||
+        github.event.comment.user.login == 'Borda' ||
+        github.event.comment.user.login == 'bhimrazy' ||
+        github.event.comment.user.login == 'deependujha'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reply to PR comment and save ID
+        id: comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = context.payload.comment.user.login;
+            const prNumber = context.payload.issue.number;
+            const reply = `hii @${username}\n![tom_eagerly_waiting_for_result](https://github.com/user-attachments/assets/6a0ea78d-8a97-415a-88dd-de4e9524eb73)`;
+            const response = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: reply
+            });
+            // Save comment ID to use later
+            core.setOutput("comment_id", response.data.id);
+
+      - name: Wait for 60 seconds
+        run: sleep 60
+
+      - name: Update the same comment
+        uses: actions/github-script@v7
+        env:
+          COMMENT_ID: ${{ steps.comment.outputs.comment_id }}
+        with:
+          script: |
+            const comment_id = Number(process.env.COMMENT_ID);
+            const updated_body = `🧠 processing done!\n\n> You can now check the result above.`;
+
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment_id,
+              body: updated_body
+            });
