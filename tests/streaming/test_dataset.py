@@ -986,7 +986,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("shuffle", [True, False])
 def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     """Tests resuming from a chunk past the first chunk, when subsequent chunks don't have the same size."""
@@ -1029,6 +1029,17 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     #         val = np.frombuffer(head_bytes, dtype=np.int32)[0]
     #         print(f"{file_name}: {val}")
     assert 6 <= len(os.listdir(data_dir)) <= 9  # +1 for index.json file
+
+    # check if the dataloader contains the complete dataset
+    os.mkdir(s3_cache_dir)
+    train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
+
+    fetched_dataset = []
+    for i, batch in enumerate(train_dataloader):
+        fetched_dataset.extend(batch)
+    assert len(fetched_dataset) == 80
+
+    shutil.rmtree(s3_cache_dir)
 
     os.mkdir(s3_cache_dir)
     train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
