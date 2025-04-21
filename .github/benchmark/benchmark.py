@@ -1,4 +1,4 @@
-"""This script is used to benchmark LitData when invoked from a GitHub PR's comment."""
+"""This script runs LitData benchmarks in Lightning Studio for a given PR number."""
 
 import argparse
 from dataclasses import dataclass
