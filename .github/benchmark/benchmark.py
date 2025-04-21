@@ -1,4 +1,4 @@
-"""This script is used to benchmark LitData in CI."""
+"""This script is used to benchmark LitData when invoked from a GitHub PR's comment."""
 
 import argparse
 from dataclasses import dataclass
