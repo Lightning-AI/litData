@@ -23,34 +23,55 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Reply to PR comment and save ID
         id: comment
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
+            const path = '.github/benchmark/greet.md';
+            const replyTemplate = fs.readFileSync(path, 'utf8');
             const username = context.payload.comment.user.login;
             const prNumber = context.payload.issue.number;
-            const reply = `hii @${username}\n![tom_eagerly_waiting_for_result](https://github.com/user-attachments/assets/6a0ea78d-8a97-415a-88dd-de4e9524eb73)`;
+
+            // Replace placeholders
+            const reply = replyTemplate
+              .replace(/{{username}}/g, username)
+              .replace(/{{pr_number}}/g, prNumber);
+
             const response = await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
               body: reply
             });
-            // Save comment ID to use later
-            core.setOutput("comment_id", response.data.id);
 
-      - name: Wait for 60 seconds
-        run: sleep 60
+            core.setOutput("comment_id", response.data.id);
+            core.setOutput("prNumber", prNumber);
+            core.setOutput("username", username);
+
+      - name: run python
+        run: |
+          pip install -U lightning-sdk
+          python .github/benchmark/benchmark.py --pr ${{ steps.comment.outputs.prNumber }}
+        env: # the following values are parsed from the repository secrets
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
 
       - name: Update the same comment
         uses: actions/github-script@v7
         env:
           COMMENT_ID: ${{ steps.comment.outputs.comment_id }}
+          USERNAME: ${{ steps.comment.outputs.username }}
         with:
           script: |
+            const fs = require('fs');
+            const path = 'result.md';
+            const reply = fs.readFileSync(path, 'utf8');
+
             const comment_id = Number(process.env.COMMENT_ID);
-            const updated_body = `🧠 processing done!\n\n> You can now check the result above.`;
+            const updated_body = `Hi @${process.env.USERNAME}!\n\n- Benchmarking output:\n\n${reply}\n\n\ncc: @tchaton @deependujha @bhimrazy`;
 
             await github.rest.issues.updateComment({
               owner: context.repo.owner,
