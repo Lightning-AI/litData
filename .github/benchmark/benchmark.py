@@ -134,6 +134,7 @@ def main():
     print(f"Running LitData benchmark for PR #{config}")
     benchmark = LitDataBenchmark(config)
     benchmark.run()
+    benchmark.studio.stop()
     print(f"✅ Benchmark completed for PR #{config.pr_number}")
 
 
