@@ -7,7 +7,7 @@ from typing import Optional
 from lightning_sdk import Machine, Studio
 
 # Constants
-DEFAULT_TEAMSPACE = "open-source"
+DEFAULT_TEAMSPACE = "litdata"
 DEFAULT_USER = "deependu"
 DEFAULT_ORG = "lightning-ai"
 DEFAULT_MACHINE = "A10G"
