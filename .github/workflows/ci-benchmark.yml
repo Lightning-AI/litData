@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  reply-to-hello:
+  reply-to-benchmark:
     if: |
       github.event.comment.body == '@benchmark' &&
       github.event.issue.pull_request &&
