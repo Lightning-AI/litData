@@ -9,7 +9,7 @@ from lightning_sdk import Machine, Studio
 # Constants
 DEFAULT_TEAMSPACE = "open-source"
 DEFAULT_USER = "deependu"
-DEFAULT_ORG = None
+DEFAULT_ORG = "lightning-ai"
 DEFAULT_MACHINE = "A10G"
 
 
