@@ -18,7 +18,7 @@ class BenchmarkArgs:
     """Arguments for the LitData benchmark."""
 
     pr_number: int
-    pr_name: str
+    branch: str
     org: Optional[str]
     user: Optional[str]
     teamspace: str
@@ -49,7 +49,7 @@ def parse_args() -> BenchmarkArgs:
 
     return BenchmarkArgs(
         pr_number=args.pr,
-        pr_name=args.branch,
+        branch=args.branch,
         user=args.user,
         org=args.org,
         teamspace=args.teamspace,
@@ -69,7 +69,7 @@ class LitDataBenchmark:
             raise ValueError("Only one of user or org must be provided.")
 
         self.pr = config.pr_number
-        self.pr_name = config.pr_name
+        self.branch = config.branch
         self.teamspace = config.teamspace
         self.user = config.user
         self.org = config.org
@@ -109,8 +109,8 @@ class LitDataBenchmark:
         commands = [
             "git clone https://github.com/Lightning-AI/litData.git",
             "cd litData",
-            f"git fetch origin pull/{self.pr}/head:{self.pr_name}",
-            f"git checkout {self.pr_name}",
+            f"git fetch origin pull/{self.pr}/head:{self.branch}",
+            f"git checkout {self.branch}",
             "make setup",
         ]
         final_command = " && ".join(commands)
