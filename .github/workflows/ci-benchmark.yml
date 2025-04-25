@@ -11,7 +11,7 @@ permissions:
 jobs:
   reply-to-benchmark:
     if: |
-      github.event.comment.body == '@benchmark' &&
+      startsWith(github.event.comment.body, '@benchmark') &&
       github.event.issue.pull_request &&
       (
         github.event.comment.user.login == 'tchaton' ||
@@ -24,6 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Extract make args
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fullComment = context.payload.comment.body;
+            const parts = fullComment.trim().split(/\s+/);
+            const makeargs = parts.slice(1).join(' '); // remove "@benchmark" and keep rest
+            core.setOutput("make_args", makeargs);
+
       - name: Reply to PR comment and save ID
         id: comment
         uses: actions/github-script@v7
@@ -63,10 +73,12 @@ jobs:
         run: |
           pip install -U lightning-sdk
           echo '"pr number: ${{ steps.comment.outputs.prNumber }}"; "branch: ${{ steps.comment.outputs.branch }}"'
+          echo "make-args: ${{steps.extract.outputs.make_args}}"
           python .github/benchmark/benchmark.py \
             --pr "${{ steps.comment.outputs.prNumber }}" \
             --branch "${{ steps.comment.outputs.branch }}" \
-            2> benchmark_error.txt || true
+            --make-args "${{ steps.extract.outputs.make_args }}" \
+            2> error.txt || true
         env: # the following values are parsed from the repository secrets
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
@@ -82,8 +94,8 @@ jobs:
             const comment_id = Number(process.env.COMMENT_ID);
 
             let reply = '';
-            if (fs.existsSync('benchmark_error.txt') && fs.readFileSync('benchmark_error.txt', 'utf8').trim().length > 0) {
-              const err = fs.readFileSync('benchmark_error.txt', 'utf8');
+            if (fs.existsSync('error.txt') && fs.readFileSync('error.txt', 'utf8').trim().length > 0) {
+              const err = fs.readFileSync('error.txt', 'utf8');
               reply = `❌ **Benchmark failed**\n\n\`\`\`\n${err}\n\`\`\``;
             } else {
               reply = fs.existsSync('result.md')
@@ -91,7 +103,7 @@ jobs:
                 : '❌ Benchmark completed, but can\'t find `result.md` file. Something went wrong.';
             }
 
-            const updated_body = `Hi @${process.env.USERNAME}!\n\n${reply}\n\ncc: @tchaton @deependujha @bhimrazy`;
+            const updated_body = `Hi @${process.env.USERNAME}!\n\n${reply}\n\ncc:  @deependujha`;
 
             await github.rest.issues.updateComment({
               owner: context.repo.owner,

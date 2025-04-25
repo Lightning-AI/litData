@@ -23,6 +23,7 @@ class BenchmarkArgs:
     user: Optional[str]
     teamspace: str
     machine: Machine
+    make_args: str
 
 
 def parse_args() -> BenchmarkArgs:
@@ -36,6 +37,7 @@ def parse_args() -> BenchmarkArgs:
     parser.add_argument(
         "--machine", type=str, default=DEFAULT_MACHINE, choices=["A10G", "T4", "CPU"], help="Machine type"
     )
+    parser.add_argument("--make-args", type=str, default="", help="Makefile variables passed to the script")
 
     args = parser.parse_args()
 
@@ -52,6 +54,7 @@ def parse_args() -> BenchmarkArgs:
         org=args.org,
         teamspace=args.teamspace,
         machine=machine_map[args.machine],
+        make_args=args.make_args,
     )
 
 
@@ -118,7 +121,7 @@ class LitDataBenchmark:
         commands = [
             "git clone https://github.com/bhimrazy/litdata-benchmark.git",
             "cd litdata-benchmark",
-            "make benchmark",
+            f"make benchmark {self.make_args}",
         ]
         final_command = " && ".join(commands)
         print(f"Running command: {final_command}")
