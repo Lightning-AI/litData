@@ -20,13 +20,13 @@ This project demonstrates a simple example of classifying customer documents int
 ## Table of Contents
 
 1. [Introduction](#introduction)
-1. [Data Generation](#data-generation)
-1. [Data Preparation](#data-preparation)
-1. [Model Training](#model-training)
-1. [Results](#results)
-1. [Usage](#usage)
-1. [Dependencies](#dependencies)
-1. [License](#license)
+2. [Data Generation](#data-generation)
+3. [Data Preparation](#data-preparation)
+4. [Model Training](#model-training)
+5. [Results](#results)
+6. [Usage](#usage)
+7. [Dependencies](#dependencies)
+8. [License](#license)
 
 ## Introduction
 
