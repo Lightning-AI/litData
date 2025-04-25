@@ -94,16 +94,16 @@ jobs:
             const comment_id = Number(process.env.COMMENT_ID);
 
             let reply = '';
-            if (fs.existsSync('error.txt') && fs.readFileSync('error.txt', 'utf8').trim().length > 0) {
+            if (fs.existsSync('result.md')) {
+              reply = fs.readFileSync('result.md', 'utf8');
+            } else if (fs.existsSync('error.txt') && fs.readFileSync('error.txt', 'utf8').trim().length > 0) {
               const err = fs.readFileSync('error.txt', 'utf8');
               reply = `❌ **Benchmark failed**\n\n\`\`\`\n${err}\n\`\`\``;
             } else {
-              reply = fs.existsSync('result.md')
-                ? fs.readFileSync('result.md', 'utf8')
-                : '❌ Benchmark completed, but can\'t find `result.md` file. Something went wrong.';
+              reply = '❌ Benchmark completed, but can\'t find `result.md` and `error.txt` file. Something went wrong.';
             }
 
-            const updated_body = `Hi @${process.env.USERNAME}!\n\n${reply}\n\ncc:  @deependujha`;
+            const updated_body = `Hi @${process.env.USERNAME}!\n\n${reply}\n\ncc: @tchaton @deependujha @bhimrazy`;
 
             await github.rest.issues.updateComment({
               owner: context.repo.owner,
