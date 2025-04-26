@@ -309,7 +309,7 @@ def copy_index_to_cache_index_filepath(index_path: str, cache_index_filepath: st
     """Copy Index file from index_path to cache_index_filepath."""
     # If index_path is a directory, append "index.json"
     if os.path.isdir(index_path):
-        index_path = os.path.join(index_path, "index.json")
+        index_path = os.path.join(index_path, _INDEX_FILENAME)
     # Check if the file exists before copying
     if not os.path.isfile(index_path):
         raise FileNotFoundError(f"Index file not found: {index_path}")
