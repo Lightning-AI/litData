@@ -187,6 +187,18 @@ def _clear_cache_dir_if_updated(input_dir_hash_filepath: str, updated_at_hash: s
             shutil.rmtree(input_dir_hash_filepath)
 
 
+def generate_md5_hash(value: str) -> str:
+    """Generate an MD5 hash for the given string value.
+
+    Args:
+        value (str): The input string to hash.
+
+    Returns:
+        str: The hexadecimal MD5 hash of the input string.
+    """
+    return hashlib.md5(value.encode()).hexdigest()  # noqa: S324
+
+
 def _try_create_cache_dir(
     input_dir: Optional[str],
     cache_dir: Optional[str] = None,
@@ -199,9 +211,9 @@ def _try_create_cache_dir(
 
     # Fallback to a hash of the input_dir if updated_at is "0"
     if updated_at == "0" and input_dir is not None:
-        updated_at = hashlib.md5(input_dir.encode()).hexdigest()  # noqa: S324
+        updated_at = generate_md5_hash(input_dir)
 
-    dir_url_hash = hashlib.md5((resolved_input_dir.url or "").encode()).hexdigest()  # noqa: S324
+    dir_url_hash = generate_md5_hash(resolved_input_dir.url or "")
 
     # Determine cache root based on environment
     is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
