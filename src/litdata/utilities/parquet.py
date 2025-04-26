@@ -1,6 +1,5 @@
 """contains utility functions to return parquet files from local, s3, or gs."""
 
-import hashlib
 import io
 import json
 import os
@@ -129,11 +128,8 @@ class CloudParquetDir(ParquetDir):
             )
         super().__init__(dir_path, cache_path, storage_options, num_workers)
 
-        assert self.dir.url is not None
-
-        if self.cache_path is None:
-            self.cache_path = default_cache_dir(self.dir.url)
-            os.makedirs(self.cache_path, exist_ok=True)  # Ensure the directory exists
+        assert self.dir.url is not None, "Dir url can't be empty"
+        assert self.cache_path is not None, "Cache path is not set."
 
         import fsspec
 
@@ -192,9 +188,6 @@ class CloudParquetDir(ParquetDir):
 
     def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
         """Write the index file to the local cache directory and upload it to the cloud."""
-        assert self.cache_path is not None
-        assert self.dir.url is not None
-
         index_file_path = os.path.join(self.cache_path, _INDEX_FILENAME)
         cloud_index_path = os.path.join(self.dir.url, _INDEX_FILENAME)
 
@@ -232,12 +225,9 @@ class HFParquetDir(ParquetDir):
             )
         super().__init__(dir_path, cache_path, storage_options, num_workers)
 
-        assert self.dir.url is not None
-        assert self.dir.url.startswith("hf")
-
-        if self.cache_path is None:
-            self.cache_path = default_cache_dir(self.dir.url)
-            os.makedirs(self.cache_path, exist_ok=True)  # Ensure the directory exists
+        assert self.dir.url is not None, "Dir url is not set."
+        assert self.dir.url.startswith("hf"), "Dir url must start with 'hf://'."
+        assert self.cache_path is not None, "Cache path is not set."
 
         # List all files and directories in the top-level of the specified directory
         from huggingface_hub import HfFileSystem
@@ -333,27 +323,3 @@ def get_parquet_indexer_cls(
         f"Found scheme: '{obj.scheme}'. Supported schemes are: {', '.join(supported_schemes)}. "
         "Please provide a valid directory path with one of the supported schemes."
     )
-
-
-def default_cache_dir(url: str) -> str:
-    """Generate a default cache directory path based on the given URL.
-
-    The directory is created under the user's home directory at
-    ~/.cache/litdata-cache-index-pq if it does not already exist.
-
-    Args:
-        url (str): The URL to be hashed for generating the cache directory path.
-
-    Returns:
-        str: The path to the generated cache directory.
-    """
-    # Hash the URL using SHA256
-    url_hash = hashlib.sha256(url.encode()).hexdigest()
-
-    # Generate the cache directory path
-    cache_path = os.path.join(os.path.expanduser("~"), ".cache", "litdata-cache-index-pq", url_hash)
-
-    # Ensure the directory exists
-    os.makedirs(cache_path, exist_ok=True)
-
-    return cache_path
