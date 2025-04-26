@@ -48,11 +48,12 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
 
             # Prepare the cache directory and move the index file there
             cache_dir = _try_create_cache_dir(dataset_url, cache_dir, index_path=temp_index_path)
+            assert cache_dir is not None
             cache_index_path = os.path.join(cache_dir, _INDEX_FILENAME)
             shutil.copyfile(temp_index_path, cache_index_path)
             print(f"Index created at {cache_index_path}.")
 
-    return cache_dir
+    return cache_dir  # type: ignore
 
 
 def _get_existing_cache(dataset_url: str, cache_dir: Optional[str]) -> Optional[str]:
