@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import tempfile
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from time import time
@@ -129,7 +130,6 @@ class CloudParquetDir(ParquetDir):
         super().__init__(dir_path, cache_path, storage_options, num_workers)
 
         assert self.dir.url is not None, "Dir url can't be empty"
-        assert self.cache_path is not None, "Cache path is not set."
 
         import fsspec
 
@@ -187,23 +187,23 @@ class CloudParquetDir(ParquetDir):
         }
 
     def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
-        """Write the index file to the local cache directory and upload it to the cloud."""
-        index_file_path = os.path.join(self.cache_path, _INDEX_FILENAME)
-        cloud_index_path = os.path.join(self.dir.url, _INDEX_FILENAME)
+        """Write the index file and upload it to the cloud."""
+        assert self.dir.url is not None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            index_file_path = os.path.join(temp_dir, _INDEX_FILENAME)
+            cloud_index_path = os.path.join(self.dir.url, _INDEX_FILENAME)
 
-        # write to index.json file
-        with open(index_file_path, "w") as f:
-            data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
-            json.dump(data, f, sort_keys=True)
+            # write to index.json file
+            with open(index_file_path, "w") as f:
+                data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
+                json.dump(data, f, sort_keys=True)
 
-        # upload index file to cloud
-        with open(index_file_path, "rb") as local_file, self.fs.open(cloud_index_path, "wb") as cloud_file:
-            for chunk in iter(lambda: local_file.read(4096), b""):  # Read in 4KB chunks
-                cloud_file.write(chunk)
+            # upload index file to cloud
+            with open(index_file_path, "rb") as local_file, self.fs.open(cloud_index_path, "wb") as cloud_file:
+                for chunk in iter(lambda: local_file.read(4096), b""):  # Read in 4KB chunks
+                    cloud_file.write(chunk)
 
-        print(f"Index file successfully written to: {cloud_index_path}")
-        if os.path.exists(index_file_path):
-            os.remove(index_file_path)
+            print(f"Index file successfully written to: {cloud_index_path}")
 
 
 class HFParquetDir(ParquetDir):
