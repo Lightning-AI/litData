@@ -60,8 +60,6 @@ class ParquetDir(ABC):
             data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
             json.dump(data, f, sort_keys=True)
 
-        print(f"Index file successfully written to: {index_file_path}")
-
 
 class LocalParquetDir(ParquetDir):
     def __init__(
