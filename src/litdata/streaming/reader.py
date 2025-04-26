@@ -106,7 +106,7 @@ class PrepareChunksThread(Thread):
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
         countpath = chunk_filepath + ".cnt"
-        with suppress(Timeout), FileLock(countpath + ".lock", timeout=3):
+        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=3):
             if not os.path.exists(countpath):
                 return 0
             with open(countpath) as count_f:
