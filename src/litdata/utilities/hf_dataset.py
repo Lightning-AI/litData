@@ -1,8 +1,9 @@
 """Contains utility functions for indexing and streaming HF datasets."""
 
 import os
-import tempfile
 import shutil
+import tempfile
+
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_md5_hash
@@ -36,8 +37,7 @@ def index_hf_dataset(hf_url: str, cache_dir: str = None) -> str:
             if os.path.exists(os.path.join(final_cache_dir, _INDEX_FILENAME)):
                 print(f"Index already exists at {final_cache_dir}.")
                 return final_cache_dir
-            else:
-                print("Index not found in cache")
+            print("Index not found in cache")
         else:
             print("cache not exist, creating a new one.", cache_dir)
 
