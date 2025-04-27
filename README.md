@@ -1285,6 +1285,17 @@ Speed to stream Imagenet 1.2M from other cloud storage providers:
 |---|---|---|---|
 | Cloudflare R2 | LitData | **5335** | **5630** |
 
+Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
+| Framework | Dataset Mode | Dataset Size @ 256px | Images / sec 1st Epoch (float32) | Images / sec 2nd Epoch (float32) |
+|---|---|---|---|---|
+| LitData | PIL raw | 168 GB | 6307 | 6458 |
+| LitData | JPEG 90% | 12 GB | 6485 | 6529 |
+| ffcv (os_cache=True) | raw | 170 GB | 7032 | 6648 |
+| ffcv (os_cache=False) | raw | 170 GB | 8223 | 8213 |
+| ffcv(os_cache=True) | JPEG 90% | 20 GB | 7812 | 8160 |
+| ffcv(os_cache=False) | JPEG 90% | 20 GB | 8159 | 8563 |
+Notes: TBD
+
 &nbsp;
 
 ## Time to optimize data
