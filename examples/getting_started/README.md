@@ -14,10 +14,12 @@ from PIL import Image
 
 # Store random images into the data chunks
 def random_images(index):
+    # Seed a unique random generator for each index
+    rng = np.random.default_rng(seed=index)
     data = {
         "index": index, # int data type
-        "image": Image.fromarray(np.random.randint(0, 256, (32, 32, 3), np.uint8)), # PIL image data type
-        "class": np.random.randint(10), # numpy array data type
+        "image": Image.fromarray(rng.integers(0, 256, (32, 32, 3), dtype=np.uint8)), # PIL image data type
+        "class": rng.integers(10), # numpy array data type
     }
     # The data is serialized into bytes and stored into data chunks by the optimize operator.
     return data # The data is serialized into bytes and stored into data chunks by the optimize operator.
