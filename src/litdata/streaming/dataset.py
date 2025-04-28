@@ -368,6 +368,12 @@ class StreamingDataset(IterableDataset):
         self.worker_chunks = workers_chunks[worker_rank]
         self.worker_intervals = workers_intervals[worker_rank]
 
+        if self.worker_next_chunk_index >= self.num_chunks:
+            # This can happen when interrupting and resuming after some but not all workers are done.
+            # Proceeding would result in an indexing error when attempting to access the next chunk.
+            # To prevent this we exit early and let the worker raise a StopIteration in __next__.
+            return
+
         # replay the indexes for the current chunks
         interval = self.worker_intervals[self.worker_next_chunk_index]
         current_indexes = np.arange(interval[1], interval[2])

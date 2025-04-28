@@ -148,9 +148,10 @@ def _read_updated_at(
     index_json_content = None
     assert isinstance(input_dir, Dir)
 
+    # Try to read index.json locally
     if input_dir.path is not None and os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
-        # read index.json file and read last_updation_timestamp
         index_json_content = load_index_file(input_dir.path)
+    # Try to read index.json remotely
     elif input_dir.url is not None:
         assert input_dir.url is not None
         # download index.json file and read last_updation_timestamp
@@ -170,11 +171,14 @@ def _read_updated_at(
 
 
 def _clear_cache_dir_if_updated(input_dir_hash_filepath: str, updated_at_hash: str) -> None:
-    """Clear cache dir if it is updated.
+    """Clear the cache directory if it is outdated.
 
-    If last_updated has changed and /cache/chunks/{HASH(input_dir.url)} isn't empty, we remove all the files and then
-    create the cache.
+    If the directory at `input_dir_hash_filepath` exists and does not contain only a single subdirectory named
+    `updated_at_hash`, the entire directory is deleted to prevent using stale or partial cache data.
 
+    Args:
+        input_dir_hash_filepath (str): Path to the hashed cache directory (e.g., /cache/chunks/{HASH(input_dir.url)}).
+        updated_at_hash (str): The expected hash or timestamp for the current dataset state.
     """
     if os.path.exists(input_dir_hash_filepath):
         # check if it only contains one directory with updated_at_hash
@@ -189,24 +193,24 @@ def _try_create_cache_dir(
     storage_options: Optional[Dict] = {},
     index_path: Optional[str] = None,
 ) -> Optional[str]:
+    """Prepare and return the cache directory for a dataset."""
     resolved_input_dir = _resolve_dir(input_dir)
     updated_at = _read_updated_at(resolved_input_dir, storage_options, index_path)
 
+    # Fallback to a hash of the input_dir if updated_at is "0"
     if updated_at == "0" and input_dir is not None:
         updated_at = hashlib.md5(input_dir.encode()).hexdigest()  # noqa: S324
 
     dir_url_hash = hashlib.md5((resolved_input_dir.url or "").encode()).hexdigest()  # noqa: S324
 
-    if "LIGHTNING_CLUSTER_ID" not in os.environ or "LIGHTNING_CLOUD_PROJECT_ID" not in os.environ:
-        input_dir_hash_filepath = os.path.join(cache_dir or _DEFAULT_CACHE_DIR, dir_url_hash)
-        _clear_cache_dir_if_updated(input_dir_hash_filepath, updated_at)
-        cache_dir = os.path.join(input_dir_hash_filepath, updated_at)
-        os.makedirs(cache_dir, exist_ok=True)
-        return cache_dir
+    # Determine cache root based on environment
+    is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
+    default_cache_root = _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
+    cache_root = cache_dir or default_cache_root
 
-    input_dir_hash_filepath = os.path.join(cache_dir or _DEFAULT_LIGHTNING_CACHE_DIR, dir_url_hash)
-    _clear_cache_dir_if_updated(input_dir_hash_filepath, updated_at)
-    cache_dir = os.path.join(input_dir_hash_filepath, updated_at)
+    input_dir_hash_path = os.path.join(cache_root, dir_url_hash)
+    _clear_cache_dir_if_updated(input_dir_hash_path, updated_at)
+    cache_dir = os.path.join(input_dir_hash_path, updated_at)
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
@@ -305,7 +309,7 @@ def copy_index_to_cache_index_filepath(index_path: str, cache_index_filepath: st
     """Copy Index file from index_path to cache_index_filepath."""
     # If index_path is a directory, append "index.json"
     if os.path.isdir(index_path):
-        index_path = os.path.join(index_path, "index.json")
+        index_path = os.path.join(index_path, _INDEX_FILENAME)
     # Check if the file exists before copying
     if not os.path.isfile(index_path):
         raise FileNotFoundError(f"Index file not found: {index_path}")
