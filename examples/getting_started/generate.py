@@ -10,7 +10,7 @@ def random_images(index):
     return {
         "index": index,  # int data type
         "image": rng.integers(0, 256, (32, 32, 3), dtype=np.uint8),  # numpy array
-        "class": rng.integers(10), # numpy array
+        "class": rng.integers(10),  # numpy array
     }
 
 
