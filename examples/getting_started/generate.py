@@ -1,18 +1,16 @@
 import numpy as np
-from PIL import Image
 
 from litdata import optimize
 
 
 # Store random images into the data chunks
 def random_images(index):
-    # The data is serialized into bytes and stored into data chunks by the optimize operator.
-    # Seed uniquely for each index
-    rng = np.random.default_rng(seed=index) # Uses index as seed for reproducibility
+    # Seed uniquely for each index to ensure reproducibility
+    rng = np.random.default_rng(seed=index)
     return {
         "index": index,  # int data type
-        "image": Image.fromarray(rng.integers(0, 256, (32, 32, 3), np.uint8)),  # PIL image data type
-        "class": rng.integers(10), # numpy array data type
+        "image": rng.integers(0, 256, (32, 32, 3), dtype=np.uint8),  # numpy array
+        "class": rng.integers(10), # numpy array
     }
 
 
