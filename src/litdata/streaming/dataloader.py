@@ -248,7 +248,6 @@ class _MultiProcessingDataLoaderIterPatch(_MultiProcessingDataLoaderIter):
             data = None
             while data is None:
                 data = super()._next_data()
-                print(f"dataloader iter patch => data: {data}")
             return data
         except StopIteration as e:
             raise e
@@ -492,7 +491,6 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
             self._task_info[self._send_idx] = (worker_queue_idx,)
             self._tasks_outstanding += 1
             self._send_idx += 1
-            print(f"{self._send_idx=}, {worker_queue_idx=}, {index=}, {worker_queue_idx=} {self._tasks_outstanding=}")
         else:
             super()._try_put_index()
 
@@ -722,7 +720,6 @@ class StreamingDataLoader(DataLoader):
 
         # Used to restart on the next DataLoader worker from the previous run.
         self._latest_worker_idx = obj["latest_worker_idx"] + 1
-        print(f"restarting dataloader from statedict with {self._latest_worker_idx=}")
         self._worker_idx_iter = iter(self._worker_idx)
         for _ in range(self._latest_worker_idx):
             next(self._worker_idx_iter)
