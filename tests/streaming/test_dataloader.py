@@ -333,3 +333,25 @@ def test_resume_dataloader_with_new_dataset(tmpdir):
     dataloader.load_state_dict(dataloader_state)
     for _ in dataloader:
         assert dataloader.current_epoch == 2, "Current epoch should be 2"
+
+
+def test_resume_dataloader_after_some_workers_are_done(tmpdir):
+    # see https://github.com/Lightning-AI/litData/issues/563
+    dset_path = tmpdir.join("dataset")
+    cache = Cache(input_dir=str(dset_path), chunk_size=1)
+    for i in range(3):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dset = StreamingDataset(str(dset_path), shuffle=False)
+    dloader = StreamingDataLoader(dset, batch_size=1, num_workers=2, shuffle=False)
+    # worker 0 is assigned with samples 0 and 1, worker 1 is assigned with sample 2
+    # the workers alternate, so the expected sequence is [0, 2, 1] and not [0, 1, 2]
+    expected_sequence = [0, 2, 1]
+    for i, x in enumerate(dloader):
+        assert x == expected_sequence[i]
+        if i == 1:
+            break
+    dloader.load_state_dict(dloader.state_dict())
+    for x in dloader:
+        assert x == expected_sequence[2]

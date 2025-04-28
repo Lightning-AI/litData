@@ -37,6 +37,7 @@ jobs:
       - name: Install package & dependencies
         run: |
           pip --version
+          pip install -U lightning-sdk
           pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
           pip list
 

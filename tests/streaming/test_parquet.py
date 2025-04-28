@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from contextlib import nullcontext
 from fnmatch import fnmatch
 from types import ModuleType
@@ -9,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litdata.constants import _INDEX_FILENAME
+from litdata.constants import _DEFAULT_CACHE_DIR, _INDEX_FILENAME
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 from litdata.streaming.writer import index_parquet_dataset
@@ -218,3 +219,29 @@ def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length
         pattern = os.path.basename(hf_url)
         assert all(fnmatch(fn, pattern) for fn in ds.subsampled_files)
         assert len(ds) == length  # 5 datasets for 5 loops
+
+
+@pytest.mark.usefixtures("clean_pq_index_cache")
+@patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
+@patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
+@pytest.mark.parametrize("default", [False, True])
+def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
+    hf_url = "hf://datasets/some_org/some_repo/some_path"
+    index_cache_dir = default_cache_dir(hf_url)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ds = StreamingDataset(hf_url, cache_dir=None if default else tmpdir)
+        assert ds.cache_dir.path == (None if default else os.path.realpath(tmpdir))
+        assert ds.input_dir.path.startswith(_DEFAULT_CACHE_DIR if default else os.path.realpath(tmpdir))
+        # check index file is sole file in chunk cache dir
+        assert len(os.listdir(ds.input_dir.path)) == 1
+        assert os.path.exists(os.path.join(ds.input_dir.path, _INDEX_FILENAME))
+        # check index file is sole file in index cache dir
+        assert len(os.listdir(index_cache_dir)) == 1
+        assert os.path.exists(os.path.join(index_cache_dir, _INDEX_FILENAME))
+        # iterate over dataset to fill cache
+        for _ in ds:
+            pass
+        # check chunk cache dir was filled
+        assert len([f for f in os.listdir(ds.input_dir.path) if f.endswith(".parquet")]) == 5  # 5 chunks
+        # check index cache dir was not filled
+        assert len(os.listdir(index_cache_dir)) == 1
