@@ -34,7 +34,7 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
 
     # Acquire a file lock to guarantee exclusive access,
     # ensuring that multiple processes do not create the index simultaneously.
-    with suppress(Timeout), FileLock(os.path.join(tempfile.gettempdir(), "hf_index.lock"), timeout=5):
+    with suppress(Timeout), FileLock(os.path.join(tempfile.gettempdir(), "hf_index.lock"), timeout=20):
         # Check for existing index in the cache
         cache_directory = _get_existing_cache(dataset_url, cache_dir)
         if cache_directory:
