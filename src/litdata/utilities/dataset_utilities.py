@@ -199,6 +199,16 @@ def generate_md5_hash(value: str) -> str:
     return hashlib.md5(value.encode()).hexdigest()  # noqa: S324
 
 
+def get_default_cache_dir() -> str:
+    """Return the default cache directory, using the Lightning cloud cache if running in a Lightning environment.
+
+    Returns:
+        str: The resolved default cache root directory.
+    """
+    is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
+    return _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
+
+
 def _try_create_cache_dir(
     input_dir: Optional[str],
     cache_dir: Optional[str] = None,
@@ -215,12 +225,10 @@ def _try_create_cache_dir(
 
     dir_url_hash = generate_md5_hash(resolved_input_dir.url or "")
 
-    # Determine cache root based on environment
-    is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
-    default_cache_root = _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
-    cache_root = cache_dir or default_cache_root
+    # Determine the cache directory, preferring user-provided cache_dir if given
+    cache_dir = cache_dir if cache_dir is not None else get_default_cache_dir()
 
-    input_dir_hash_path = os.path.join(cache_root, dir_url_hash)
+    input_dir_hash_path = os.path.join(cache_dir, dir_url_hash)
     _clear_cache_dir_if_updated(input_dir_hash_path, updated_at)
     cache_dir = os.path.join(input_dir_hash_path, updated_at)
     os.makedirs(cache_dir, exist_ok=True)

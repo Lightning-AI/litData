@@ -10,7 +10,7 @@ from filelock import FileLock, Timeout
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.writer import index_parquet_dataset
-from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_md5_hash
+from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_md5_hash, get_default_cache_dir
 
 
 def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
@@ -66,8 +66,8 @@ def _get_existing_cache(dataset_url: str, cache_dir: Optional[str]) -> Optional[
     Returns:
         Optional[str]: The path to the existing cache directory if found, otherwise None.
     """
-    if not cache_dir:
-        return None
+    # Determine the cache directory, preferring user-provided cache_dir if given
+    cache_dir = cache_dir if cache_dir is not None else get_default_cache_dir()
 
     url_hash = generate_md5_hash(dataset_url)
     hashed_cache_path = os.path.join(cache_dir, url_hash)
