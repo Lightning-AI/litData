@@ -1,9 +1,9 @@
 """contains utility functions to return parquet files from local, s3, or gs."""
 
-import hashlib
 import io
 import json
 import os
+import tempfile
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from time import time
@@ -59,8 +59,6 @@ class ParquetDir(ABC):
         with open(index_file_path, "w") as f:
             data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
             json.dump(data, f, sort_keys=True)
-
-        print(f"Index file successfully written to: {index_file_path}")
 
 
 class LocalParquetDir(ParquetDir):
@@ -131,11 +129,7 @@ class CloudParquetDir(ParquetDir):
             )
         super().__init__(dir_path, cache_path, storage_options, num_workers)
 
-        assert self.dir.url is not None
-
-        if self.cache_path is None:
-            self.cache_path = default_cache_dir(self.dir.url)
-            os.makedirs(self.cache_path, exist_ok=True)  # Ensure the directory exists
+        assert self.dir.url is not None, "Dir url can't be empty"
 
         import fsspec
 
@@ -193,26 +187,23 @@ class CloudParquetDir(ParquetDir):
         }
 
     def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
-        """Write the index file to the local cache directory and upload it to the cloud."""
-        assert self.cache_path is not None
+        """Write the index file and upload it to the cloud."""
         assert self.dir.url is not None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            index_file_path = os.path.join(temp_dir, _INDEX_FILENAME)
+            cloud_index_path = os.path.join(self.dir.url, _INDEX_FILENAME)
 
-        index_file_path = os.path.join(self.cache_path, _INDEX_FILENAME)
-        cloud_index_path = os.path.join(self.dir.url, _INDEX_FILENAME)
+            # write to index.json file
+            with open(index_file_path, "w") as f:
+                data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
+                json.dump(data, f, sort_keys=True)
 
-        # write to index.json file
-        with open(index_file_path, "w") as f:
-            data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
-            json.dump(data, f, sort_keys=True)
+            # upload index file to cloud
+            with open(index_file_path, "rb") as local_file, self.fs.open(cloud_index_path, "wb") as cloud_file:
+                for chunk in iter(lambda: local_file.read(4096), b""):  # Read in 4KB chunks
+                    cloud_file.write(chunk)
 
-        # upload index file to cloud
-        with open(index_file_path, "rb") as local_file, self.fs.open(cloud_index_path, "wb") as cloud_file:
-            for chunk in iter(lambda: local_file.read(4096), b""):  # Read in 4KB chunks
-                cloud_file.write(chunk)
-
-        print(f"Index file successfully written to: {cloud_index_path}")
-        if os.path.exists(index_file_path):
-            os.remove(index_file_path)
+            print(f"Index file successfully written to: {cloud_index_path}")
 
 
 class HFParquetDir(ParquetDir):
@@ -234,12 +225,9 @@ class HFParquetDir(ParquetDir):
             )
         super().__init__(dir_path, cache_path, storage_options, num_workers)
 
-        assert self.dir.url is not None
-        assert self.dir.url.startswith("hf")
-
-        if self.cache_path is None:
-            self.cache_path = default_cache_dir(self.dir.url)
-            os.makedirs(self.cache_path, exist_ok=True)  # Ensure the directory exists
+        assert self.dir.url is not None, "Dir url is not set."
+        assert self.dir.url.startswith("hf"), "Dir url must start with 'hf://'."
+        assert self.cache_path is not None, "Cache path is not set."
 
         # List all files and directories in the top-level of the specified directory
         from huggingface_hub import HfFileSystem
@@ -335,27 +323,3 @@ def get_parquet_indexer_cls(
         f"Found scheme: '{obj.scheme}'. Supported schemes are: {', '.join(supported_schemes)}. "
         "Please provide a valid directory path with one of the supported schemes."
     )
-
-
-def default_cache_dir(url: str) -> str:
-    """Generate a default cache directory path based on the given URL.
-
-    The directory is created under the user's home directory at
-    ~/.cache/litdata-cache-index-pq if it does not already exist.
-
-    Args:
-        url (str): The URL to be hashed for generating the cache directory path.
-
-    Returns:
-        str: The path to the generated cache directory.
-    """
-    # Hash the URL using SHA256
-    url_hash = hashlib.sha256(url.encode()).hexdigest()
-
-    # Generate the cache directory path
-    cache_path = os.path.join(os.path.expanduser("~"), ".cache", "litdata-cache-index-pq", url_hash)
-
-    # Ensure the directory exists
-    os.makedirs(cache_path, exist_ok=True)
-
-    return cache_path

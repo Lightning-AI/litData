@@ -187,6 +187,28 @@ def _clear_cache_dir_if_updated(input_dir_hash_filepath: str, updated_at_hash: s
             shutil.rmtree(input_dir_hash_filepath)
 
 
+def generate_md5_hash(value: str) -> str:
+    """Generate an MD5 hash for the given string value.
+
+    Args:
+        value (str): The input string to hash.
+
+    Returns:
+        str: The hexadecimal MD5 hash of the input string.
+    """
+    return hashlib.md5(value.encode()).hexdigest()  # noqa: S324
+
+
+def get_default_cache_dir() -> str:
+    """Return the default cache directory, using the Lightning cloud cache if running in a Lightning environment.
+
+    Returns:
+        str: The resolved default cache root directory.
+    """
+    is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
+    return _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
+
+
 def _try_create_cache_dir(
     input_dir: Optional[str],
     cache_dir: Optional[str] = None,
@@ -199,16 +221,14 @@ def _try_create_cache_dir(
 
     # Fallback to a hash of the input_dir if updated_at is "0"
     if updated_at == "0" and input_dir is not None:
-        updated_at = hashlib.md5(input_dir.encode()).hexdigest()  # noqa: S324
+        updated_at = generate_md5_hash(input_dir)
 
-    dir_url_hash = hashlib.md5((resolved_input_dir.url or "").encode()).hexdigest()  # noqa: S324
+    dir_url_hash = generate_md5_hash(resolved_input_dir.url or "")
 
-    # Determine cache root based on environment
-    is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
-    default_cache_root = _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
-    cache_root = cache_dir or default_cache_root
+    # Determine the cache directory, preferring user-provided cache_dir if given
+    cache_dir = cache_dir if cache_dir is not None else get_default_cache_dir()
 
-    input_dir_hash_path = os.path.join(cache_root, dir_url_hash)
+    input_dir_hash_path = os.path.join(cache_dir, dir_url_hash)
     _clear_cache_dir_if_updated(input_dir_hash_path, updated_at)
     cache_dir = os.path.join(input_dir_hash_path, updated_at)
     os.makedirs(cache_dir, exist_ok=True)

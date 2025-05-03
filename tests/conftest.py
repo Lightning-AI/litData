@@ -13,6 +13,7 @@ from litdata import CombinedStreamingDataset, StreamingDataset
 from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
+from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 
 @pytest.fixture(autouse=True)
@@ -168,7 +169,7 @@ def write_pq_data(pq_data, tmp_path):
 @pytest.fixture
 def clean_pq_index_cache():
     """Ensures the PQ index cache is cleared before and after the test."""
-    cache_path = os.path.join(os.path.expanduser("~"), ".cache", "litdata-cache-index-pq")
+    cache_path = os.path.join(get_default_cache_dir())
 
     # Cleanup before the test
     if os.path.exists(cache_path):

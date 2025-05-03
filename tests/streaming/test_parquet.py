@@ -1,16 +1,14 @@
-import hashlib
 import json
 import os
 import sys
 import tempfile
 from contextlib import nullcontext
 from fnmatch import fnmatch
-from types import ModuleType
 from unittest.mock import Mock, patch
 
 import pytest
 
-from litdata.constants import _DEFAULT_CACHE_DIR, _INDEX_FILENAME
+from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 from litdata.streaming.writer import index_parquet_dataset
@@ -19,7 +17,6 @@ from litdata.utilities.parquet import (
     CloudParquetDir,
     HFParquetDir,
     LocalParquetDir,
-    default_cache_dir,
     get_parquet_indexer_cls,
 )
 
@@ -30,7 +27,6 @@ from litdata.utilities.parquet import (
 @pytest.mark.parametrize(
     ("pq_dir_url"),
     [
-        None,
         "s3://some_bucket/some_path",
         "gs://some_bucket/some_path",
         "hf://datasets/some_org/some_repo/some_path",
@@ -46,7 +42,8 @@ def test_parquet_index_write(
     if pq_dir_url is None:
         pq_dir_url = os.path.join(tmp_path, "pq-dataset")
 
-    cache_dir = default_cache_dir(pq_dir_url)
+    cache_dir = os.path.join(tmp_path, "pq-cache")
+    os.makedirs(cache_dir, exist_ok=True)
 
     index_file_path = os.path.join(tmp_path, "pq-dataset", _INDEX_FILENAME)
     if pq_dir_url.startswith("hf://"):
@@ -55,11 +52,7 @@ def test_parquet_index_write(
     assert not os.path.exists(index_file_path)
 
     # call the write_parquet_index fn
-    if num_worker is None:
-        index_parquet_dataset(pq_dir_url=pq_dir_url)
-    else:
-        index_parquet_dataset(pq_dir_url=pq_dir_url, num_workers=num_worker)
-
+    index_parquet_dataset(pq_dir_url=pq_dir_url, cache_dir=cache_dir, num_workers=num_worker)
     assert os.path.exists(index_file_path)
 
     if pq_dir_url.startswith("hf://"):
@@ -103,37 +96,6 @@ def test_index_hf_dataset(monkeypatch, tmp_path, huggingface_hub_fs_mock):
     assert os.path.exists(os.path.join(cache_dir, _INDEX_FILENAME))
 
 
-def test_default_cache_dir(monkeypatch):
-    os = ModuleType("os")
-    os.path = Mock()
-    monkeypatch.setattr("litdata.utilities.parquet.os", os)
-    os.path.expanduser = Mock(return_value="/tmp/mock_path")  # noqa: S108
-
-    def join_all_args(*args):
-        # concatenate all paths with '/'
-        assert all(isinstance(arg, str) for arg in args), "All arguments must be strings"
-        is_root_route = args[0].startswith("/")
-        joined_path = "/".join(arg.strip("/") for arg in args)
-        if is_root_route:
-            joined_path = "/" + joined_path
-        return joined_path
-
-    os.path.join = Mock(side_effect=join_all_args)
-    os.makedirs = Mock()
-
-    url = "pq://random_path/random_endpoint"
-    url_hash = hashlib.sha256(url.encode()).hexdigest()
-
-    cache_dir = default_cache_dir(url)
-
-    assert os.path.expanduser.assert_called_once
-    assert os.makedirs.assert_called_once
-
-    expected_default_cache_dir = "/tmp/mock_path" + "/.cache" + "/litdata-cache-index-pq" + "/" + url_hash  # noqa: S108
-
-    assert expected_default_cache_dir == cache_dir
-
-
 #! TODO: Fix test failing on windows
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Fails on windows bcoz of urllib.parse")
 @pytest.mark.parametrize(
@@ -147,7 +109,7 @@ def test_default_cache_dir(monkeypatch):
         ("meow://some_bucket/somepath", None, pytest.raises(ValueError, match="The provided")),
     ],
 )
-def test_get_parquet_indexer_cls(pq_url, cls, expectation, monkeypatch, fsspec_mock, huggingface_hub_fs_mock):
+def test_get_parquet_indexer_cls(pq_url, tmp_path, cls, expectation, monkeypatch, fsspec_mock, huggingface_hub_fs_mock):
     os = Mock()
     os.listdir = Mock(return_value=[])
 
@@ -163,7 +125,7 @@ def test_get_parquet_indexer_cls(pq_url, cls, expectation, monkeypatch, fsspec_m
     monkeypatch.setattr("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 
     with expectation:
-        indexer_obj = get_parquet_indexer_cls(pq_url)
+        indexer_obj = get_parquet_indexer_cls(pq_url, tmp_path)
         assert isinstance(indexer_obj, cls)
 
 
@@ -227,21 +189,17 @@ def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length
 @pytest.mark.parametrize("default", [False, True])
 def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
     hf_url = "hf://datasets/some_org/some_repo/some_path"
-    index_cache_dir = default_cache_dir(hf_url)
     with tempfile.TemporaryDirectory() as tmpdir:
         ds = StreamingDataset(hf_url, cache_dir=None if default else tmpdir)
         assert ds.cache_dir.path == (None if default else os.path.realpath(tmpdir))
-        assert ds.input_dir.path.startswith(_DEFAULT_CACHE_DIR if default else os.path.realpath(tmpdir))
+        assert ds.input_dir.path.startswith(
+            (_DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR) if default else os.path.realpath(tmpdir)
+        )
         # check index file is sole file in chunk cache dir
         assert len(os.listdir(ds.input_dir.path)) == 1
         assert os.path.exists(os.path.join(ds.input_dir.path, _INDEX_FILENAME))
-        # check index file is sole file in index cache dir
-        assert len(os.listdir(index_cache_dir)) == 1
-        assert os.path.exists(os.path.join(index_cache_dir, _INDEX_FILENAME))
         # iterate over dataset to fill cache
         for _ in ds:
             pass
         # check chunk cache dir was filled
         assert len([f for f in os.listdir(ds.input_dir.path) if f.endswith(".parquet")]) == 5  # 5 chunks
-        # check index cache dir was not filled
-        assert len(os.listdir(index_cache_dir)) == 1
