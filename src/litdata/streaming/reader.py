@@ -15,12 +15,11 @@ import contextlib
 import logging
 import os
 import warnings
-from contextlib import suppress
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from filelock import FileLock, Timeout
+from filelock import Timeout
 
 from litdata.constants import _DEBUG
 from litdata.debugger import _get_log_msg
@@ -91,72 +90,13 @@ class PrepareChunksThread(Thread):
         for chunk_index in chunk_indexes:
             self._to_delete_queue.put(chunk_index)
 
-    def _remaining_locks(self, chunkpath: str) -> int:
-        countpath = chunkpath + ".cnt"
-        if not os.path.exists(countpath):
-            return 0
-        with open(countpath) as count_f:
-            try:
-                return int(count_f.read().strip())
-            except Exception:
-                return 1
-
-    def _decrement_local_lock(self, chunk_index: int) -> int:
-        """Remove a count from the local lock, return the remaining count."""
-        chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-
-        countpath = chunk_filepath + ".cnt"
-        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=3):
-            if not os.path.exists(countpath):
-                return 0
-            with open(countpath) as count_f:
-                logger.debug(_get_log_msg({"name": f"decrement_local_lock_for_ {chunk_filepath}", "ph": "B"}))
-                try:
-                    curr_count = int(count_f.read().strip())
-                except Exception:
-                    curr_count = 1
-            curr_count -= 1
-            if curr_count <= 0:
-                with contextlib.suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath)
-
-                with contextlib.suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath + ".lock")
-            else:
-                with open(countpath, "w+") as count_f:
-                    count_f.write(str(curr_count))
-            logger.debug(_get_log_msg({"name": f"decrement_local_lock_for_ {chunk_filepath}", "ph": "E"}))
-            return curr_count
-        return 0
-
     def _apply_delete(self, chunk_index: int) -> None:
         """Inform the item loader of the chunk to delete."""
         # TODO: Fix the can_delete method
-        can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-
-        remaining_locks = self._remaining_locks(chunk_filepath)
-        if remaining_locks > 0:  # Can't delete this, something has it
-            if _DEBUG:
-                print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
-            return
-
-        if _DEBUG:
-            with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
-                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
-
-        self._item_loader.delete(chunk_index, chunk_filepath)
-
-        if _DEBUG:
-            print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
-
-        for lock_extension in [".lock", ".cnt.lock"]:
-            try:
-                locak_chunk_path = chunk_filepath + lock_extension
-                if os.path.exists(locak_chunk_path):
-                    os.remove(locak_chunk_path)
-            except FileNotFoundError:
-                pass
+        self._item_loader.safe_delete(
+            chunk_index, chunk_filepath, delete_original_file=self._delete_chunks_when_processed
+        )
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
@@ -206,7 +146,8 @@ class PrepareChunksThread(Thread):
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
                 print(f"Requested force download for {chunk_filepath} by {self._rank}")
 
-            self._config.download_chunk_from_index(chunk_index, skip_lock=True)
+            # skip counter_file logic and directly download the chunk
+            self._config.download_chunk_from_index(chunk_index, skip_counter=True)
 
             # Preload item if possible to gain some time but only
             # if this is one of the pre-downloaded chunk

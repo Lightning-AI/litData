@@ -46,20 +46,6 @@ class Downloader(ABC):
         self._chunks = chunks
         self._storage_options = storage_options or {}
 
-    def _increment_local_lock(self, chunkpath: str) -> None:
-        logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "B"}))
-        countpath = chunkpath + ".cnt"
-        with suppress(Timeout), FileLock(countpath + ".lock", timeout=1):
-            try:
-                with open(countpath) as count_f:
-                    curr_count = int(count_f.read().strip())
-            except Exception:
-                curr_count = 0
-            curr_count += 1
-            with open(countpath, "w+") as count_f:
-                count_f.write(str(curr_count))
-        logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "E"}))
-
     def download_chunk_from_index(self, chunk_index: int) -> None:
         logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "B"}))
 
