@@ -24,7 +24,7 @@ _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")
 _DEFAULT_LIGHTNING_CACHE_DIR = os.path.join("/cache", "chunks")
-_SUPPORTED_DOWNLOADERS = ("s3", "gs", "azure", "hf")  # cloud providers supported by litdata for streaming datasets
+_SUPPORTED_PROVIDERS = ("s3", "gs", "azure", "hf")  # cloud providers supported by litdata for streaming datasets
 
 # This is required for full pytree serialization / deserialization support
 _TORCH_GREATER_EQUAL_2_1_0 = RequirementCache("torch>=2.1.0")

@@ -16,7 +16,7 @@ import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from litdata.constants import _INDEX_FILENAME, _SUPPORTED_DOWNLOADERS
+from litdata.constants import _INDEX_FILENAME, _SUPPORTED_PROVIDERS
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
@@ -130,11 +130,7 @@ class ChunksConfig:
 
         if os.path.exists(local_chunkpath):
             self.try_decompress(local_chunkpath)
-            if (
-                self._downloader is not None
-                and not skip_counter
-                and self._remote_dir.startswith(_SUPPORTED_DOWNLOADERS)
-            ):
+            if self._downloader is not None and not skip_counter and self._remote_dir.startswith(_SUPPORTED_PROVIDERS):
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
                 count = increment_file_count(local_chunkpath.replace(f".{self._compressor_name}", ""))
@@ -145,7 +141,7 @@ class ChunksConfig:
                     self.try_decompress(local_chunkpath)
             return
 
-        if (self._downloader is None) or (not self._remote_dir.startswith(_SUPPORTED_DOWNLOADERS)):
+        if (self._downloader is None) or (not self._remote_dir.startswith(_SUPPORTED_PROVIDERS)):
             return
 
         if skip_counter:
