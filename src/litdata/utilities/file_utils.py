@@ -10,10 +10,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import os
 from contextlib import suppress
 
 from filelock import FileLock, Timeout
+
+logger = logging.getLogger(__name__)
 
 
 def increment_file_count(file_path: str) -> int:
@@ -41,7 +44,8 @@ def decrement_file_count(file_path: str) -> int:
             with open(countpath) as count_f:
                 curr_count = int(count_f.read().strip())
         except Exception as e:
-            raise ValueError(f"Count file not found when trying to decrement_file_count: {countpath}.") from e
+            logger.warning(f"Count file not found when trying to decrement_file_count: {countpath}. Got {e}")
+            return 0
         curr_count -= 1
 
         if curr_count <= 0:
