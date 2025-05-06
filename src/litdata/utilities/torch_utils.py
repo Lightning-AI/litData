@@ -10,10 +10,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 
 import torch.distributed as dist
 
+from litdata.utilities.env import _DistributedEnv
 
-def maybe_barrier():
+
+def maybe_barrier() -> None:
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
+
+
+def is_local_rank_0() -> bool:
+    """Checks if the current process is the local rank 0 process."""
+    local_rank = os.environ.get("LOCAL_RANK", None)  # this env is set by torchrun
+    if local_rank is not None:
+        return int(local_rank) == 0
+
+    env = _DistributedEnv.detect()
+
+    # this condition might not work as expected if num of processes is not equal on each nodes
+    return (env.num_nodes == 1 and env.global_rank == 0) or (env.num_nodes > 1 and env.global_rank % env.num_nodes == 0)
