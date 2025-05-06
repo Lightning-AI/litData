@@ -44,7 +44,7 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
     # Otherwise, create a new index file
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_index_path = os.path.join(temp_dir, _INDEX_FILENAME)
-        index_parquet_dataset(dataset_url, temp_dir, num_workers=os.cpu_count() or 4)
+        index_parquet_dataset(dataset_url, temp_dir, num_workers=os.cpu_count() // 2)
 
         # Prepare the cache directory and move the index file there
         cache_dir = _try_create_cache_dir(dataset_url, cache_dir, index_path=temp_index_path)
