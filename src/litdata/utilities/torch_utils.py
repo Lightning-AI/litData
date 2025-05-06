@@ -18,12 +18,21 @@ from litdata.utilities.env import _DistributedEnv
 
 
 def maybe_barrier() -> None:
+    """Synchronizes all processes in distributed training if PyTorch's distributed package is available and initialized.
+
+    This function checks if the PyTorch distributed package is both available and initialized.
+
+    If so, it calls `dist.barrier()` to synchronize all processes.
+
+    This is useful in distributed training to ensure that all processes reach a certain point in the code before
+    proceeding.
+    """
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
 
 def is_local_rank_0() -> bool:
-    """Checks if the current process is the local rank 0 process."""
+    """Checks if the current process has local rank 0."""
     local_rank = os.environ.get("LOCAL_RANK", None)  # this env is set by torchrun
     if local_rank is not None:
         return int(local_rank) == 0
