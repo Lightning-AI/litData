@@ -33,7 +33,7 @@ def maybe_barrier() -> None:
 
 def is_local_rank_0() -> bool:
     """Checks if the current process has local rank 0."""
-    local_rank = os.environ.get("LOCAL_RANK", None)  # this env is set by torchrun
+    local_rank = os.environ.get("LOCAL_RANK", None)  # env variable set by torchrun
     if local_rank is not None:
         return int(local_rank) == 0
 
