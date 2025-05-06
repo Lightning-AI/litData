@@ -50,7 +50,7 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
         cache_dir = _try_create_cache_dir(dataset_url, cache_dir, index_path=temp_index_path)
         assert cache_dir is not None
         if is_local_rank_0():
-            # Only the first process on the first node should create the cache directory
+            # Only the first process on the each node should create the cache directory
             # and move the index file to the final location.
             # This prevents multiple processes from creating the same cache directory.
             print(f"Creating cache directory at {cache_dir}.")
