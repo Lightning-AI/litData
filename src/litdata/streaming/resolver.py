@@ -59,6 +59,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
         dir_path = _resolve_time_template(dir_path)
 
     dir_path_absolute = str(Path(dir_path).absolute().resolve())
+    dir_path = str(dir_path)  # Convert to string if it was a Path object
 
     if dir_path_absolute.startswith("/teamspace/studios/this_studio"):
         return Dir(path=dir_path_absolute, url=None)
