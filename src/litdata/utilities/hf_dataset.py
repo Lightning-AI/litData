@@ -39,9 +39,8 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
 
     maybe_barrier()  # wait for all processes to reach this point
 
-    # Ensure that only the first process on the first node creates the index file.
+    # `index_parquet_dataset()` ensures that only the first process on the first node creates the index file.
     # This prevents multiple processes or nodes from attempting to create the index simultaneously.
-    # Otherwise, create a new index file
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_index_path = os.path.join(temp_dir, _INDEX_FILENAME)
         index_parquet_dataset(dataset_url, temp_dir, num_workers=os.cpu_count() // 2)
@@ -51,8 +50,8 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
         assert cache_dir is not None
         if is_local_rank_0():
             # Only the first process on the each node should create the cache directory
-            # and move the index file to the final location.
-            # This prevents multiple processes from creating the same cache directory.
+            # and move the index file to the cache directory.
+            # This prevents multiple processes from attempting to create the cache directory simultaneously.
             print(f"Creating cache directory at {cache_dir}.")
             os.makedirs(cache_dir, exist_ok=True)
             cache_index_path = os.path.join(cache_dir, _INDEX_FILENAME)
