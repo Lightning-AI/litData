@@ -1,3 +1,4 @@
+import datetime
 import sys
 from pathlib import Path
 from unittest import mock
@@ -388,3 +389,14 @@ def test_resolve_dir_absolute(tmp_path, monkeypatch):
     link.symlink_to(src)
     assert link.resolve() == src
     assert resolver._resolve_dir(str(link)).path == str(src)
+
+
+def test_resolve_time_template():
+    path_1 = "/logs/log_{%Y-%m}"
+    path_2 = "/logs/my_logfile"
+
+    curr_year = datetime.datetime.now().year
+    curr_month = datetime.datetime.now().month
+
+    assert resolver._resolve_time_template(path_1) == f"/logs/log_{curr_year}-{curr_month:02d}"
+    assert resolver._resolve_time_template(path_2) == path_2
