@@ -84,7 +84,6 @@ def test_map_with_path(tmpdir):
             assert content == "hello world!"
 
     inputs = list(input_dir.iterdir())  # List all files in the directory
-    print(f"inputs: {inputs}")
 
     map(
         fn=update_msg,
