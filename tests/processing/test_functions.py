@@ -60,7 +60,6 @@ def test_get_input_dir_with_s3_path():
 
 # Resize the input image
 def update_msg(file_path: Path, output_dir: Path):
-    # open file and overwrite `Bonjour!`
     with open(os.path.join(output_dir, file_path.name), "w") as f:
         f.write("Bonjour!")
 
