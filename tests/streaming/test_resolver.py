@@ -396,8 +396,9 @@ def test_resolve_time_template():
     path_2 = "/logs/my_logfile"
     path_3 = "/logs/log_{%Y-%m}/important"
 
-    curr_year = datetime.datetime.now().year
-    curr_month = datetime.datetime.now().month
+    current_datetime = datetime.datetime.now()
+    curr_year = current_datetime.year
+    curr_month = current_datetime.month
 
     assert resolver._resolve_time_template(path_1) == f"/logs/log_{curr_year}-{curr_month:02d}"
     assert resolver._resolve_time_template(path_2) == path_2
