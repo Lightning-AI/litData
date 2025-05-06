@@ -588,6 +588,11 @@ def index_parquet_dataset(
     if not _POLARS_AVAILABLE:
         raise ModuleNotFoundError("Please, run: `pip install polars`")
 
+    env = _DistributedEnv.detect()
+    if env.global_rank != 0:
+        # Only rank 0 should index the dataset
+        return
+
     pq_chunks_info = []
     config: Dict[str, Any] = {
         "compression": None,
