@@ -3,14 +3,13 @@
 import os
 import shutil
 import tempfile
-from contextlib import suppress
 from typing import Optional
-
-from filelock import FileLock, Timeout
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_md5_hash, get_default_cache_dir
+from litdata.utilities.env import _DistributedEnv
+from litdata.utilities.torch_utils import maybe_barrier
 
 
 def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
@@ -32,15 +31,23 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
             "URLs must start with 'hf://'. Please check the URL and try again."
         )
 
-    # Acquire a file lock to guarantee exclusive access,
-    # ensuring that multiple processes do not create the index simultaneously.
-    with suppress(Timeout), FileLock(os.path.join(tempfile.gettempdir(), "hf_index.lock")):
-        # Check for existing index in the cache
-        cache_directory = _get_existing_cache(dataset_url, cache_dir)
-        if cache_directory:
-            print(f"Using existing index at {cache_directory}.")
-            return cache_directory
+    env = _DistributedEnv.detect()
 
+    # Check for existing index in the cache
+    cache_directory = _get_existing_cache(dataset_url, cache_dir)
+    if cache_directory:
+        if (env.num_nodes == 1 and env.global_rank == 0) or (
+            env.num_nodes > 1 and env.global_rank % env.num_nodes == 0
+        ):
+            # above condition might not work if num of processes is not equal on each nodes
+            print(f"Using existing index at {cache_directory}.")
+        return cache_directory
+
+    maybe_barrier()  # wait for all processes to reach this point
+
+    # Ensure that only the first process on the first node creates the index file.
+    # This prevents multiple processes or nodes from attempting to create the index simultaneously.
+    if env.global_rank == 0:
         # Otherwise, create a new index file
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_index_path = os.path.join(temp_dir, _INDEX_FILENAME)
@@ -53,7 +60,9 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
             shutil.copyfile(temp_index_path, cache_index_path)
             print(f"Index created at {cache_index_path}.")
 
-    return cache_dir  # type: ignore
+    maybe_barrier()  # wait for all processes to reach this point
+
+    return cache_dir
 
 
 def _get_existing_cache(dataset_url: str, cache_dir: Optional[str]) -> Optional[str]:
