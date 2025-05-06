@@ -59,7 +59,7 @@ def test_get_input_dir_with_s3_path():
 
 
 def update_msg(file_path: Path, output_dir: Path):
-    with open(output_dir / file_path.name, "w") as f:
+    with open(os.path.join(output_dir, file_path.name), "w") as f:
         f.write("Bonjour!")
 
 
