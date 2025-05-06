@@ -300,9 +300,7 @@ def map(
 
         if num_workers == 0:
             num_workers = 1
-        print(f"{type(inputs)=}; {inputs=}")
-        print(f"{type(output_dir)=}; {output_dir=}")
-        print(f"{type(input_dir)=}; {input_dir=}")
+
         data_processor = DataProcessor(
             input_dir=resolved_dir,
             output_dir=_output_dir,
