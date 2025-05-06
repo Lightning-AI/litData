@@ -39,5 +39,5 @@ def is_local_rank_0() -> bool:
 
     env = _DistributedEnv.detect()
 
-    # this condition might not work as expected if num of processes is not equal on each nodes
+    # condition might not work as expected if num of processes is not equal on each nodes
     return (env.num_nodes == 1 and env.global_rank == 0) or (env.num_nodes > 1 and env.global_rank % env.num_nodes == 0)
