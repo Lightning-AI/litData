@@ -1,0 +1,2628 @@
+
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-PQBQ3CV');
+  </script>
+  <!-- End Google Tag Manager -->
+
+  <meta charset="utf-8">
+  <meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+  <meta name="google-site-verification" content="okUst94cAlWSsUsGZTB4xSS4UKTtRV8Nu5XZ9pdd3Aw" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Transform data at scale. Optimize for fast model training. &mdash; litdata 0.2.46 documentation</title>
+  
+
+  
+  
+  
+  
+    <link rel="canonical" href="https://github.com/Lightning-AI/litdata/readme.html"/>
+  
+
+  
+
+  
+  
+    
+
+  
+
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <!-- <link rel="stylesheet" href="_static/pygments.css" type="text/css" /> -->
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/sphinx_paramlinks.css" type="text/css" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="prev" title="lit-data" href="index.html" />
+  <!-- Google Analytics -->
+  
+  <!-- End Google Analytics -->
+  
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+  <!-- Preload the theme fonts -->
+
+<link rel="preload" href="_static/fonts/FreightSans/freight-sans-book.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/FreightSans/freight-sans-medium.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/IBMPlexMono/IBMPlexMono-Medium.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/FreightSans/freight-sans-bold.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/FreightSans/freight-sans-medium-italic.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/IBMPlexMono/IBMPlexMono-SemiBold.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/UCity/UCity-Light.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/UCity/UCity-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/UCity/UCity-Semibold.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="_static/fonts/Inconsolata/Inconsolata.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+
+<!-- Preload the katex fonts -->
+
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Math-Italic.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Main-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Main-Bold.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Size1-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Size4-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Size2-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Size3-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/katex@0.10.0/dist/fonts/KaTeX_Caligraphic-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+  <script defer src="https://use.fontawesome.com/releases/v6.1.1/js/all.js" integrity="sha384-xBXmu0dk1bEoiwd71wOonQLyH+VpgR1XcDH3rtxrLww5ajNTuMvBdL5SOiFZnNdp" crossorigin="anonymous"></script>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+  <script src="_static/js/react/react.jsx" type="text/babel"></script>
+</head>
+
+<div class="container-fluid header-holder tutorials-header" id="header-holder">
+  <div class="container">
+    <div class="header-container">
+      <a class="header-logo" href="https://lightning-ai.github.io/lit-data/" aria-label="PyTorch Lightning">
+      <!--  <img class="call-to-action-img" src="_static/images/logo-lightning-icon.png"/> -->
+      </a>
+
+      <div class="main-menu">
+        <ul>
+          <li>
+            <a href="https://lightning.ai">Get Started</a>
+          </li>
+
+          <li>
+            <a href="https://www.Lightning.ai/blog">Blog</a>
+          </li>
+
+          <li>
+            <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+              <a class="resource-option with-down-orange-arrow">
+                Docs
+              </a>
+              <div class="resources-dropdown-menu">
+                <a class="doc-dropdown-option nav-dropdown-item" href="https://lightning.ai/docs/pytorch/stable/">
+                  <span class="dropdown-title">PyTorch Lightning</span>
+                </a>
+                <a class="doc-dropdown-option nav-dropdown-item" href="https://lightning.ai/docs/fabric/stable/">
+                  <span class="dropdown-title">Lightning Fabric</span>
+                </a>
+                <a class="doc-dropdown-option nav-dropdown-item" href="https://torchmetrics.readthedocs.io/en/stable/">
+                  <span class="dropdown-title">TorchMetrics</span>
+                </a>
+                <a class="doc-dropdown-option nav-dropdown-item" href="https://lightning-flash.readthedocs.io/en/stable/">
+                  <span class="dropdown-title">Lightning Flash</span>
+                </a>
+                <a class="doc-dropdown-option nav-dropdown-item" href="https://lightning-bolts.readthedocs.io/en/stable/">
+                  <span class="dropdown-title">Lightning Bolts</span>
+                </a>
+            </div>
+          </li>
+
+          <!--<li>
+            <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+              <a class="resource-option with-down-arrow">
+                Resources
+              </a>
+              <div class="resources-dropdown-menu">
+                <a class="nav-dropdown-item" href="">
+                  <span class="dropdown-title">Community</span>
+                  <p>Join the PyTorch developer community to contribute, learn, and get your questions answered.</p>
+                </a>
+                <a class="nav-dropdown-item" href="https://lightning.ai">
+                  <span class="dropdown-title">Developer Resources</span>
+                  <p>Find resources and get questions answered</p>
+                </a>
+                <a class="nav-dropdown-item" href="" target="_blank">
+                  <span class="dropdown-title">Forums</span>
+                  <p>A place to discuss PyTorch code, issues, install, research</p>
+                </a>
+                <a class="nav-dropdown-item" href="">
+                  <span class="dropdown-title">Models (Beta)</span>
+                  <p>Discover, publish, and reuse pre-trained models</p>
+                </a>
+              </div>
+            </div>
+          </li>-->
+
+          
+
+          <li>
+            <a href="https://github.com/Lightning-AI/lit-data">GitHub</a>
+          </li>
+
+          <li>
+            <a href="https://www.lightning.ai/">Lightning AI</a>
+          </li>
+
+        </ul>
+      </div>
+
+      <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+    </div>
+  </div>
+</div>
+
+<body class="pytorch-body">
+
+   
+
+    
+
+    <div class="table-of-contents-link-wrapper">
+      <span>Table of Contents</span>
+      <a href="#" class="toggle-table-of-contents" data-behavior="toggle-table-of-contents"></a>
+    </div>
+
+    <nav data-toggle="wy-nav-shift" class="pytorch-left-menu" id="pytorch-left-menu">
+      <div class="pytorch-side-scroll">
+        <div class="pytorch-menu pytorch-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          <div class="pytorch-left-menu-search">
+            
+
+            
+              
+              
+                <div class="version">
+                  0.2.46
+                </div>
+              
+            
+
+            
+
+
+  
+
+
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search Docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+            
+          </div>
+
+          
+            
+            
+              
+            
+            
+              <p class="caption" role="heading"><span class="caption-text">Start here</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Transform data at scale. Optimize for fast model training.</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#quick-start">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#speed-up-model-training">Speed up model training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#transform-datasets">Transform datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#use-a-local-or-s3-folder">use a local or S3 folder</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#resize-the-input-image">resize the input image</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#key-features">Key Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#boto3-compatible-storage-options-for-a-custom-s3-compatible-endpoint">boto3 compatible storage options for a custom S3-compatible endpoint</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#s5cmd-compatible-storage-options-for-a-custom-s3-compatible-endpoint">s5cmd compatible storage options for a custom S3-compatible endpoint</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#note-if-s5cmd-is-installed-it-will-be-used-by-default-for-s3-operations-if-you-prefer-not-to-use-s5cmd-you-can-disable-it-by-setting-the-environment-variable-disable-s5cmd-1">Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: <code class="docutils literal notranslate"><span class="pre">DISABLE_S5CMD=1</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="#initialize-the-streamingdataset-with-the-custom-cache-directory">Initialize the StreamingDataset with the custom cache directory</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#optional-to-speed-up-downloads-on-high-bandwidth-networks">Optional: To speed up downloads on high-bandwidth networks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#define-the-hugging-face-dataset-uri">Define the Hugging Face dataset URI</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#create-a-streaming-dataset">Create a streaming dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#print-the-first-sample">Print the first sample</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#stream-the-dataset-using-streamingdataloader">Stream the dataset using StreamingDataLoader</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <div class="pytorch-container">
+      <div class="pytorch-page-level-bar" id="pytorch-page-level-bar">
+        <div class="pytorch-breadcrumbs-wrapper">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="pytorch-breadcrumbs">
+    
+      <li>
+        <a href="index.html">
+          
+            Docs
+          
+        </a> &gt;
+      </li>
+
+        
+      <li>Transform data at scale. Optimize for fast model training.</li>
+    
+    
+      <li class="pytorch-breadcrumbs-aside">
+        
+            
+            <a href="_sources/readme.md.txt" rel="nofollow"><img src="_static/images/view-page-source-icon.svg"></a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+</div>
+        </div>
+
+        <div class="pytorch-shortcuts-wrapper" id="pytorch-shortcuts-wrapper">
+          Shortcuts
+        </div>
+      </div>
+
+      <section data-toggle="wy-nav-shift" id="pytorch-content-wrap" class="pytorch-content-wrap">
+        <div class="pytorch-content-left">
+
+        
+          
+          <div class="rst-content">
+          
+            <div role="main" class="main-content" itemscope="itemscope" itemtype="http://schema.org/Article">
+             <article itemprop="articleBody" id="pytorch-article" class="pytorch-article">
+              
+  <p>.. container::</p>
+<p></p>
+<p><strong>Transform datasets at scale.
+Optimize data for fast AI model training.</strong></p>
+<p>.. raw:: html</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>  &lt;pre&gt;
+  Transform                              Optimize
+    
+  ✅ Parallelize data processing       ✅ Stream large cloud datasets          
+  ✅ Create vector embeddings          ✅ Accelerate training by 20x           
+  ✅ Run distributed inference         ✅ Pause and resume data streaming      
+  ✅ Scrape websites at scale          ✅ Use remote data without local loading
+  &lt;/pre&gt;
+</pre></div>
+</div>
+<hr class="docutils" />
+<p>|PyPI| |Downloads| |License|</p>
+<p>.. raw:: html</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>  &lt;p align=&quot;center&quot;&gt;
+</pre></div>
+</div>
+<p>Lightning AI • Quick start • Optimize data • Transform data •
+Features • Benchmarks • Templates • Community</p>
+<p>.. raw:: html</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>  &lt;/p&gt;
+</pre></div>
+</div>
+<p></p>
+<p></p>
+<section id="transform-data-at-scale-optimize-for-fast-model-training">
+<h1>Transform data at scale. Optimize for fast model training.<a class="headerlink" href="#transform-data-at-scale-optimize-for-fast-model-training" title="Permalink to this heading">¶</a></h1>
+<p>LitData scales <code class="docutils literal notranslate"><span class="pre">data</span> <span class="pre">processing</span> <span class="pre">tasks</span> <span class="pre">&lt;#transform-datasets&gt;</span></code>__ (data
+scraping, image resizing, distributed inference, embedding creation) on
+local or cloud machines. It also enables <code class="docutils literal notranslate"><span class="pre">optimizing</span> <span class="pre">datasets</span> <span class="pre">&lt;#speed-up-model-training&gt;</span></code>__ to accelerate AI model training
+and work with large remote datasets without local loading.</p>
+<p></p>
+</section>
+<section id="quick-start">
+<h1>Quick start<a class="headerlink" href="#quick-start" title="Permalink to this heading">¶</a></h1>
+<p>First, install LitData:</p>
+<p>.. code:: bash</p>
+<p>pip install litdata</p>
+<p>Choose your workflow:</p>
+<p>| 🚀 <code class="docutils literal notranslate"><span class="pre">Speed</span> <span class="pre">up</span> <span class="pre">model</span> <span class="pre">training</span> <span class="pre">&lt;#speed-up-model-training&gt;</span></code>__
+| 🚀 <code class="docutils literal notranslate"><span class="pre">Transform</span> <span class="pre">datasets</span> <span class="pre">&lt;#transform-datasets&gt;</span></code>__</p>
+<p></p>
+<p>.. raw:: html</p>
+   <details>
+<p>.. raw:: html</p>
+   <summary>
+<p>Advanced install</p>
+<p>.. raw:: html</p>
+   </summary>
+<p>Install all the extras</p>
+<p>.. code:: bash</p>
+<p>pip install ‘litdata[extras]’</p>
+<p>.. raw:: html</p>
+   </details>
+<p></p>
+</section>
+<hr class="docutils" />
+<section id="speed-up-model-training">
+<h1>Speed up model training<a class="headerlink" href="#speed-up-model-training" title="Permalink to this heading">¶</a></h1>
+<p>Accelerate model training (20x faster) by optimizing datasets for
+streaming directly from cloud storage. Work with remote data without
+local downloads with features like loading data subsets, accessing
+individual samples, and resumable streaming.</p>
+<p><strong>Step 1: Optimize the data</strong> This step will format the dataset for fast
+loading. The data will be written in a chunked binary format.</p>
+<p>.. code:: python</p>
+<p>import numpy as np
+from PIL import Image
+import litdata as ld</p>
+<p>def random_images(index):
+# Replace with your actual image loading here (e.g., .jpg, .png, etc.)
+# (recommended to pass as compressed formats like JPEG for better storage and optimized streaming speed)
+# You can also apply resizing or reduce image quality to further increase streaming speed and save space.
+fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+fake_labels = np.random.randint(10)</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>   # You can use any key:value pairs. Note that their types must not change between samples, and Python lists must
+   # always contain the same number of elements with the same types.
+   data = {&quot;index&quot;: index, &quot;image&quot;: fake_images, &quot;class&quot;: fake_labels}
+
+   return data
+</pre></div>
+</div>
+<p>if <strong>name</strong> == “<strong>main</strong>”:
+# The optimize function writes data in an optimized format.
+ld.optimize(
+fn=random_images,                   # the function applied to each input
+inputs=list(range(1000)),           # the inputs to the function (here it’s a list of numbers)
+output_dir=”fast_data”,             # optimized data is stored here
+num_workers=4,                      # The number of workers on the same machine
+chunk_bytes=”64MB”                  # size of each chunk
+)</p>
+<p><strong>Step 2: Put the data on the cloud</strong></p>
+<p>Upload the data to a <code class="docutils literal notranslate"><span class="pre">Lightning</span> <span class="pre">Studio</span> <span class="pre">&lt;https://lightning.ai&gt;</span></code>__ (backed
+by S3) or your own S3 bucket:</p>
+<p>.. code:: bash</p>
+<p>aws s3 cp –recursive fast_data s3://my-bucket/fast_data</p>
+<p><strong>Step 3: Stream the data during training</strong></p>
+<p>Load the data by replacing the PyTorch DataSet and DataLoader with the
+StreamingDataset and StreamingDataloader</p>
+<p>.. code:: python</p>
+<p>import litdata as ld</p>
+<p>train_dataset = ld.StreamingDataset(‘s3://my-bucket/fast_data’, shuffle=True, drop_last=True)
+train_dataloader = ld.StreamingDataLoader(train_dataset)</p>
+<p>for sample in train_dataloader:
+img, cls = sample[‘image’], sample[‘class’]</p>
+<p><strong>Key benefits:</strong></p>
+<p>| ✅ Accelerate training: Optimized datasets load 20x faster.
+| ✅ Stream cloud datasets: Work with cloud data without downloading it.
+| ✅ Pytorch-first: Works with PyTorch libraries like PyTorch Lightning,
+Lightning Fabric, Hugging Face.
+| ✅ Easy collaboration: Share and access datasets in the cloud,
+streamlining team projects.
+| ✅ Scale across GPUs: Streamed data automatically scales to all GPUs.
+| ✅ Flexible storage: Use S3, GCS, Azure, or your own cloud account for
+data storage.
+| ✅ Compression: Reduce your data footprint by using advanced
+compression algorithms.
+| ✅ Run local or cloud: Run on your own machines or auto-scale to 1000s
+of cloud GPUs with Lightning Studios.
+| ✅ Enterprise security: Self host or process data on your cloud
+account with Lightning Studios.</p>
+<p></p>
+</section>
+<hr class="docutils" />
+<section id="transform-datasets">
+<h1>Transform datasets<a class="headerlink" href="#transform-datasets" title="Permalink to this heading">¶</a></h1>
+<p>Accelerate data processing tasks (data scraping, image resizing,
+embedding creation, distributed inference) by parallelizing (map) the
+work across many machines at once.</p>
+<p>Here’s an example that resizes and crops a large image dataset:</p>
+<p>.. code:: python</p>
+<p>from PIL import Image
+import litdata as ld</p>
+</section>
+<section id="use-a-local-or-s3-folder">
+<h1>use a local or S3 folder<a class="headerlink" href="#use-a-local-or-s3-folder" title="Permalink to this heading">¶</a></h1>
+<p>input_dir = “my_large_images”     # or “s3://my-bucket/my_large_images”
+output_dir = “my_resized_images”  # or “s3://my-bucket/my_resized_images”</p>
+<p>inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]</p>
+</section>
+<section id="resize-the-input-image">
+<h1>resize the input image<a class="headerlink" href="#resize-the-input-image" title="Permalink to this heading">¶</a></h1>
+<p>def resize_image(image_path, output_dir):
+output_image_path = os.path.join(output_dir, os.path.basename(image_path))
+Image.open(image_path).resize((224, 224)).save(output_image_path)</p>
+<p>ld.map(
+fn=resize_image,
+inputs=inputs,
+output_dir=”output_dir”,
+)</p>
+<p><strong>Key benefits:</strong></p>
+<p>| ✅ Parallelize processing: Reduce processing time by transforming data
+across multiple machines simultaneously.
+| ✅ Scale to large data: Increase the size of datasets you can
+efficiently handle.
+| ✅ Flexible usecases: Resize images, create embeddings, scrape the
+internet, etc…
+| ✅ Run local or cloud: Run on your own machines or auto-scale to 1000s
+of cloud GPUs with Lightning Studios.
+| ✅ Enterprise security: Self host or process data on your cloud
+account with Lightning Studios.</p>
+<p></p>
+</section>
+<hr class="docutils" />
+<section id="key-features">
+<h1>Key Features<a class="headerlink" href="#key-features" title="Permalink to this heading">¶</a></h1>
+<section id="features-for-optimizing-and-streaming-datasets-for-model-training">
+<h2>Features for optimizing and streaming datasets for model training<a class="headerlink" href="#features-for-optimizing-and-streaming-datasets-for-model-training" title="Permalink to this heading">¶</a></h2>
+<p>.. raw:: html</p>
+   <details>
+<p>.. raw:: html</p>
+   <summary>
+<p>✅ Stream large cloud datasets</p>
+<p>.. raw:: html</p>
+   </summary>
+<p></p>
+<p>Use data stored on the cloud without needing to download it all to your
+computer, saving time and space.</p>
+<p>Imagine you’re working on a project with a huge amount of data stored
+online. Instead of waiting hours to download it all, you can start
+working with the data almost immediately by streaming it.</p>
+<p>Once you’ve optimized the dataset with LitData, stream it as follows:</p>
+<p>.. code:: python</p>
+<p>from litdata import StreamingDataset, StreamingDataLoader</p>
+<p>dataset = StreamingDataset(‘s3://my-bucket/my-data’, shuffle=True)
+dataloader = StreamingDataLoader(dataset, batch_size=64)</p>
+<p>for batch in dataloader:
+process(batch)  # Replace with your data processing logic</p>
+<p>Additionally, you can inject client connection settings for
+<code class="docutils literal notranslate"><span class="pre">S3</span> <span class="pre">&lt;https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html#boto3.session.Session.client&gt;</span></code>__
+or GCP when initializing your dataset. This is useful for specifying
+custom endpoints and credentials per dataset.</p>
+<p>.. code:: python</p>
+<p>from litdata import StreamingDataset</p>
+</section>
+</section>
+<section id="boto3-compatible-storage-options-for-a-custom-s3-compatible-endpoint">
+<h1>boto3 compatible storage options for a custom S3-compatible endpoint<a class="headerlink" href="#boto3-compatible-storage-options-for-a-custom-s3-compatible-endpoint" title="Permalink to this heading">¶</a></h1>
+<p>storage_options = {
+“endpoint_url”: “your_endpoint_url”,
+“aws_access_key_id”: “your_access_key_id”,
+“aws_secret_access_key”: “your_secret_access_key”,
+}</p>
+<p>dataset = StreamingDataset(‘s3://my-bucket/my-data’, storage_options=storage_options)</p>
+</section>
+<section id="s5cmd-compatible-storage-options-for-a-custom-s3-compatible-endpoint">
+<h1>s5cmd compatible storage options for a custom S3-compatible endpoint<a class="headerlink" href="#s5cmd-compatible-storage-options-for-a-custom-s3-compatible-endpoint" title="Permalink to this heading">¶</a></h1>
+</section>
+<section id="note-if-s5cmd-is-installed-it-will-be-used-by-default-for-s3-operations-if-you-prefer-not-to-use-s5cmd-you-can-disable-it-by-setting-the-environment-variable-disable-s5cmd-1">
+<h1>Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: <code class="docutils literal notranslate"><span class="pre">DISABLE_S5CMD=1</span></code><a class="headerlink" href="#note-if-s5cmd-is-installed-it-will-be-used-by-default-for-s3-operations-if-you-prefer-not-to-use-s5cmd-you-can-disable-it-by-setting-the-environment-variable-disable-s5cmd-1" title="Permalink to this heading">¶</a></h1>
+<p>storage_options = {
+“AWS_ACCESS_KEY_ID”: “your_access_key_id”,
+“AWS_SECRET_ACCESS_KEY”: “your_secret_access_key”,
+“S3_ENDPOINT_URL”: “your_endpoint_url”,  # Required only for custom endpoints
+}</p>
+<p>dataset = StreamingDataset(‘s3://my-bucket/my-data’, storage_options=storage_options)</p>
+<p>Alternative: Using <code class="docutils literal notranslate"><span class="pre">s5cmd</span></code> for S3 Operations</p>
+<p>Also, you can specify a custom cache directory when initializing your
+dataset. This is useful when you want to store the cache in a specific
+location.</p>
+<p>.. code:: python</p>
+<p>from litdata import StreamingDataset</p>
+</section>
+<section id="initialize-the-streamingdataset-with-the-custom-cache-directory">
+<h1>Initialize the StreamingDataset with the custom cache directory<a class="headerlink" href="#initialize-the-streamingdataset-with-the-custom-cache-directory" title="Permalink to this heading">¶</a></h1>
+<p>dataset = StreamingDataset(‘s3://my-bucket/my-data’, cache_dir=”/path/to/cache”)</p>
+<p>.. raw:: html</p>
+   </details>
+<p>.. raw:: html</p>
+   <details>
+<p>.. raw:: html</p>
+   <summary>
+<p>✅ Stream Hugging Face 🤗 datasets</p>
+<p>.. raw:: html</p>
+   </summary>
+<p></p>
+<p>To use your favorite Hugging Face dataset with LitData, simply pass its
+URL to <code class="docutils literal notranslate"><span class="pre">StreamingDataset</span></code>.</p>
+<p>.. raw:: html</p>
+   <details>
+<p>.. raw:: html</p>
+   <summary>
+<p>How to get HF dataset URI?</p>
+<p>.. raw:: html</p>
+   </summary>
+<p>https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72</p>
+<p>.. raw:: html</p>
+   </details>
+<p><strong>Prerequisites:</strong></p>
+<p>Install the required dependencies to stream Hugging Face datasets:</p>
+<p>.. code:: sh</p>
+<p>pip install “litdata[extra]” huggingface_hub</p>
+</section>
+<section id="optional-to-speed-up-downloads-on-high-bandwidth-networks">
+<h1>Optional: To speed up downloads on high-bandwidth networks<a class="headerlink" href="#optional-to-speed-up-downloads-on-high-bandwidth-networks" title="Permalink to this heading">¶</a></h1>
+<p>pip install hf_transfer
+export HF_HUB_ENABLE_HF_TRANSFER=1</p>
+<p><strong>Stream Hugging Face dataset:</strong></p>
+<p>.. code:: python</p>
+<p>import litdata as ld</p>
+</section>
+<section id="define-the-hugging-face-dataset-uri">
+<h1>Define the Hugging Face dataset URI<a class="headerlink" href="#define-the-hugging-face-dataset-uri" title="Permalink to this heading">¶</a></h1>
+<p>hf_dataset_uri = “hf://datasets/leonardPKU/clevr_cogen_a_train/data”</p>
+</section>
+<section id="create-a-streaming-dataset">
+<h1>Create a streaming dataset<a class="headerlink" href="#create-a-streaming-dataset" title="Permalink to this heading">¶</a></h1>
+<p>dataset = ld.StreamingDataset(hf_dataset_uri)</p>
+</section>
+<section id="print-the-first-sample">
+<h1>Print the first sample<a class="headerlink" href="#print-the-first-sample" title="Permalink to this heading">¶</a></h1>
+<p>print(“Sample”, dataset[0])</p>
+</section>
+<section id="stream-the-dataset-using-streamingdataloader">
+<h1>Stream the dataset using StreamingDataLoader<a class="headerlink" href="#stream-the-dataset-using-streamingdataloader" title="Permalink to this heading">¶</a></h1>
+<p>dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
+for sample in dataloader:
+pass</p>
+<p>You don’t need to worry about indexing the dataset or any other setup.
+<strong>LitData</strong> will <strong>handle all the necessary steps automatically</strong> and
+<code class="docutils literal notranslate"><span class="pre">cache</span></code> the <code class="docutils literal notranslate"><span class="pre">index.json</span></code> file, so you won’t have to index it again.</p>
+<p>This ensures that the next time you stream the dataset, the indexing
+step is skipped..</p>
+<p></p>
+<p>Indexing the HF dataset (Optional)</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
+If the Hugging Face dataset hasn’t been indexed yet, you can index it
+first using the ``index_hf_dataset`` method, and then stream it using
+the code above.
+
+.. code:: python
+
+   import litdata as ld
+
+   hf_dataset_uri = &quot;hf://datasets/leonardPKU/clevr_cogen_a_train/data&quot;
+
+   ld.index_hf_dataset(hf_dataset_uri)
+
+- Indexing the Hugging Face dataset ahead of time will make streaming
+  abit faster, as it avoids the need for real-time indexing during
+  streaming.
+
+- To use ``HF gated dataset``, ensure the ``HF_TOKEN`` environment
+  variable is set.
+
+**Note**: For HuggingFace datasets, ``indexing`` &amp; ``streaming`` is
+supported only for datasets in **``Parquet format``**.
+
+ 
+
+Full Workflow for Hugging Face Datasets
+</pre></div>
+</div>
+<p>For full control over the cache
+path(<code class="docutils literal notranslate"><span class="pre">where</span> <span class="pre">index.json</span> <span class="pre">file</span> <span class="pre">will</span> <span class="pre">be</span> <span class="pre">stored</span></code>) and other configurations,
+follow these steps:</p>
+<ol class="arabic simple">
+<li><p>Index the Hugging Face dataset first:</p></li>
+</ol>
+<p>.. code:: python</p>
+<p>import litdata as ld</p>
+<p>hf_dataset_uri = “hf://datasets/open-thoughts/OpenThoughts-114k/data”</p>
+<p>ld.index_parquet_dataset(hf_dataset_uri, “hf-index-dir”)</p>
+<ol class="arabic simple" start="2">
+<li><p>To stream HF datasets now, pass the <code class="docutils literal notranslate"><span class="pre">HF</span> <span class="pre">dataset</span> <span class="pre">URI</span></code>, the path
+where the <code class="docutils literal notranslate"><span class="pre">index.json</span></code> file is stored, and <code class="docutils literal notranslate"><span class="pre">ParquetLoader</span></code> as the
+<code class="docutils literal notranslate"><span class="pre">item_loader</span></code> to the <strong><code class="docutils literal notranslate"><span class="pre">StreamingDataset</span></code></strong>:</p></li>
+</ol>
+<p>.. code:: python</p>
+<p>import litdata as ld
+from litdata.streaming.item_loader import ParquetLoader</p>
+<p>hf_dataset_uri = “hf://datasets/open-thoughts/OpenThoughts-114k/data”</p>
+<p>dataset = ld.StreamingDataset(hf_dataset_uri, item_loader=ParquetLoader(), index_path=”hf-index-dir”)</p>
+<p>for batch in ld.StreamingDataLoader(dataset, batch_size=4):
+pass</p>
+<p></p>
+<p>LitData <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> v/s <code class="docutils literal notranslate"><span class="pre">Parquet</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
+.. raw:: html
+
+   &lt;!-- TODO: Update benchmark --&gt;
+
+Below is the benchmark for the ``Imagenet dataset (155 GB)``,
+demonstrating that
+**``optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files``**.
+
++------------------------+---------+--------------+-------------------+
+| **Operation**          | **Size  | **Time       | **Throughput      |
+|                        | (GB)**  | (seconds)**  | (images/sec)**    |
++========================+=========+==============+===================+
+| LitData Optimize       | 45      | 283.17       | 4000-4700         |
+| Dataset                |         |              |                   |
++------------------------+---------+--------------+-------------------+
+| Parquet Optimize       | 51      | 465.96       | 3600-3900         |
+| Dataset                |         |              |                   |
++------------------------+---------+--------------+-------------------+
+| Index Parquet Dataset  | N/A     | 6            | N/A               |
+| (overhead)             |         |              |                   |
++------------------------+---------+--------------+-------------------+
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Streams on multi-GPU, multi-node
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Data optimized and loaded with Lightning automatically streams
+efficiently in distributed training across GPUs or multi-node.
+
+The ``StreamingDataset`` and ``StreamingDataLoader`` automatically make
+sure each rank receives the same quantity of varied batches of data, so
+it works out of the box with your favorite frameworks (`PyTorch
+Lightning &lt;https://lightning.ai/docs/pytorch/stable/&gt;`__, `Lightning
+Fabric &lt;https://lightning.ai/docs/fabric/stable/&gt;`__, or
+`PyTorch &lt;https://pytorch.org/docs/stable/index.html&gt;`__) to do
+distributed training.
+
+Here you can see an illustration showing how the Streaming Dataset works
+with multi node / multi gpu under the hood.
+
+.. code:: python
+
+   from litdata import StreamingDataset, StreamingDataLoader
+
+   # For the training dataset, don&#39;t forget to enable shuffle and drop_last !!! 
+   train_dataset = StreamingDataset(&#39;s3://my-bucket/my-train-data&#39;, shuffle=True, drop_last=True)
+   train_dataloader = StreamingDataLoader(train_dataset, batch_size=64)
+
+   for batch in train_dataloader:
+       process(batch)  # Replace with your data processing logic
+
+   val_dataset = StreamingDataset(&#39;s3://my-bucket/my-val-data&#39;, shuffle=False, drop_last=False)
+   val_dataloader = StreamingDataLoader(val_dataset, batch_size=64)
+
+   for batch in val_dataloader:
+       process(batch)  # Replace with your data processing logic
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Stream from multiple cloud providers
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+The ``StreamingDataset`` provides support for reading optimized datasets
+from common cloud storage providers like AWS S3, Google Cloud Storage
+(GCS), and Azure Blob Storage. Below are examples of how to use
+StreamingDataset with each cloud provider.
+
+.. code:: python
+
+   import os
+   import litdata as ld
+
+   # Read data from AWS S3 using s5cmd
+   # Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
+   aws_storage_options={
+       &quot;AWS_ACCESS_KEY_ID&quot;: os.environ[&#39;AWS_ACCESS_KEY_ID&#39;],
+       &quot;AWS_SECRET_ACCESS_KEY&quot;: os.environ[&#39;AWS_SECRET_ACCESS_KEY&#39;],
+       &quot;S3_ENDPOINT_URL&quot;: os.environ[&#39;AWS_ENDPOINT_URL&#39;],  # Required only for custom endpoints
+   }
+   dataset = ld.StreamingDataset(&quot;s3://my-bucket/my-data&quot;, storage_options=aws_storage_options)
+
+   # Read Data from AWS S3 with Unsigned Request using s5cmd
+   aws_storage_options={
+     &quot;AWS_NO_SIGN_REQUEST&quot;: &quot;Yes&quot; # Required for unsigned requests
+     &quot;S3_ENDPOINT_URL&quot;: os.environ[&#39;AWS_ENDPOINT_URL&#39;],  # Required only for custom endpoints
+   }
+   dataset = ld.StreamingDataset(&quot;s3://my-bucket/my-data&quot;, storage_options=aws_storage_options)
+
+   # Read data from AWS S3 using boto3
+   os.environ[&quot;DISABLE_S5CMD&quot;] = &quot;1&quot;
+   aws_storage_options={
+       &quot;aws_access_key_id&quot;: os.environ[&#39;AWS_ACCESS_KEY_ID&#39;],
+       &quot;aws_secret_access_key&quot;: os.environ[&#39;AWS_SECRET_ACCESS_KEY&#39;],
+   }
+   dataset = ld.StreamingDataset(&quot;s3://my-bucket/my-data&quot;, storage_options=aws_storage_options)
+
+
+   # Read data from GCS
+   gcp_storage_options={
+       &quot;project&quot;: os.environ[&#39;PROJECT_ID&#39;],
+   }
+   dataset = ld.StreamingDataset(&quot;gs://my-bucket/my-data&quot;, storage_options=gcp_storage_options)
+
+   # Read data from Azure
+   azure_storage_options={
+       &quot;account_url&quot;: f&quot;https://{os.environ[&#39;AZURE_ACCOUNT_NAME&#39;]}.blob.core.windows.net&quot;,
+       &quot;credential&quot;: os.environ[&#39;AZURE_ACCOUNT_ACCESS_KEY&#39;]
+   }
+   dataset = ld.StreamingDataset(&quot;azure://my-bucket/my-data&quot;, storage_options=azure_storage_options)
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Pause, resume data streaming
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Stream data during long training, if interrupted, pick up right where
+you left off without any issues.
+
+LitData provides a stateful ``Streaming DataLoader`` e.g. you can
+``pause`` and ``resume`` your training whenever you want.
+
+Info: The ``Streaming DataLoader`` was used by
+`Lit-GPT &lt;https://github.com/Lightning-AI/lit-gpt/blob/main/pretrain/tinyllama.py&gt;`__
+to pretrain LLMs. Restarting from an older checkpoint was critical to
+get to pretrain the full model due to several failures (network, CUDA
+Errors, etc..).
+
+.. code:: python
+
+   import os
+   import torch
+   from litdata import StreamingDataset, StreamingDataLoader
+
+   dataset = StreamingDataset(&quot;s3://my-bucket/my-data&quot;, shuffle=True)
+   dataloader = StreamingDataLoader(dataset, num_workers=os.cpu_count(), batch_size=64)
+
+   # Restore the dataLoader state if it exists
+   if os.path.isfile(&quot;dataloader_state.pt&quot;):
+       state_dict = torch.load(&quot;dataloader_state.pt&quot;)
+       dataloader.load_state_dict(state_dict)
+
+   # Iterate over the data
+   for batch_idx, batch in enumerate(dataloader):
+
+       # Store the state every 1000 batches
+       if batch_idx % 1000 == 0:
+           torch.save(dataloader.state_dict(), &quot;dataloader_state.pt&quot;)
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ LLM Pre-training
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+LitData is highly optimized for LLM pre-training. First, we need to
+tokenize the entire dataset and then we can consume it.
+
+.. code:: python
+
+   import json
+   from pathlib import Path
+   import zstandard as zstd
+   from litdata import optimize, TokensLoader
+   from tokenizer import Tokenizer
+   from functools import partial
+
+   # 1. Define a function to convert the text within the jsonl files into tokens
+   def tokenize_fn(filepath, tokenizer=None):
+       with zstd.open(open(filepath, &quot;rb&quot;), &quot;rt&quot;, encoding=&quot;utf-8&quot;) as f:
+           for row in f:
+               text = json.loads(row)[&quot;text&quot;]
+               if json.loads(row)[&quot;meta&quot;][&quot;redpajama_set_name&quot;] == &quot;RedPajamaGithub&quot;:
+                   continue  # exclude the GitHub data since it overlaps with starcoder
+               text_ids = tokenizer.encode(text, bos=False, eos=True)
+               yield text_ids
+
+   if __name__ == &quot;__main__&quot;:
+       # 2. Generate the inputs (we are going to optimize all the compressed json files from SlimPajama dataset )
+       input_dir = &quot;./slimpajama-raw&quot;
+       inputs = [str(file) for file in Path(f&quot;{input_dir}/SlimPajama-627B/train&quot;).rglob(&quot;*.zst&quot;)]
+
+       # 3. Store the optimized data wherever you want under &quot;/teamspace/datasets&quot; or &quot;/teamspace/s3_connections&quot;
+       outputs = optimize(
+           fn=partial(tokenize_fn, tokenizer=Tokenizer(f&quot;{input_dir}/checkpoints/Llama-2-7b-hf&quot;)), # Note: You can use HF tokenizer or any others
+           inputs=inputs,
+           output_dir=&quot;./slimpajama-optimized&quot;,
+           chunk_size=(2049 * 8012),
+           # This is important to inform LitData that we are encoding contiguous 1D array (tokens). 
+           # LitData skips storing metadata for each sample e.g all the tokens are concatenated to form one large tensor.
+           item_loader=TokensLoader(),
+       )
+
+.. code:: python
+
+   import os
+   from litdata import StreamingDataset, StreamingDataLoader, TokensLoader
+   from tqdm import tqdm
+
+   # Increase by one because we need the next word as well
+   dataset = StreamingDataset(
+     input_dir=f&quot;./slimpajama-optimized/train&quot;,
+     item_loader=TokensLoader(block_size=2048 + 1),
+     shuffle=True,
+     drop_last=True,
+   )
+
+   train_dataloader = StreamingDataLoader(dataset, batch_size=8, pin_memory=True, num_workers=os.cpu_count())
+
+   # Iterate over the SlimPajama dataset
+   for batch in tqdm(train_dataloader):
+       pass
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Filter illegal data
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Sometimes, you have bad data that you don’t want to include in the
+optimized dataset. With LitData, yield only the good data sample to
+include.
+
+.. code:: python
+
+   from litdata import optimize, StreamingDataset
+
+   def should_keep(index) -&gt; bool:
+     # Replace with your own logic
+     return index % 2 == 0
+
+
+   def fn(data):
+       if should_keep(data):
+           yield data
+
+   if __name__ == &quot;__main__&quot;:
+       optimize(
+           fn=fn,
+           inputs=list(range(1000)),
+           output_dir=&quot;only_even_index_optimized&quot;,
+           chunk_bytes=&quot;64MB&quot;,
+           num_workers=1
+       )
+
+       dataset = StreamingDataset(&quot;only_even_index_optimized&quot;)
+       data = list(dataset)
+       print(data)
+       # [0, 2, 4, 6, 8, 10, ..., 992, 994, 996, 998]
+
+You can even use try/expect.
+
+.. code:: python
+
+   from litdata import optimize, StreamingDataset
+
+   def fn(data):
+       try:
+           yield 1 / data 
+       except:
+           pass
+
+   if __name__ == &quot;__main__&quot;:
+       optimize(
+           fn=fn,
+           inputs=[0, 0, 0, 1, 2, 4, 0],
+           output_dir=&quot;only_defined_ratio_optimized&quot;,
+           chunk_bytes=&quot;64MB&quot;,
+           num_workers=1
+       )
+
+       dataset = StreamingDataset(&quot;only_defined_ratio_optimized&quot;)
+       data = list(dataset)
+       # The 0 are filtered out as they raise a division by zero 
+       print(data)
+       # [1.0, 0.5, 0.25] 
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Combine datasets
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Mix and match different sets of data to experiment and create better
+models.
+
+Combine datasets with ``CombinedStreamingDataset``. As an example, this
+mixture of
+`Slimpajama &lt;https://huggingface.co/datasets/cerebras/SlimPajama-627B&gt;`__
+&amp; `StarCoder &lt;https://huggingface.co/datasets/bigcode/starcoderdata&gt;`__
+was used in the `TinyLLAMA &lt;https://github.com/jzhang38/TinyLlama&gt;`__
+project to pretrain a 1.1B Llama model on 3 trillion tokens.
+
+.. code:: python
+
+   from litdata import StreamingDataset, CombinedStreamingDataset, StreamingDataLoader, TokensLoader
+   from tqdm import tqdm
+   import os
+
+   train_datasets = [
+       StreamingDataset(
+           input_dir=&quot;s3://tinyllama-template/slimpajama/train/&quot;,
+           item_loader=TokensLoader(block_size=2048 + 1), # Optimized loader for tokens used by LLMs
+           shuffle=True,
+           drop_last=True,
+       ),
+       StreamingDataset(
+           input_dir=&quot;s3://tinyllama-template/starcoder/&quot;,
+           item_loader=TokensLoader(block_size=2048 + 1), # Optimized loader for tokens used by LLMs
+           shuffle=True,
+           drop_last=True,
+       ),
+   ]
+
+   # Mix SlimPajama data and Starcoder data with these proportions:
+   weights = (0.693584, 0.306416)
+   combined_dataset = CombinedStreamingDataset(datasets=train_datasets, seed=42, weights=weights, iterate_over_all=False)
+
+   train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memory=True, num_workers=os.cpu_count())
+
+   # Iterate over the combined datasets
+   for batch in tqdm(train_dataloader):
+       pass
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Merge datasets
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Merge multiple optimized datasets into one.
+
+.. code:: python
+
+   import numpy as np
+   from PIL import Image
+
+   from litdata import StreamingDataset, merge_datasets, optimize
+
+
+   def random_images(index):
+       return {
+           &quot;index&quot;: index,
+           &quot;image&quot;: Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)),
+           &quot;class&quot;: np.random.randint(10),
+       }
+
+
+   if __name__ == &quot;__main__&quot;:
+       out_dirs = [&quot;fast_data_1&quot;, &quot;fast_data_2&quot;, &quot;fast_data_3&quot;, &quot;fast_data_4&quot;]  # or [&quot;s3://my-bucket/fast_data_1&quot;, etc.]&quot;
+       for out_dir in out_dirs:
+           optimize(fn=random_images, inputs=list(range(250)), output_dir=out_dir, num_workers=4, chunk_bytes=&quot;64MB&quot;)
+
+       merged_out_dir = &quot;merged_fast_data&quot; # or &quot;s3://my-bucket/merged_fast_data&quot;
+       merge_datasets(input_dirs=out_dirs, output_dir=merged_out_dir)
+
+       dataset = StreamingDataset(merged_out_dir)
+       print(len(dataset))
+       # out: 1000
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Split datasets for train, val, test
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Split a dataset into train, val, test splits with ``train_test_split``.
+
+.. code:: python
+
+   from litdata import StreamingDataset, train_test_split
+
+   dataset = StreamingDataset(&quot;s3://my-bucket/my-data&quot;) # data are stored in the cloud
+
+   print(len(dataset)) # display the length of your data
+   # out: 100,000
+
+   train_dataset, val_dataset, test_dataset = train_test_split(dataset, splits=[0.3, 0.2, 0.5])
+
+   print(train_dataset)
+   # out: 30,000
+
+   print(val_dataset)
+   # out: 20,000
+
+   print(test_dataset)
+   # out: 50,000
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Load a subset of the remote dataset
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+  Work on a smaller, manageable portion of your data to save time and
+resources.
+
+.. code:: python
+
+   from litdata import StreamingDataset, train_test_split
+
+   dataset = StreamingDataset(&quot;s3://my-bucket/my-data&quot;, subsample=0.01) # data are stored in the cloud
+
+   print(len(dataset)) # display the length of your data
+   # out: 1000
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Upsample from your source datasets
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+  Use to control the size of one iteration of a StreamingDataset using
+repeats. Contains ``floor(N)`` possibly shuffled copies of the source
+data, then a subsampling of the remainder.
+
+.. code:: python
+
+   from litdata import StreamingDataset
+
+   dataset = StreamingDataset(&quot;s3://my-bucket/my-data&quot;, subsample=2.5, shuffle=True)
+
+   print(len(dataset)) # display the length of your data
+   # out: 250000
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Easily modify optimized cloud datasets
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Add new data to an existing dataset or start fresh if needed, providing
+flexibility in data management.
+
+LitData optimized datasets are assumed to be immutable. However, you can
+make the decision to modify them by changing the mode to either
+``append`` or ``overwrite``.
+
+.. code:: python
+
+   from litdata import optimize, StreamingDataset
+
+   def compress(index):
+       return index, index**2
+
+   if __name__ == &quot;__main__&quot;:
+       # Add some data
+       optimize(
+           fn=compress,
+           inputs=list(range(100)),
+           output_dir=&quot;./my_optimized_dataset&quot;,
+           chunk_bytes=&quot;64MB&quot;,
+       )
+
+       # Later on, you add more data
+       optimize(
+           fn=compress,
+           inputs=list(range(100, 200)),
+           output_dir=&quot;./my_optimized_dataset&quot;,
+           chunk_bytes=&quot;64MB&quot;,
+           mode=&quot;append&quot;,
+       )
+
+       ds = StreamingDataset(&quot;./my_optimized_dataset&quot;)
+       assert len(ds) == 200
+       assert ds[:] == [(i, i**2) for i in range(200)]
+
+The ``overwrite`` mode will delete the existing data and start from
+fresh.
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Stream parquet datasets
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Stream Parquet datasets directly with LitData—no need to convert them
+into LitData’s optimized binary format! If your dataset is already in
+Parquet format, you can efficiently index and stream it using
+``StreamingDataset`` and ``StreamingDataLoader``.
+
+**Assumption:**
+
+Your dataset directory contains one or more Parquet files.
+
+**Prerequisites:**
+
+Install the required dependencies to stream Parquet datasets from cloud
+storage like **Amazon S3** or **Google Cloud Storage**:
+
+.. code:: bash
+
+   # For Amazon S3
+   pip install &quot;litdata[extra]&quot; s3fs
+
+   # For Google Cloud Storage
+   pip install &quot;litdata[extra]&quot; gcsfs
+
+**Index Your Dataset**:
+
+Index your Parquet dataset to create an index file that LitData can use
+to stream the dataset.
+
+.. code:: python
+
+   import litdata as ld
+
+   # Point to your data stored in the cloud
+   pq_dataset_uri = &quot;s3://my-bucket/my-parquet-data&quot;  # or &quot;gs://my-bucket/my-parquet-data&quot;
+
+   ld.index_parquet_dataset(pq_dataset_uri)
+
+**Stream the Dataset**
+
+Use ``StreamingDataset`` with ``ParquetLoader`` to load and stream the
+dataset efficiently:
+
+.. code:: python
+
+   import litdata as ld
+   from litdata.streaming.item_loader import ParquetLoader
+
+   # Specify your dataset location in the cloud
+   pq_dataset_uri = &quot;s3://my-bucket/my-parquet-data&quot;  # or &quot;gs://my-bucket/my-parquet-data&quot;
+
+   # Set up the streaming dataset
+   dataset = ld.StreamingDataset(pq_dataset_uri, item_loader=ParquetLoader())
+
+   # print the first sample
+   print(&quot;Sample&quot;, dataset[0])
+
+   # Stream the dataset using StreamingDataLoader
+   dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
+   for sample in dataloader:
+       pass
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Use compression
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Reduce your data footprint by using advanced compression algorithms.
+
+.. code:: python
+
+   import litdata as ld
+
+   def compress(index):
+       return index, index**2
+
+   if __name__ == &quot;__main__&quot;:
+       # Add some data
+       ld.optimize(
+           fn=compress,
+           inputs=list(range(100)),
+           output_dir=&quot;./my_optimized_dataset&quot;,
+           chunk_bytes=&quot;64MB&quot;,
+           num_workers=1,
+           compression=&quot;zstd&quot;
+       )
+
+Using `zstd &lt;https://github.com/facebook/zstd&gt;`__, you can achieve high
+compression ratio like 4.34x for this simple example.
+
+======= ====
+Without With
+======= ====
+2.8kb   646b
+======= ====
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Access samples without full data download
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Look at specific parts of a large dataset without downloading the whole
+thing or loading it on a local machine.
+
+.. code:: python
+
+   from litdata import StreamingDataset
+
+   dataset = StreamingDataset(&quot;s3://my-bucket/my-data&quot;) # data are stored in the cloud
+
+   print(len(dataset)) # display the length of your data
+
+   print(dataset[42]) # show the 42th element of the dataset
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Use any data transforms
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Customize how your data is processed to better fit your needs.
+
+Subclass the ``StreamingDataset`` and override its ``__getitem__``
+method to add any extra data transformations.
+
+.. code:: python
+
+   from litdata import StreamingDataset, StreamingDataLoader
+   import torchvision.transforms.v2.functional as F
+
+   class ImagenetStreamingDataset(StreamingDataset):
+
+       def __getitem__(self, index):
+           image = super().__getitem__(index)
+           return F.resize(image, (224, 224))
+
+   dataset = ImagenetStreamingDataset(...)
+   dataloader = StreamingDataLoader(dataset, batch_size=4)
+
+   for batch in dataloader:
+       print(batch.shape)
+       # Out: (4, 3, 224, 224)
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Profile data loading speed
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Measure and optimize how fast your data is being loaded, improving
+efficiency.
+
+The ``StreamingDataLoader`` supports profiling of your data loading
+process. Simply use the ``profile_batches`` argument to specify the
+number of batches you want to profile:
+
+.. code:: python
+
+   from litdata import StreamingDataset, StreamingDataLoader
+
+   StreamingDataLoader(..., profile_batches=5)
+
+This generates a Chrome trace called ``result.json``. Then, visualize
+this trace by opening Chrome browser at the ``chrome://tracing`` URL and
+load the trace inside.
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Reduce memory use for large files
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Handle large data files efficiently without using too much of your
+computer’s memory.
+
+When processing large files like compressed `parquet
+files &lt;https://en.wikipedia.org/wiki/Apache_Parquet&gt;`__, use the Python
+yield keyword to process and store one item at the time, reducing the
+memory footprint of the entire program.
+
+.. code:: python
+
+   from pathlib import Path
+   import pyarrow.parquet as pq
+   from litdata import optimize
+   from tokenizer import Tokenizer
+   from functools import partial
+
+   # 1. Define a function to convert the text within the parquet files into tokens
+   def tokenize_fn(filepath, tokenizer=None):
+       parquet_file = pq.ParquetFile(filepath)
+       # Process per batch to reduce RAM usage
+       for batch in parquet_file.iter_batches(batch_size=8192, columns=[&quot;content&quot;]):
+           for text in batch.to_pandas()[&quot;content&quot;]:
+               yield tokenizer.encode(text, bos=False, eos=True)
+
+   # 2. Generate the inputs
+   input_dir = &quot;/teamspace/s3_connections/tinyllama-template&quot;
+   inputs = [str(file) for file in Path(f&quot;{input_dir}/starcoderdata&quot;).rglob(&quot;*.parquet&quot;)]
+
+   # 3. Store the optimized data wherever you want under &quot;/teamspace/datasets&quot; or &quot;/teamspace/s3_connections&quot;
+   outputs = optimize(
+       fn=partial(tokenize_fn, tokenizer=Tokenizer(f&quot;{input_dir}/checkpoints/Llama-2-7b-hf&quot;)), # Note: Use HF tokenizer or any others
+       inputs=inputs,
+       output_dir=&quot;/teamspace/datasets/starcoderdata&quot;,
+       chunk_size=(2049 * 8012), # Number of tokens to store by chunks. This is roughly 64MB of tokens per chunk.
+   )
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Limit local cache space
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Limit the amount of disk space used by temporary files, preventing
+storage issues.
+
+Adapt the local caching limit of the ``StreamingDataset``. This is
+useful to make sure the downloaded data chunks are deleted when used and
+the disk usage stays low.
+
+.. code:: python
+
+   from litdata import StreamingDataset
+
+   dataset = StreamingDataset(..., max_cache_size=&quot;10GB&quot;)
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Change cache directory path
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Specify the directory where cached files should be stored, ensuring
+efficient data retrieval and management. This is particularly useful for
+organizing your data storage and improving access times.
+
+.. code:: python
+
+   from litdata import StreamingDataset
+   from litdata.streaming.cache import Dir
+
+   cache_dir = &quot;/path/to/your/cache&quot;
+   data_dir = &quot;s3://my-bucket/my_optimized_dataset&quot;
+
+   dataset = StreamingDataset(input_dir=Dir(path=cache_dir, url=data_dir))
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Optimize loading on networked drives
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Optimize data handling for computers on a local network to improve
+performance for on-site setups.
+
+On-prem compute nodes can mount and use a network drive. A network drive
+is a shared storage device on a local area network. In order to reduce
+their network overload, the ``StreamingDataset`` supports ``caching``
+the data chunks.
+
+.. code:: python
+
+   from litdata import StreamingDataset
+
+   dataset = StreamingDataset(input_dir=&quot;local:/data/shared-drive/some-data&quot;)
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Optimize dataset in distributed environment
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Lightning can distribute large workloads across hundreds of machines in
+parallel. This can reduce the time to complete a data processing task
+from weeks to minutes by scaling to enough machines.
+
+To apply the optimize operator across multiple machines, simply provide
+the num_nodes and machine arguments to it as follows:
+
+.. code:: python
+
+   import os
+   from litdata import optimize, Machine
+
+   def compress(index):
+       return (index, index ** 2)
+
+   optimize(
+       fn=compress,
+       inputs=list(range(100)),
+       num_workers=2,
+       output_dir=&quot;my_output&quot;,
+       chunk_bytes=&quot;64MB&quot;,
+       num_nodes=2,
+       machine=Machine.DATA_PREP, # You can select between dozens of optimized machines
+   )
+
+If the ``output_dir`` is a local path, the optimized dataset will be
+present in: ``/teamspace/jobs/{job_name}/nodes-0/my_output``. Otherwise,
+it will be stored in the specified ``output_dir``.
+
+Read the optimized dataset:
+
+.. code:: python
+
+   from litdata import StreamingDataset
+
+   output_dir = &quot;/teamspace/jobs/litdata-optimize-2024-07-08/nodes.0/my_output&quot;
+
+   dataset = StreamingDataset(output_dir)
+
+   print(dataset[:])
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Encrypt, decrypt data at chunk/sample level
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Secure data by applying encryption to individual samples or chunks,
+ensuring sensitive information is protected during storage.
+
+This example shows how to use the ``FernetEncryption`` class for
+sample-level encryption with a data optimization function.
+
+.. code:: python
+
+   from litdata import optimize
+   from litdata.utilities.encryption import FernetEncryption
+   import numpy as np
+   from PIL import Image
+
+   # Initialize FernetEncryption with a password for sample-level encryption
+   fernet = FernetEncryption(password=&quot;your_secure_password&quot;, level=&quot;sample&quot;)
+   data_dir = &quot;s3://my-bucket/optimized_data&quot;
+
+   def random_image(index):
+       &quot;&quot;&quot;Generate a random image for demonstration purposes.&quot;&quot;&quot;
+       fake_img = Image.fromarray(np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8))
+       return {&quot;image&quot;: fake_img, &quot;class&quot;: index}
+
+   # Optimize data while applying encryption
+   optimize(
+       fn=random_image,
+       inputs=list(range(5)),  # Example inputs: [0, 1, 2, 3, 4]
+       num_workers=1,
+       output_dir=data_dir,
+       chunk_bytes=&quot;64MB&quot;,
+       encryption=fernet,
+   )
+
+   # Save the encryption key to a file for later use
+   fernet.save(&quot;fernet.pem&quot;)
+
+Load the encrypted data using the ``StreamingDataset`` class as follows:
+
+.. code:: python
+
+   from litdata import StreamingDataset
+   from litdata.utilities.encryption import FernetEncryption
+
+   # Load the encryption key
+   fernet = FernetEncryption(password=&quot;your_secure_password&quot;, level=&quot;sample&quot;)
+   fernet.load(&quot;fernet.pem&quot;)
+
+   # Create a streaming dataset for reading the encrypted samples
+   ds = StreamingDataset(input_dir=data_dir, encryption=fernet)
+
+Implement your own encryption method: Subclass the ``Encryption`` class
+and define the necessary methods:
+
+.. code:: python
+
+   from litdata.utilities.encryption import Encryption
+
+   class CustomEncryption(Encryption):
+       def encrypt(self, data):
+           # Implement your custom encryption logic here
+           return data
+
+       def decrypt(self, data):
+           # Implement your custom decryption logic here
+           return data
+
+This allows the data to remain secure while maintaining flexibility in
+the encryption method.
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Debug &amp; Profile LitData with logs &amp; Litracer
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+LitData comes with built-in logging and profiling capabilities to help
+you debug and profile your data streaming workloads.
+
+- e.g., with LitData Streaming
+
+.. code:: python
+
+   import litdata as ld
+   from litdata.debugger import enable_tracer
+
+   # WARNING: Remove existing trace `litdata_debug.log` file if it exists before re-tracing
+   enable_tracer()
+
+   if __name__ == &quot;__main__&quot;:
+       dataset = ld.StreamingDataset(&quot;s3://my-bucket/my-data&quot;, shuffle=True)
+       dataloader = ld.StreamingDataLoader(dataset, batch_size=64)
+
+       for batch in dataloader:
+           print(batch)  # Replace with your data processing logic
+
+1. Generate Debug Log:
+
+   - Run your Python program and it’ll create a log file containing
+     detailed debug information.
+
+   .. code:: bash
+
+        python main.py
+
+2. Install `Litracer &lt;https://github.com/deependujha/litracer/&gt;`__:
+
+   - Option 1: Using Go (recommended)
+
+     - Install Go on your system.
+     - Run the following command to install Litracer:
+
+     .. code:: bash
+
+          go install github.com/deependujha/litracer@latest
+
+   - Option 2: Download Binary
+
+     - Visit the `LitRacer GitHub
+       Releases &lt;https://github.com/deependujha/litracer/releases&gt;`__
+       page.
+     - Download the appropriate binary for your operating system and
+       follow the installation instructions.
+
+3. Convert Debug Log to trace JSON:
+
+   - Use litracer to convert the generated log file into a trace JSON
+     file. This command uses 100 workers for conversion:
+
+   .. code:: bash
+
+        litracer litdata_debug.log -o litdata_trace.json -w 100
+
+4. Visualize the trace:
+
+   - Use either ``chrome://tracing`` in the Chrome browser or
+     ``ui.perfetto.dev`` to view the ``litdata_trace.json`` file for
+     in-depth performance insights. You can also use ``SQL queries`` to
+     analyze the logs.
+   - ``Perfetto`` is recommended over ``chrome://tracing`` for
+     visualization &amp; analyzing.
+
+- Key Points:
+
+  - For very large trace.json files (``&gt; 2GB``), refer to the `Perfetto
+    documentation &lt;https://perfetto.dev/docs/visualization/large-traces&gt;`__
+    for using native accelerators.
+  - If you are trying to connect Perfetto to the RPC server, it is
+    recommended to use Chrome over Brave, as it has been observed that
+    Perfetto in Brave does not autodetect the RPC server.
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+ 
+
+Features for transforming datasets
+----------------------------------
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+✅ Parallelize data transformations (map)
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+Apply the same change to different parts of the dataset at once to save
+time and effort.
+
+The ``map`` operator can be used to apply a function over a list of
+inputs.
+
+Here is an example where the ``map`` operator is used to apply a
+``resize_image`` function over a folder of large images.
+
+.. code:: python
+
+   from litdata import map
+   from PIL import Image
+
+   # Note: Inputs could also refer to files on s3 directly.
+   input_dir = &quot;my_large_images&quot;
+   inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
+
+   # The resize image takes one of the input (image_path) and the output directory.
+   # Files written to output_dir are persisted.
+   def resize_image(image_path, output_dir):
+     output_image_path = os.path.join(output_dir, os.path.basename(image_path))
+     Image.open(image_path).resize((224, 224)).save(output_image_path)
+
+   map(
+       fn=resize_image,
+       inputs=inputs,
+       output_dir=&quot;s3://my-bucket/my_resized_images&quot;,
+   )
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+ 
+
+--------------
+
+Benchmarks
+==========
+
+In this section we show benchmarks for speed to optimize a dataset and
+the resulting streaming speed (`Reproduce the
+benchmark &lt;https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries&gt;`__).
+
+Streaming speed
+---------------
+
+Data optimized and streamed with LitData achieves a 20x speed up over
+non optimized data and 2x speed up over other streaming solutions.
+
+Speed to stream Imagenet 1.2M from AWS S3:
+
++-------------+-------------+-------------+-------------+-------------+
+| Framework   | Images /    | Images /    | Images /    | Images /    |
+|             | sec 1st     | sec 2nd     | sec 1st     | sec 2nd     |
+|             | Epoch       | Epoch       | Epoch       | Epoch       |
+|             | (float32)   | (float32)   | (torch16)   | (torch16)   |
++=============+=============+=============+=============+=============+
+| LitData     | **5839**    | **6692**    | **6282**    | **7221**    |
++-------------+-------------+-------------+-------------+-------------+
+| Web Dataset | 3134        | 3924        | 3343        | 4424        |
++-------------+-------------+-------------+-------------+-------------+
+| Mosaic ML   | 2898        | 5099        | 2809        | 5158        |
++-------------+-------------+-------------+-------------+-------------+
+
+.. raw:: html
+
+   &lt;details&gt;
+
+.. raw:: html
+
+   &lt;summary&gt;
+
+Benchmark details
+
+.. raw:: html
+
+   &lt;/summary&gt;
+
+ 
+
+- `Imagenet-1.2M dataset &lt;https://www.image-net.org/&gt;`__ contains
+  ``1,281,167 images``.
+- To align with other benchmarks, we measured the streaming speed
+  (``images per second``) loaded from `AWS
+  S3 &lt;https://aws.amazon.com/s3/&gt;`__ for several frameworks.
+
+.. raw:: html
+
+   &lt;/details&gt;
+
+ 
+
+Speed to stream Imagenet 1.2M from other cloud storage providers:
+
++-----------------+-----------------+-----------------+-----------------+
+| Storage         | Framework       | Images / sec    | Images / sec    |
+| Provider        |                 | 1st Epoch       | 2nd Epoch       |
+|                 |                 | (float32)       | (float32)       |
++=================+=================+=================+=================+
+| Cloudflare R2   | LitData         | **5335**        | **5630**        |
++-----------------+-----------------+-----------------+-----------------+
+
+ 
+
+Time to optimize data
+---------------------
+
+LitData optimizes the Imagenet dataset for fast training 3-5x faster
+than other frameworks:
+
+Time to optimize 1.2 million ImageNet images (Faster is better): \|
+Framework \|Train Conversion Time \| Val Conversion Time \| Dataset Size
+\| # Files \| \|—\|—\|—\|—\|—\| \| LitData \| **10:05 min** \| **00:30
+min** \| **143.1 GB** \| 2.339 \| \| Web Dataset \| 32:36 min \| 01:22
+min \| 147.8 GB \| 1.144 \| \| Mosaic ML \| 49:49 min \| 01:04 min \|
+**143.1 GB** \| 2.298 \|
+
+ 
+
+--------------
+
+Parallelize transforms and data optimization on cloud machines
+==============================================================
+
+.. container::
+
+Parallelize data transforms
+---------------------------
+
+Transformations with LitData are linearly parallelizable across
+machines.
+
+For example, let’s say that it takes 56 hours to embed a dataset on a
+single A10G machine. With LitData, this can be speed up by adding more
+machines in parallel
+
+================== =====
+Number of machines Hours
+================== =====
+1                  56
+2                  28
+4                  14
+…                  …
+64                 0.875
+================== =====
+
+To scale the number of machines, run the processing script on `Lightning
+Studios &lt;https://lightning.ai/&gt;`__:
+
+.. code:: python
+
+   from litdata import map, Machine
+
+   map(
+     ...
+     num_nodes=32,
+     machine=Machine.DATA_PREP, # Select between dozens of optimized machines
+   )
+
+Parallelize data optimization
+-----------------------------
+
+To scale the number of machines for data optimization, use `Lightning
+Studios &lt;https://lightning.ai/&gt;`__:
+
+.. code:: python
+
+   from litdata import optimize, Machine
+
+   optimize(
+     ...
+     num_nodes=32,
+     machine=Machine.DATA_PREP, # Select between dozens of optimized machines
+   )
+
+ 
+
+Example: `Process the LAION 400 million image dataset in 2 hours on 32
+machines, each with 32
+CPUs &lt;https://lightning.ai/lightning-ai/studios/use-or-explore-laion-400million-dataset&gt;`__.
+
+ 
+
+--------------
+
+Start from a template
+=====================
+
+Below are templates for real-world applications of LitData at scale.
+
+Templates: Transform datasets
+-----------------------------
+
++-------------------------+-----------+-----------+---------+---------+
+| Studio                  | Data type | Time      | M       | Dataset |
+|                         |           | (minutes) | achines |         |
++=========================+===========+===========+=========+=========+
+| `Download               | Image &amp;   | 120       | 32      | `LAION  |
+| LAION-400MILLION        | Text      |           |         | -400M &lt; |
+| da                      |           |           |         | https:/ |
+| taset &lt;https://lightnin |           |           |         | /laion. |
+| g.ai/lightning-ai/studi |           |           |         | ai/blog |
+| os/use-or-explore-laion |           |           |         | /laion- |
+| -400million-dataset&gt;`__ |           |           |         | 400-ope |
+|                         |           |           |         | n-datas |
+|                         |           |           |         | et/&gt;`__ |
++-------------------------+-----------+-----------+---------+---------+
+| `Tokenize 2M Swedish    | Text      | 7         | 4       | `       |
+| Wikipedia               |           |           |         | Swedish |
+| Ar                      |           |           |         | Wikiped |
+| ticles &lt;https://lightni |           |           |         | ia &lt;htt |
+| ng.ai/lightning-ai/stud |           |           |         | ps://hu |
+| ios/tokenize-2m-swedish |           |           |         | ggingfa |
+| -wikipedia-articles&gt;`__ |           |           |         | ce.co/d |
+|                         |           |           |         | atasets |
+|                         |           |           |         | /wikipe |
+|                         |           |           |         | dia&gt;`__ |
++-------------------------+-----------+-----------+---------+---------+
+| `Embed English          | Text      | 15        | 3       | `       |
+| Wikipedia under 5       |           |           |         | English |
+| do                      |           |           |         | Wikiped |
+| llars &lt;https://lightnin |           |           |         | ia &lt;htt |
+| g.ai/lightning-ai/studi |           |           |         | ps://hu |
+| os/embed-english-wikipe |           |           |         | ggingfa |
+| dia-under-5-dollars&gt;`__ |           |           |         | ce.co/d |
+|                         |           |           |         | atasets |
+|                         |           |           |         | /wikipe |
+|                         |           |           |         | dia&gt;`__ |
++-------------------------+-----------+-----------+---------+---------+
+
+Templates: Optimize + stream data
+---------------------------------
+
++-----------------------+------------+------------+---------+---------+
+| Studio                | Data type  | Time       | M       | Dataset |
+|                       |            | (minutes)  | achines |         |
++=======================+============+============+=========+=========+
+| `Benchmark cloud      | Image &amp;    | 10         | 1       | `I      |
+| data-loading          | Label      |            |         | magenet |
+| libraries &lt;           |            |            |         | 1M      |
+| https://lightning.ai/ |            |            |         | &lt;https: |
+| lightning-ai/studios/ |            |            |         | //paper |
+| benchmark-cloud-data- |            |            |         | swithco |
+| loading-libraries&gt;`__ |            |            |         | de.com/ |
+|                       |            |            |         | sota/im |
+|                       |            |            |         | age-cla |
+|                       |            |            |         | ssifica |
+|                       |            |            |         | tion-on |
+|                       |            |            |         | -imagen |
+|                       |            |            |         | et?tag_ |
+|                       |            |            |         | filter= |
+|                       |            |            |         | 171&gt;`__ |
++-----------------------+------------+------------+---------+---------+
+| `Optimize GeoSpatial  | Image &amp;    | 120        | 32      | `Che    |
+| data for model        | Mask       |            |         | sapeake |
+| training &lt;https       |            |            |         | Roads   |
+| ://lightning.ai/light |            |            |         | Spatial |
+| ning-ai/studios/conve |            |            |         | C       |
+| rt-spatial-data-to-li |            |            |         | ontext  |
+| ghtning-streaming&gt;`__ |            |            |         | &lt;https: |
+|                       |            |            |         | //githu |
+|                       |            |            |         | b.com/i |
+|                       |            |            |         | saaccor |
+|                       |            |            |         | ley/che |
+|                       |            |            |         | sapeake |
+|                       |            |            |         | rsc&gt;`__ |
++-----------------------+------------+------------+---------+---------+
+| `Optimize TinyLlama   | Text       | 240        | 32      | `Sl     |
+| 1T dataset for        |            |            |         | imPajam |
+| training &lt;            |            |            |         | a &lt;http |
+| https://lightning.ai/ |            |            |         | s://hug |
+| lightning-ai/studios/ |            |            |         | gingfac |
+| prepare-the-tinyllama |            |            |         | e.co/da |
+| -1t-token-dataset&gt;`__ |            |            |         | tasets/ |
+|                       |            |            |         | cerebra |
+|                       |            |            |         | s/SlimP |
+|                       |            |            |         | ajama-6 |
+|                       |            |            |         | 27B&gt;`__ |
+|                       |            |            |         | &amp;       |
+|                       |            |            |         | `StarC  |
+|                       |            |            |         | oder &lt;h |
+|                       |            |            |         | ttps:// |
+|                       |            |            |         | hugging |
+|                       |            |            |         | face.co |
+|                       |            |            |         | /datase |
+|                       |            |            |         | ts/bigc |
+|                       |            |            |         | ode/sta |
+|                       |            |            |         | rcoderd |
+|                       |            |            |         | ata&gt;`__ |
++-----------------------+------------+------------+---------+---------+
+| `Optimize parquet     | Parquet    | 12         | 16      | R       |
+| files for model       | Files      |            |         | andomly |
+| training &lt;h           |            |            |         | Ge      |
+| ttps://lightning.ai/l |            |            |         | nerated |
+| ightning-ai/studios/c |            |            |         | data    |
+| onvert-parquets-to-li |            |            |         |         |
+| ghtning-streaming&gt;`__ |            |            |         |         |
++-----------------------+------------+------------+---------+---------+
+
+ 
+
+--------------
+
+Community
+=========
+
+LitData is a community project accepting contributions - Let’s make the
+world’s most advanced AI data processing framework.
+
+| 💬 `Get help on Discord &lt;https://discord.com/invite/XncpTy7DSt&gt;`__
+| 📋 `License: Apache
+  2.0 &lt;https://github.com/Lightning-AI/litdata/blob/main/LICENSE&gt;`__
+
+--------------
+
+Citation
+--------
+
+::
+
+   @misc{litdata2023,
+     author       = {Thomas Chaton and Lightning AI},
+     title        = {LitData: Transform datasets at scale. Optimize datasets for fast AI model training.},
+     year         = {2023},
+     howpublished = {\url{https://github.com/Lightning-AI/litdata}},
+     note         = {Accessed: 2025-04-09}
+   }
+
+--------------
+
+Papers with LitData
+-------------------
+
+- `Towards Interpretable Protein Structure Prediction with Sparse
+  Autoencoders &lt;https://arxiv.org/pdf/2503.08764&gt;`__ \|
+  `Github &lt;https://github.com/johnyang101/reticular-sae&gt;`__ \| (Nithin
+  Parsan, David J. Yang and John J. Yang)
+
+--------------
+
+Governance
+==========
+
+Maintainers
+-----------
+
+- Thomas Chaton (`tchaton &lt;https://github.com/tchaton&gt;`__)
+- Luca Antiga (`lantiga &lt;https://github.com/lantiga&gt;`__)
+- Justus Schock (`justusschock &lt;https://github.com/justusschock&gt;`__)
+- Bhimraj Yadav (`bhimrazy &lt;https://github.com/bhimrazy&gt;`__)
+- Deependu (`deependujha &lt;https://github.com/deependujha&gt;`__)
+- Jirka Borda (`Borda &lt;https://github.com/Borda&gt;`__)
+
+Emeritus Maintainers
+--------------------
+
+- Adrian Wälchli (`awaelchli &lt;https://github.com/awaelchli&gt;`__)
+
+.. |PyPI| image:: https://img.shields.io/pypi/v/litdata
+.. |Downloads| image:: https://img.shields.io/pypi/dm/litdata
+.. |License| image:: https://img.shields.io/github/license/Lightning-AI/litdata
+</pre></div>
+</div>
+</section>
+
+
+             </article>
+             
+            </div>
+            <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+      
+        <a href="index.html" class="btn btn-neutral" title="lit-data" accesskey="p" rel="prev"><img src="_static/images/chevron-right-orange.svg" class="previous-page"> Previous</a>
+      
+    </div>
+  
+
+  
+
+    <hr>
+
+  
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright Copyright (c) 2023-2025, Lightning AI et al...
+
+    </p>
+  </div>
+    
+      <div>
+        Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+      </div>
+     
+
+</footer>
+          </div>
+        </div>
+
+        <div class="pytorch-content-right" id="pytorch-content-right">
+          <div class="pytorch-right-menu" id="pytorch-right-menu">
+            <div class="pytorch-side-scroll" id="pytorch-side-scroll-right">
+              <ul>
+<li><a class="reference internal" href="#">Transform data at scale. Optimize for fast model training.</a></li>
+<li><a class="reference internal" href="#quick-start">Quick start</a></li>
+<li><a class="reference internal" href="#speed-up-model-training">Speed up model training</a></li>
+<li><a class="reference internal" href="#transform-datasets">Transform datasets</a></li>
+<li><a class="reference internal" href="#use-a-local-or-s3-folder">use a local or S3 folder</a></li>
+<li><a class="reference internal" href="#resize-the-input-image">resize the input image</a></li>
+<li><a class="reference internal" href="#key-features">Key Features</a><ul>
+<li><a class="reference internal" href="#features-for-optimizing-and-streaming-datasets-for-model-training">Features for optimizing and streaming datasets for model training</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#boto3-compatible-storage-options-for-a-custom-s3-compatible-endpoint">boto3 compatible storage options for a custom S3-compatible endpoint</a></li>
+<li><a class="reference internal" href="#s5cmd-compatible-storage-options-for-a-custom-s3-compatible-endpoint">s5cmd compatible storage options for a custom S3-compatible endpoint</a></li>
+<li><a class="reference internal" href="#note-if-s5cmd-is-installed-it-will-be-used-by-default-for-s3-operations-if-you-prefer-not-to-use-s5cmd-you-can-disable-it-by-setting-the-environment-variable-disable-s5cmd-1">Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: <code class="docutils literal notranslate"><span class="pre">DISABLE_S5CMD=1</span></code></a></li>
+<li><a class="reference internal" href="#initialize-the-streamingdataset-with-the-custom-cache-directory">Initialize the StreamingDataset with the custom cache directory</a></li>
+<li><a class="reference internal" href="#optional-to-speed-up-downloads-on-high-bandwidth-networks">Optional: To speed up downloads on high-bandwidth networks</a></li>
+<li><a class="reference internal" href="#define-the-hugging-face-dataset-uri">Define the Hugging Face dataset URI</a></li>
+<li><a class="reference internal" href="#create-a-streaming-dataset">Create a streaming dataset</a></li>
+<li><a class="reference internal" href="#print-the-first-sample">Print the first sample</a></li>
+<li><a class="reference internal" href="#stream-the-dataset-using-streamingdataloader">Stream the dataset using StreamingDataLoader</a></li>
+</ul>
+
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  
+
+  
+
+     
+       <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+         <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+         <script src="_static/doctools.js"></script>
+         <script src="_static/sphinx_highlight.js"></script>
+         <script src="_static/copybutton.js"></script>
+     
+
+  
+
+  <script type="text/javascript" src="_static/js/vendor/popper.min.js"></script>
+  <script type="text/javascript" src="_static/js/vendor/bootstrap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/list.js/1.5.0/list.min.js"></script>
+  <script type="text/javascript" src="_static/js/theme.js"></script>
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+  <!-- Begin Footer -->
+
+  <!-- <div class="container-fluid docs-tutorials-resources" id="docs-tutorials-resources"> -->
+    <!-- <div class="container"> -->
+      <!-- <div class="row"> -->
+        <!--
+        <div class="col-md-4 text-center">
+          <h2>Docs</h2>
+          <p>Access comprehensive developer documentation for PyTorch</p>
+          <a class="with-right-arrow" href="https://lightning-ai.github.io/lit-data/">View Docs</a>
+        </div>
+
+        <div class="col-md-4 text-center">
+          <h2>Tutorials</h2>
+          <p>Get in-depth tutorials for beginners and advanced developers</p>
+          <a class="with-right-arrow" href="https://lightning.ai">View Tutorials</a>
+        </div>
+
+        <div class="col-md-4 text-center">
+          <h2>Resources</h2>
+          <p>Find development resources and get your questions answered</p>
+          <a class="with-right-arrow" href="https://lightning.ai">View Resources</a>
+        </div>
+        -->
+      <!-- </div> -->
+    <!-- </div> -->
+  <!-- </div> -->
+
+  <!--
+  <footer class="site-footer">
+    <div class="container footer-container">
+      <div class="footer-logo-wrapper">
+        <a href="https://lightning-ai.github.io/lit-data/" class="footer-logo"></a>
+      </div>
+
+      <div class="footer-links-wrapper">
+        <div class="footer-links-col">
+          <ul>
+            <li class="list-title"><a href="https://lightning-ai.github.io/lit-data/">PyTorch</a></li>
+            <li><a href="https://lightning.ai">Get Started</a></li>
+            <li><a href="https://lightning-ai.github.io/lit-data/">Features</a></li>
+            <li><a href="">Ecosystem</a></li>
+            <li><a href="https://www.Lightning.ai/blog">Blog</a></li>
+            <li><a href="https://github.com/Lightning-AI/lightning/blob/master/CONTRIBUTING.md">Contributing</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-links-col">
+          <ul>
+            <li class="list-title"><a href="https://lightning.ai">Resources</a></li>
+            <li><a href="https://lightning.ai">Tutorials</a></li>
+            <li><a href="https://lightning-ai.github.io/lit-data/">Docs</a></li>
+            <li><a href="https://discord.com/invite/tfXFetEZxv" target="_blank">Discuss</a></li>
+            <li><a href="https://github.com/Lightning-AI/lit-data/issues" target="_blank">Github Issues</a></li>
+            <li><a href="" target="_blank">Brand Guidelines</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-links-col follow-us-col">
+          <ul>
+            <li class="list-title">Stay Connected</li>
+            <li>
+              <div id="mc_embed_signup">
+                <form
+                  action="https://twitter.us14.list-manage.com/subscribe/post?u=75419c71fe0a935e53dfa4a3f&id=91d0dccd39"
+                  method="post"
+                  id="mc-embedded-subscribe-form"
+                  name="mc-embedded-subscribe-form"
+                  class="email-subscribe-form validate"
+                  target="_blank"
+                  novalidate>
+                  <div id="mc_embed_signup_scroll" class="email-subscribe-form-fields-wrapper">
+                    <div class="mc-field-group">
+                      <label for="mce-EMAIL" style="display:none;">Email Address</label>
+                      <input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL" placeholder="Email Address">
+                    </div>
+
+                    <div id="mce-responses" class="clear">
+                      <div class="response" id="mce-error-response" style="display:none"></div>
+                      <div class="response" id="mce-success-response" style="display:none"></div>
+                    </div>
+
+                    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_75419c71fe0a935e53dfa4a3f_91d0dccd39" tabindex="-1" value=""></div>
+
+                    <div class="clear">
+                      <input type="submit" value="" name="subscribe" id="mc-embedded-subscribe" class="button email-subscribe-button">
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+            </li>
+          </ul>
+
+          <div class="footer-social-icons">
+            <a href="" target="_blank" class="facebook"></a>
+            <a href="https://twitter.com/LightningAI" target="_blank" class="twitter"></a>
+            <a href="" target="_blank" class="youtube"></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+  -->
+
+  <div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">To analyze traffic and optimize your experience, we serve cookies on this site. By clicking or navigating, you agree to allow our usage of cookies. Read PyTorch Lightning's <a href="https://pytorchlightning.ai/privacy-policy">Privacy Policy</a>.</p>
+    <img class="close-button" src="_static/images/pytorch-x.svg">
+  </div>
+</div>
+
+  <!-- End Footer -->
+
+  <!-- Begin Mobile Menu -->
+
+  <div class="mobile-main-menu">
+    <div class="container-fluid">
+      <div class="container">
+        <div class="mobile-main-menu-header-container">
+          <a class="header-logo" href="https://lightning-ai.github.io/lit-data/" aria-label="PyTorch Lightning"></a>
+          <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+        </div>
+      </div>
+    </div>
+
+    <div class="mobile-main-menu-links-container">
+      <div class="main-menu">
+        <ul>
+          <li>
+            <a href="https://lightning.ai">Get Started</a>
+          </li>
+
+          <li>
+            <a href="https://www.Lightning.ai/blog">Blog</a>
+          </li>
+
+          <li class="resources-mobile-menu-title">
+            Ecosystem
+          </li>
+
+          <ul class="resources-mobile-menu-items">
+            <li>
+              <a href="https://lightning.ai/docs/pytorch/stable/">PyTorch Lightning</a>
+            </li>
+
+            <li>
+              <a href="https://lightning.ai/docs/fabric/stable/">Lightning Fabric</a>
+            </li>
+
+            <li>
+              <a href="https://torchmetrics.readthedocs.io/en/stable/">TorchMetrics</a>
+            </li>
+
+            <li>
+              <a href="https://lightning.ai/docs/fabric/stable/">Fabric</a>
+            </li>
+          </ul>
+
+          <!--<li class="resources-mobile-menu-title">
+            Resources
+          </li>
+
+          <ul class="resources-mobile-menu-items">
+            <li>
+              <a href="https://lightning.ai">Developer Resources</a>
+            </li>
+
+            <li>
+              <a href="https://lightning-ai.github.io/lit-data/">About</a>
+            </li>
+
+            <li>
+              <a href="">Models (Beta)</a>
+            </li>
+
+            <li>
+              <a href="">Community</a>
+            </li>
+
+            <li>
+              <a href="">Forums</a>
+            </li>
+          </ul>-->
+
+          <li>
+            <a href="https://github.com/Lightning-AI/lit-data">Github</a>
+          </li>
+
+          <li>
+            <a href="https://www.lightning.ai/">Lightning.ai</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- End Mobile Menu -->
+
+  <script type="text/javascript" src="_static/js/vendor/anchor.min.js"></script>
+
+  <script type="text/javascript">
+    $(document).ready(function() {
+      mobileMenu.bind();
+      mobileTOC.bind();
+      pytorchAnchors.bind();
+      sideMenus.bind();
+      scrollToAnchor.bind();
+      highlightNavigation.bind();
+      mainMenuDropdown.bind();
+      filterTags.bind();
+
+      // Add class to links that have code blocks, since we cannot create links in code blocks
+      $("article.pytorch-article a span.pre").each(function(e) {
+        $(this).closest("a").addClass("has-code");
+      });
+    })
+  </script>
+
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-PQBQ3CV"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
+ </body>
+</html>
