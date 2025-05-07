@@ -31,7 +31,7 @@ from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
 from litdata.utilities.parquet import get_parquet_indexer_cls
-from litdata.utilities.torch_utils import maybe_barrier
+from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
 @dataclass
@@ -589,10 +589,9 @@ def index_parquet_dataset(
     if not _POLARS_AVAILABLE:
         raise ModuleNotFoundError("Please, run: `pip install polars`")
 
-    env = _DistributedEnv.detect()
-    if env.global_rank == 0:
-        # in distributed mode, only node: 0, process: 0 will create the index
-        # and write it to the cache_dir
+    if is_local_rank_0():
+        # in multi-node setup, each node's first process should do the indexing,
+        # but only first node's first process should upload the index (if uploading is needed)
         pq_chunks_info = []
         config: Dict[str, Any] = {
             "compression": None,

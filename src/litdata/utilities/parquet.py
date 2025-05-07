@@ -12,6 +12,7 @@ from urllib import parse
 
 from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE
 from litdata.streaming.resolver import Dir, _resolve_dir
+from litdata.utilities.env import _DistributedEnv
 
 
 class ParquetDir(ABC):
@@ -198,6 +199,10 @@ class CloudParquetDir(ParquetDir):
                 data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
                 json.dump(data, f, sort_keys=True)
 
+            env = _DistributedEnv.detect()
+            # Prevent multiple nodes & processes from uploading the same index file; only global rank 0 should proceed
+            if env.global_rank != 0:
+                return
             # upload index file to cloud
             with open(index_file_path, "rb") as local_file, self.fs.open(cloud_index_path, "wb") as cloud_file:
                 for chunk in iter(lambda: local_file.read(4096), b""):  # Read in 4KB chunks
