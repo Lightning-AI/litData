@@ -207,8 +207,8 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
 def map(
     fn: Callable[[str, Any], None],
     inputs: Union[Sequence[Any], StreamingDataLoader],
-    output_dir: Union[str, Dir],
-    input_dir: Optional[str] = None,
+    output_dir: Union[str, Path, Dir],
+    input_dir: Optional[Union[str, Path]] = None,
     weights: Optional[List[int]] = None,
     num_workers: Optional[int] = None,
     fast_dev_run: Union[bool, int] = False,
