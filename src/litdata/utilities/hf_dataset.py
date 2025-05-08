@@ -3,14 +3,12 @@
 import os
 import shutil
 import tempfile
-from contextlib import suppress
 from typing import Optional
-
-from filelock import FileLock, Timeout
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_md5_hash, get_default_cache_dir
+from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
 def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
@@ -32,28 +30,39 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
             "URLs must start with 'hf://'. Please check the URL and try again."
         )
 
-    # Acquire a file lock to guarantee exclusive access,
-    # ensuring that multiple processes do not create the index simultaneously.
-    with suppress(Timeout), FileLock(os.path.join(tempfile.gettempdir(), "hf_index.lock"), timeout=20):
-        # Check for existing index in the cache
-        cache_directory = _get_existing_cache(dataset_url, cache_dir)
-        if cache_directory:
+    # Check for existing index in the cache
+    cache_directory = _get_existing_cache(dataset_url, cache_dir)
+    if cache_directory:
+        if is_local_rank_0():
             print(f"Using existing index at {cache_directory}.")
-            return cache_directory
+        return cache_directory
 
-        # Otherwise, create a new index file
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_index_path = os.path.join(temp_dir, _INDEX_FILENAME)
-            index_parquet_dataset(dataset_url, temp_dir, num_workers=os.cpu_count() or 4)
+    maybe_barrier()  # wait for all processes to reach this point
 
-            # Prepare the cache directory and move the index file there
-            cache_dir = _try_create_cache_dir(dataset_url, cache_dir, index_path=temp_index_path)
-            assert cache_dir is not None
+    # `index_parquet_dataset()` let's only first process on each node (if multi-node) create its own index file
+    # in a temporary directory. This is to prevent multiple processes from trying to create the same index file at once.
+    # The index file will be moved to the cache directory later.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_index_path = os.path.join(temp_dir, _INDEX_FILENAME)
+        index_parquet_dataset(dataset_url, temp_dir, num_workers=os.cpu_count() or 4)
+
+        # Prepare the cache directory and move the index file there
+        cache_dir = _try_create_cache_dir(dataset_url, cache_dir, index_path=temp_index_path)
+        assert cache_dir is not None
+
+        if is_local_rank_0():
+            # Only the first process on the each node should create the cache directory
+            # and move the index file to the cache directory.
+            # This prevents multiple processes from attempting to create the cache directory simultaneously.
+            print(f"Creating cache directory at {cache_dir}.")
+            os.makedirs(cache_dir, exist_ok=True)
             cache_index_path = os.path.join(cache_dir, _INDEX_FILENAME)
             shutil.copyfile(temp_index_path, cache_index_path)
             print(f"Index created at {cache_index_path}.")
 
-    return cache_dir  # type: ignore
+    maybe_barrier()  # wait for all processes to reach this point
+
+    return cache_dir
 
 
 def _get_existing_cache(dataset_url: str, cache_dir: Optional[str]) -> Optional[str]:
