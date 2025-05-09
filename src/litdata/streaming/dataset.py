@@ -483,6 +483,7 @@ class StreamingDataset(IterableDataset):
 
         if self._state_dict is not None:
             self._state_dict["num_samples_yielded"] = num_samples_yielded
+            self._state_dict["current_epoch"] = self.current_epoch
             return self._state_dict
 
         return {

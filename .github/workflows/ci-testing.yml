@@ -22,7 +22,7 @@ jobs:
         python-version: ["3.9", "3.10"]
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
 
