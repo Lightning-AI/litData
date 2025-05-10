@@ -34,6 +34,7 @@ clean:
 	rm -rf ./dist
 
 install-dependencies:
+	pip install -U lightning-sdk
 	pip install -r requirements.txt
 	pip install -r requirements/test.txt
 	pip install -r requirements/docs.txt

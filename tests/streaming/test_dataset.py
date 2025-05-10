@@ -758,10 +758,12 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     L = len(dataset)
     assert L == 20
 
+    returned_data = []
     for i in range(L):
         sequence = dataset[i]
-        assert sequence[0].item() == i * block_size
-        assert sequence[-1].item() == (i + 1) * block_size - 1
+        returned_data.append((sequence[0].item(), sequence[-1].item()))
+    expected_data = [(i * block_size, (i + 1) * block_size - 1) for i in range(L)]
+    assert sorted(returned_data) == expected_data
 
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "0")
@@ -780,11 +782,13 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     # one worker will yield 2 batches, other will yield 3 batches => len(dataloader) = 5
     assert len(dataloader) == 5
 
-    expected = [[0, 10], [60, 70], [20, 30], [80, 90], [40, 50]]
-    returned = []
+    # we can't foresay the items that node 0 and node 1 will
+    # but, they will be different and should completely describe the dataset
+    # expected = [[0, 10], [60, 70], [20, 30], [80, 90], [40, 50]]
+    rank_0_returned = []
     for batch in dataloader:
-        returned.append(batch[:, 0].tolist())
-    assert returned == expected
+        rank_0_returned.append(batch[:, 0].tolist())
+    assert len(rank_0_returned) == 5
 
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "1")
@@ -795,11 +799,15 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
 
     assert len(dataloader) == 5
 
-    expected = [[100, 110], [160, 170], [120, 130], [180, 190], [140, 150]]
-    returned = []
+    rank_1_returned = []
     for batch in dataloader:
-        returned.append(batch[:, 0].tolist())
-    assert returned == expected
+        rank_1_returned.append(batch[:, 0].tolist())
+    assert len(rank_1_returned) == 5
+
+    returned_items = sorted(rank_0_returned + rank_1_returned)
+    assert len(returned_items) == 10
+    print(f"{returned_items=}")
+    assert returned_items == [[i, i + 10] for i in range(0, 200, 20)]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
@@ -978,7 +986,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("shuffle", [True, False])
 def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     """Tests resuming from a chunk past the first chunk, when subsequent chunks don't have the same size."""
@@ -989,6 +997,16 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", optimize_data_cache_dir)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", optimize_cache_dir)
 
+    # 8*10*10 = 800 items will be stored in chunks of max_size = 190 with 4 workers
+    # so, if 4 chunks of 190 items = 760 items can be packed in 4 chunks
+    # left chunks = 800 - 760 = 140 chunks
+    # these 140 chunks can be stored in any random order, so we can't predict the exact count
+    # but we can put a `min-max` value.
+    # min => 140 can be stored in a single chunk by a single worker = 4 + 1 = 5 chunks minimum
+    # max => 140 items can be picked by each of the 4 works = 4 chunks with (~35 items)
+    #                                               (can't be 35, some will've 30 or 40)
+    # so, max chunk count = 4 + 4 = 8 chunks maximum
+
     optimize(
         fn=_simple_preprocess,
         inputs=list(range(8)),
@@ -998,17 +1016,30 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
         num_uploaders=1,
         item_loader=TokensLoader(block_size=10),
     )
-    assert set(os.listdir(data_dir)) == {
-        "chunk-0-0.bin",
-        "chunk-0-1.bin",
-        "chunk-1-0.bin",
-        "chunk-1-1.bin",
-        "chunk-2-0.bin",
-        "chunk-2-1.bin",
-        "chunk-3-0.bin",
-        "chunk-3-1.bin",
-        "index.json",
-    }
+    # print(f"{os.listdir(data_dir)=}")
+    # # print items in head of each
+    # for file_name in os.listdir(data_dir):
+    #     file_path = os.path.join(data_dir, file_name)
+
+    #     with open(file_path, "rb") as f:
+    #         head_bytes = f.read(4)  # read first 4 bytes
+    #         if len(head_bytes) < 4:
+    #             print(f"{file_name}: File too short")
+    #             continue
+    #         val = np.frombuffer(head_bytes, dtype=np.int32)[0]
+    #         print(f"{file_name}: {val}")
+    assert 6 <= len(os.listdir(data_dir)) <= 9  # +1 for index.json file
+
+    # check if the dataloader contains the complete dataset
+    os.mkdir(s3_cache_dir)
+    train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
+
+    fetched_dataset = []
+    for i, batch in enumerate(train_dataloader):
+        fetched_dataset.extend(batch)
+    assert len(fetched_dataset) == 80
+
+    shutil.rmtree(s3_cache_dir)
 
     os.mkdir(s3_cache_dir)
     train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
@@ -1029,8 +1060,12 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     assert dataloader_state is not None
     assert batch_to_resume_from is not None
     train_dataloader.load_state_dict(dataloader_state)
+    print(f"{dataloader_state=}")
+    print(f"{batch_to_resume_from=}")
+    next_batch_data = next(iter(train_dataloader))
+    print(f"{next_batch_data=}")
     # The next batch after resuming must match what we should have gotten next in the initial loop
-    assert torch.equal(next(iter(train_dataloader)), batch_to_resume_from)
+    assert torch.equal(next_batch_data, batch_to_resume_from)
 
 
 @pytest.mark.timeout(60)

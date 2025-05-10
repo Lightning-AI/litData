@@ -134,7 +134,7 @@ def test_optimize_append_overwrite(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 5
-    assert ds[:] == [(i, i**2) for i in range(5)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(5)]
 
     with pytest.raises(RuntimeError, match="HINT: If you want to append/overwrite to the existing dataset"):
         optimize(
@@ -167,7 +167,7 @@ def test_optimize_append_overwrite(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 5
-    assert ds[:] == [(i, i**2) for i in range(5, 10)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(5, 10)]  # each worker can pick items in any order
 
     optimize(
         fn=compress,
@@ -181,7 +181,7 @@ def test_optimize_append_overwrite(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 10
-    assert ds[:] == [(i, i**2) for i in range(5, 15)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(5, 15)]
 
     optimize(
         fn=compress,
@@ -195,7 +195,7 @@ def test_optimize_append_overwrite(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 15
-    assert ds[:] == [(i, i**2) for i in range(5, 20)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(5, 20)]
 
     with pytest.raises(Exception, match="The config isn't consistent between chunks"):
         optimize(
@@ -219,7 +219,7 @@ def test_optimize_append_overwrite(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 5
-    assert ds[:] == [(i, i**2, i**3) for i in range(0, 5)]
+    assert sorted(ds[:]) == [(i, i**2, i**3) for i in range(0, 5)]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
@@ -254,7 +254,7 @@ def test_optimize_checkpoint_in_none_and_append_mode(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 4
-    assert ds[:] == [(i, i**2) for i in range(4)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(4)]  # for multiple workers, the order of items is not guaranteed
     # checkpoints should be deleted
     assert not os.path.exists(os.path.join(output_dir, ".checkpoints"))
 
@@ -295,7 +295,7 @@ def test_optimize_checkpoint_in_none_and_append_mode(tmpdir):
     ds = StreamingDataset(output_dir)
 
     assert len(ds) == 8
-    assert ds[:] == [(i, i**2) for i in range(8)]
+    assert sorted(ds[:]) == [(i, i**2) for i in range(8)]
     # checkpoints should be deleted
     assert not os.path.exists(os.path.join(output_dir, ".checkpoints"))
 

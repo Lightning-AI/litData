@@ -125,7 +125,7 @@ class LambdaMapRecipe(MapRecipe):
     def prepare_structure(self, _: Optional[str]) -> Any:
         return self._inputs
 
-    def prepare_item(self, item_metadata: Any, output_dir: str, is_last: bool) -> None:
+    def prepare_item(self, item_metadata: Any, output_dir: str, is_last: bool = False) -> None:
         if self._contains_device and self._device is None:
             self._find_device()
 

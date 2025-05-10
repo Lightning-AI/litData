@@ -172,6 +172,7 @@ class BinaryWriter:
 
             worker_rank = get_worker_rank()
             if worker_rank is not None:
+                print(flush=True)  # to prevent truncated printing when using concurrent threads/processes
                 print(f"Rank {worker_rank} inferred the following `{data_format}` data format.")
             self._data_format = data_format
             self._data_spec = data_spec
