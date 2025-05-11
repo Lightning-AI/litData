@@ -38,28 +38,28 @@ class Dir:
     url: Optional[str] = None
 
 
-def _resolve_dir(dir_path: Optional[Union[str, Dir]]) -> Dir:
+def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if isinstance(dir_path, Dir):
         return Dir(path=str(dir_path.path) if dir_path.path else None, url=str(dir_path.url) if dir_path.url else None)
 
     if dir_path is None:
         return Dir()
 
-    if not isinstance(dir_path, str):
-        raise ValueError(f"`dir_path` must be a `Dir` or a string, got: {dir_path}")
+    if not isinstance(dir_path, (str, Path)):
+        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {dir_path}")
 
-    assert isinstance(dir_path, str)
+    if isinstance(dir_path, str):
+        cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
+        if dir_path.startswith(cloud_prefixes):
+            return Dir(path=None, url=dir_path)
 
-    cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
-    if dir_path.startswith(cloud_prefixes):
-        return Dir(path=None, url=dir_path)
+        if dir_path.startswith("local:"):
+            return Dir(path=None, url=dir_path)
 
-    if dir_path.startswith("local:"):
-        return Dir(path=None, url=dir_path)
-
-    dir_path = _resolve_time_template(dir_path)
+        dir_path = _resolve_time_template(dir_path)
 
     dir_path_absolute = str(Path(dir_path).absolute().resolve())
+    dir_path = str(dir_path)  # Convert to string if it was a Path object
 
     if dir_path_absolute.startswith("/teamspace/studios/this_studio"):
         return Dir(path=dir_path_absolute, url=None)
@@ -345,7 +345,22 @@ def _get_lightning_cloud_url() -> str:
 
 
 def _resolve_time_template(path: str) -> str:
-    match = re.search("^.*{%.*}$", path)
+    """Resolves a datetime pattern in the given path string.
+
+    If the path contains a placeholder in the form `{%Y-%m-%d}`, it replaces it
+    with the current date/time formatted using the specified `strftime` pattern.
+
+    Example:
+        Input: "/logs/log_{%Y-%m-%d}.txt"
+        Output (on May 5, 2025): "/logs/log_2025-05-05.txt"
+
+    Args:
+        path (str): The file path containing an optional datetime placeholder.
+
+    Returns:
+        str: The path with the datetime placeholder replaced by the current timestamp.
+    """
+    match = re.search("^.*{%.*}.*$", path)
     if match is None:
         return path
 
