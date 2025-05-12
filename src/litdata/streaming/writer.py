@@ -31,6 +31,7 @@ from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
 from litdata.utilities.parquet import get_parquet_indexer_cls
+from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
 @dataclass
@@ -588,56 +589,61 @@ def index_parquet_dataset(
     if not _POLARS_AVAILABLE:
         raise ModuleNotFoundError("Please, run: `pip install polars`")
 
-    pq_chunks_info = []
-    config: Dict[str, Any] = {
-        "compression": None,
-        "chunk_size": None,
-        "chunk_bytes": None,
-        "data_format": [],
-        "data_spec": None,
-        "encryption": None,
-        "item_loader": ParquetLoader.__name__,
-    }
-
-    pq_dir_class = get_parquet_indexer_cls(pq_dir_url, cache_dir, storage_options, num_workers)
-
-    if _TQDM_AVAILABLE:
-        from tqdm.auto import tqdm as _tqdm
-
-        pbar = _tqdm(
-            desc="Indexing progress",
-            total=len(pq_dir_class.files),
-            smoothing=0,
-            mininterval=1,
-            leave=True,
-            dynamic_ncols=True,
-            unit="step",
-        )
-
-    results = {}
-    # iterate through the directory and index each file ending with ".parquet"
-    for file_metadata, order in pq_dir_class:
-        chunk_dtypes = file_metadata["data_types"]
-
-        if len(config["data_format"]) != 0 and config["data_format"] != chunk_dtypes:
-            raise Exception(
-                "The config isn't consistent between chunks. This shouldn't have happened."
-                f"Found {config}; {chunk_dtypes}."
-            )
-        config["data_format"] = chunk_dtypes
-        chunk_info = {
-            "chunk_bytes": file_metadata["file_size"],
-            "chunk_size": file_metadata["num_rows"],
-            "filename": file_metadata["file_name"],
-            "dim": None,
+    if is_local_rank_0():
+        # in multi-node setup, each node's first process should do the indexing,
+        # but only first node's first process should upload the index (if uploading is needed)
+        pq_chunks_info = []
+        config: Dict[str, Any] = {
+            "compression": None,
+            "chunk_size": None,
+            "chunk_bytes": None,
+            "data_format": [],
+            "data_spec": None,
+            "encryption": None,
+            "item_loader": ParquetLoader.__name__,
         }
-        results[order] = chunk_info
+
+        pq_dir_class = get_parquet_indexer_cls(pq_dir_url, cache_dir, storage_options, num_workers)
+
         if _TQDM_AVAILABLE:
-            pbar.update(1)
+            from tqdm.auto import tqdm as _tqdm
 
-    for i in sorted(results.keys()):
-        pq_chunks_info.append(results[i])
+            pbar = _tqdm(
+                desc="Indexing progress",
+                total=len(pq_dir_class.files),
+                smoothing=0,
+                mininterval=1,
+                leave=True,
+                dynamic_ncols=True,
+                unit="step",
+            )
 
-    del results
-    print(flush=True)  # to prevent truncated printing when using concurrent threads/processes
-    pq_dir_class.write_index(pq_chunks_info, config)
+        results = {}
+        # iterate through the directory and index each file ending with ".parquet"
+        for file_metadata, order in pq_dir_class:
+            chunk_dtypes = file_metadata["data_types"]
+
+            if len(config["data_format"]) != 0 and config["data_format"] != chunk_dtypes:
+                raise Exception(
+                    "The config isn't consistent between chunks. This shouldn't have happened."
+                    f"Found {config}; {chunk_dtypes}."
+                )
+            config["data_format"] = chunk_dtypes
+            chunk_info = {
+                "chunk_bytes": file_metadata["file_size"],
+                "chunk_size": file_metadata["num_rows"],
+                "filename": file_metadata["file_name"],
+                "dim": None,
+            }
+            results[order] = chunk_info
+            if _TQDM_AVAILABLE:
+                pbar.update(1)
+
+        for i in sorted(results.keys()):
+            pq_chunks_info.append(results[i])
+
+        del results
+        print(flush=True)  # to prevent truncated printing when using concurrent threads/processes
+        pq_dir_class.write_index(pq_chunks_info, config)
+
+    maybe_barrier()  # wait for all processes to reach this point

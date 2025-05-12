@@ -14,7 +14,7 @@ import requests
 import torch
 from PIL import Image
 
-from litdata import StreamingDataset, merge_datasets, optimize, walk
+from litdata import StreamingDataset, map, merge_datasets, optimize, walk
 from litdata.processing.functions import _get_input_dir, _resolve_dir
 from litdata.streaming.cache import Cache
 from litdata.utilities.encryption import FernetEncryption, RSAEncryption
@@ -56,6 +56,44 @@ def test_get_input_dir_with_s3_path():
     input_dir = _resolve_dir(input_dir)
     assert not input_dir.path
     assert input_dir.url == "s3://my_bucket/my_folder"
+
+
+def update_msg(file_path: Path, output_dir: Path):
+    with open(os.path.join(output_dir, file_path.name), "w") as f:
+        f.write("Bonjour!")
+
+
+def test_map_with_path(tmpdir):
+    input_dir = Path(tmpdir) / "input_dir"
+    output_dir = Path(tmpdir) / "output_dir"
+
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    for i in range(5):
+        filepath = os.path.join(input_dir, f"{i}.txt")
+        with open(filepath, "w") as f:
+            f.write("hello world!")
+
+    # read all files in the input directory, and assert it contains hello world!
+    for file in input_dir.iterdir():
+        with open(file) as f:
+            content = f.read()
+            assert content == "hello world!"
+
+    inputs = list(input_dir.iterdir())  # List all files in the directory
+
+    map(
+        fn=update_msg,
+        inputs=inputs,
+        output_dir=output_dir,
+    )
+
+    # read all files in the output directory, and assert it contains Bonjour!
+    for file in output_dir.iterdir():
+        with open(file) as f:
+            content = f.read()
+            assert content == "Bonjour!"
 
 
 def compress(index):

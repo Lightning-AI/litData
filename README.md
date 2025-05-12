@@ -90,6 +90,9 @@ from PIL import Image
 import litdata as ld
 
 def random_images(index):
+    # Replace with your actual image loading here (e.g., .jpg, .png, etc.)
+    # (recommended to pass as compressed formats like JPEG for better storage and optimized streaming speed)
+    # You can also apply resizing or reduce image quality to further increase streaming speed and save space.
     fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
     fake_labels = np.random.randint(10)
 

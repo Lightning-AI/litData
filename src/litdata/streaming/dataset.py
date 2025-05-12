@@ -106,8 +106,7 @@ class StreamingDataset(IterableDataset):
         if input_dir.url is not None and input_dir.url.startswith("hf://"):
             if index_path is None:
                 # No index_path was provided. Attempt to load it from cache or generate it dynamically on the fly.
-                index_path = index_hf_dataset(input_dir.url)
-
+                index_path = index_hf_dataset(input_dir.url, cache_dir.path)
             if item_loader is not None and not isinstance(item_loader, ParquetLoader):
                 raise ValueError(
                     "Invalid item_loader for hf://datasets. "
