@@ -138,13 +138,13 @@ def _download_data_target(
             return
 
         # 4. Unpack
-        item, paths = r
+        index, paths = r
 
         # 5. Check whether all the files are already downloaded
         if input_dir.path and all(
             os.path.exists(p.replace(input_dir.path, cache_dir) if input_dir else p) for p in paths
         ):
-            queue_out.put((item, paths))
+            queue_out.put(index)
             continue
 
         if input_dir.url is not None or input_dir.path is not None:
@@ -177,7 +177,7 @@ def _download_data_target(
                     raise ValueError(f"The provided {input_dir.url} isn't supported.")
 
         # 7. Inform the worker the current files are available
-        queue_out.put((item, paths))
+        queue_out.put(index)
 
 
 #
@@ -192,9 +192,6 @@ def _remove_target(input_dir: Dir, cache_dir: str, queue_in: Queue) -> None:
         # 2. Terminate the process if we received a termination signal
         if paths is None:
             return
-
-        if not isinstance(paths, list):
-            paths = [paths]
 
         # 3. Iterate through the paths and delete them sequentially.
         for path in paths:
@@ -488,7 +485,7 @@ class BaseWorker:
         self.num_uploaders = num_uploaders
         self.remove = remove
         self.reader = reader
-        self.paths_and_items: List[List[str]] = []
+        self.paths: List[List[str]] = []
         self.remover: Optional[Process] = None
         self.downloaders: List[Process] = []
         self.uploaders: List[Process] = []
@@ -513,7 +510,6 @@ class BaseWorker:
         self.checkpoint_chunks_info: Optional[List[Dict[str, Any]]] = checkpoint_chunks_info
         self.checkpoint_next_index: Optional[int] = checkpoint_next_index
         self.storage_options = storage_options
-        self.contains_items_and_paths = False
         self.using_shared_queue = use_shared_queue
 
     def run(self) -> None:
@@ -559,18 +555,11 @@ class BaseWorker:
         num_downloader_finished = 0
 
         while True:
-            item = self.ready_to_process_queue.get()
-            paths = None
+            index = self.ready_to_process_queue.get()
 
-            if self.contains_items_and_paths and item is not None:
-                item = item[0]
-                paths = item[1]
-            # print(f"Worker {self.worker_index} ready to process {item=} {self.num_downloaders=}", flush=True)
-
-            if item is None:
+            if index is None:
                 num_downloader_finished += 1
-                # if no_downloaders, we don't need to wait for the downloader to finish
-                if num_downloader_finished == self.num_downloaders or self.no_downloaders:
+                if num_downloader_finished == self.num_downloaders:
                     print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
@@ -596,9 +585,9 @@ class BaseWorker:
                 continue
 
             if isinstance(self.data_recipe, DataChunkRecipe):
-                self._handle_data_chunk_recipe(item)
+                self._handle_data_chunk_recipe(index)
             else:
-                self._handle_data_transform_recipe(item)
+                self._handle_data_transform_recipe(index)
 
             self._counter += 1
 
@@ -607,8 +596,8 @@ class BaseWorker:
                 self.progress_queue.put((self.worker_index, self._counter))
                 self._last_time = time()
 
-            if self.remove and self.input_dir.path is not None and self.reader is None and paths is not None:
-                self.remove_queue.put(paths)
+            if self.remove and self.input_dir.path is not None and self.reader is None:
+                self.remove_queue.put(self.paths[index])
 
             try:
                 self.stop_queue.get(timeout=0.0001)
@@ -699,7 +688,7 @@ class BaseWorker:
 
             self.paths_and_items.append((item, paths))
 
-            # items.append(tree_unflatten(flattened_item, spec))
+            items.append(tree_unflatten(flattened_item, spec))
 
         self.item_provider.set_items(self.worker_index, items)
 
@@ -1323,6 +1312,7 @@ class DataProcessor:
                 self.checkpoint_next_index[worker_idx] if self.checkpoint_next_index else None,
                 self.item_loader,
                 self.storage_options,
+                self.use_shared_queue,
             )
             worker.start()
             workers.append(worker)
