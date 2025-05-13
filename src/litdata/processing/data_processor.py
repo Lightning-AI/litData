@@ -43,7 +43,7 @@ from litdata.constants import (
     _SUPPORTED_PROVIDERS,
     _TQDM_AVAILABLE,
 )
-from litdata.processing.item_provider import SharedQueueProvider, StaticPartitionProvider, WorkerItemProvider
+from litdata.processing.item_provider import WorkerItemProvider
 from litdata.processing.readers import BaseReader, StreamingDataLoaderReader
 from litdata.processing.utilities import _create_dataset, remove_uuid_from_filename
 from litdata.streaming import Cache
@@ -1202,11 +1202,7 @@ class DataProcessor:
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
-        self.items_provider = (
-            StaticPartitionProvider(items=workers_user_items)
-            if not self.use_shared_queue
-            else SharedQueueProvider(items=workers_user_items)
-        )
+        self.items_provider = WorkerItemProvider(items=workers_user_items)
 
         self._create_process_workers(data_recipe)
 
