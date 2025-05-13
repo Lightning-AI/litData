@@ -32,8 +32,8 @@ class WorkerItemProvider:
 
     def prepare_ready_to_use_queue(self, use_shared: bool = False) -> None:
         for index, items in enumerate(self.items):
-            for _item in items:
+            for _item_index, _ in enumerate(items):
                 if use_shared:
-                    self.ready_to_process_shared_queue.put(_item)
+                    self.ready_to_process_shared_queue.put_nowait(_item_index)
                 else:
-                    self.ready_to_process_item[index].put(_item)
+                    self.ready_to_process_item[index].put_nowait(_item_index)

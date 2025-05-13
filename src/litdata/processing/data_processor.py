@@ -520,6 +520,7 @@ class BaseWorker:
         except Exception:
             traceback_format = traceback.format_exc()
             self.error_queue.put(traceback_format)
+        print(flush=True)  # to ensure all prints are flushed
         print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is done.")
 
     def _setup(self) -> None:
@@ -532,6 +533,9 @@ class BaseWorker:
 
     def _terminate(self) -> None:
         """Make sure all the uploaders, downloaders and removers are terminated."""
+        print(flush=True)  # to ensure all prints are flushed
+        print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
+
         for uploader in self.uploaders:
             if uploader.is_alive():
                 uploader.join()
@@ -553,14 +557,27 @@ class BaseWorker:
         finally, it will upload and remove the data depending on the recipe type.
         """
         num_downloader_finished = 0
+        task_completed = False
+        worker_terminating = False
 
         while True:
-            index = self.ready_to_process_queue.get()
+            try:
+                index = self.ready_to_process_queue.get(timeout=30)
+            except TimeoutError:
+                if not task_completed:
+                    raise TimeoutError(
+                        f"Worker {self.worker_index} timed out after 30 seconds. "
+                        "Please check if the input_dir is accessible and the data is available."
+                    )
+                index = None
+                worker_terminating = True
 
             if index is None:
-                num_downloader_finished += 1
-                if num_downloader_finished == self.num_downloaders:
-                    print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
+                if not task_completed:  # if task already completed, means, no downloader is active now
+                    num_downloader_finished += 1
+
+                if num_downloader_finished == self.num_downloaders or worker_terminating:
+                    task_completed = True
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
                         self._handle_data_chunk_recipe_end()
@@ -581,7 +598,9 @@ class BaseWorker:
 
                     if self.progress_queue:
                         self.progress_queue.put((self.worker_index, self._counter))
-                    return
+
+                    if worker_terminating:
+                        return
                 continue
 
             if isinstance(self.data_recipe, DataChunkRecipe):
@@ -757,7 +776,11 @@ class BaseWorker:
         and save (write) the output in the cache.
         """
         try:
-            current_item = self.items[index] if self.reader is None else self.reader.read(self.items[index])
+            current_item = (
+                self.item_provider.get_items(self.worker_index)[index]
+                if self.reader is None
+                else self.reader.read(self.item_provider.get_items(self.worker_index)[index])
+            )
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:
@@ -773,7 +796,9 @@ class BaseWorker:
                     checkpoint_filepath = self.cache.save_checkpoint()
                     self._try_upload(checkpoint_filepath)
         except Exception as e:
-            raise RuntimeError(f"Failed processing {self.items[index]=}; {index=}") from e
+            raise RuntimeError(
+                f"Failed processing {self.item_provider.get_items(self.worker_index)[index]=}; {index=}"
+            ) from e
 
     def _handle_data_chunk_recipe_end(self) -> None:
         """Called when the `optimize fn` is done.
@@ -798,8 +823,14 @@ class BaseWorker:
         """
         # Don't use a context manager to avoid deleting files that are being uploaded.
         output_dir = tempfile.mkdtemp()
-        item = self.items[index] if self.reader is None else self.reader.read(self.items[index])
-        item_data = self.data_recipe.prepare_item(item, str(output_dir), len(self.items) - 1 == index)
+        item = (
+            self.item_provider.get_items(self.worker_index)[index]
+            if self.reader is None
+            else self.reader.read(self.item_provider.get_items(self.worker_index)[index])
+        )
+        item_data = self.data_recipe.prepare_item(
+            item, str(output_dir), len(self.item_provider.get_items(self.worker_index)) - 1 == index
+        )
         if item_data is not None:
             raise ValueError(
                 "When using a `MapRecipe`, the `prepare_item` shouldn't return anything."
