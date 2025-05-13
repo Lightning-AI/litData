@@ -362,6 +362,60 @@ def _map_items_to_workers_weighted(
     return [np.random.permutation(worker_items[worker_id]).tolist() for worker_id in worker_ids_this_node]
 
 
+def _map_items_to_nodes_sequentially(user_items: List[Any]) -> List[Any]:
+    """Map the items to the nodes sequentially, and return the items for current node.
+    - with 1 node:
+    >>> workers_user_items = _map_items_to_nodes_sequentially(2, list(range(5)))
+    >>> assert workers_user_items == [0,1,2,3,4]
+    - with 2 node:
+    >>> workers_user_items = _map_items_to_nodes_sequentially(2, list(range(5)))
+    >>> assert workers_user_items == [0,1] # for node 0
+    >>> assert workers_user_items == [2,3,4] # for node 1.
+    """
+    node_rank = _get_node_rank()
+    num_nodes = _get_num_nodes()
+
+    num_items_per_node = len(user_items) // num_nodes
+
+    num_items_per_node: List[int] = [num_items_per_node for _ in range(num_nodes)]
+    reminder = len(user_items) % num_nodes
+
+    for node_idx in range(len(num_items_per_node) - 1, -1, -1):
+        if reminder == 0:
+            break
+        num_items_per_node[node_idx] += 1
+        reminder -= 1
+
+    num_items_cumsum_per_node = np.cumsum([0] + num_items_per_node)
+
+    start = num_items_cumsum_per_node[node_rank]
+    end = num_items_cumsum_per_node[node_rank + 1]
+
+    return user_items[start:end]
+
+
+def _map_items_to_nodes_weighted(
+    user_items: List[Any],
+    weights: Optional[List[int]] = None,
+    file_size: bool = True,
+) -> List[Any]:
+    """Map the items to the nodes based on the weights.
+    - with 1 node:
+    >>> workers_user_items = _map_items_to_nodes_weighted(list(range(5)), weights=[1, 2, 3, 4, 5])
+    >>> assert workers_user_items == [0,1,2,3,4]
+    - with 2 node:
+    >>> workers_user_items = _map_items_to_nodes_weighted(list(range(5)), weights=[1, 2, 3, 4, 5])
+    >>> assert workers_user_items == [0,1,4] # for node 0 (total weight: 1+2+5=8)
+    >>> assert workers_user_items == [2,3] # for node 1 (total weight: 3+4=7).
+    """
+    weights = [1] * len(user_items) if weights is None else weights
+    num_nodes = _get_num_nodes()
+    node_rank = _get_node_rank()
+
+    node_items, node_weights = _pack_greedily(items=user_items, weights=weights, num_bins=num_nodes)
+    return node_items[node_rank]
+
+
 def _get_num_bytes(item: Any, base_path: str) -> int:
     """For the given item (PyTree), flatten it and return the total size in bytes of all file paths."""
     flattened_item, _ = tree_flatten(item)

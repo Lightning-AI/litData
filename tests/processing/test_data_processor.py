@@ -21,6 +21,8 @@ from litdata.processing.data_processor import (
     _download_data_target,
     _get_item_filesizes,
     _is_path,
+    _map_items_to_nodes_sequentially,
+    _map_items_to_nodes_weighted,
     _map_items_to_workers_sequentially,
     _map_items_to_workers_weighted,
     _remove_target,
@@ -361,6 +363,100 @@ def test_map_items_to_workers_sequentially(monkeypatch):
     assert workers_user_items == [[23, 24, 25], [26, 27, 28], [29, 30, 31]]
     workers_user_items = _map_items_to_workers_sequentially(4, list(range(32)))
     assert workers_user_items == [[24, 25], [26, 27], [28, 29], [30, 31]]
+
+
+def test_map_items_to_nodes_weighted(monkeypatch):
+    seed_everything(42)
+
+    workers_user_items = _map_items_to_nodes_weighted(list(range(5)))
+    assert workers_user_items == list(range(5))
+    workers_user_items = _map_items_to_nodes_weighted(list(range(6)))
+    assert workers_user_items == list(range(6))
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(5)))
+    assert workers_user_items == [0, 2, 4]
+    workers_user_items = _map_items_to_nodes_weighted(list(range(6)))
+    assert workers_user_items == [0, 2, 4]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(5)))
+    assert workers_user_items == [1, 3]
+    workers_user_items = _map_items_to_nodes_weighted(list(range(6)))
+    assert workers_user_items == [1, 3, 5]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(32)))
+    assert workers_user_items == [i * 4 for i in range(8)]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(32)))
+    assert workers_user_items == [i * 4 + 1 for i in range(8)]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "2")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(32)))
+    assert workers_user_items == [i * 4 + 2 for i in range(8)]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "3")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(32)))
+    assert workers_user_items == [i * 4 + 3 for i in range(8)]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(5)), weights=[1, 2, 3, 4, 5])
+    assert workers_user_items == [4, 1, 0]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_nodes_weighted(list(range(5)), weights=[1, 2, 3, 4, 5])
+    assert workers_user_items == [3, 2]
+
+
+def test_map_items_to_nodes_sequentially(monkeypatch):
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(2)))
+    assert workers_user_items == list(range(2))
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(5)))
+    assert workers_user_items == list(range(5))
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(5)))
+    assert workers_user_items == [0, 1]
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(6)))
+    assert workers_user_items == [0, 1, 2]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(5)))
+    assert workers_user_items == [2, 3, 4]
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(6)))
+    assert workers_user_items == [3, 4, 5]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(32)))
+    assert workers_user_items == list(range(8))
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(32)))
+    assert workers_user_items == list(range(8, 16))
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "2")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(32)))
+    assert workers_user_items == list(range(16, 24))
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "4")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "3")
+    workers_user_items = _map_items_to_nodes_sequentially(list(range(32)))
+    assert workers_user_items == list(range(24, 32))
 
 
 class CustomDataChunkRecipe(DataChunkRecipe):
