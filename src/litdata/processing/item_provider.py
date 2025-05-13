@@ -10,34 +10,75 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from abc import ABC, abstractmethod
+from collections import defaultdict
 from multiprocessing import Queue
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 
-class WorkerItemProvider(ABC):
-    """Abstract base class for providing items to the worker.
-    This class is used to define a common interface for different item providers.
-    """
+class WorkerItemProvider:
+    """Helper class for providing items to the worker."""
 
-    @abstractmethod
-    def get_next_item(self) -> Any:
-        pass
+    def __init__(self, items: List[List[Any]]):
+        self.index = 0
+        self.items = items
+        self.ready_to_process_item: Dict[int, Queue] = defaultdict(Queue)
+        self.ready_to_process_shared_queue: Queue = Queue()
+
+    def get_next(self, index: int) -> Any:
+        """Get the next item from the provider.
+
+        Returns:
+            Any: The next item from the provider.
+        """
+        try:
+            return self.ready_to_process_item[index].get()
+        except KeyError:
+            raise KeyError(f"Item with index {index} not found in ready_to_process_item.")
+        except Exception as e:
+            raise RuntimeError(f"Error while getting item from `ready_to_process_item`: {e}")
+
+    def get_next_shared(self) -> Any:
+        """Get the next item from the provider.
+
+        Returns:
+            Any: The next item from the shared queue.
+        """
+        try:
+            return self.ready_to_process_shared_queue.get()
+        except Exception as e:
+            raise RuntimeError(f"Error while getting item from `ready_to_process_shared_queue`: {e}")
+
+    def set_items(self, index: int, item: List[Any]) -> None:
+        self.items[index] = item
+
+    def get_items(self, index: int) -> List[Any]:
+        return self.items[index]
+
+    def prepare_ready_to_use_queue(self, use_shared: bool = False) -> None:
+        for index, items in enumerate(self.items):
+            for _item in items:
+                if use_shared:
+                    self.ready_to_process_shared_queue.put(_item)
+                else:
+                    self.ready_to_process_item[index].put(_item)
 
 
 class StaticPartitionProvider(WorkerItemProvider):
     """Provides items from a static partition."""
 
-    def __init__(self, items: list):
-        self.items = items
-        self.index = 0
-
-    def get_next_item(self) -> Any:
+    def get_next_item(self) -> Tuple[int, Any]:
         if self.index >= len(self.items):
-            return None
+            return -1, None
         item = self.items[self.index]
         self.index += 1
-        return item
+        return (self.index - 1, item)
+
+    def get_item_with_path(self, index: int) -> Tuple[int, Any]:
+        item_with_path = self.items_with_paths[index]
+        return index, item_with_path
+
+    def set_item_with_path(self, index: int, item_with_path: Any) -> None:
+        self.items_with_paths[index] = item_with_path
 
     def __len__(self) -> int:
         return len(self.items)
@@ -46,11 +87,8 @@ class StaticPartitionProvider(WorkerItemProvider):
 class SharedQueueProvider(WorkerItemProvider):
     """Provides items from a shared queue."""
 
-    def __init__(self, queue: Queue):
-        self.queue = queue
+    def __init__(self, items: List[Any]):
+        self.items = items
 
     def get_next_item(self) -> Any:
-        try:
-            return self.queue.get_nowait()
-        except Exception:
-            return None
+        raise NotImplementedError("SharedQueueProvider does not support get_next_item() method.")
