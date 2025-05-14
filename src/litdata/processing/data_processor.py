@@ -606,7 +606,6 @@ class BaseWorker:
                 self._handle_data_transform_recipe(index)
 
             self._counter += 1
-            self.process_index.append(index)
 
             # send update to the progress queue after every 1 second
             if self.progress_queue and (time() - self._last_time) > 1:
@@ -822,14 +821,18 @@ class BaseWorker:
         It should not return anything and write directly to the output directory.
         """
         # Don't use a context manager to avoid deleting files that are being uploaded.
+        if not isinstance(index, tuple) or len(index) != 2:
+            raise ValueError(f"Expected index to be a tuple of (worker_index, item_index), got {index}")
+
         output_dir = tempfile.mkdtemp()
         item = (
             self.item_provider.get_items(index)
             if self.reader is None
             else self.reader.read(self.item_provider.get_items(index))
         )
+
         item_data = self.data_recipe.prepare_item(
-            item, str(output_dir), len(self.item_provider.get_items(index)) - 1 == index
+            item, str(output_dir), len(self.item_provider.get_items(index[0])) - 1 == index[1]
         )
         if item_data is not None:
             raise ValueError(

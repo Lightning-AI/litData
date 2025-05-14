@@ -12,7 +12,7 @@
 # limitations under the License.
 from collections import defaultdict
 from multiprocessing import Queue
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 
 class WorkerItemProvider:
@@ -25,11 +25,22 @@ class WorkerItemProvider:
         self.ready_to_process_item: Dict[int, Queue] = defaultdict(Queue)
         self.ready_to_process_shared_queue: Queue = Queue()
 
-    def set_items(self, index: int, item: List[Any]) -> None:
-        self.items[index] = item
+    def set_items(self, index: Union[int, Tuple[int, int]], item: List[Any]) -> None:
+        if isinstance(index, int):
+            self.items[index] = item
+        elif isinstance(index, tuple):
+            worker_index, item_index = index
+            self.items[worker_index][item_index] = item
+        else:
+            raise ValueError(f"Invalid index type: Expected (int or Tuple[int, int]), but got {type(index)}")
 
-    def get_items(self, index: Tuple[int, int]) -> List[Any]:
-        return self.items[index[0]][index[1]]
+    def get_items(self, index: Union[int, Tuple[int, int]]) -> List[Any]:
+        if isinstance(index, int):
+            return self.items[index]
+        if isinstance(index, tuple):
+            worker_index, item_index = index
+            return self.items[worker_index][item_index]
+        raise ValueError(f"Invalid index type: Expected (int or Tuple[int, int]), but got {type(index)}")
 
     def prepare_ready_to_use_queue(self, use_shared_queue: bool, worker_index: int) -> None:
         for index, _ in enumerate(self.items[worker_index]):
