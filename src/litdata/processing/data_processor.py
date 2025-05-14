@@ -777,7 +777,7 @@ class BaseWorker:
         and save (write) the output in the cache.
         """
         try:
-            current_item = current_item = (
+            current_item = (
                 self.item_provider.get_items(index)
                 if self.reader is None
                 else self.reader.read(self.item_provider.get_items(index))
