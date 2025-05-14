@@ -150,7 +150,7 @@ def _download_data_target(
         if input_dir.path and all(
             os.path.exists(p.replace(input_dir.path, cache_dir) if input_dir else p) for p in paths
         ):
-            queue_out.put(index)
+            queue_out.put((worker_index, index))
             continue
 
         if input_dir.url is not None or input_dir.path is not None:
