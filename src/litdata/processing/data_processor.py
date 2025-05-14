@@ -61,6 +61,8 @@ from litdata.utilities.packing import _pack_greedily
 
 logger = logging.Logger(__name__)
 
+WORKER_RESPONSE_TIMEOUT_LIMIT = 30000  # 30 seconds (or, 30000 milliseconds)
+
 
 def _get_num_nodes() -> int:
     """Returns the number of nodes."""
@@ -1244,7 +1246,7 @@ class DataProcessor:
         node_rank = _get_node_rank()
         total_num_items = len(user_items)
 
-        limit = 30000  # 30 seconds
+        limit = WORKER_RESPONSE_TIMEOUT_LIMIT  # 30 seconds
         while True:
             try:
                 error = self.error_queue.get(timeout=0.001)
@@ -1253,7 +1255,7 @@ class DataProcessor:
                 assert self.progress_queue
                 try:
                     index, counter = self.progress_queue.get(timeout=0.001)
-                    limit = 30000
+                    limit = WORKER_RESPONSE_TIMEOUT_LIMIT
                 except Empty:
                     limit -= 1
                     if limit == 0:
