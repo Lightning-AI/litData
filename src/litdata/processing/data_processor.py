@@ -1218,9 +1218,7 @@ class DataProcessor:
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
-        self.items_provider = WorkerItemProvider(
-            items=workers_user_items, num_downloaders=self.num_downloaders, num_workers=self.num_workers
-        )
+        self.items_provider = WorkerItemProvider(items=workers_user_items, num_downloaders=self.num_downloaders)
 
         self._create_process_workers(data_recipe)
 

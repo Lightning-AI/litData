@@ -18,14 +18,12 @@ from typing import Any, Dict, List, Tuple
 class WorkerItemProvider:
     """Helper class for providing items to the worker."""
 
-    def __init__(self, items: List[List[Any]], num_downloaders: int = 1, num_workers: int = 1):
+    def __init__(self, items: List[List[Any]], num_downloaders: int) -> None:
         self.items = items
         self.paths: Dict[int, List[List[str]]] = defaultdict(list)
         self.num_downloaders = num_downloaders
-        self.num_workers = num_workers
         self.ready_to_process_item: Dict[int, Queue] = defaultdict(Queue)
         self.ready_to_process_shared_queue: Queue = Queue()
-        print(f"{self.items=}")
 
     def set_items(self, index: int, item: List[Any]) -> None:
         self.items[index] = item
