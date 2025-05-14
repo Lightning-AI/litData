@@ -12,7 +12,7 @@
 # limitations under the License.
 from collections import defaultdict
 from multiprocessing import Queue
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 class WorkerItemProvider:
@@ -20,38 +20,31 @@ class WorkerItemProvider:
 
     def __init__(self, items: List[List[Any]], num_downloaders: int = 1, num_workers: int = 1):
         self.items = items
+        self.paths: Dict[int, List[List[str]]] = defaultdict(list)
         self.num_downloaders = num_downloaders
         self.num_workers = num_workers
         self.ready_to_process_item: Dict[int, Queue] = defaultdict(Queue)
         self.ready_to_process_shared_queue: Queue = Queue()
-        self._prepared = False
+        print(f"{self.items=}")
 
     def set_items(self, index: int, item: List[Any]) -> None:
         self.items[index] = item
 
-    def get_items(self, index: int) -> List[Any]:
-        return self.items[index]
+    def get_items(self, index: Tuple[int, int]) -> List[Any]:
+        return self.items[index[0]][index[1]]
 
-    def prepare_ready_to_use_queue(self, use_shared: bool = False) -> None:
-        if self._prepared:
-            # prevents re-preparing the queue by multiple workers
-            return
+    def prepare_ready_to_use_queue(self, use_shared_queue: bool, worker_index: int) -> None:
+        for index, _ in enumerate(self.items[worker_index]):
+            if use_shared_queue:
+                self.ready_to_process_shared_queue.put_nowait((worker_index, index))
+            else:
+                self.ready_to_process_item[worker_index].put_nowait((worker_index, index))
 
-        self._prepared = True
+        sentinel = None
 
-        for index, items in enumerate(self.items):
-            for _item_index, _ in enumerate(items):
-                if use_shared:
-                    self.ready_to_process_shared_queue.put_nowait(_item_index)
-                else:
-                    self.ready_to_process_item[index].put_nowait(_item_index)
+        target_queue = (
+            self.ready_to_process_shared_queue if use_shared_queue else self.ready_to_process_item[worker_index]
+        )
 
-            if not use_shared:
-                # at the end of each, add a sentinel to indicate the end of the items
-                for _ in range(self.num_downloaders * self.num_workers):
-                    self.ready_to_process_item[index].put_nowait(None)
-
-        if use_shared:
-            for _ in range(self.num_downloaders * self.num_workers * 5):
-                # add a sentinel to indicate the end of the items
-                self.ready_to_process_shared_queue.put_nowait(None)
+        for _ in range(self.num_downloaders):
+            target_queue.put_nowait(sentinel)

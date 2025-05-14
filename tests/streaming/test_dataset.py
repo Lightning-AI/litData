@@ -99,6 +99,49 @@ def test_streaming_dataset(tmpdir, monkeypatch, compression):
     assert len(dataloader) == 30
 
 
+def _simple_optimize_fn(index):
+    return index
+
+
+@pytest.mark.parametrize(
+    ("chunk_bytes", "chunk_size"),
+    [
+        ("64MB", None),
+        (None, 5),  # at max 5 items in a chunk
+        (None, 75),  # at max 75 items in a chunk
+        (None, 1200),  # at max 1200 items in a chunk
+    ],
+)
+@pytest.mark.parametrize("use_shared_queue", [True, False])
+def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+    data_dir = str(tmpdir / "optimized")
+
+    optimize(
+        fn=_simple_optimize_fn,
+        inputs=list(range(1000)),
+        output_dir=data_dir,
+        num_workers=4,
+        chunk_bytes=chunk_bytes,
+        chunk_size=chunk_size,
+        use_shared_queue=use_shared_queue,
+    )
+
+    sleep(2)  # wait for the cache to be created
+
+    ds = StreamingDataset(input_dir=data_dir)
+
+    expected_dataset = list(range(1000))
+    actual_dataset = ds[:]
+
+    assert len(actual_dataset) == len(expected_dataset)
+
+    if use_shared_queue:
+        # in shared queue, the order of the chunks is not guaranteed
+        assert sorted(actual_dataset) == sorted(expected_dataset)
+    else:
+        assert actual_dataset == expected_dataset
+
+
 @pytest.mark.timeout(30)
 def test_streaming_dataset_max_pre_download(tmpdir):
     seed_everything(42)
@@ -978,9 +1021,10 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("shuffle", [True, False])
-def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
+@pytest.mark.parametrize("use_shared_queue", [True, False])
+def test_dataset_resume_on_future_chunks(shuffle, use_shared_queue, tmpdir, monkeypatch):
     """Tests resuming from a chunk past the first chunk, when subsequent chunks don't have the same size."""
     s3_cache_dir = str(tmpdir / "s3cache")
     optimize_data_cache_dir = str(tmpdir / "optimize_data_cache")
@@ -989,6 +1033,15 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", optimize_data_cache_dir)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", optimize_cache_dir)
 
+    # 8*10*10 = 800 items will be stored in chunks of max_size = 190 with 4 workers
+    # so, if 4 chunks of 190 items = 760 items can be packed in 4 chunks
+    # left chunks = 800 - 760 = 140 chunks
+    # these 140 chunks can be stored in any random order, so we can't predict the exact count
+    # but we can put a `min-max` value.
+    # min => 140 can be stored in a single chunk by a single worker = 4 + 1 = 5 chunks minimum
+    # max => 140 items can be picked by each of the 4 works = 4 chunks with (~35 items)
+    #                                               (can't be 35, some will've 30 or 40)
+    # so, max chunk count = 4 + 4 = 8 chunks maximum
     optimize(
         fn=_simple_preprocess,
         inputs=list(range(8)),
@@ -997,18 +1050,34 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
         num_workers=4,
         num_uploaders=1,
         item_loader=TokensLoader(block_size=10),
+        use_shared_queue=use_shared_queue,
     )
-    assert set(os.listdir(data_dir)) == {
-        "chunk-0-0.bin",
-        "chunk-0-1.bin",
-        "chunk-1-0.bin",
-        "chunk-1-1.bin",
-        "chunk-2-0.bin",
-        "chunk-2-1.bin",
-        "chunk-3-0.bin",
-        "chunk-3-1.bin",
-        "index.json",
-    }
+    # print(f"{set(os.listdir(data_dir))=}")
+    if not use_shared_queue:
+        assert set(os.listdir(data_dir)) == {
+            "chunk-0-0.bin",
+            "chunk-0-1.bin",
+            "chunk-1-0.bin",
+            "chunk-1-1.bin",
+            "chunk-2-0.bin",
+            "chunk-2-1.bin",
+            "chunk-3-0.bin",
+            "chunk-3-1.bin",
+            "index.json",
+        }
+
+    assert 6 <= len(os.listdir(data_dir)) <= 9  # +1 for index.json file
+
+    # check if the dataloader contains the complete dataset
+    os.mkdir(s3_cache_dir)
+    train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
+
+    fetched_dataset = []
+    for i, batch in enumerate(train_dataloader):
+        fetched_dataset.extend(batch)
+    assert len(fetched_dataset) == 80
+
+    shutil.rmtree(s3_cache_dir)
 
     os.mkdir(s3_cache_dir)
     train_dataloader = _get_simulated_s3_dataloader(s3_cache_dir, data_dir, shuffle=shuffle)
@@ -1029,8 +1098,12 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     assert dataloader_state is not None
     assert batch_to_resume_from is not None
     train_dataloader.load_state_dict(dataloader_state)
+    print(f"{dataloader_state=}")
+    print(f"{batch_to_resume_from=}")
+    next_batch_data = next(iter(train_dataloader))
+    print(f"{next_batch_data=}")
     # The next batch after resuming must match what we should have gotten next in the initial loop
-    assert torch.equal(next(iter(train_dataloader)), batch_to_resume_from)
+    assert torch.equal(next_batch_data, batch_to_resume_from)
 
 
 @pytest.mark.timeout(60)

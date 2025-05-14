@@ -223,6 +223,7 @@ def map(
     start_method: Optional[str] = None,
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
+    use_shared_queue: bool = False,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -248,6 +249,11 @@ def map(
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
+        use_shared_queue (bool): Whether to use a shared queue for item distribution among workers.
+            If True, all workers will fetch items dynamically from a shared queue, which helps balance
+            workload and reduce idle time when some workers finish early. This may lead to unordered
+            processing of items. If False, each worker processes a statically assigned subset of items
+            in order.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -313,6 +319,7 @@ def map(
             reader=reader,
             start_method=start_method,
             storage_options=storage_options,
+            use_shared_queue=use_shared_queue,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
@@ -367,6 +374,7 @@ def optimize(
     start_method: Optional[str] = None,
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
+    use_shared_queue: bool = False,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -403,6 +411,11 @@ def optimize(
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
+        use_shared_queue (bool): Whether to use a shared queue for item distribution among workers.
+            If True, all workers will fetch items dynamically from a shared queue, which helps balance
+            workload and reduce idle time when some workers finish early. This may lead to unordered
+            processing of items. If False, each worker processes a statically assigned subset of items
+            in order.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -500,6 +513,7 @@ def optimize(
             item_loader=item_loader,
             start_method=start_method,
             storage_options=storage_options,
+            use_shared_queue=use_shared_queue,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
