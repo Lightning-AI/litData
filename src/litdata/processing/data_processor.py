@@ -572,7 +572,7 @@ class BaseWorker:
             try:
                 index = self.ready_to_process_queue.get(timeout=30)
             except Empty:
-                print(f"Worker {self.worker_index} is timed out after 30 seconds.")
+                warnings.warn(f"Worker {self.worker_index} is timed out after 30 seconds.")
                 continue
 
             if index is None:
