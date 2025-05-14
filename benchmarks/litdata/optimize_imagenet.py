@@ -1,10 +1,7 @@
-"""Optimize ImageNet Dataset Script.
+"""Optimize ImageNet dataset for benchmarking using litdata.
 
-This script optimizes the ImageNet dataset for benchmarking and efficient loading.
-It supports resizing, format conversion, and quality adjustment. Designed to be modular and easy to follow.
-
-Usage Example:
-    python optimize_imagenet.py --input_dir /path/to/imagenet --output_dir /path/to/output --resize --resize_size 256 --write_mode jpeg --quality 90
+This module provides functionality to optimize ImageNet images for benchmarking purposes by applying resizing,
+format conversion, and other optimizations.
 """
 
 import argparse
