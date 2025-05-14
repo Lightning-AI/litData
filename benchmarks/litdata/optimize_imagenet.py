@@ -99,7 +99,6 @@ def main():
     parser.add_argument(
         "--resize",
         action="store_true",
-        default=False,
         help=(
             "Resize images. If --resize_size is an int, the largest dimension will be scaled to this value,"
             ", preserving aspect ratio. If a tuple is provided, the image will be resized to the exact"
@@ -113,12 +112,11 @@ def main():
         default=None,
         help="Resize size: int for max dimension (aspect ratio preserved), or two ints for (width height)",
     )
-    parser.add_argument("--num_workers", type=int, default=32, help="Number of workers for optimization")
+    parser.add_argument("--num_workers", type=int, default=os.cpu_count(), help="Number of workers for optimization")
     parser.add_argument("--chunk_bytes", type=str, default="64MB", help="Chunk size for optimization")
     parser.add_argument(
         "--reorder_files",
         action="store_true",
-        default=False,
         help="Whether to reorder files for optimal storage/performance.",
     )
     parser.add_argument("--num_downloaders", type=int, default=10, help="Number of downloaders to use for optimize fn.")
