@@ -43,19 +43,17 @@ class WorkerItemProvider:
         raise ValueError(f"Invalid index type: Expected (int or Tuple[int, int]), but got {type(index)}")
 
     def prepare_ready_to_use_queue(self, use_shared_queue: bool, worker_index: int) -> None:
-        for index, _ in enumerate(self.items[worker_index]):
-            if use_shared_queue:
-                self.ready_to_process_shared_queue.put_nowait((worker_index, index))
-            else:
-                self.ready_to_process_item[worker_index].put_nowait((worker_index, index))
-
-        sentinel = None
-
+        """Default (if not using downloaders), Prepares the queue for the worker to use."""
         target_queue = (
             self.ready_to_process_shared_queue if use_shared_queue else self.ready_to_process_item[worker_index]
         )
 
-        # A worker should stop only after it has received `num_downloaders` sentinel values (None).
+        for index, _ in enumerate(self.items[worker_index]):
+            target_queue.put_nowait((worker_index, index))
+
+        sentinel = None
+
+        # A worker stops only after it has received `num_downloaders` sentinel values (None).
         #
         # When using a **shared queue**, sentinels are inserted by each worker into the same queue.
         # This means the queue ends up with `num_downloaders * num_workers` sentinel values.
