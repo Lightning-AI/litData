@@ -10,20 +10,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from collections import defaultdict
-from multiprocessing import Queue
+from multiprocessing import Manager, Queue
 from typing import Any, Dict, List, Tuple, Union
 
 
 class WorkerItemProvider:
     """Helper class for providing items to the worker."""
 
-    def __init__(self, items: List[List[Any]], num_downloaders: int) -> None:
+    def __init__(self, items: List[List[Any]], num_downloaders: int, num_workers: int) -> None:
+        self.manager = Manager()
         self.items = items
-        self.paths: Dict[int, List[List[str]]] = defaultdict(list)
         self.num_downloaders = num_downloaders
-        self.ready_to_process_item: Dict[int, Queue] = defaultdict(Queue)
-        self.ready_to_process_shared_queue: Queue = Queue()
+        self.num_workers = num_workers
+
+        self.paths: Dict[int, List[List[str]]] = self.manager.dict()
+        self.ready_to_process_item_queue: Dict[int, Queue] = self.manager.dict()
+        self.ready_to_process_shared_queue: Queue = self.manager.Queue()
+
+        # Initialize queues & paths, can't use defaultdict as it is not serializable
+        self._initialize()
+
+    def _initialize(self):
+        for worker_index in range(self.num_workers):
+            self.paths[worker_index] = []
+            self.ready_to_process_item_queue[worker_index] = self.manager.Queue()
 
     def set_items(self, index: Union[int, Tuple[int, int]], item: List[Any]) -> None:
         if isinstance(index, int):
@@ -45,7 +55,7 @@ class WorkerItemProvider:
     def prepare_ready_to_use_queue(self, use_shared_queue: bool, worker_index: int) -> None:
         """Default (if not using downloaders), Prepares the queue for the worker to use."""
         target_queue = (
-            self.ready_to_process_shared_queue if use_shared_queue else self.ready_to_process_item[worker_index]
+            self.ready_to_process_shared_queue if use_shared_queue else self.ready_to_process_item_queue[worker_index]
         )
 
         for index, _ in enumerate(self.items[worker_index]):

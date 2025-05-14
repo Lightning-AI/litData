@@ -707,7 +707,7 @@ class BaseWorker:
                     path = path.replace(self.input_dir.path, self.cache_data_dir)
                 flattened_item[index] = path
 
-            self.item_provider.paths[self.worker_index].append(paths)
+            self.item_provider.append_to_paths(self.worker_index, paths)
 
             items.append(tree_unflatten(flattened_item, spec))
 
@@ -1223,7 +1223,9 @@ class DataProcessor:
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
-        self.items_provider = WorkerItemProvider(items=workers_user_items, num_downloaders=self.num_downloaders)
+        self.items_provider = WorkerItemProvider(
+            items=workers_user_items, num_downloaders=self.num_downloaders, num_workers=self.num_workers
+        )
 
         self._create_process_workers(data_recipe)
 

@@ -29,13 +29,20 @@ def test_invalid_index_type():
 def test_prepare_ready_to_use_queue(use_shared):
     provider = WorkerItemProvider([[1, 2, 3], [4, 5, 6]], num_downloaders=2)
     provider.prepare_ready_to_use_queue(use_shared, worker_index=0)
+    provider.prepare_ready_to_use_queue(use_shared, worker_index=1)
 
-    queue = provider.ready_to_process_shared_queue if use_shared else provider.ready_to_process_item[0]
-    contents = []
-    while not queue.empty():
-        contents.append(queue.get_nowait())
+    for worker_index in range(2):
+        queue = provider.ready_to_process_shared_queue if use_shared else provider.ready_to_process_item[worker_index]
+        contents = []
+        none_count = 0
+        while none_count < 2:
+            item = queue.get_nowait()
 
-    # should have 3 items + 2 sentinels (None)
-    assert contents.count(None) == 2
-    assert len(contents) == 5
-    assert all(isinstance(i, tuple) or i is None for i in contents)
+            if item is None:
+                none_count += 1
+            else:
+                contents.append(item)
+
+        # should have 3 items + 2 sentinels (None)
+        assert len(contents) == 3
+        assert all(isinstance(i, tuple) for i in contents)
