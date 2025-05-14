@@ -1052,7 +1052,7 @@ def test_dataset_resume_on_future_chunks(shuffle, use_shared_queue, tmpdir, monk
         item_loader=TokensLoader(block_size=10),
         use_shared_queue=use_shared_queue,
     )
-    # print(f"{set(os.listdir(data_dir))=}")
+
     if not use_shared_queue:
         assert set(os.listdir(data_dir)) == {
             "chunk-0-0.bin",
@@ -1098,10 +1098,8 @@ def test_dataset_resume_on_future_chunks(shuffle, use_shared_queue, tmpdir, monk
     assert dataloader_state is not None
     assert batch_to_resume_from is not None
     train_dataloader.load_state_dict(dataloader_state)
-    print(f"{dataloader_state=}")
-    print(f"{batch_to_resume_from=}")
     next_batch_data = next(iter(train_dataloader))
-    print(f"{next_batch_data=}")
+
     # The next batch after resuming must match what we should have gotten next in the initial loop
     assert torch.equal(next_batch_data, batch_to_resume_from)
 
