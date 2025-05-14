@@ -13,6 +13,8 @@ def test_set_and_get_items_tuple_index():
     provider = WorkerItemProvider([[1, 2], [3, 4]], num_downloaders=2)
     provider.set_items((1, 0), [30])
     assert provider.get_items((1, 0)) == [30]
+    provider.set_items(1, [10, 20])
+    assert provider.get_items(1) == [10, 20]
 
 
 def test_invalid_index_type():
