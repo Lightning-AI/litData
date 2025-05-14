@@ -1246,7 +1246,7 @@ class DataProcessor:
         node_rank = _get_node_rank()
         total_num_items = len(user_items)
 
-        limit = WORKER_RESPONSE_TIMEOUT_LIMIT  # 30 seconds
+        limit = WORKER_RESPONSE_TIMEOUT_LIMIT
         while True:
             try:
                 error = self.error_queue.get(timeout=0.001)
