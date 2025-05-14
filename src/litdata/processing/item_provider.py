@@ -55,5 +55,35 @@ class WorkerItemProvider:
             self.ready_to_process_shared_queue if use_shared_queue else self.ready_to_process_item[worker_index]
         )
 
+        # A worker should stop only after it has received `num_downloaders` sentinel values (None).
+        #
+        # When using a **shared queue**, sentinels are inserted by each worker into the same queue.
+        # This means the queue ends up with `num_downloaders * num_workers` sentinel values.
+        #
+        # The goal is to ensure that **each worker eventually sees `num_downloaders` sentinel values**,
+        # so it knows that no more real items will arrive.
+        #
+        # Example:
+        #   Suppose we have:
+        #     - 2 workers (Worker 0 and Worker 1)
+        #     - 2 downloaders per worker
+        #
+        #   Shared queue content might look like this:
+        #     [(0,0), (0,1), (0,2), None, None,
+        #      (1,0), (1,1), (1,2), None, None]
+        #
+        #   In the above example, each tuple represents: (worker_index, item_index)
+        #   having `worker_index` as well helps to use same code for both shared and non-shared queues.
+        #
+        #   In this case:
+        #     - Worker 0 might process: (0,0), (0,2), None, (1,1), None → stops after 2 Nones
+        #     - Worker 1 might process: (0,1), None, (1,0), (1,2), None → stops after 2 Nones
+        #
+        #   Each worker sees 2 sentinel values → termination condition is met.
+        #
+        # ---
+        #
+        # When using `non-shared queues`, each worker has its own queue and will contain only its own sentinels.
+
         for _ in range(self.num_downloaders):
             target_queue.put_nowait(sentinel)
