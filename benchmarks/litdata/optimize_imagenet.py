@@ -1,6 +1,6 @@
 """Optimize ImageNet dataset for benchmarking using litdata.
 
-This module provides functionality to optimize ImageNet images for benchmarking purposes by applying resizing,
+This script provides functionality to optimize ImageNet images for benchmarking purposes by applying resizing,
 format conversion, and other optimizations.
 """
 
@@ -129,7 +129,7 @@ def main():
         help="Random seed for reproducibility.",
     )
     args = parser.parse_args()
-    print("Arguments:", args)
+    print(f"[INFO] Running optimize with arguments: {args}")
 
     seed_everything(args.seed)
 
@@ -150,7 +150,7 @@ def main():
         "write_mode": args.write_mode,
         "quality": args.quality,
     }
-    print(f"Optimization arguments: {optimize_args}")
+
     is_train = "train" in args.input_dir.lower()
     if not is_train:
         raise ValueError("Only training dataset optimization is supported. Please provide a 'train' directory.")
@@ -161,7 +161,7 @@ def main():
     start_time = time.perf_counter()
     optimize(
         fn=partial(optimize_fn, args=optimize_args),
-        inputs=inputs[:1000],
+        inputs=inputs,
         output_dir=args.output_dir,
         chunk_bytes=args.chunk_bytes,
         reorder_files=args.reorder_files,
