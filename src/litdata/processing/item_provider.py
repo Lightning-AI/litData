@@ -18,22 +18,35 @@ class WorkerItemProvider:
     """Helper class for providing items to the worker."""
 
     def __init__(self, items: List[List[Any]], num_downloaders: int, num_workers: int) -> None:
-        self.manager = Manager()
-        self.items = self.manager.list([self.manager.list(sublist) for sublist in items])
+        # Convert pathlib.Path to strings if present
+        # items = [[str(item) if isinstance(item, pathlib.Path) else item for item in sublist] for sublist in items]
+        assert len(items) == num_workers, f"Expected {num_workers} items, but got {len(items)}"
+        manager = Manager()
+        self.items = manager.list([manager.list(sublist) for sublist in items])
         self.num_downloaders = num_downloaders
         self.num_workers = num_workers
 
-        self.paths: Dict[int, List[List[str]]] = self.manager.dict()
-        self.ready_to_process_item_queue: Dict[int, Queue] = self.manager.dict()
-        self.ready_to_process_shared_queue: Queue = self.manager.Queue()
+        self.paths: Dict[int, List[List[str]]] = manager.dict()
+        self.ready_to_process_item_queue: Dict[int, Queue] = {}
+        self.ready_to_process_shared_queue: Queue = manager.Queue()
 
         # Initialize queues & paths, can't use defaultdict as it is not serializable
-        self._initialize()
-
-    def _initialize(self):
         for worker_index in range(self.num_workers):
-            self.paths[worker_index] = []
-            self.ready_to_process_item_queue[worker_index] = self.manager.Queue()
+            self.paths[worker_index] = manager.list()
+            self.ready_to_process_item_queue[worker_index] = manager.Queue()
+
+        # self._check_pickleable(self.items, name="self.items")
+        # self._check_pickleable(self.paths, name="self.paths")
+        # self._check_pickleable(self.ready_to_process_item_queue, name="self.ready_to_process_item_queue")
+        # self._check_pickleable(self.ready_to_process_shared_queue, name="self.ready_to_process_shared_queue")
+        # self._check_pickleable(self.num_downloaders, name="self.num_downloaders")
+        # self._check_pickleable(self.num_workers, name="self.num_workers")
+
+    # def _check_pickleable(self, obj: Any, name: str) -> None:
+    #     try:
+    #         pickle.dumps(obj)
+    #     except Exception as e:
+    #         raise ValueError(f"Object {name} is not pickleable: {obj}") from e
 
     def set_items(self, index: Union[int, Tuple[int, int]], item: List[Any]) -> None:
         if isinstance(index, int):

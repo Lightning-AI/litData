@@ -588,7 +588,7 @@ class ImageResizeRecipe(MapRecipe):
         filepaths = [os.path.join(input_dir, filename) for filename in os.listdir(input_dir)]
         return [filepath for filepath in filepaths if os.path.isfile(filepath)]
 
-    def prepare_item(self, filepath: Any, output_dir: str, is_last) -> None:
+    def prepare_item(self, filepath: Any, output_dir: str, is_last: bool) -> None:
         from PIL import Image
 
         img = Image.open(filepath)

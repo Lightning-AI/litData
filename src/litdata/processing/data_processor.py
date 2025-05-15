@@ -148,6 +148,9 @@ def _download_data_target(
         # 4. Unpack
         index, paths = r
 
+        if not isinstance(paths, list):
+            paths = [paths]
+
         # 5. Check whether all the files are already downloaded
         if input_dir.path and all(
             os.path.exists(p.replace(input_dir.path, cache_dir) if input_dir else p) for p in paths
@@ -509,7 +512,7 @@ class BaseWorker:
         self.ready_to_process_queue: Queue = (
             self.item_provider.ready_to_process_shared_queue
             if use_shared_queue
-            else self.item_provider.ready_to_process_item[self.worker_index]
+            else self.item_provider.ready_to_process_item_queue[self.worker_index]
         )
         self.remove_queue: Queue = Queue()
         self.progress_queue: Queue = progress_queue
@@ -707,7 +710,7 @@ class BaseWorker:
                     path = path.replace(self.input_dir.path, self.cache_data_dir)
                 flattened_item[index] = path
 
-            self.item_provider.append_to_paths(self.worker_index, paths)
+            self.item_provider.paths[self.worker_index].append(paths)
 
             items.append(tree_unflatten(flattened_item, spec))
 
