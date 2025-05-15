@@ -65,6 +65,7 @@ def main(
     write_mode,
     compress_probability,
 ):
+    """Write an ImageNet or CIFAR dataset to FFCV format for fast training."""
     if dataset == "cifar":
         my_dataset = CIFAR10(root=data_dir, train=(split == "train"), download=True)
     elif dataset == "imagenet":
