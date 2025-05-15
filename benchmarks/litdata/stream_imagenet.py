@@ -99,6 +99,7 @@ def main():
         ),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        drop_last=True,
     )
 
     print(
