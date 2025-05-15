@@ -1416,12 +1416,19 @@ Prediction with Sparse Autoencoders](https://arxiv.org/pdf/2503.08764) | [Github
 ## Maintainers
 
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
-* Luca Antiga ([lantiga](https://github.com/lantiga))
-* Justus Schock ([justusschock](https://github.com/justusschock))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
-* Jirka Borda ([Borda](https://github.com/Borda))
 
 
 ## Emeritus Maintainers
+
+* Luca Antiga ([lantiga](https://github.com/lantiga))
+* Justus Schock ([justusschock](https://github.com/justusschock))
+* Jirka Borda ([Borda](https://github.com/Borda))
+
+<details>
+  <summary>Alumni</summary>
+
 * Adrian Wälchli ([awaelchli](https://github.com/awaelchli))
+
+</details>
