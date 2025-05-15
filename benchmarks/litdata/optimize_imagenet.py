@@ -24,18 +24,12 @@ from litdata import optimize, walk
 @lru_cache(maxsize=1)
 def load_imagenet_class_index():
     """Load the ImageNet class index mapping from class names to class indices."""
-    # URL for the class index mapping file
     class_index_url = "https://raw.githubusercontent.com/raghakot/keras-vis/master/resources/imagenet_class_index.json"
-
     try:
-        # Use requests to fetch the file content
         response = requests.get(class_index_url, timeout=10)
-        response.raise_for_status()  # Raise exception for HTTP errors
-        # Parse the JSON data
+        response.raise_for_status()
         class_index_data = response.json()
-        # Create mapping from class name to index
         return {v[0]: int(k) for k, v in class_index_data.items()}
-
     except (requests.RequestException, json.JSONDecodeError) as e:
         raise RuntimeError(f"Failed to load ImageNet class index: {e}")
 
