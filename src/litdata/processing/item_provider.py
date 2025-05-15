@@ -19,7 +19,7 @@ class WorkerItemProvider:
 
     def __init__(self, items: List[List[Any]], num_downloaders: int, num_workers: int) -> None:
         self.manager = Manager()
-        self.items = items
+        self.items = self.manager.list([self.manager.list(sublist) for sublist in items])
         self.num_downloaders = num_downloaders
         self.num_workers = num_workers
 
