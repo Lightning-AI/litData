@@ -45,17 +45,22 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=256, help="Batch size for benchmarking")
     parser.add_argument("--num_workers", type=int, default=os.cpu_count(), help="Number of workers for dataloader")
+    parser.add_argument('--drop_last', dest='drop_last', action='store_true', help='Drop the last incomplete batch (default)')
     parser.add_argument("--epochs", type=int, default=2, help="Number of epochs to run benchmark")
     parser.add_argument("--max_cache_size", default="200GB", help="Max cache size for streaming dataset")
     parser.add_argument(
-        "--clear_cache", action="store_true", help="Clear the cache directory before and after running the benchmark"
+        "--use_pil",
+        action="store_true",
+        help="If set, applies T.ToImage() as the first transform."
     )
     parser.add_argument(
-        "--format",
-        default="jpeg",
-        choices=["jpeg", "pil"],
-        help="Image format: 'jpeg' or 'pil'. If 'pil', applies T.ToImage as first transform.",
+        "--clear_cache",
+        dest="clear_cache",
+        action="store_true",
+        help="Clear the cache directory before and after running the benchmark (default)",
     )
+    parser.add_argument("--no_clear_cache", dest="clear_cache", action="store_false", help="Do not clear cache")
+    parser.set_defaults(clear_cache=True)
     args = parser.parse_args()
     print(f"[INFO] Running streaming benchmark with arguments: {args}")
 
@@ -99,7 +104,7 @@ def main():
         ),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        drop_last=True,
+        drop_last=args.drop_last,
     )
 
     print(
@@ -110,7 +115,7 @@ def main():
         num_samples = 0
         t0 = time.perf_counter()
         for data in tqdm(dataloader, desc=f"Epoch {epoch + 1}/{args.epochs}", smoothing=0, mininterval=1):
-            num_samples += data[0].squeeze(0).shape[0]
+            num_samples += data[0].shape[0]
         elapsed = time.perf_counter() - t0
         print(
             f"[RESULT] Epoch {epoch + 1}: Streamed {num_samples} samples in {elapsed:.2f}s "
