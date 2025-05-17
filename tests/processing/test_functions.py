@@ -104,6 +104,12 @@ def different_compress(index):
     return index, index**2, index**3
 
 
+def img_optimize_fn(filepath: str):
+    img = Image.open(filepath)
+    class_index = random.randint(0, 10)  # noqa: S311
+    return img, class_index
+
+
 def fn(i: int):
     if i in [1, 2, 4]:
         raise ValueError("An error occurred")
@@ -117,6 +123,38 @@ def another_fn(i: int):
 def random_image(index):
     fake_img = Image.fromarray(np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8))
     return {"image": fake_img, "class": index}
+
+
+@pytest.mark.parametrize("use_shared_queue", [False, True])
+def test_optimize_image_path(tmpdir, use_shared_queue):
+    input_dir = Path(tmpdir) / "images"
+    output_dir = Path(tmpdir) / "optimized"
+
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    for i in range(10):
+        # Create a random 32x32 RGB image
+        random_image = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+        # Convert to PIL Image
+        image = Image.fromarray(random_image)
+        # Save to a file
+        image.save(f"{input_dir}/{i}.jpg", "JPEG")
+
+    inputs = list(input_dir.iterdir())  # List all files in the directory
+
+    optimize(
+        fn=img_optimize_fn,
+        inputs=inputs,
+        output_dir=output_dir,
+        num_workers=2,
+        chunk_bytes="64MB",
+        use_shared_queue=use_shared_queue,
+    )
+
+    ds = StreamingDataset(output_dir)
+
+    assert len(ds) == 10
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")

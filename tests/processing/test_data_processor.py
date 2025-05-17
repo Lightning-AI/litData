@@ -202,7 +202,7 @@ def test_download_data_target(wait_for_disk_usage_higher_than_threshold_mock, tm
     queue_out = mock.MagicMock()
     _download_data_target(Dir(input_dir, remote_input_dir), cache_dir, queue_in, queue_out)
 
-    assert queue_out.put._mock_call_args_list[0].args == (0,)
+    assert queue_out.put._mock_call_args_list[0].args == ((0, 0),)  # first 0 -> worker index, second 0 -> item index
     assert queue_out.put._mock_call_args_list[1].args == (None,)
 
     assert os.listdir(cache_dir) == ["a.txt"]
@@ -588,7 +588,7 @@ class ImageResizeRecipe(MapRecipe):
         filepaths = [os.path.join(input_dir, filename) for filename in os.listdir(input_dir)]
         return [filepath for filepath in filepaths if os.path.isfile(filepath)]
 
-    def prepare_item(self, filepath: Any, output_dir: str, is_last) -> None:
+    def prepare_item(self, filepath: Any, output_dir: str, is_last: bool) -> None:
         from PIL import Image
 
         img = Image.open(filepath)
