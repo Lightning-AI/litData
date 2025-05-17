@@ -1,5 +1,7 @@
 """Stream an FFCV ImageNet dataset for benchmarking.
 
+Adapted from: https://github.com/libffcv/ffcv-imagenet/blob/main/train_imagenet.py
+
     This script streams an FFCV ImageNet dataset and benchmarks the streaming speed.
     It uses the FFCV library to load and process the dataset efficiently.
 
