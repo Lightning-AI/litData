@@ -72,7 +72,7 @@ def main():
 
     # Compose transforms based on format
     transforms = []
-    if args.format == "pil":
+    if args.use_pil:
         transforms.append(T.ToImage())
     transforms.extend(
         [
