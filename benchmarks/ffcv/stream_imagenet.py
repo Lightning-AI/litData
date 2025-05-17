@@ -28,6 +28,11 @@ Section("cfg", "arguments for streaming FFCV dataset").params(
     data_path=Param(str, "Path to the FFCV .ffcv file", required=True),
     batch_size=Param(int, "Batch size for streaming", default=256),
     num_workers=Param(int, "Number of workers for loader", default=os.cpu_count()),
+    drop_last=Param(
+        bool,
+        "Drop the last incomplete batch (default: True)",
+        default=False,
+    ),
     epochs=Param(int, "Number of epochs to run benchmark", default=2),
     order=Param(str, "Order: SEQUENTIAL or RANDOM or QUASI_RANDOM", default="SEQUENTIAL"),
     os_cache=Param(bool, "Use OS cache if the dataset can fit in memory", default=False),
@@ -43,11 +48,12 @@ Section("cfg", "arguments for streaming FFCV dataset").params(
 @param("data_path")
 @param("batch_size")
 @param("num_workers")
+@param("drop_last")
 @param("epochs")
 @param("order")
 @param("os_cache")
 @param("normalize")
-def main(data_path, batch_size, num_workers, epochs, order, os_cache, normalize):
+def main(data_path, batch_size, num_workers, drop_last, epochs, order, os_cache, normalize):
     """Stream and benchmark an FFCV ImageNet dataset."""
     L.seed_everything(42)
 
@@ -71,7 +77,7 @@ def main(data_path, batch_size, num_workers, epochs, order, os_cache, normalize)
         order=order_option,
         pipelines=pipelines,
         os_cache=os_cache,
-        drop_last=True,
+        drop_last=drop_last,
     )
 
     print("[INFO] Starting streaming benchmark...")
