@@ -57,7 +57,7 @@ def main(data_path, batch_size, num_workers, epochs, order, os_cache, normalize)
         RandomHorizontalFlip(),
         ToTensor(),
         ToTorchImage(),
-        NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32) if normalize else T.ToDtype(torch.float32),
+        NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32) if normalize else T.ToDtype(torch.float32, scale=True),
     ]
 
     label_pipeline = [IntDecoder(), ToTensor(), Squeeze()]
@@ -70,7 +70,7 @@ def main(data_path, batch_size, num_workers, epochs, order, os_cache, normalize)
         num_workers=num_workers,
         order=order_option,
         pipelines=pipelines,
-        os_cache=True,
+        os_cache=os_cache,
         drop_last=True,
     )
 
