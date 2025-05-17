@@ -45,14 +45,12 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=256, help="Batch size for benchmarking")
     parser.add_argument("--num_workers", type=int, default=os.cpu_count(), help="Number of workers for dataloader")
-    parser.add_argument('--drop_last', dest='drop_last', action='store_true', help='Drop the last incomplete batch (default)')
+    parser.add_argument(
+        "--drop_last", dest="drop_last", action="store_true", help="Drop the last incomplete batch (default)"
+    )
     parser.add_argument("--epochs", type=int, default=2, help="Number of epochs to run benchmark")
     parser.add_argument("--max_cache_size", default="200GB", help="Max cache size for streaming dataset")
-    parser.add_argument(
-        "--use_pil",
-        action="store_true",
-        help="If set, applies T.ToImage() as the first transform."
-    )
+    parser.add_argument("--use_pil", action="store_true", help="If set, applies T.ToImage() as the first transform.")
     parser.add_argument(
         "--clear_cache",
         dest="clear_cache",
