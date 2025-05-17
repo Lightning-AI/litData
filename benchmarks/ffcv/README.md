@@ -1,4 +1,4 @@
-# LitData Benchmarks: FFCV
+# FFCV Benchmarks  
 
 This folder contains scripts to convert, write, and stream datasets using FFCV for benchmarking.
 
