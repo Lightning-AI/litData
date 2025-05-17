@@ -1288,6 +1288,16 @@ Speed to stream Imagenet 1.2M from other cloud storage providers:
 |---|---|---|---|
 | Cloudflare R2 | LitData | **5335** | **5630** |
 
+Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
+| Framework | Dataset Mode | Dataset Size @ 256px | Images / sec 1st Epoch (float32) | Images / sec 2nd Epoch (float32) |
+|---|---|---|---|---|
+| LitData | PIL RAW | 168 GB | 6647 | 6398 | 
+| LitData | JPEG 90% | 12 GB | 6553 | 6537 |
+| ffcv (os_cache=True) | RAW | 170 GB | 7263 | 6698 |
+| ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
+| ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
+| ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
 &nbsp;
 
 ## Time to optimize data
@@ -1416,12 +1426,19 @@ Prediction with Sparse Autoencoders](https://arxiv.org/pdf/2503.08764) | [Github
 ## Maintainers
 
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
-* Luca Antiga ([lantiga](https://github.com/lantiga))
-* Justus Schock ([justusschock](https://github.com/justusschock))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
-* Jirka Borda ([Borda](https://github.com/Borda))
 
 
 ## Emeritus Maintainers
+
+* Luca Antiga ([lantiga](https://github.com/lantiga))
+* Justus Schock ([justusschock](https://github.com/justusschock))
+* Jirka Borda ([Borda](https://github.com/Borda))
+
+<details>
+  <summary>Alumni</summary>
+
 * Adrian Wälchli ([awaelchli](https://github.com/awaelchli))
+
+</details>
