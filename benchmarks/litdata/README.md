@@ -1,4 +1,4 @@
-# LitData Benchmarks: LitData
+# LitData Benchmarks
 
 This folder contains scripts to optimize and stream datasets using LitData.
 
@@ -30,7 +30,7 @@ python stream_imagenet.py \
     --epochs 2
 ```
 
-- Use `--format pil` if you optimized with raw PIL images.
+- Use `--use_pil` if you optimized with raw PIL images.
 
 ---
 
