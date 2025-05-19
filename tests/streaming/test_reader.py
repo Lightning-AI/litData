@@ -104,6 +104,7 @@ def test_reader_chunk_removal_compressed(tmpdir):
 
     assert len(filter_lock_files(os.listdir(cache_dir))) in [1, 2, 3]
 
+
 @mock.patch("litdata.streaming.downloader._DEBUG", True)
 def test_get_folder_size(tmpdir, caplog):
     cache_dir = os.path.join(tmpdir, "cache_dir")
