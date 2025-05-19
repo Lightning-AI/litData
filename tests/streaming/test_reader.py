@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 from time import sleep
+from unittest import mock
 
 from litdata.streaming import reader
 from litdata.streaming.cache import Cache
@@ -103,7 +104,7 @@ def test_reader_chunk_removal_compressed(tmpdir):
 
     assert len(filter_lock_files(os.listdir(cache_dir))) in [1, 2, 3]
 
-
+@mock.patch("litdata.streaming.downloader._DEBUG", True)
 def test_get_folder_size(tmpdir, caplog):
     cache_dir = os.path.join(tmpdir, "cache_dir")
     cache = Cache(cache_dir, chunk_size=10)
