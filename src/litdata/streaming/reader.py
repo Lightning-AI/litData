@@ -512,10 +512,11 @@ def _get_folder_size(path: str, config: ChunksConfig) -> int:
 
             # warn about unrecognized files
             else:
-                logger.warning(
-                    f"Ignoring '{filename}': "
-                    "This file doesn't appear to be a valid chunk file and has been excluded from the size calculation."
-                )
+                if _DEBUG:
+                    logger.warning(
+                        f"Ignoring '{filename}': This file doesn't appear to be a valid chunk file"
+                        " and has been excluded from the cache size calculation."
+                    )
 
     return size
 
