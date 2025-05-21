@@ -573,11 +573,12 @@ class BaseWorker:
         """
         num_downloader_finished = 0
 
-        timed_out = False
+        timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 30))
+        timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
 
         while True:
             try:
-                combined_data = self.ready_to_process_queue.get(timeout=30)
+                combined_data = self.ready_to_process_queue.get(timeout=timeout)
             except Empty:
                 timed_out = True
 
