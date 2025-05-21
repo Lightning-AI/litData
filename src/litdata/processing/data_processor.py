@@ -137,7 +137,6 @@ def _download_data_target(
             return
 
         # 4. Unpack
-        print(f"unpacking {r=}")
         index, item, paths = r
 
         # 5. Check whether all the files are already downloaded
@@ -570,7 +569,10 @@ class BaseWorker:
         """
         num_downloader_finished = 0
 
-        timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 30))
+        timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 300))
+        if self.use_shared_queue:
+            timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
+
         timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
 
         while True:
@@ -790,9 +792,7 @@ class BaseWorker:
         and save (write) the output in the cache.
         """
         try:
-            # print(f"handle data chunk: {index=}, {item=}")
             current_item = item if self.reader is None else self.reader.read(item)
-            # current_item = current_item + self.worker_index*10000
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:
