@@ -39,7 +39,7 @@ class ParquetDir(ABC):
             raise RuntimeError(
                 f"No Parquet files were found at '{self.dir.url or self.dir.path}'. "
                 "Please verify that the provided path is correct and that it contains at least one .parquet file. "
-                "If your files are located in a subdirectory, please specify the correct path."
+                "If the files are located in a subdirectory, please specify the correct path."
             )
 
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
