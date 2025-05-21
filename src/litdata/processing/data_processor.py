@@ -514,7 +514,6 @@ class BaseWorker:
         if use_shared_queue:
             assert shared_queue is not None
             self.ready_to_process_queue = shared_queue
-            print("Using shared queue")
         else:
             self.ready_to_process_queue: Union[Queue, FakeQueue] = (
                 FakeQueue() if self.no_downloaders and use_fake_queue else Queue()
