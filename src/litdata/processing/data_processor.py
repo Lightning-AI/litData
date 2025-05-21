@@ -59,8 +59,6 @@ from litdata.utilities.packing import _pack_greedily
 
 logger = logging.Logger(__name__)
 
-EXIT_IMMEDIATELY = "EXIT_IMMEDIATELY"
-
 
 def _get_num_nodes() -> int:
     """Returns the number of nodes."""
