@@ -256,7 +256,7 @@ def map(
             processing of items. If False, each worker processes a statically assigned subset of items
             in order.
         use_fake_queue (bool): Whether to use a fake queue for item distribution among workers.
-            If True, all workers will fetch items from a fake queue, which helps to in faster data
+            If True, all workers will fetch items from a fake queue, which helps in faster data
             processing without actually serializing any data. Use it for local datasets without downloader
             when multiprocessing Queue is not fast enough to process the data.
             Refer to this issue for more details: https://github.com/Lightning-AI/litData/issues/299
