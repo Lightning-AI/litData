@@ -99,6 +99,49 @@ def test_streaming_dataset(tmpdir, monkeypatch, compression):
     assert len(dataloader) == 30
 
 
+def _simple_optimize_fn(index):
+    return index
+
+
+@pytest.mark.parametrize(
+    ("chunk_bytes", "chunk_size"),
+    [
+        ("64MB", None),
+        (None, 5),  # at max 5 items in a chunk
+        (None, 75),  # at max 75 items in a chunk
+        (None, 1200),  # at max 1200 items in a chunk
+    ],
+)
+@pytest.mark.parametrize("use_shared_queue", [True, False])
+def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+    data_dir = str(tmpdir / "optimized")
+
+    optimize(
+        fn=_simple_optimize_fn,
+        inputs=list(range(1000)),
+        output_dir=data_dir,
+        num_workers=4,
+        chunk_bytes=chunk_bytes,
+        chunk_size=chunk_size,
+        use_shared_queue=use_shared_queue,
+    )
+
+    sleep(2)  # wait for the cache to be created
+
+    ds = StreamingDataset(input_dir=data_dir)
+
+    expected_dataset = list(range(1000))
+    actual_dataset = ds[:]
+
+    assert len(actual_dataset) == len(expected_dataset)
+
+    if use_shared_queue:
+        # in shared queue, the order of the chunks is not guaranteed
+        assert sorted(actual_dataset) == sorted(expected_dataset)
+    else:
+        assert actual_dataset == expected_dataset
+
+
 @pytest.mark.timeout(30)
 def test_streaming_dataset_max_pre_download(tmpdir):
     seed_everything(42)
