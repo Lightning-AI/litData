@@ -574,6 +574,7 @@ class BaseWorker:
             timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
 
         timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
+        combined_data = None
 
         while True:
             try:
