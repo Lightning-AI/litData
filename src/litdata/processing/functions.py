@@ -224,7 +224,7 @@ def map(
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
     use_shared_queue: bool = False,
-    use_fake_queue: bool = False,
+    use_fake_queue: bool = True,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -382,7 +382,7 @@ def optimize(
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
     use_shared_queue: bool = False,
-    use_fake_queue: bool = False,
+    use_fake_queue: bool = True,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 

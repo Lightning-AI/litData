@@ -475,7 +475,7 @@ class BaseWorker:
         item_loader: Optional[BaseItemLoader] = None,
         storage_options: Dict[str, Any] = {},
         use_shared_queue: bool = False,
-        use_fake_queue: bool = False,
+        use_fake_queue: bool = True,
         shared_queue: Union[Queue, FakeQueue, None] = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
@@ -1055,7 +1055,7 @@ class DataProcessor:
         start_method: Optional[str] = None,
         storage_options: Dict[str, Any] = {},
         use_shared_queue: bool = False,
-        use_fake_queue: bool = False,
+        use_fake_queue: bool = True,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
 

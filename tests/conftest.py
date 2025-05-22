@@ -24,6 +24,12 @@ def teardown_process_group():
         torch.distributed.destroy_process_group()
 
 
+@pytest.fixture(autouse=True)
+def set_env():
+    # Set the env var before each test
+    os.environ["DATA_OPTIMIZER_TIMEOUT"] = "10"
+
+
 @pytest.fixture
 def mosaic_mds_index_data():
     return {

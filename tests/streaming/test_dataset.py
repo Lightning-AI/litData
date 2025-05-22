@@ -124,6 +124,7 @@ def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, mon
         chunk_bytes=chunk_bytes,
         chunk_size=chunk_size,
         use_shared_queue=use_shared_queue,
+        use_fake_queue=False if use_shared_queue else None,
     )
 
     sleep(2)  # wait for the cache to be created
