@@ -44,7 +44,7 @@ class S3Client:
         )
 
         if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options:
-            session = boto3.Session()
+            session = boto3.Session(**self._s3_session_options)  # If additional options are provided
             self._client = session.client(
                 "s3",
                 **{
