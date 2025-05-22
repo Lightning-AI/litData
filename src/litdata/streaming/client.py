@@ -43,7 +43,7 @@ class S3Client:
             os.getenv("AWS_SHARED_CREDENTIALS_FILE") == os.getenv("AWS_CONFIG_FILE") == "/.credentials/.aws_credentials"
         )
 
-        if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options:
+        if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options or self._s3_session_options:
             session = boto3.Session(**self._s3_session_options)  # If additional options are provided
             self._client = session.client(
                 "s3",
@@ -55,7 +55,7 @@ class S3Client:
         else:
             provider = InstanceMetadataProvider(iam_role_fetcher=InstanceMetadataFetcher(timeout=3600, num_attempts=5))
             credentials = provider.load()
-            session = boto3.Session(**self._s3_session_options)  # If additional options are provided
+            session = boto3.Session()
             self._client = session.client(
                 "s3",
                 aws_access_key_id=credentials.access_key,
