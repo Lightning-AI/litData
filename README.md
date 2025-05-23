@@ -521,7 +521,7 @@ if __name__ == "__main__":
 
 ### Performance Difference between using a shared queue and not using it:
 
-**Note**: The following benchmarks were collected using the ImageNet dataset on an A10 machine with 16 workers.
+**Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
 
 | Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
 |------------------|---------------------|---------------------|---------------------|
