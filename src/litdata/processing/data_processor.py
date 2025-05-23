@@ -1267,6 +1267,8 @@ class DataProcessor:
                 for w in self.workers:
                     if not self.keep_data_ordered:
                         w.ready_to_process_queue.put(ALL_DONE)
+
+                for w in self.workers:
                     if w.is_alive():
                         w.join()
                 break
