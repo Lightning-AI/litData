@@ -1264,8 +1264,8 @@ class DataProcessor:
             current_total = new_total
             if current_total == num_items:
                 # make sure all processes are terminated
-                for w in self.workers:
-                    if not self.keep_data_ordered:
+                if not self.keep_data_ordered:
+                    for w in self.workers:
                         w.ready_to_process_queue.put(ALL_DONE)
 
                 for w in self.workers:
