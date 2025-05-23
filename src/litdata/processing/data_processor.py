@@ -59,7 +59,7 @@ from litdata.utilities.packing import _pack_greedily
 
 logger = logging.Logger(__name__)
 
-ALL_DONE = "ALL_DONE"
+ALL_DONE = "ALL_DONE"  # sentinel value for shared queue
 
 
 def _get_num_nodes() -> int:
