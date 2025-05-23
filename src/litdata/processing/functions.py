@@ -224,7 +224,7 @@ def map(
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
     use_shared_queue: bool = False,
-    use_fake_queue: bool = True,
+    use_fake_queue: Optional[bool] = None,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -288,6 +288,10 @@ def map(
             "Create an account on https://lightning.ai/ to transform your data faster using "
             "multiple nodes and large machines."
         )
+
+    if use_fake_queue is None:
+        # if using shared queue, don't use fake queue, else use fake queue if possible
+        use_fake_queue = not use_shared_queue
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         _output_dir: Dir = _resolve_dir(output_dir)
@@ -382,7 +386,7 @@ def optimize(
     optimize_dns: Optional[bool] = None,
     storage_options: Dict[str, Any] = {},
     use_shared_queue: bool = False,
-    use_fake_queue: bool = True,
+    use_fake_queue: Optional[bool] = None,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -461,6 +465,10 @@ def optimize(
             "Create an account on https://lightning.ai/ to optimize your data faster "
             "using multiple nodes and large machines."
         )
+
+    if use_fake_queue is None:
+        # if using shared queue, don't use fake queue, else use fake queue if possible
+        use_fake_queue = not use_shared_queue
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         DATA_OPTIMIZER_NUM_NODES = int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0))

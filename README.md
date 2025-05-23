@@ -485,6 +485,58 @@ for batch_idx, batch in enumerate(dataloader):
 
 
 <details>
+  <summary> ✅ Use shared queue for Optimizing</summary>
+&nbsp;
+
+If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
+
+This is especially useful when optimizing large datasets in parallel, where some workers may be slower than others.
+
+It can also improve fault tolerance when workers fail due to out-of-memory (OOM) errors.
+
+```python
+import numpy as np
+from PIL import Image
+import litdata as ld
+
+def random_images(index):
+    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+    fake_labels = np.random.randint(10)
+
+    data = {"index": index, "image": fake_images, "class": fake_labels}
+
+    return data
+
+if __name__ == "__main__":
+    # The optimize function writes data in an optimized format.
+    ld.optimize(
+        fn=random_images,                   # the function applied to each input
+        inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
+        output_dir="fast_data",             # optimized data is stored here
+        num_workers=4,                      # The number of workers on the same machine
+        chunk_bytes="64MB" ,                 # size of each chunk
+        use_shared_queue=True,             # Use a shared queue to speed up the process
+    )
+```
+
+### Performance Difference between using a shared queue and not using it:
+
+**Note**: The following benchmarks were collected using the ImageNet dataset on an A10 machine with 16 workers.
+
+| Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
+|------------------|---------------------|---------------------|---------------------|
+| shared_queue     | 1281                | 5392                | 5732                |
+| no shared_queue  | 1187                | 5257                | 5746                |
+
+
+- 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
+
+- ⚡ However, it can significantly improve streaming performance — especially when some workers are slower than others.
+
+</details>
+
+
+<details>
   <summary> ✅ LLM Pre-training </summary>
 &nbsp;
 
