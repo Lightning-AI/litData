@@ -135,7 +135,7 @@ def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, mo
 
     assert len(actual_dataset) == len(expected_dataset)
 
-    if keep_data_ordered:
+    if not keep_data_ordered:
         # in shared queue, the order of the chunks is not guaranteed
         assert sorted(actual_dataset) == expected_dataset
     else:
