@@ -501,13 +501,11 @@ class BaseWorker:
 
         self.keep_data_ordered = keep_data_ordered
 
-        if keep_data_ordered:
+        if not keep_data_ordered:
             assert shared_queue is not None
             self.ready_to_process_queue = shared_queue
         else:
-            self.ready_to_process_queue: Union[Queue, FakeQueue] = (
-                FakeQueue() if self.no_downloaders and self.keep_data_ordered else Queue()
-            )
+            self.ready_to_process_queue: Union[Queue, FakeQueue] = FakeQueue() if self.no_downloaders else Queue()
 
         self.remove_queue: Queue = Queue()
         self.progress_queue: Queue = progress_queue
@@ -563,7 +561,7 @@ class BaseWorker:
         num_downloader_finished = 0
 
         timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 300))
-        if self.keep_data_ordered:
+        if not self.keep_data_ordered:
             timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
 
         timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
@@ -1310,9 +1308,8 @@ class DataProcessor:
 
     def _create_process_workers(self, data_recipe: DataRecipe, workers_user_items: List[List[Any]]) -> None:
         self.shared_queue: Union[Queue, FakeQueue, None] = None
-        if self.keep_data_ordered:
-            no_downloaders = self.input_dir.path is None or self.reader is not None
-            self.shared_queue = FakeQueue() if no_downloaders and self.keep_data_ordered else Queue()
+        if not self.keep_data_ordered:
+            self.shared_queue = Queue()
 
         self.progress_queue = Queue()
         workers: List[DataWorkerProcess] = []
