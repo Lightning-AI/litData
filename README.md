@@ -519,16 +519,15 @@ if __name__ == "__main__":
     )
 ```
 
-> `keep_data_ordered=False` uses a shared queue between workers to speed up the optimization process and and efficiently handle imbalanced workloads.
 
 ### Performance Difference between using a shared queue and not using it:
-  
+
 **Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
 
 | Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
 |------------------|---------------------|---------------------|---------------------|
-| shared_queue     | 1281                | 5392                | 5732                |
-| no shared_queue  | 1187                | 5257                | 5746                |
+| shared_queue (`keep_data_ordered=False`)     | 1281                | 5392                | 5732                |
+| no shared_queue (`keep_data_ordered=True (default)`)  | 1187                | 5257                | 5746                |
 
 📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
 > While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
