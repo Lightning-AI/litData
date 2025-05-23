@@ -897,10 +897,8 @@ pq_dataset_uri = "s3://my-bucket/my-parquet-data"  # or "gs://my-bucket/my-parqu
 # Set up the streaming dataset
 dataset = ld.StreamingDataset(pq_dataset_uri, item_loader=ParquetLoader())
 
-# print the first sample
 print("Sample", dataset[0])
 
-# Stream the dataset using StreamingDataLoader
 dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
 for sample in dataloader:
     pass
