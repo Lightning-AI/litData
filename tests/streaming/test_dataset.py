@@ -112,8 +112,8 @@ def _simple_optimize_fn(index):
         (None, 1200),  # at max 1200 items in a chunk
     ],
 )
-@pytest.mark.parametrize("use_shared_queue", [True, False])
-def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+@pytest.mark.parametrize("keep_data_ordered", [True, False])
+def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, monkeypatch):
     data_dir = str(tmpdir / "optimized")
 
     optimize(
@@ -123,8 +123,7 @@ def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, mon
         num_workers=4,
         chunk_bytes=chunk_bytes,
         chunk_size=chunk_size,
-        use_shared_queue=use_shared_queue,
-        use_fake_queue=False if use_shared_queue else None,
+        keep_data_ordered=keep_data_ordered,
     )
 
     sleep(2)  # wait for the cache to be created
@@ -136,7 +135,7 @@ def test_optimize_dataset(use_shared_queue, chunk_bytes, chunk_size, tmpdir, mon
 
     assert len(actual_dataset) == len(expected_dataset)
 
-    if use_shared_queue:
+    if keep_data_ordered:
         # in shared queue, the order of the chunks is not guaranteed
         assert sorted(actual_dataset) == expected_dataset
     else:

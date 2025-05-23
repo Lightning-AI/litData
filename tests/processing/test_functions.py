@@ -630,8 +630,8 @@ def text_optimize_fn(filename: str, *args, **kwargs):
     return text.strip()
 
 
-@pytest.mark.parametrize("use_shared_queue", [False, True])
-def test_optimize_with_text_files(tmpdir, use_shared_queue):
+@pytest.mark.parametrize("keep_data_ordered", [False, True])
+def test_optimize_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
     input_dir = Path(tmpdir) / "files"
     os.makedirs(input_dir, exist_ok=True)
@@ -650,7 +650,7 @@ def test_optimize_with_text_files(tmpdir, use_shared_queue):
         num_downloaders=1,
         num_uploaders=1,
         mode="overwrite",
-        use_shared_queue=use_shared_queue,
+        keep_data_ordered=keep_data_ordered,
     )
 
     # Load as streaming dataset
@@ -676,8 +676,8 @@ def text_map_fn(filename: str, output_dir: str):
             file.write(f"{text}\tBonjour!")
 
 
-@pytest.mark.parametrize("use_shared_queue", [False, True])
-def test_map_with_text_files(tmpdir, use_shared_queue):
+@pytest.mark.parametrize("keep_data_ordered", [False, True])
+def test_map_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
     input_dir = Path(tmpdir) / "files"
     os.makedirs(input_dir, exist_ok=True)
@@ -692,7 +692,7 @@ def test_map_with_text_files(tmpdir, use_shared_queue):
         input_dir=str(input_dir),
         output_dir=str(tmpdir / "output"),
         num_workers=1,
-        use_shared_queue=use_shared_queue,
+        keep_data_ordered=keep_data_ordered,
     )
 
     # Verify in files are updated

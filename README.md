@@ -515,7 +515,7 @@ if __name__ == "__main__":
         output_dir="fast_data",             # optimized data is stored here
         num_workers=4,                      # The number of workers on the same machine
         chunk_bytes="64MB" ,                 # size of each chunk
-        use_shared_queue=True,             # Use a shared queue to speed up the process
+        keep_data_ordered=True,             # Use a shared queue to speed up the process
     )
 ```
 
@@ -528,6 +528,10 @@ if __name__ == "__main__":
 | shared_queue     | 1281                | 5392                | 5732                |
 | no shared_queue  | 1187                | 5257                | 5746                |
 
+📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
+> While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
+>
+> Streaming happens after optimization and does not involve inter-process communication where shared_queue plays a role.
 
 - 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
 

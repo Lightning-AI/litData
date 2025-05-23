@@ -474,17 +474,10 @@ class BaseWorker:
         checkpoint_next_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
         storage_options: Dict[str, Any] = {},
-        use_shared_queue: bool = False,
-        use_fake_queue: bool = True,
+        keep_data_ordered: bool = False,
         shared_queue: Union[Queue, FakeQueue, None] = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
-        if use_fake_queue and use_shared_queue:
-            raise ValueError(
-                "You can't use both `use_fake_queue` and `use_shared_queue` at the same time."
-                "FakeQueue is used to avoid serializing data, while SharedQueue requires it to be serialized & shared."
-            )
-
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.node_rank = node_rank
@@ -506,14 +499,14 @@ class BaseWorker:
         self.stop_queue = stop_queue
         self.no_downloaders = self.input_dir.path is None or self.reader is not None
 
-        self.use_shared_queue = use_shared_queue
+        self.keep_data_ordered = keep_data_ordered
 
-        if use_shared_queue:
+        if keep_data_ordered:
             assert shared_queue is not None
             self.ready_to_process_queue = shared_queue
         else:
             self.ready_to_process_queue: Union[Queue, FakeQueue] = (
-                FakeQueue() if self.no_downloaders and use_fake_queue else Queue()
+                FakeQueue() if self.no_downloaders and not self.keep_data_ordered else Queue()
             )
 
         self.remove_queue: Queue = Queue()
@@ -570,7 +563,7 @@ class BaseWorker:
         num_downloader_finished = 0
 
         timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 300))
-        if self.use_shared_queue:
+        if self.keep_data_ordered:
             timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
 
         timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
@@ -584,7 +577,7 @@ class BaseWorker:
 
             if combined_data is None or timed_out:
                 num_downloader_finished += 1
-                if timed_out or (not self.use_shared_queue and num_downloader_finished == self.num_downloaders):
+                if timed_out or (not self.keep_data_ordered and num_downloader_finished == self.num_downloaders):
                     print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
@@ -835,7 +828,7 @@ class BaseWorker:
         # Don't use a context manager to avoid deleting files that are being uploaded.
         output_dir = tempfile.mkdtemp()
         item = item if self.reader is None else self.reader.read(item)
-        is_last = (len(self.items) - 1 == index) if not self.use_shared_queue else False
+        is_last = (len(self.items) - 1 == index) if not self.keep_data_ordered else False
         item_data = self.data_recipe.prepare_item(item, str(output_dir), is_last)
         if item_data is not None:
             raise ValueError(
@@ -1055,8 +1048,7 @@ class DataProcessor:
         item_loader: Optional[BaseItemLoader] = None,
         start_method: Optional[str] = None,
         storage_options: Dict[str, Any] = {},
-        use_shared_queue: bool = False,
-        use_fake_queue: bool = True,
+        keep_data_ordered: bool = False,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
 
@@ -1082,11 +1074,7 @@ class DataProcessor:
             start_method: The start method used by python multiprocessing package. Default to spawn unless running
                 inside an interactive shell like Ipython.
             storage_options: Storage options for the cloud provider.
-            use_shared_queue: Whether to use a shared queue for the workers.
-            use_fake_queue: Whether to use a fake queue for the workers. This is used to avoid serializing data.
-                Use this if you are not using `shared_queue` and your local data processing is not fast enough.
-                Refer to this issue & for more details: https://github.com/Lightning-AI/litData/issues/299
-
+            keep_data_ordered: Whether to use a shared queue for the workers.
         """
         # spawn doesn't work in IPython
         start_method = start_method or ("fork" if in_notebook() else "spawn")
@@ -1097,12 +1085,6 @@ class DataProcessor:
             msg += "move your code to files and import it within the notebook."
 
         print(msg)
-
-        if use_fake_queue and use_shared_queue:
-            raise ValueError(
-                "You can't use both `use_fake_queue` and `use_shared_queue` at the same time."
-                "FakeQueue is used to avoid serializing data, while SharedQueue requires it to be serialized & shared."
-            )
 
         multiprocessing.set_start_method(start_method, force=True)
 
@@ -1127,8 +1109,7 @@ class DataProcessor:
         self.checkpoint_next_index: Optional[List[int]] = None
         self.item_loader = item_loader
         self.storage_options = storage_options
-        self.use_shared_queue = use_shared_queue
-        self.use_fake_queue = use_fake_queue
+        self.keep_data_ordered = keep_data_ordered
 
         self.state_dict = state_dict or dict.fromkeys(range(self.num_workers), 0)
 
@@ -1329,9 +1310,9 @@ class DataProcessor:
 
     def _create_process_workers(self, data_recipe: DataRecipe, workers_user_items: List[List[Any]]) -> None:
         self.shared_queue: Union[Queue, FakeQueue, None] = None
-        if self.use_shared_queue:
+        if self.keep_data_ordered:
             no_downloaders = self.input_dir.path is None or self.reader is not None
-            self.shared_queue = FakeQueue() if no_downloaders and self.use_fake_queue else Queue()
+            self.shared_queue = FakeQueue() if no_downloaders and not self.keep_data_ordered else Queue()
 
         self.progress_queue = Queue()
         workers: List[DataWorkerProcess] = []
@@ -1359,8 +1340,7 @@ class DataProcessor:
                 self.checkpoint_next_index[worker_idx] if self.checkpoint_next_index else None,
                 self.item_loader,
                 self.storage_options,
-                self.use_shared_queue,
-                self.use_fake_queue,
+                self.keep_data_ordered,
                 self.shared_queue,
             )
             worker.start()
