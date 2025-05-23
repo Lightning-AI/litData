@@ -515,12 +515,14 @@ if __name__ == "__main__":
         output_dir="fast_data",             # optimized data is stored here
         num_workers=4,                      # The number of workers on the same machine
         chunk_bytes="64MB" ,                 # size of each chunk
-        keep_data_ordered=True,             # Use a shared queue to speed up the process
+        keep_data_ordered=False,             # Use a shared queue to speed up the process
     )
 ```
 
-### Performance Difference between using a shared queue and not using it:
+> `keep_data_ordered=False` uses a shared queue between workers to speed up the optimization process and and efficiently handle imbalanced workloads.
 
+### Performance Difference between using a shared queue and not using it:
+  
 **Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
 
 | Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |

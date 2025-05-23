@@ -474,7 +474,7 @@ class BaseWorker:
         checkpoint_next_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
         storage_options: Dict[str, Any] = {},
-        keep_data_ordered: bool = False,
+        keep_data_ordered: bool = True,
         shared_queue: Union[Queue, FakeQueue, None] = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
@@ -506,7 +506,7 @@ class BaseWorker:
             self.ready_to_process_queue = shared_queue
         else:
             self.ready_to_process_queue: Union[Queue, FakeQueue] = (
-                FakeQueue() if self.no_downloaders and not self.keep_data_ordered else Queue()
+                FakeQueue() if self.no_downloaders and self.keep_data_ordered else Queue()
             )
 
         self.remove_queue: Queue = Queue()
@@ -577,7 +577,7 @@ class BaseWorker:
 
             if combined_data is None or timed_out:
                 num_downloader_finished += 1
-                if timed_out or (not self.keep_data_ordered and num_downloader_finished == self.num_downloaders):
+                if timed_out or (self.keep_data_ordered and num_downloader_finished == self.num_downloaders):
                     print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
@@ -828,7 +828,7 @@ class BaseWorker:
         # Don't use a context manager to avoid deleting files that are being uploaded.
         output_dir = tempfile.mkdtemp()
         item = item if self.reader is None else self.reader.read(item)
-        is_last = (len(self.items) - 1 == index) if not self.keep_data_ordered else False
+        is_last = (len(self.items) - 1 == index) if self.keep_data_ordered else False
         item_data = self.data_recipe.prepare_item(item, str(output_dir), is_last)
         if item_data is not None:
             raise ValueError(
@@ -1048,7 +1048,7 @@ class DataProcessor:
         item_loader: Optional[BaseItemLoader] = None,
         start_method: Optional[str] = None,
         storage_options: Dict[str, Any] = {},
-        keep_data_ordered: bool = False,
+        keep_data_ordered: bool = True,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
 
@@ -1074,7 +1074,7 @@ class DataProcessor:
             start_method: The start method used by python multiprocessing package. Default to spawn unless running
                 inside an interactive shell like Ipython.
             storage_options: Storage options for the cloud provider.
-            keep_data_ordered: Whether to use a shared queue for the workers.
+            keep_data_ordered: Whether to use a shared queue for the workers or not.
         """
         # spawn doesn't work in IPython
         start_method = start_method or ("fork" if in_notebook() else "spawn")
@@ -1312,7 +1312,7 @@ class DataProcessor:
         self.shared_queue: Union[Queue, FakeQueue, None] = None
         if self.keep_data_ordered:
             no_downloaders = self.input_dir.path is None or self.reader is not None
-            self.shared_queue = FakeQueue() if no_downloaders and not self.keep_data_ordered else Queue()
+            self.shared_queue = FakeQueue() if no_downloaders and self.keep_data_ordered else Queue()
 
         self.progress_queue = Queue()
         workers: List[DataWorkerProcess] = []
