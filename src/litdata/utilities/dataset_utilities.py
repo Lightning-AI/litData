@@ -24,7 +24,7 @@ def subsample_streaming_dataset(
     shuffle: bool = False,
     seed: int = 42,
     storage_options: Optional[Dict] = {},
-    s3_session_options: Optional[Dict] = {},
+    session_options: Optional[Dict] = {},
     index_path: Optional[str] = None,
     fnmatch_pattern: Optional[str] = None,
 ) -> Tuple[List[str], List[Tuple[int, int]]]:
@@ -47,7 +47,7 @@ def subsample_streaming_dataset(
             input_dir=input_dir.path if input_dir.path else input_dir.url,
             cache_dir=cache_dir.path if cache_dir else None,
             storage_options=storage_options,
-            s3_session_options=s3_session_options,
+            session_options=session_options,
             index_path=index_path,
         )
         if cache_path is not None:
@@ -63,7 +63,7 @@ def subsample_streaming_dataset(
         if index_path is not None:
             copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
         else:
-            downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, s3_session_options)
+            downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
     time.sleep(0.5)  # Give some time for the file to be available
@@ -143,7 +143,7 @@ def _should_replace_path(path: Optional[str]) -> bool:
 def _read_updated_at(
     input_dir: Optional[Dir],
     storage_options: Optional[Dict] = {},
-    s3_session_options: Optional[Dict] = {},
+    session_options: Optional[Dict] = {},
     index_path: Optional[str] = None,
 ) -> str:
     """Read last updated timestamp from index.json file."""
@@ -163,7 +163,7 @@ def _read_updated_at(
             if index_path is not None:
                 copy_index_to_cache_index_filepath(index_path, temp_index_filepath)
             else:
-                downloader = get_downloader(input_dir.url, tmp_directory, [], storage_options, s3_session_options)
+                downloader = get_downloader(input_dir.url, tmp_directory, [], storage_options, session_options)
                 downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), temp_index_filepath)
             index_json_content = load_index_file(tmp_directory)
 
@@ -216,12 +216,12 @@ def _try_create_cache_dir(
     input_dir: Optional[str],
     cache_dir: Optional[str] = None,
     storage_options: Optional[Dict] = {},
-    s3_session_options: Optional[Dict] = {},
+    session_options: Optional[Dict] = {},
     index_path: Optional[str] = None,
 ) -> Optional[str]:
     """Prepare and return the cache directory for a dataset."""
     resolved_input_dir = _resolve_dir(input_dir)
-    updated_at = _read_updated_at(resolved_input_dir, storage_options, s3_session_options, index_path)
+    updated_at = _read_updated_at(resolved_input_dir, storage_options, session_options, index_path)
 
     # Fallback to a hash of the input_dir if updated_at is "0"
     if updated_at == "0" and input_dir is not None:

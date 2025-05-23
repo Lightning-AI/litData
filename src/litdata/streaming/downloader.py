@@ -91,11 +91,11 @@ class S3Downloader(Downloader):
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
         self._s5cmd_available = os.system("s5cmd > /dev/null 2>&1") == 0
-        # check if kwargs contains s3_session_options
-        self.s3_session_options = kwargs.get("s3_session_options", {})
+        # check if kwargs contains session_options
+        self.session_options = kwargs.get("session_options", {})
 
         if not self._s5cmd_available or _DISABLE_S5CMD:
-            self._client = S3Client(storage_options=self._storage_options, s3_session_options=self.s3_session_options)
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -362,7 +362,7 @@ def get_downloader(
     cache_dir: str,
     chunks: List[Dict[str, Any]],
     storage_options: Optional[Dict] = {},
-    s3_session_options: Optional[Dict] = {},
+    session_options: Optional[Dict] = {},
 ) -> Downloader:
     """Get the appropriate downloader instance based on the remote directory prefix.
 
@@ -371,14 +371,14 @@ def get_downloader(
         cache_dir (str): The local cache directory.
         chunks (List[Dict[str, Any]]): List of chunks to managed by the downloader.
         storage_options (Optional[Dict], optional): Additional storage options. Defaults to {}.
-        s3_session_options (Optional[Dict], optional): Additional S3 session options. Defaults to {}.
+        session_options (Optional[Dict], optional): Additional S3 session options. Defaults to {}.
 
     Returns:
         Downloader: An instance of the appropriate downloader class.
     """
     for k, cls in _DOWNLOADERS.items():
         if str(remote_dir).startswith(k):
-            return cls(remote_dir, cache_dir, chunks, storage_options, s3_session_options=s3_session_options)
+            return cls(remote_dir, cache_dir, chunks, storage_options, session_options=session_options)
     else:
         # Default to LocalDownloader if no prefix is matched
         return LocalDownloader(remote_dir, cache_dir, chunks, storage_options)
