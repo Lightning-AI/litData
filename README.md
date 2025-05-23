@@ -536,7 +536,7 @@ if __name__ == "__main__":
 
 - 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
 
-- ⚡ However, it can significantly improve streaming performance — especially when some workers are slower than others.
+- ⚡ However, it can significantly improve optimizing performance — especially when some workers are slower than others.
 
 </details>
 

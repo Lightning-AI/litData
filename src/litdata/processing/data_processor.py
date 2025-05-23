@@ -59,6 +59,8 @@ from litdata.utilities.packing import _pack_greedily
 
 logger = logging.Logger(__name__)
 
+ALL_DONE = "ALL_DONE"
+
 
 def _get_num_nodes() -> int:
     """Returns the number of nodes."""
@@ -573,9 +575,13 @@ class BaseWorker:
             except Empty:
                 timed_out = True
 
-            if combined_data is None or timed_out:
+            if combined_data in (None, ALL_DONE) or timed_out:
                 num_downloader_finished += 1
-                if timed_out or (self.keep_data_ordered and num_downloader_finished == self.num_downloaders):
+                if (
+                    timed_out
+                    or combined_data is ALL_DONE
+                    or (self.keep_data_ordered and num_downloader_finished == self.num_downloaders)
+                ):
                     print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
@@ -611,8 +617,12 @@ class BaseWorker:
 
             self._counter += 1
 
-            # Don't send the last progress update, so the main thread awaits for the uploader and remover
-            if self.progress_queue and (time() - self._last_time) > 1 and self._counter < (self.num_items - 2):
+            # Send update after every 1 second.
+            # When only few elements are left, send update every second.
+            if self.progress_queue and (
+                ((time() - self._last_time) > 1 and self._counter < (self.num_items - 20))
+                or self._counter + 20 >= self.num_items
+            ):
                 self.progress_queue.put((self.worker_index, self._counter))
                 self._last_time = time()
 
@@ -1255,6 +1265,8 @@ class DataProcessor:
             if current_total == num_items:
                 # make sure all processes are terminated
                 for w in self.workers:
+                    if not self.keep_data_ordered:
+                        w.ready_to_process_queue.put(ALL_DONE)
                     if w.is_alive():
                         w.join()
                 break
