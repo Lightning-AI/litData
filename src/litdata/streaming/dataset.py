@@ -58,6 +58,7 @@ class StreamingDataset(IterableDataset):
         subsample: float = 1.0,
         encryption: Optional[Encryption] = None,
         storage_options: Optional[Dict] = {},
+        session_options: Optional[Dict] = {},
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
@@ -81,6 +82,7 @@ class StreamingDataset(IterableDataset):
             subsample: Float representing fraction of the dataset to be randomly sampled (e.g., 0.1 => 10% of dataset).
             encryption: The encryption object to use for decrypting the data.
             storage_options: Additional connection options for accessing storage services.
+            session_options: Additional connection options for accessing S3 services.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the StreamingDataset.
             index_path: Path to `index.json` for the Parquet dataset.
                 If `index_path` is a directory, the function will look for `index.json` within it.
@@ -128,6 +130,7 @@ class StreamingDataset(IterableDataset):
             shuffle,
             seed,
             storage_options,
+            session_options,
             index_path,
             fnmatch_pattern,
         )
@@ -190,6 +193,7 @@ class StreamingDataset(IterableDataset):
         self.batch_size: int = 1
         self._encryption = encryption
         self.storage_options = storage_options
+        self.session_options = session_options
         self.max_pre_download = max_pre_download
 
     def set_shuffle(self, shuffle: bool) -> None:
@@ -228,6 +232,7 @@ class StreamingDataset(IterableDataset):
             max_cache_size=self.max_cache_size,
             encryption=self._encryption,
             storage_options=self.storage_options,
+            session_options=self.session_options,
             max_pre_download=self.max_pre_download,
         )
         cache._reader._try_load_config()

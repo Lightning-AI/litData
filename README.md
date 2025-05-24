@@ -431,7 +431,12 @@ aws_storage_options={
     "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
     "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
 }
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
+# You can also pass the session options. (for boto3 only)
+aws_session_options = {
+  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
+  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
 
 
 # Read data from GCS
