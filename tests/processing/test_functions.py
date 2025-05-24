@@ -621,3 +621,82 @@ def test_optimize_with_jpeg_array(tmpdir):
         "int",
         "jpeg_array",
     ], f"Expected data format to be ['int', 'jpeg_array'], but got {data_format}"
+
+
+def text_optimize_fn(filename: str, *args, **kwargs):
+    """A simple text processing function."""
+    with open(filename, encoding="utf-8") as file:
+        text = file.read()
+    return text.strip()
+
+
+@pytest.mark.parametrize("keep_data_ordered", [False, True])
+def test_optimize_with_text_files(tmpdir, keep_data_ordered):
+    """Test optimizing data containing text manipulation."""
+    input_dir = Path(tmpdir) / "files"
+    os.makedirs(input_dir, exist_ok=True)
+    for i in range(1, 6):
+        with open(input_dir / f"file-{i}.txt", "w") as f:
+            f.write("hello world")
+
+    # Run the optimization
+    optimize(
+        fn=text_optimize_fn,
+        inputs=[str(input_dir / f"file-{i}.txt") for i in range(1, 6)],
+        input_dir=str(input_dir),
+        output_dir=str(tmpdir / "output"),
+        num_workers=1,
+        chunk_bytes="10MB",
+        num_downloaders=1,
+        num_uploaders=1,
+        mode="overwrite",
+        keep_data_ordered=keep_data_ordered,
+    )
+
+    # Load as streaming dataset
+    ds = StreamingDataset(str(tmpdir / "output"))
+
+    # Verify data length
+    assert len(ds) == 5
+
+    # Check tokenized data
+    for i in range(5):
+        item = ds[i]
+        assert isinstance(item, str)
+        assert item == "hello world"
+
+
+def text_map_fn(filename: str, output_dir: str):
+    """A simple text processing function."""
+    with open(filename, encoding="utf-8") as file:
+        text = file.read().strip()
+        filename_only = os.path.basename(filename)
+
+        with open(os.path.join(output_dir, filename_only), "a", encoding="utf-8") as file:
+            file.write(f"{text}\tBonjour!")
+
+
+@pytest.mark.parametrize("keep_data_ordered", [False, True])
+def test_map_with_text_files(tmpdir, keep_data_ordered):
+    """Test optimizing data containing text manipulation."""
+    input_dir = Path(tmpdir) / "files"
+    os.makedirs(input_dir, exist_ok=True)
+    for i in range(1, 6):
+        with open(input_dir / f"file-{i}.txt", "w") as f:
+            f.write("hello world")
+
+    # Run the optimization
+    map(
+        fn=text_map_fn,
+        inputs=[str(input_dir / f"file-{i}.txt") for i in range(1, 6)],
+        input_dir=str(input_dir),
+        output_dir=str(tmpdir / "output"),
+        num_workers=1,
+        keep_data_ordered=keep_data_ordered,
+    )
+
+    # Verify in files are updated
+    for i in range(1, 6):
+        with open(tmpdir / "output" / f"file-{i}.txt", encoding="utf-8") as file:
+            content = file.read()
+            assert content == "hello world\tBonjour!"

@@ -2,6 +2,7 @@ import os
 import random
 import sys
 from functools import partial
+from queue import Empty
 from typing import Any, List
 from unittest import mock
 from unittest.mock import ANY, Mock
@@ -17,6 +18,7 @@ from litdata.processing import functions
 from litdata.processing.data_processor import (
     DataChunkRecipe,
     DataProcessor,
+    FakeQueue,
     MapRecipe,
     _download_data_target,
     _get_item_filesizes,
@@ -189,20 +191,21 @@ def test_download_data_target(wait_for_disk_usage_higher_than_threshold_mock, tm
 
     queue_in = mock.MagicMock()
 
+    items = [10]
     paths = [os.path.join(input_dir, "a.txt"), None]
 
     def fn(*_, **__):
         value = paths.pop(0)
         if value is None:
             return value
-        return (0, [value])
+        return (0, items.pop(0), [value])
 
     queue_in.get = fn
 
     queue_out = mock.MagicMock()
     _download_data_target(Dir(input_dir, remote_input_dir), cache_dir, queue_in, queue_out)
 
-    assert queue_out.put._mock_call_args_list[0].args == (0,)
+    assert queue_out.put._mock_call_args_list[0].args == ((0, 10, [os.path.join(input_dir, "a.txt")]),)
     assert queue_out.put._mock_call_args_list[1].args == (None,)
 
     assert os.listdir(cache_dir) == ["a.txt"]
@@ -361,6 +364,21 @@ def test_map_items_to_workers_sequentially(monkeypatch):
     assert workers_user_items == [[23, 24, 25], [26, 27, 28], [29, 30, 31]]
     workers_user_items = _map_items_to_workers_sequentially(4, list(range(32)))
     assert workers_user_items == [[24, 25], [26, 27], [28, 29], [30, 31]]
+
+
+def test_fake_queue():
+    q = FakeQueue()
+    index = [1, 2]
+    items = ["a", "b"]
+    paths = ["p1", "p2"]
+
+    q.add_items(index, items, paths)
+
+    assert q.get() == (1, "a", "p1")
+    assert q.get() == (2, "b", "p2")
+
+    with pytest.raises(Empty):
+        q.get()
 
 
 class CustomDataChunkRecipe(DataChunkRecipe):

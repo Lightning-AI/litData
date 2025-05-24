@@ -59,6 +59,8 @@ from litdata.utilities.packing import _pack_greedily
 
 logger = logging.Logger(__name__)
 
+ALL_DONE = "ALL_DONE"  # sentinel value for shared queue
+
 
 def _get_num_nodes() -> int:
     """Returns the number of nodes."""
@@ -129,7 +131,7 @@ def _download_data_target(
 
     while True:
         # 2. Fetch from the queue
-        r: Optional[Tuple[int, List[str]]] = queue_in.get()
+        r: Optional[Tuple[int, Any, List[str]]] = queue_in.get()
 
         # 3. Terminate the process if we received a termination signal
         if r is None:
@@ -137,13 +139,13 @@ def _download_data_target(
             return
 
         # 4. Unpack
-        index, paths = r
+        index, item, paths = r
 
         # 5. Check whether all the files are already downloaded
         if input_dir.path and all(
             os.path.exists(p.replace(input_dir.path, cache_dir) if input_dir else p) for p in paths
         ):
-            queue_out.put(index)
+            queue_out.put((index, item, paths))
             continue
 
         if input_dir.url is not None or input_dir.path is not None:
@@ -176,7 +178,7 @@ def _download_data_target(
                     raise ValueError(f"The provided {input_dir.url} isn't supported.")
 
         # 7. Inform the worker the current files are available
-        queue_out.put(index)
+        queue_out.put((index, item, paths))
 
 
 #
@@ -419,16 +421,20 @@ class FakeQueue:
     """This class enables us to replace multiprocessing Queue when not required and avoid serializing data."""
 
     def __init__(self) -> None:
+        self._index: List[Any] = []
         self._items: List[Any] = []
+        self._paths: List[Any] = []
 
-    def add_items(self, items: List[Any]) -> None:
+    def add_items(self, index: List[Any], items: List[Any], paths: List[Any]) -> None:
+        self._index.extend(index)
         self._items.extend(items)
+        self._paths.extend(paths)
 
-    def get(self) -> None:
+    def get(self, *args, **kwargs) -> None:
         try:
-            return self._items.pop(0)
+            return (self._index.pop(0), self._items.pop(0), self._paths.pop(0))
         except IndexError:
-            return None
+            raise Empty
 
 
 class BaseWorker:
@@ -470,6 +476,8 @@ class BaseWorker:
         checkpoint_next_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
         storage_options: Dict[str, Any] = {},
+        keep_data_ordered: bool = True,
+        shared_queue: Union[Queue, FakeQueue, None] = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
         self.worker_index = worker_index
@@ -492,7 +500,15 @@ class BaseWorker:
         self.to_upload_queues: List[Queue] = []
         self.stop_queue = stop_queue
         self.no_downloaders = self.input_dir.path is None or self.reader is not None
-        self.ready_to_process_queue: Union[Queue, FakeQueue] = FakeQueue() if self.no_downloaders else Queue()
+
+        self.keep_data_ordered = keep_data_ordered
+
+        if not keep_data_ordered:
+            assert shared_queue is not None
+            self.ready_to_process_queue = shared_queue
+        else:
+            self.ready_to_process_queue: Union[Queue, FakeQueue] = FakeQueue() if self.no_downloaders else Queue()
+
         self.remove_queue: Queue = Queue()
         self.progress_queue: Queue = progress_queue
         self.error_queue: Queue = error_queue
@@ -546,12 +562,26 @@ class BaseWorker:
         """
         num_downloader_finished = 0
 
-        while True:
-            index = self.ready_to_process_queue.get()
+        timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 300))
+        if not self.keep_data_ordered:
+            timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
 
-            if index is None:
+        timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
+        combined_data = None
+
+        while True:
+            try:
+                combined_data = self.ready_to_process_queue.get(timeout=timeout)
+            except Empty:
+                timed_out = True
+
+            if combined_data in (None, ALL_DONE) or timed_out:
                 num_downloader_finished += 1
-                if num_downloader_finished == self.num_downloaders:
+                if (
+                    timed_out
+                    or combined_data is ALL_DONE
+                    or (self.keep_data_ordered and num_downloader_finished == self.num_downloaders)
+                ):
                     print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
@@ -576,20 +606,28 @@ class BaseWorker:
                     return
                 continue
 
+            assert isinstance(combined_data, tuple), f"Invalid data received from queue {combined_data=}."
+            assert len(combined_data) == 3, f"Invalid data received from queue {combined_data=}."
+
+            index, item, paths = combined_data
             if isinstance(self.data_recipe, DataChunkRecipe):
-                self._handle_data_chunk_recipe(index)
+                self._handle_data_chunk_recipe(index, item)
             else:
-                self._handle_data_transform_recipe(index)
+                self._handle_data_transform_recipe(index, item)
 
             self._counter += 1
 
-            # Don't send the last progress update, so the main thread awaits for the uploader and remover
-            if self.progress_queue and (time() - self._last_time) > 1 and self._counter < (self.num_items - 2):
+            # Send update after every 1 second.
+            # When only few elements are left, send update every second.
+            if self.progress_queue and (
+                ((time() - self._last_time) > 1 and self._counter < (self.num_items - 20))
+                or self._counter + 20 >= self.num_items
+            ):
                 self.progress_queue.put((self.worker_index, self._counter))
                 self._last_time = time()
 
-            if self.remove and self.input_dir.path is not None and self.reader is None:
-                self.remove_queue.put(self.paths[index])
+            if self.remove and self.input_dir.path is not None and self.reader is None and paths is not None:
+                self.remove_queue.put(paths)
 
             try:
                 self.stop_queue.get(timeout=0.0001)
@@ -646,11 +684,14 @@ class BaseWorker:
 
     def _collect_paths(self) -> None:
         if self.no_downloaders:
+            # in queue, put (index, corresponding item, corresponding paths (None in this case))
             if isinstance(self.ready_to_process_queue, FakeQueue):
-                self.ready_to_process_queue.add_items(list(range(len(self.items))))
+                self.ready_to_process_queue.add_items(
+                    list(range(len(self.items))), self.items, [None for _ in self.items]
+                )
             else:
                 for index in range(len(self.items)):
-                    self.ready_to_process_queue.put(index)
+                    self.ready_to_process_queue.put((index, self.items[index], None))
             return
 
         items = []
@@ -709,7 +750,7 @@ class BaseWorker:
             self.to_download_queues.append(to_download_queue)
 
         for index, paths in enumerate(self.paths):
-            self.to_download_queues[index % self.num_downloaders].put((index, paths))
+            self.to_download_queues[index % self.num_downloaders].put((index, self.items[index], paths))
 
         for downloader_index in range(self.num_downloaders):
             self.to_download_queues[downloader_index].put(None)
@@ -748,12 +789,12 @@ class BaseWorker:
             self.uploaders.append(p)
             self.to_upload_queues.append(to_upload_queue)
 
-    def _handle_data_chunk_recipe(self, index: int) -> None:
+    def _handle_data_chunk_recipe(self, index: int, item: Any) -> None:
         """Used by `optimize fn` to run the user provided fn on each item of the input data,
         and save (write) the output in the cache.
         """
         try:
-            current_item = self.items[index] if self.reader is None else self.reader.read(self.items[index])
+            current_item = item if self.reader is None else self.reader.read(item)
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:
@@ -769,7 +810,7 @@ class BaseWorker:
                     checkpoint_filepath = self.cache.save_checkpoint()
                     self._try_upload(checkpoint_filepath)
         except Exception as e:
-            raise RuntimeError(f"Failed processing {self.items[index]=}; {index=}") from e
+            raise RuntimeError(f"Failed processing {item=}; {index=}") from e
 
     def _handle_data_chunk_recipe_end(self) -> None:
         """Called when the `optimize fn` is done.
@@ -787,15 +828,16 @@ class BaseWorker:
             checkpoint_filepath = self.cache.save_checkpoint()
             self._try_upload(checkpoint_filepath)
 
-    def _handle_data_transform_recipe(self, index: int) -> None:
+    def _handle_data_transform_recipe(self, index: int, item: Any) -> None:
         """Used by map fn to run the user provided fn on each item of the input data.
 
         It should not return anything and write directly to the output directory.
         """
         # Don't use a context manager to avoid deleting files that are being uploaded.
         output_dir = tempfile.mkdtemp()
-        item = self.items[index] if self.reader is None else self.reader.read(self.items[index])
-        item_data = self.data_recipe.prepare_item(item, str(output_dir), len(self.items) - 1 == index)
+        item = item if self.reader is None else self.reader.read(item)
+        is_last = (len(self.items) - 1 == index) if self.keep_data_ordered else False
+        item_data = self.data_recipe.prepare_item(item, str(output_dir), is_last)
         if item_data is not None:
             raise ValueError(
                 "When using a `MapRecipe`, the `prepare_item` shouldn't return anything."
@@ -1014,6 +1056,7 @@ class DataProcessor:
         item_loader: Optional[BaseItemLoader] = None,
         start_method: Optional[str] = None,
         storage_options: Dict[str, Any] = {},
+        keep_data_ordered: bool = True,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
 
@@ -1039,7 +1082,7 @@ class DataProcessor:
             start_method: The start method used by python multiprocessing package. Default to spawn unless running
                 inside an interactive shell like Ipython.
             storage_options: Storage options for the cloud provider.
-
+            keep_data_ordered: Whether to use a shared queue for the workers or not.
         """
         # spawn doesn't work in IPython
         start_method = start_method or ("fork" if in_notebook() else "spawn")
@@ -1074,6 +1117,7 @@ class DataProcessor:
         self.checkpoint_next_index: Optional[List[int]] = None
         self.item_loader = item_loader
         self.storage_options = storage_options
+        self.keep_data_ordered = keep_data_ordered
 
         self.state_dict = state_dict or dict.fromkeys(range(self.num_workers), 0)
 
@@ -1220,6 +1264,10 @@ class DataProcessor:
             current_total = new_total
             if current_total == num_items:
                 # make sure all processes are terminated
+                if not self.keep_data_ordered:
+                    for w in self.workers:
+                        w.ready_to_process_queue.put(ALL_DONE)
+
                 for w in self.workers:
                     if w.is_alive():
                         w.join()
@@ -1273,6 +1321,10 @@ class DataProcessor:
         raise RuntimeError(f"We found the following error {error}.")
 
     def _create_process_workers(self, data_recipe: DataRecipe, workers_user_items: List[List[Any]]) -> None:
+        self.shared_queue: Union[Queue, FakeQueue, None] = None
+        if not self.keep_data_ordered:
+            self.shared_queue = Queue()
+
         self.progress_queue = Queue()
         workers: List[DataWorkerProcess] = []
         stop_queues: List[Queue] = []
@@ -1299,6 +1351,8 @@ class DataProcessor:
                 self.checkpoint_next_index[worker_idx] if self.checkpoint_next_index else None,
                 self.item_loader,
                 self.storage_options,
+                self.keep_data_ordered,
+                self.shared_queue,
             )
             worker.start()
             workers.append(worker)
