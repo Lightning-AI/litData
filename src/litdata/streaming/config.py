@@ -39,6 +39,7 @@ class ChunksConfig:
         subsampled_files: Optional[List[str]] = None,
         region_of_interest: Optional[List[Tuple[int, int]]] = None,
         storage_options: Optional[Dict] = {},
+        session_options: Optional[Dict] = {},
     ) -> None:
         """Reads the index files associated a chunked dataset and enables to map an index to its chunk.
 
@@ -51,6 +52,7 @@ class ChunksConfig:
             subsampled_files: List of subsampled chunk files loaded from `input_dir/index.json` file.
             region_of_interest: List of tuples of {start,end} of region of interest for each chunk.
             storage_options: Additional connection options for accessing storage services.
+            session_options: Additional options for S3 session.
 
         """
         self._cache_dir = cache_dir
@@ -60,6 +62,7 @@ class ChunksConfig:
         self._remote_dir = remote_dir
         self._item_loader = item_loader or PyTreeLoader()
         self._storage_options = storage_options
+        self._session_options = session_options
 
         # load data from `index.json` file
         data = load_index_file(self._cache_dir)
@@ -84,7 +87,9 @@ class ChunksConfig:
         self._downloader = None
 
         if remote_dir:
-            self._downloader = get_downloader(remote_dir, cache_dir, self._chunks, self._storage_options)
+            self._downloader = get_downloader(
+                remote_dir, cache_dir, self._chunks, self._storage_options, self._session_options
+            )
 
         self._compressor_name = self._config["compression"]
         self._compressor: Optional[Compressor] = None
@@ -286,6 +291,7 @@ class ChunksConfig:
         subsampled_files: Optional[List[str]] = None,
         region_of_interest: Optional[List[Tuple[int, int]]] = None,
         storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
     ) -> Optional["ChunksConfig"]:
         cache_index_filepath = os.path.join(cache_dir, _INDEX_FILENAME)
 
@@ -298,14 +304,21 @@ class ChunksConfig:
                         f"This should not have happened. No index.json file found in cache: {cache_index_filepath}"
                     )
             else:
-                downloader = get_downloader(remote_dir, cache_dir, [], storage_options)
+                downloader = get_downloader(remote_dir, cache_dir, [], storage_options, session_options)
                 downloader.download_file(os.path.join(remote_dir, _INDEX_FILENAME), cache_index_filepath)
 
         if not os.path.exists(cache_index_filepath):
             return None
 
         return ChunksConfig(
-            cache_dir, serializers, remote_dir, item_loader, subsampled_files, region_of_interest, storage_options
+            cache_dir,
+            serializers,
+            remote_dir,
+            item_loader,
+            subsampled_files,
+            region_of_interest,
+            storage_options,
+            session_options,
         )
 
     def __len__(self) -> int:

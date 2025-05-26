@@ -46,6 +46,7 @@ class Cache:
         serializers: Optional[Dict[str, Serializer]] = None,
         writer_chunk_index: Optional[int] = None,
         storage_options: Optional[Dict] = {},
+        session_options: Optional[Dict] = {},
         max_pre_download: int = 2,
     ):
         """The Cache enables to optimise dataset format for cloud training. This is done by grouping several elements
@@ -64,6 +65,7 @@ class Cache:
             serializers: Provide your own serializers.
             writer_chunk_index: The index of the chunk to start from when writing.
             storage_options: Additional connection options for accessing storage services.
+            session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded while filling up the cache.
 
         """
@@ -92,6 +94,7 @@ class Cache:
             item_loader=item_loader,
             serializers=serializers,
             storage_options=storage_options,
+            session_options=session_options,
             max_pre_download=max_pre_download,
         )
         self._is_done = False

@@ -431,7 +431,12 @@ aws_storage_options={
     "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
     "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
 }
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
+# You can also pass the session options. (for boto3 only)
+aws_session_options = {
+  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
+  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
 
 
 # Read data from GCS
@@ -704,6 +709,83 @@ train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memor
 for batch in tqdm(train_dataloader):
     pass
 ```
+</details>
+
+<details>
+  <summary> ✅ Parallel streaming</summary>
+&nbsp;
+
+While `CombinedDataset` allows to fetch a sample from one of the datasets it wraps at each iteration, `ParallelStreamingDataset` can be used to fetch a sample from all the wrapped datasets at each iteration:
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+parallel_dataset = ParallelStreamingDataset(
+    [
+        StreamingDataset(input_dir="input_dir_1"),
+        StreamingDataset(input_dir="input_dir_2"),
+    ],
+)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for batch_1, batch_2 in tqdm(dataloader):
+    pass
+```
+
+This is useful to generate new data on-the-fly using a sample from each dataset. To do so, provide a ``transform`` function to `ParallelStreamingDataset`:
+
+```python
+def transform(samples: Tuple[Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    return sample_1 + sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for transformed_batch in tqdm(dataloader):
+    pass
+```
+
+If the transformation requires random number generation, internal random number generators provided by `ParallelStreamingDataset` can be used. These are seeded using the current dataset state at the beginning of each epoch, which allows for reproducible and resumable data transformation. To use them, define a ``transform`` which takes a dictionary of random number generators as its second argument:
+
+```python
+def transform(samples: Tuple[Any], rngs: Dict[str, Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    rng = rngs["random"]  # "random", "numpy" and "torch" keys available
+    return rng.random() * sample_1 + rng.random() * sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+```
+</details>
+
+<details>
+  <summary> ✅ Cycle datasets</summary>
+&nbsp;
+
+`ParallelStreamingDataset` can also be used to cycle a `StreamingDataset`. This allows to dissociate the epoch length from the number of samples in the dataset.
+
+To do so, set the `length` option to the desired number of samples to yield per epoch. If ``length`` is greater than the number of samples in the dataset, the dataset is cycled. At the beginning of a new epoch, the dataset resumes from where it left off at the end of the previous epoch.
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+dataset = StreamingDataset(input_dir="input_dir")
+
+cycled_dataset = ParallelStreamingDataset([dataset], length=100)
+
+print(len(cycled_dataset)))  # 100
+
+dataloader = StreamingDataLoader(cycled_dataset)
+
+for batch, in tqdm(dataloader):
+    pass
+```
+
+You can even set `length` to `float("inf")` for an infinite dataset!
 </details>
 
 <details>

@@ -265,6 +265,7 @@ class BinaryReader:
         item_loader: Optional[BaseItemLoader] = None,
         serializers: Optional[Dict[str, Serializer]] = None,
         storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
         max_pre_download: int = 2,
     ) -> None:
         """The BinaryReader enables to read chunked dataset in an efficient way.
@@ -281,6 +282,7 @@ class BinaryReader:
             max_cache_size: The maximum cache size used by the reader when fetching the chunks.
             serializers: Provide your own serializers.
             storage_options: Additional connection options for accessing storage services.
+            session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the reader.
 
         """
@@ -308,6 +310,7 @@ class BinaryReader:
         self._chunks_queued_for_download = False
         self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
         self._storage_options = storage_options
+        self._session_options = session_options
         self._max_pre_download = max_pre_download
 
     def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
@@ -327,6 +330,7 @@ class BinaryReader:
             self.subsampled_files,
             self.region_of_interest,
             self._storage_options,
+            self._session_options,
         )
         return self._config
 

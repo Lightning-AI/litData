@@ -18,6 +18,7 @@ from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import TokensLoader
+from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
@@ -28,6 +29,7 @@ __all__ = [
     "CombinedStreamingDataset",
     "StreamingDataLoader",
     "TokensLoader",
+    "ParallelStreamingDataset",
     "map",
     "optimize",
     "walk",
