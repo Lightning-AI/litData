@@ -1,3 +1,4 @@
+import multiprocessing as mp
 import os
 import random
 import sys
@@ -16,8 +17,10 @@ from litdata.constants import _TORCH_AUDIO_AVAILABLE, _ZSTD_AVAILABLE
 from litdata.processing import data_processor as data_processor_module
 from litdata.processing import functions
 from litdata.processing.data_processor import (
+    BaseWorker,
     DataChunkRecipe,
     DataProcessor,
+    DataRecipe,
     FakeQueue,
     MapRecipe,
     _download_data_target,
@@ -1280,3 +1283,36 @@ def test_data_processor_start_method(monkeypatch):
 
     DataProcessor(None)
     mp_mock.set_start_method.assert_called_with("fork", force=True)
+
+
+@pytest.mark.parametrize("keep_data_ordered", [True, False])
+def test_base_worker_collect_paths_no_downloader(keep_data_ordered):
+    shared_queue = mp.Queue() if not keep_data_ordered else None
+
+    worker = BaseWorker(
+        worker_index=0,
+        num_workers=1,
+        node_rank=0,
+        data_recipe=DataRecipe(),
+        input_dir=Dir(),
+        output_dir=Dir(),
+        items=list(range(10)),
+        progress_queue=mp.Queue(),
+        error_queue=mp.Queue(),
+        stop_queue=mp.Queue(),
+        num_downloaders=1,
+        num_uploaders=1,
+        remove=True,
+        reader=None,
+        keep_data_ordered=keep_data_ordered,
+        shared_queue=shared_queue,
+    )
+
+    worker._collect_paths()
+
+    expected_type = FakeQueue if keep_data_ordered else type(mp.Queue())
+
+    assert isinstance(worker.ready_to_process_queue, expected_type)
+
+    for index in range(10):
+        assert worker.ready_to_process_queue.get() == (index, index, None)
