@@ -571,6 +571,7 @@ def data_producer(q: Queue):
     for item in yield_numbers():
         q.put(item)
     q.put(ALL_DONE)  # Sentinel value to signal completion
+    q.put(ALL_DONE)  # since 2 workers are used, we need to send 2 sentinel values
 
 def fn(index):
     return index  # Identity function for demo
