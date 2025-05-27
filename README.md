@@ -562,13 +562,13 @@ from litdata.processing.data_processor import ALL_DONE
 import litdata as ld
 import time
 
-def random_images():
+def yield_numbers():
     for i in range(1000):
         time.sleep(0.01)
         yield (i, i**2)
 
 def data_producer(q: Queue):
-    for item in random_images():
+    for item in yield_numbers():
         q.put(item)
     q.put(ALL_DONE)  # Sentinel value to signal completion
 
