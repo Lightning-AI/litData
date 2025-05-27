@@ -705,14 +705,14 @@ def test_map_with_text_files(tmpdir, keep_data_ordered):
             assert content == "hello world\tBonjour!"
 
 
-def random_images():
+def yield_numbers():
     for i in range(100):
         time.sleep(0.01)
         yield i
 
 
 def data_producer(q: Queue):
-    for item in random_images():
+    for item in yield_numbers():
         q.put(item)
     q.put(ALL_DONE)  # Sentinel value to indicate end
 
