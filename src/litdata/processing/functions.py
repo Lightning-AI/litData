@@ -229,6 +229,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         self._fn = fn
         self._queue = queue
         self.existing_index = existing_index
+        self.is_generator = False
 
     def prepare_structure(self, input_dir: Optional[str]) -> Any:
         return self._queue
@@ -459,9 +460,9 @@ def optimize(
         raise ValueError("You can either provide `inputs` or `queue`, not both.")
 
     if queue is None and inputs is None:
-        raise ValueError("At least one of `inputs` or `queue` should be provided.")
+        raise ValueError("At least one of `inputs` or `queue` must be provided.")
 
-    if queue is not None and not isinstance(queue, mp.Queue):
+    if queue is not None and not isinstance(queue, mp.queues.Queue):
         raise ValueError(f"The provided `queue` should be a multiprocessing queue. Found {type(queue)}.")
 
     if mode is not None and mode not in ["append", "overwrite"]:
@@ -522,6 +523,7 @@ def optimize(
         )
 
         if not isinstance(inputs, StreamingDataLoader) and queue is None:
+            assert inputs is not None
             resolved_dir = _resolve_dir(input_dir or _get_input_dir(inputs))
 
             if isinstance(batch_size, int) and batch_size > 1:
@@ -564,27 +566,33 @@ def optimize(
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
-            args = {
-                "chunk_size": chunk_size,
-                "chunk_bytes": chunk_bytes,
-                "compression": compression,
-                "encryption": encryption,
-                "existing_index": existing_index_file_content,
-                "storage_options": storage_options,
-            }
-            data_processor.run(
-                LambdaDataChunkRecipe(
+            recipe: Optional[Union[LambdaDataChunkRecipe, QueueDataChunkRecipe]] = None
+            if queue is None:
+                assert isinstance(inputs, (Sequence, StreamingDataLoader))
+                recipe = LambdaDataChunkRecipe(
                     fn,
                     inputs,
-                    **args,
+                    chunk_size=chunk_size,
+                    chunk_bytes=chunk_bytes,
+                    compression=compression,
+                    encryption=encryption,
+                    existing_index=existing_index_file_content,
+                    storage_options=storage_options,
                 )
-                if queue is None
-                else QueueDataChunkRecipe(
+            else:
+                assert queue is not None
+                recipe = QueueDataChunkRecipe(
                     fn,
                     queue,
-                    **args,
-                ),
-            )
+                    chunk_size=chunk_size,
+                    chunk_bytes=chunk_bytes,
+                    compression=compression,
+                    encryption=encryption,
+                    existing_index=existing_index_file_content,
+                    storage_options=storage_options,
+                )
+            assert recipe is not None, "Recipe should be defined at this point."
+            data_processor.run(recipe)
         return None
     return _execute(
         f"litdata-optimize-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
