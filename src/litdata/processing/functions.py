@@ -206,7 +206,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
 
 
 class QueueDataChunkRecipe(DataChunkRecipe):
-    """Recipe for `optimize`."""
+    """A recipe to optimize data using a shared `multiprocessing.Queue`."""
 
     def __init__(
         self,
