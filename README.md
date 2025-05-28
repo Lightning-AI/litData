@@ -596,7 +596,7 @@ if __name__ == "__main__":
 
 📌 Note: Using queues to optimize your dataset impacts optimization time, not streaming speed.
 
-> Irrespective of number of workers, you only need to put one sentinel value to signal completion
+> Irrespective of number of workers, you only need to put one sentinel value to signal completion.
 >
 > It'll be handled internally by LitData.
 
