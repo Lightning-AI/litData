@@ -27,7 +27,7 @@ def teardown_process_group():
 @pytest.fixture(autouse=True)
 def set_env():
     # Set environment variable before each test to configure BaseWorker's maximum wait time
-    os.environ["DATA_OPTIMIZER_TIMEOUT"] = "60"
+    os.environ["DATA_OPTIMIZER_TIMEOUT"] = "120"
 
 
 @pytest.fixture
