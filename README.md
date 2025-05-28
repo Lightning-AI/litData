@@ -570,8 +570,8 @@ def yield_numbers():
 def data_producer(q: Queue):
     for item in yield_numbers():
         q.put(item)
+
     q.put(ALL_DONE)  # Sentinel value to signal completion
-    q.put(ALL_DONE)  # since 2 workers are used, we need to send 2 sentinel values
 
 def fn(index):
     return index  # Identity function for demo
@@ -595,6 +595,10 @@ if __name__ == "__main__":
 ```
 
 📌 Note: Using queues to optimize your dataset impacts optimization time, not streaming speed.
+
+> Irrespective of number of workers, you only need to put one sentinel value to signal completion
+>
+> It'll be handled internally by LitData.
 
 </details>
 

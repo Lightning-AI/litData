@@ -567,7 +567,7 @@ class BaseWorker:
 
         timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 300))
         if not self.keep_data_ordered:
-            timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 60))
+            timeout = int(os.getenv("DATA_OPTIMIZER_TIMEOUT", 120))
 
         timed_out = False  # to avoid infinite waiting, and to know when shared_queue is completely empty
         combined_data = None
@@ -575,8 +575,14 @@ class BaseWorker:
         while True:
             try:
                 combined_data = self.ready_to_process_queue.get(timeout=timeout)
+
+                if combined_data == ALL_DONE:
+                    # re-insert the ALL_DONE item to the queue for other workers to signal they are done.
+                    # if the queue is not being shared, this will be ignored.
+                    self.ready_to_process_queue.put(ALL_DONE)
             except Empty:
                 timed_out = True
+                raise TimeoutError(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} timed out.")
 
             if combined_data in (None, ALL_DONE) or timed_out:
                 num_downloader_finished += 1

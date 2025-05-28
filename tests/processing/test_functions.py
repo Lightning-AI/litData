@@ -714,8 +714,8 @@ def yield_numbers():
 def data_producer(q: Queue):
     for item in yield_numbers():
         q.put(item)
-    for _ in range(2):
-        q.put(ALL_DONE)  # Sentinel value to indicate end
+
+    q.put(ALL_DONE)  # Sentinel value to indicate end
 
 
 def simple_optimize_fn(index):
