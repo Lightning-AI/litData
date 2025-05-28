@@ -582,7 +582,6 @@ class BaseWorker:
                     self.ready_to_process_queue.put(ALL_DONE)
             except Empty:
                 timed_out = True
-                raise TimeoutError(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} timed out.")
 
             if combined_data in (None, ALL_DONE) or timed_out:
                 num_downloader_finished += 1
