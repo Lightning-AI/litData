@@ -490,6 +490,63 @@ for batch_idx, batch in enumerate(dataloader):
 
 
 <details>
+  <summary> ✅ Use shared queue for Optimizing</summary>
+&nbsp;
+
+If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
+
+This is especially useful when optimizing large datasets in parallel, where some workers may be slower than others.
+
+It can also improve fault tolerance when workers fail due to out-of-memory (OOM) errors.
+
+```python
+import numpy as np
+from PIL import Image
+import litdata as ld
+
+def random_images(index):
+    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+    fake_labels = np.random.randint(10)
+
+    data = {"index": index, "image": fake_images, "class": fake_labels}
+
+    return data
+
+if __name__ == "__main__":
+    # The optimize function writes data in an optimized format.
+    ld.optimize(
+        fn=random_images,                   # the function applied to each input
+        inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
+        output_dir="fast_data",             # optimized data is stored here
+        num_workers=4,                      # The number of workers on the same machine
+        chunk_bytes="64MB" ,                 # size of each chunk
+        keep_data_ordered=False,             # Use a shared queue to speed up the process
+    )
+```
+
+
+### Performance Difference between using a shared queue and not using it:
+
+**Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
+
+| Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
+|------------------|---------------------|---------------------|---------------------|
+| shared_queue (`keep_data_ordered=False`)     | 1281                | 5392                | 5732                |
+| no shared_queue (`keep_data_ordered=True (default)`)  | 1187                | 5257                | 5746                |
+
+📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
+> While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
+>
+> Streaming happens after optimization and does not involve inter-process communication where shared_queue plays a role.
+
+- 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
+
+- ⚡ However, it can significantly improve optimizing performance — especially when some workers are slower than others.
+
+</details>
+
+
+<details>
   <summary> ✅ LLM Pre-training </summary>
 &nbsp;
 
@@ -652,6 +709,83 @@ train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memor
 for batch in tqdm(train_dataloader):
     pass
 ```
+</details>
+
+<details>
+  <summary> ✅ Parallel streaming</summary>
+&nbsp;
+
+While `CombinedDataset` allows to fetch a sample from one of the datasets it wraps at each iteration, `ParallelStreamingDataset` can be used to fetch a sample from all the wrapped datasets at each iteration:
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+parallel_dataset = ParallelStreamingDataset(
+    [
+        StreamingDataset(input_dir="input_dir_1"),
+        StreamingDataset(input_dir="input_dir_2"),
+    ],
+)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for batch_1, batch_2 in tqdm(dataloader):
+    pass
+```
+
+This is useful to generate new data on-the-fly using a sample from each dataset. To do so, provide a ``transform`` function to `ParallelStreamingDataset`:
+
+```python
+def transform(samples: Tuple[Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    return sample_1 + sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for transformed_batch in tqdm(dataloader):
+    pass
+```
+
+If the transformation requires random number generation, internal random number generators provided by `ParallelStreamingDataset` can be used. These are seeded using the current dataset state at the beginning of each epoch, which allows for reproducible and resumable data transformation. To use them, define a ``transform`` which takes a dictionary of random number generators as its second argument:
+
+```python
+def transform(samples: Tuple[Any], rngs: Dict[str, Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    rng = rngs["random"]  # "random", "numpy" and "torch" keys available
+    return rng.random() * sample_1 + rng.random() * sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+```
+</details>
+
+<details>
+  <summary> ✅ Cycle datasets</summary>
+&nbsp;
+
+`ParallelStreamingDataset` can also be used to cycle a `StreamingDataset`. This allows to dissociate the epoch length from the number of samples in the dataset.
+
+To do so, set the `length` option to the desired number of samples to yield per epoch. If ``length`` is greater than the number of samples in the dataset, the dataset is cycled. At the beginning of a new epoch, the dataset resumes from where it left off at the end of the previous epoch.
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+dataset = StreamingDataset(input_dir="input_dir")
+
+cycled_dataset = ParallelStreamingDataset([dataset], length=100)
+
+print(len(cycled_dataset)))  # 100
+
+dataloader = StreamingDataLoader(cycled_dataset)
+
+for batch, in tqdm(dataloader):
+    pass
+```
+
+You can even set `length` to `float("inf")` for an infinite dataset!
 </details>
 
 <details>
@@ -845,10 +979,8 @@ pq_dataset_uri = "s3://my-bucket/my-parquet-data"  # or "gs://my-bucket/my-parqu
 # Set up the streaming dataset
 dataset = ld.StreamingDataset(pq_dataset_uri, item_loader=ParquetLoader())
 
-# print the first sample
 print("Sample", dataset[0])
 
-# Stream the dataset using StreamingDataLoader
 dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
 for sample in dataloader:
     pass

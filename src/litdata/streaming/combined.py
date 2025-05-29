@@ -16,14 +16,14 @@ import random
 from copy import deepcopy
 from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence
 
-from torch.utils.data import IterableDataset
-
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
+from litdata.utilities.base import (
+    __NUM_SAMPLES_YIELDED_KEY__,
+    __SAMPLES_KEY__,
+    _BaseStreamingDatasetWrapper,
+)
 from litdata.utilities.env import _WorkerEnv
-
-__NUM_SAMPLES_YIELDED_KEY__ = "__NUM_SAMPLES_YIELDED__"
-__SAMPLES_KEY__ = "__SAMPLES__"
 
 logger = logging.getLogger("litdata.streaming.combined")
 
@@ -36,7 +36,7 @@ class BatchingMethod:
 BatchingMethodType = Literal["stratified", "per_stream"]
 
 
-class CombinedStreamingDataset(IterableDataset):
+class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
     """Enables to stream data from multiple StreamingDataset with the sampling ratio of
     your choice.
 
@@ -99,7 +99,7 @@ class CombinedStreamingDataset(IterableDataset):
 
         self._iterator: Optional[_CombinedDatasetIterator] = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[List[int]] = None
+        self._num_samples_yielded: Optional[Dict[int, List[int]]] = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
@@ -119,11 +119,6 @@ class CombinedStreamingDataset(IterableDataset):
     def _get_total_length(self) -> int:
         return sum(self._get_len(d) for d in self._datasets)
 
-    def _get_len(self, d: Any) -> int:
-        if isinstance(d, StreamingDataset):
-            return d.get_len(self.num_workers, self.batch_size)
-        return len(d)
-
     def set_epoch(self, current_epoch: int) -> None:
         """Set the current epoch to the datasets on epoch starts.
 
@@ -133,40 +128,6 @@ class CombinedStreamingDataset(IterableDataset):
         self._current_epoch = current_epoch
         for dataset in self._datasets:
             dataset.set_epoch(current_epoch)
-
-    def set_shuffle(self, shuffle: bool) -> None:
-        """Set the current shuffle to the datasets."""
-        for dataset in self._datasets:
-            dataset.set_shuffle(shuffle)
-
-    def set_batch_size(self, batch_size: int) -> None:
-        """Set the current batch size to the datasets."""
-        self.batch_size = batch_size
-        for dataset in self._datasets:
-            dataset.set_batch_size(batch_size)
-
-    def set_num_workers(self, num_workers: int) -> None:
-        """Set the current number of workers to the datasets."""
-        for dataset in self._datasets:
-            dataset.set_num_workers(num_workers)
-
-    def set_drop_last(self, drop_last: bool) -> None:
-        """Set the current drop_last to the datasets."""
-        for dataset in self._datasets:
-            dataset.set_drop_last(drop_last)
-
-    def reset_state_dict(self) -> None:
-        """Reset the state of the dataset."""
-        for dataset in self._datasets:
-            dataset.reset_state_dict()
-
-    def _check_datasets(self, datasets: List[StreamingDataset]) -> None:
-        if any(not isinstance(d, StreamingDataset) for d in datasets):
-            raise RuntimeError("The provided datasets should be instances of the StreamingDataset.")
-
-    def _set_use_streaming_dataloader(self, use_streaming_dataloader: bool) -> None:
-        # Used to prevent returning num_samples_yielded when using PyTorch DataLoader
-        self._use_streaming_dataloader = use_streaming_dataloader
 
     def __iter__(self) -> Iterator[Any]:
         assert self._weights
@@ -198,31 +159,6 @@ class CombinedStreamingDataset(IterableDataset):
                 return {}
             return _state_dict(self._datasets, num_samples_yielded, num_workers, batch_size)
         return self._iterator.state_dict(num_workers, batch_size)
-
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        if not state_dict:
-            return
-
-        if len(state_dict["dataset"]) != len(self._datasets):
-            if not self._force_override_state_dict:
-                raise RuntimeError(
-                    f"The provided state doesn't match the current number of datasets: {self._datasets}."
-                )
-            if len(state_dict["dataset"]) > len(self._datasets):
-                raise RuntimeError(
-                    "Currently it's only possible to add datasets to the end of the dataset list when overriding state"
-                )
-
-        for dataset_idx, dataset in enumerate(self._datasets):
-            if str(dataset_idx) in state_dict["dataset"]:
-                dataset.load_state_dict(state_dict["dataset"][str(dataset_idx)])
-
-            elif not self._force_override_state_dict:
-                raise RuntimeError(f"The provided state doesn't contain the index {dataset_idx}.")
-
-        # Used to iterate over the sampler to avoid sampling the same samples
-        if self._use_streaming_dataloader:
-            self._num_samples_yielded = state_dict["num_samples_yielded"]
 
 
 class _CombinedDatasetIterator(Iterator):
