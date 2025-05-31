@@ -4,6 +4,8 @@ import os
 import random
 import shutil
 import sys
+import time
+from multiprocessing import Process, Queue
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +17,7 @@ import torch
 from PIL import Image
 
 from litdata import StreamingDataset, map, merge_datasets, optimize, walk
+from litdata.processing.data_processor import ALL_DONE
 from litdata.processing.functions import _get_input_dir, _resolve_dir
 from litdata.streaming.cache import Cache
 from litdata.utilities.encryption import FernetEncryption, RSAEncryption
@@ -700,3 +703,45 @@ def test_map_with_text_files(tmpdir, keep_data_ordered):
         with open(tmpdir / "output" / f"file-{i}.txt", encoding="utf-8") as file:
             content = file.read()
             assert content == "hello world\tBonjour!"
+
+
+def yield_numbers():
+    for i in range(100):
+        time.sleep(0.01)
+        yield i
+
+
+def data_producer(q: Queue):
+    for item in yield_numbers():
+        q.put(item)
+
+    q.put(ALL_DONE)  # Sentinel value to indicate end
+
+
+def simple_optimize_fn(index):
+    return index, index**2
+
+
+@pytest.mark.parametrize("num_workers", [1, 2])
+def test_optimize_with_queues_as_input(tmpdir, num_workers):
+    output_dir = str(tmpdir / "output_dir")
+    q = Queue(maxsize=100)
+
+    producer = Process(target=data_producer, args=(q,))
+    producer.start()
+
+    optimize(
+        fn=simple_optimize_fn,
+        queue=q,
+        output_dir=output_dir,
+        num_workers=num_workers,
+        chunk_size=100,
+    )
+
+    producer.join()
+
+    ds = StreamingDataset(output_dir)
+    assert len(ds) == 100
+    complete_data = sorted(ds[:])  # Sort to ensure order
+    for idx, data in enumerate(complete_data):
+        assert data == (idx, idx**2)
