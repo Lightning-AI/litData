@@ -42,25 +42,7 @@ jobs:
           pip list
 
       - name: Tests
-        run: |
-          # Set environment variables for Python 3.12+ to improve multiprocessing behavior
-          if [[ "${{ matrix.python-version }}" == "3.12" || "${{ matrix.python-version }}" == "3.13" ]]; then
-            export PYTHONUNBUFFERED=1
-            export DATA_OPTIMIZER_TIMEOUT=20
-            # Force spawn method for multiprocessing to avoid hanging issues
-            export MULTIPROCESSING_START_METHOD=spawn
-            # Disable fork safety warnings for cleaner output
-            export PYTHONNOFORK=1
-            # Enable more detailed output for debugging
-            export PYTEST_LOG_LEVEL=DEBUG
-            # Collect thread dumps on test failures
-            export PYTEST_PRINT_THREADS_ON_FAILURE=1
-            # Run tests with enhanced debugging for Python 3.12+
-            coverage run --source litdata -m pytest tests -v --tb=short -x --durations=0 --log-cli-level=DEBUG
-          else
-            # Run tests normally for other Python versions
-            coverage run --source litdata -m pytest tests -v
-          fi
+        run: coverage run --source litdata -m pytest tests -v
 
       - name: Statistics
         run: |
