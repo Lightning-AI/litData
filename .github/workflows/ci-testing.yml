@@ -47,13 +47,10 @@ jobs:
           if [[ "${{ matrix.python-version }}" == "3.12" || "${{ matrix.python-version }}" == "3.13" ]]; then
             export PYTHONUNBUFFERED=1
             export DATA_OPTIMIZER_TIMEOUT=20
-            export PYTEST_TIMEOUT=15
             # Force spawn method for multiprocessing to avoid hanging issues
             export MULTIPROCESSING_START_METHOD=spawn
             # Disable fork safety warnings for cleaner output
             export PYTHONNOFORK=1
-            # Set shorter queue timeouts for faster failure detection
-            export LITDATA_QUEUE_TIMEOUT=10
             # Enable more detailed output for debugging
             export PYTEST_LOG_LEVEL=DEBUG
             # Collect thread dumps on test failures
