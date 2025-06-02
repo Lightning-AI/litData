@@ -42,7 +42,7 @@ jobs:
           pip list
 
       - name: Tests
-        run: coverage run --source litdata -m pytest tests -v
+        run: pytest tests -v --cov=litdata --cov-report=xml --cov-report=term
 
       - name: Statistics
         run: |
