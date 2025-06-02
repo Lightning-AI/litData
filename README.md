@@ -127,11 +127,19 @@ Load the data by replacing the PyTorch DataSet and DataLoader with the Streaming
 ```python
 import litdata as ld
 
-train_dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
-train_dataloader = ld.StreamingDataLoader(train_dataset)
+dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
 
-for sample in train_dataloader:
-    img, cls = sample['image'], sample['class']
+# Custom collate function to handle the batch (Optional)
+def collate_fn(batch):
+    return {
+        "image": [sample["image"] for sample in batch],
+        "class": [sample["class"] for sample in batch],
+    }
+
+
+dataloader = ld.StreamingDataLoader(dataset, collate_fn=collate_fn)
+for sample in dataloader:
+    img, cls = sample["image"], sample["class"]
 ```
 
 **Key benefits:**

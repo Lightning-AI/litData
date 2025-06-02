@@ -64,5 +64,16 @@ img = sample['image']
 cls = sample['class']
 
 # Create dataLoader and iterate over it to train your AI models.
-dataloader = StreamingDataLoader(dataset)
+
+# Custom collate function to handle the batch (Optional)
+def collate_fn(batch):
+    return {
+        "image": [sample["image"] for sample in batch],
+        "class": [sample["class"] for sample in batch],
+    }
+
+
+dataloader = StreamingDataLoader(dataset, collate_fn=collate_fn)
+for sample in dataloader:
+    img, cls = sample["image"], sample["class"]
 ```
