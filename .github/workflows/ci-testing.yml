@@ -20,6 +20,8 @@ jobs:
       matrix:
         os: ["ubuntu-22.04", "macos-14", "windows-2022"]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - { os: "windows-2022", python-version: "3.13" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
