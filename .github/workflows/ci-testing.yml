@@ -44,7 +44,7 @@ jobs:
           pip list
 
       - name: Tests
-        run: pytest tests -v --cov=litdata --cov-report=xml --cov-report=term
+        run: pytest tests -v --cov=litdata
 
       - name: Statistics
         run: |
