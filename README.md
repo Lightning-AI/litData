@@ -127,11 +127,19 @@ Load the data by replacing the PyTorch DataSet and DataLoader with the Streaming
 ```python
 import litdata as ld
 
-train_dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
-train_dataloader = ld.StreamingDataLoader(train_dataset)
+dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
 
-for sample in train_dataloader:
-    img, cls = sample['image'], sample['class']
+# Custom collate function to handle the batch (Optional)
+def collate_fn(batch):
+    return {
+        "image": [sample["image"] for sample in batch],
+        "class": [sample["class"] for sample in batch],
+    }
+
+
+dataloader = ld.StreamingDataLoader(dataset, collate_fn=collate_fn)
+for sample in dataloader:
+    img, cls = sample["image"], sample["class"]
 ```
 
 **Key benefits:**
@@ -431,7 +439,12 @@ aws_storage_options={
     "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
     "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
 }
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
+# You can also pass the session options. (for boto3 only)
+aws_session_options = {
+  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
+  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
 
 
 # Read data from GCS
@@ -480,6 +493,63 @@ for batch_idx, batch in enumerate(dataloader):
     if batch_idx % 1000 == 0:
         torch.save(dataloader.state_dict(), "dataloader_state.pt")
 ```
+
+</details>
+
+
+<details>
+  <summary> ✅ Use shared queue for Optimizing</summary>
+&nbsp;
+
+If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
+
+This is especially useful when optimizing large datasets in parallel, where some workers may be slower than others.
+
+It can also improve fault tolerance when workers fail due to out-of-memory (OOM) errors.
+
+```python
+import numpy as np
+from PIL import Image
+import litdata as ld
+
+def random_images(index):
+    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+    fake_labels = np.random.randint(10)
+
+    data = {"index": index, "image": fake_images, "class": fake_labels}
+
+    return data
+
+if __name__ == "__main__":
+    # The optimize function writes data in an optimized format.
+    ld.optimize(
+        fn=random_images,                   # the function applied to each input
+        inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
+        output_dir="fast_data",             # optimized data is stored here
+        num_workers=4,                      # The number of workers on the same machine
+        chunk_bytes="64MB" ,                 # size of each chunk
+        keep_data_ordered=False,             # Use a shared queue to speed up the process
+    )
+```
+
+
+### Performance Difference between using a shared queue and not using it:
+
+**Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
+
+| Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
+|------------------|---------------------|---------------------|---------------------|
+| shared_queue (`keep_data_ordered=False`)     | 1281                | 5392                | 5732                |
+| no shared_queue (`keep_data_ordered=True (default)`)  | 1187                | 5257                | 5746                |
+
+📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
+> While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
+>
+> Streaming happens after optimization and does not involve inter-process communication where shared_queue plays a role.
+
+- 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
+
+- ⚡ However, it can significantly improve optimizing performance — especially when some workers are slower than others.
 
 </details>
 
@@ -647,6 +717,83 @@ train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memor
 for batch in tqdm(train_dataloader):
     pass
 ```
+</details>
+
+<details>
+  <summary> ✅ Parallel streaming</summary>
+&nbsp;
+
+While `CombinedDataset` allows to fetch a sample from one of the datasets it wraps at each iteration, `ParallelStreamingDataset` can be used to fetch a sample from all the wrapped datasets at each iteration:
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+parallel_dataset = ParallelStreamingDataset(
+    [
+        StreamingDataset(input_dir="input_dir_1"),
+        StreamingDataset(input_dir="input_dir_2"),
+    ],
+)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for batch_1, batch_2 in tqdm(dataloader):
+    pass
+```
+
+This is useful to generate new data on-the-fly using a sample from each dataset. To do so, provide a ``transform`` function to `ParallelStreamingDataset`:
+
+```python
+def transform(samples: Tuple[Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    return sample_1 + sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+
+dataloader = StreamingDataLoader(parallel_dataset)
+
+for transformed_batch in tqdm(dataloader):
+    pass
+```
+
+If the transformation requires random number generation, internal random number generators provided by `ParallelStreamingDataset` can be used. These are seeded using the current dataset state at the beginning of each epoch, which allows for reproducible and resumable data transformation. To use them, define a ``transform`` which takes a dictionary of random number generators as its second argument:
+
+```python
+def transform(samples: Tuple[Any], rngs: Dict[str, Any]):
+    sample_1, sample_2 = samples  # as many samples as wrapped datasets
+    rng = rngs["random"]  # "random", "numpy" and "torch" keys available
+    return rng.random() * sample_1 + rng.random() * sample_2  # example transformation
+
+parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
+```
+</details>
+
+<details>
+  <summary> ✅ Cycle datasets</summary>
+&nbsp;
+
+`ParallelStreamingDataset` can also be used to cycle a `StreamingDataset`. This allows to dissociate the epoch length from the number of samples in the dataset.
+
+To do so, set the `length` option to the desired number of samples to yield per epoch. If ``length`` is greater than the number of samples in the dataset, the dataset is cycled. At the beginning of a new epoch, the dataset resumes from where it left off at the end of the previous epoch.
+
+```python
+from litdata import StreamingDataset, ParallelStreamingDataset, StreamingDataLoader
+from tqdm import tqdm
+
+dataset = StreamingDataset(input_dir="input_dir")
+
+cycled_dataset = ParallelStreamingDataset([dataset], length=100)
+
+print(len(cycled_dataset)))  # 100
+
+dataloader = StreamingDataLoader(cycled_dataset)
+
+for batch, in tqdm(dataloader):
+    pass
+```
+
+You can even set `length` to `float("inf")` for an infinite dataset!
 </details>
 
 <details>
@@ -840,10 +987,8 @@ pq_dataset_uri = "s3://my-bucket/my-parquet-data"  # or "gs://my-bucket/my-parqu
 # Set up the streaming dataset
 dataset = ld.StreamingDataset(pq_dataset_uri, item_loader=ParquetLoader())
 
-# print the first sample
 print("Sample", dataset[0])
 
-# Stream the dataset using StreamingDataLoader
 dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
 for sample in dataloader:
     pass
@@ -1288,6 +1433,16 @@ Speed to stream Imagenet 1.2M from other cloud storage providers:
 |---|---|---|---|
 | Cloudflare R2 | LitData | **5335** | **5630** |
 
+Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
+| Framework | Dataset Mode | Dataset Size @ 256px | Images / sec 1st Epoch (float32) | Images / sec 2nd Epoch (float32) |
+|---|---|---|---|---|
+| LitData | PIL RAW | 168 GB | 6647 | 6398 | 
+| LitData | JPEG 90% | 12 GB | 6553 | 6537 |
+| ffcv (os_cache=True) | RAW | 170 GB | 7263 | 6698 |
+| ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
+| ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
+| ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
 &nbsp;
 
 ## Time to optimize data
@@ -1416,12 +1571,19 @@ Prediction with Sparse Autoencoders](https://arxiv.org/pdf/2503.08764) | [Github
 ## Maintainers
 
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
-* Luca Antiga ([lantiga](https://github.com/lantiga))
-* Justus Schock ([justusschock](https://github.com/justusschock))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
-* Jirka Borda ([Borda](https://github.com/Borda))
 
 
 ## Emeritus Maintainers
+
+* Luca Antiga ([lantiga](https://github.com/lantiga))
+* Justus Schock ([justusschock](https://github.com/justusschock))
+* Jirka Borda ([Borda](https://github.com/Borda))
+
+<details>
+  <summary>Alumni</summary>
+
 * Adrian Wälchli ([awaelchli](https://github.com/awaelchli))
+
+</details>

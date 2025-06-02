@@ -203,3 +203,24 @@ def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
             pass
         # check chunk cache dir was filled
         assert len([f for f in os.listdir(ds.input_dir.path) if f.endswith(".parquet")]) == 5  # 5 chunks
+
+
+@pytest.mark.parametrize(
+    ("pq_url"),
+    [
+        "s3://some_bucket/some_path",
+        "gs://some_bucket/some_path",
+        "hf://datasets/some_org/some_repo/some_path",
+    ],
+)
+@patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
+@patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
+@patch("litdata.utilities.parquet._FSSPEC_AVAILABLE", True)
+def test_no_parquet_files(pq_url, tmpdir, huggingface_hub_fs_mock, fsspec_pq_mock):
+    ls_mock = Mock()
+    ls_mock.ls = Mock(side_effect=lambda *args, **kwargs: [])
+    huggingface_hub_fs_mock.HfFileSystem = Mock(return_value=ls_mock)
+    fsspec_pq_mock.filesystem = Mock(return_value=ls_mock)
+
+    with pytest.raises(RuntimeError, match="No Parquet files were found"):
+        index_parquet_dataset(pq_url, cache_dir=tmpdir)

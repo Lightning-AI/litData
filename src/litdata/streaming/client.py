@@ -26,19 +26,25 @@ from litdata.constants import _IS_IN_STUDIO
 class S3Client:
     # TODO: Generalize to support more cloud providers.
 
-    def __init__(self, refetch_interval: int = 3300, storage_options: Optional[Dict] = {}) -> None:
+    def __init__(
+        self,
+        refetch_interval: int = 3300,
+        storage_options: Optional[Dict] = {},
+        session_options: Optional[Dict] = {},
+    ) -> None:
         self._refetch_interval = refetch_interval
         self._last_time: Optional[float] = None
         self._client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
+        self._session_options: dict = session_options or {}
 
     def _create_client(self) -> None:
         has_shared_credentials_file = (
             os.getenv("AWS_SHARED_CREDENTIALS_FILE") == os.getenv("AWS_CONFIG_FILE") == "/.credentials/.aws_credentials"
         )
 
-        if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options:
-            session = boto3.Session()
+        if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options or self._session_options:
+            session = boto3.Session(**self._session_options)  # If additional options are provided
             self._client = session.client(
                 "s3",
                 **{
