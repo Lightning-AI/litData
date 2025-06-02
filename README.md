@@ -555,6 +555,63 @@ if __name__ == "__main__":
 
 
 <details>
+  <summary> ✅ Use a <code>Queue</code> as input for optimizing data</summary>
+&nbsp;
+
+Sometimes you don’t have a static list of inputs to optimize — instead, you have a stream of data coming in over time. In such cases, you can use a multiprocessing.Queue to feed data into the optimize() function.
+
+- This is especially useful when you're collecting data from a remote source like a web scraper, socket, or API.
+
+- You can also use this setup to store `replay buffer` data during reinforcement learning and later stream it back for training.
+
+```python
+from multiprocessing import Process, Queue
+from litdata.processing.data_processor import ALL_DONE
+import litdata as ld
+import time
+
+def yield_numbers():
+    for i in range(1000):
+        time.sleep(0.01)
+        yield (i, i**2)
+
+def data_producer(q: Queue):
+    for item in yield_numbers():
+        q.put(item)
+
+    q.put(ALL_DONE)  # Sentinel value to signal completion
+
+def fn(index):
+    return index  # Identity function for demo
+
+if __name__ == "__main__":
+    q = Queue(maxsize=100)
+
+    producer = Process(target=data_producer, args=(q,))
+    producer.start()
+
+    ld.optimize(
+        fn=fn,                   # Function to process each item
+        queue=q,                 # 👈 Stream data from this queue
+        output_dir="fast_data",  # Where to store optimized data
+        num_workers=2,
+        chunk_size=100,
+        mode="overwrite",
+    )
+
+    producer.join()
+```
+
+📌 Note: Using queues to optimize your dataset impacts optimization time, not streaming speed.
+
+> Irrespective of number of workers, you only need to put one sentinel value to signal completion.
+>
+> It'll be handled internally by LitData.
+
+</details>
+
+
+<details>
   <summary> ✅ LLM Pre-training </summary>
 &nbsp;
 

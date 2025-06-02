@@ -14,6 +14,7 @@
 import concurrent.futures
 import inspect
 import json
+import multiprocessing as mp
 import os
 import shutil
 import tempfile
@@ -204,6 +205,39 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         """Being overridden dynamically."""
 
 
+class QueueDataChunkRecipe(DataChunkRecipe):
+    """A recipe to optimize data using a shared `multiprocessing.Queue`."""
+
+    def __init__(
+        self,
+        fn: Callable[[Any], None],
+        queue: mp.Queue,
+        chunk_size: Optional[int],
+        chunk_bytes: Optional[Union[int, str]],
+        compression: Optional[str],
+        encryption: Optional[Encryption] = None,
+        existing_index: Optional[Dict[str, Any]] = None,
+        storage_options: Dict[str, Any] = {},
+    ):
+        super().__init__(
+            chunk_size=chunk_size,
+            chunk_bytes=chunk_bytes,
+            compression=compression,
+            encryption=encryption,
+            storage_options=storage_options,
+        )
+        self._fn = fn
+        self._queue = queue
+        self.existing_index = existing_index
+        self.is_generator = False
+
+    def prepare_structure(self, input_dir: Optional[str]) -> Any:
+        return self._queue
+
+    def prepare_item(self, item_metadata: Any) -> Any:
+        return self._fn(item_metadata)
+
+
 def map(
     fn: Callable[[str, Any], None],
     inputs: Union[Sequence[Any], StreamingDataLoader],
@@ -351,8 +385,9 @@ def map(
 #
 def optimize(
     fn: Callable[[Any], Any],
-    inputs: Union[Sequence[Any], StreamingDataLoader],
-    output_dir: str,
+    inputs: Optional[Union[Sequence[Any], StreamingDataLoader]] = None,
+    output_dir: str = "optimized_data",
+    queue: Optional[mp.Queue] = None,
     input_dir: Optional[str] = None,
     weights: Optional[List[int]] = None,
     chunk_size: Optional[int] = None,
@@ -383,6 +418,8 @@ def optimize(
             corresponds to the input. Every invocation of the function should return a similar hierarchy of objects,
             where the object types and list sizes don't change.
         inputs: A sequence of input to be processed by the `fn` function, or a streaming dataloader.
+        queue: A multiprocessing queue to be used for processing the inputs. If provided, the `inputs` argument
+            will be ignored, and the function will process the items from the queue instead.
         output_dir: The folder where the processed data should be stored.
         input_dir: Provide the path where your files are stored. If the files are on a remote storage,
             they will be downloaded in the background while processed.
@@ -419,6 +456,15 @@ def optimize(
     """
     _check_version_and_prompt_upgrade(__version__)
 
+    if queue is not None and inputs is not None:
+        raise ValueError("You can either provide `inputs` or `queue`, not both.")
+
+    if queue is None and inputs is None:
+        raise ValueError("At least one of `inputs` or `queue` must be provided.")
+
+    if queue is not None and not isinstance(queue, mp.queues.Queue):
+        raise ValueError(f"The provided `queue` should be a multiprocessing queue. Found {type(queue)}.")
+
     if mode is not None and mode not in ["append", "overwrite"]:
         raise ValueError(f"The provided `mode` should be either `append` or `overwrite`. Found {mode}.")
 
@@ -428,13 +474,15 @@ def optimize(
     if isinstance(inputs, StreamingDataLoader) and weights is not None:
         raise ValueError("When providing a streaming dataloader, weights isn't supported.")
 
-    if not isinstance(inputs, (Sequence, StreamingDataLoader)):
-        raise ValueError(
-            f"The provided inputs should be a non-empty sequence or a streaming dataloader. Found {inputs}."
-        )
+    if queue is None:
+        if not isinstance(inputs, (Sequence, StreamingDataLoader)):
+            raise ValueError(
+                f"The provided inputs should be a non-empty sequence or a streaming dataloader. Found {inputs}."
+            )
 
-    if len(inputs) == 0:
-        raise ValueError(f"The provided inputs should be non empty. Found {inputs}.")
+        if len(inputs) == 0:
+            raise ValueError(f"The provided inputs should be non empty. Found {inputs}.")
+
     if chunk_size is None and chunk_bytes is None:
         raise ValueError("Either `chunk_size` or `chunk_bytes` needs to be defined.")
 
@@ -474,7 +522,8 @@ def optimize(
             _output_dir, mode=mode, use_checkpoint=use_checkpoint, storage_options=storage_options
         )
 
-        if not isinstance(inputs, StreamingDataLoader):
+        if not isinstance(inputs, StreamingDataLoader) and queue is None:
+            assert inputs is not None
             resolved_dir = _resolve_dir(input_dir or _get_input_dir(inputs))
 
             if isinstance(batch_size, int) and batch_size > 1:
@@ -517,8 +566,10 @@ def optimize(
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
-            data_processor.run(
-                LambdaDataChunkRecipe(
+            recipe: Optional[Union[LambdaDataChunkRecipe, QueueDataChunkRecipe]] = None
+            if queue is None:
+                assert isinstance(inputs, (Sequence, StreamingDataLoader))
+                recipe = LambdaDataChunkRecipe(
                     fn,
                     inputs,
                     chunk_size=chunk_size,
@@ -528,7 +579,20 @@ def optimize(
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
                 )
-            )
+            else:
+                assert queue is not None
+                recipe = QueueDataChunkRecipe(
+                    fn,
+                    queue,
+                    chunk_size=chunk_size,
+                    chunk_bytes=chunk_bytes,
+                    compression=compression,
+                    encryption=encryption,
+                    existing_index=existing_index_file_content,
+                    storage_options=storage_options,
+                )
+            assert recipe is not None, "Recipe should be defined at this point."
+            data_processor.run(recipe)
         return None
     return _execute(
         f"litdata-optimize-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
