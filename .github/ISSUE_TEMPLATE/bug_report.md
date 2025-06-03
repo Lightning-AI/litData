@@ -23,14 +23,17 @@ Steps to reproduce the behavior...
 # Ideally attach a minimal code sample to reproduce the decried issue.
 # Minimal means having the shortest code but still preserving the bug.
 ```
+
 </details>
 
 Alternatively, you can share a fully reproducible [Lightning Studio](https://lightning.ai/studios) environment:
->  A simple guide on how to create such a studio can be found [here](https://www.youtube.com/watch?v=YcW-2Zt_bFg&ab_channel=LightningAI).
-1. Create a [Studio](https://lightning.ai/studios).    
-2. Reproduce the issue in the Studio.    
+
+> A simple guide on how to create such a studio can be found [here](https://www.youtube.com/watch?v=YcW-2Zt_bFg&ab_channel=LightningAI).
+
+1. Create a [Studio](https://lightning.ai/studios).
+2. Reproduce the issue in the Studio.
 3. [Publish the Studio](https://lightning.ai/docs/overview/studios/publishing#how-to-publish).
-4. Paste the Studio link here.    
+4. Paste the Studio link here.
 
 ### Expected behavior
 
