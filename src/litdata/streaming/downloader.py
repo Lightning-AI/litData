@@ -54,7 +54,7 @@ class Downloader(ABC):
     def _increment_local_lock(self, chunkpath: str) -> None:
         logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "B"}))
         countpath = chunkpath + ".cnt"
-        with suppress(Timeout), FileLock(countpath + ".lock", timeout=1):
+        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=1):
             try:
                 with open(countpath) as count_f:
                     curr_count = int(count_f.read().strip())
