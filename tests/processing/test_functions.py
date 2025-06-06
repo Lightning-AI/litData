@@ -16,10 +16,11 @@ import requests
 import torch
 from PIL import Image
 
-from litdata import StreamingDataset, map, merge_datasets, optimize, walk
+from litdata import StreamingDataLoader, StreamingDataset, index_parquet_dataset, map, merge_datasets, optimize, walk
 from litdata.processing.data_processor import ALL_DONE
 from litdata.processing.functions import _get_input_dir, _resolve_dir
 from litdata.streaming.cache import Cache
+from litdata.streaming.item_loader import ParquetLoader
 from litdata.utilities.encryption import FernetEncryption, RSAEncryption
 
 
@@ -745,3 +746,43 @@ def test_optimize_with_queues_as_input(tmpdir, num_workers):
     complete_data = sorted(ds[:])  # Sort to ensure order
     for idx, data in enumerate(complete_data):
         assert data == (idx, idx**2)
+
+
+def optimize_fn(data):
+    return {"question": data["question"][0], "answer": data["answer"][0]}
+
+
+@pytest.mark.parametrize("num_workers", [5, 6])
+def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
+    # prepare parquet dataset
+    parquet_dir = os.path.join(tmpdir, "parquet")
+    os.makedirs(parquet_dir, exist_ok=True)
+    import polars as pl
+
+    num_of_items = 500
+    questions = ["What is the capital of France?"] * num_of_items
+    answers = ["The capital of France is Paris."] * num_of_items
+
+    df = pl.DataFrame({"question": questions, "answer": answers})
+    df.write_parquet(os.path.join(parquet_dir, "sample.parquet"))
+
+    # streaming dataset
+    index_parquet_dataset(parquet_dir)
+    dataset = StreamingDataset(parquet_dir, item_loader=ParquetLoader())
+    dataloader = StreamingDataLoader(dataset)
+
+    # optimize
+    output_dir = os.path.join(tmpdir, "out")
+    os.makedirs(output_dir, exist_ok=True)
+
+    optimize(
+        fn=optimize_fn,
+        inputs=dataloader,
+        num_workers=num_workers,
+        output_dir=output_dir,
+        chunk_bytes="64MB",
+    )
+
+    # verify len of optimized dataset
+    ds = StreamingDataset(output_dir)
+    assert len(ds) == num_of_items
