@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import logging
 import os
 import warnings
@@ -117,10 +116,10 @@ class PrepareChunksThread(Thread):
                     curr_count = 1
             curr_count -= 1
             if curr_count <= 0:
-                with contextlib.suppress(FileNotFoundError, PermissionError):
+                with suppress(FileNotFoundError, PermissionError):
                     os.remove(countpath)
 
-                with contextlib.suppress(FileNotFoundError, PermissionError):
+                with suppress(FileNotFoundError, PermissionError):
                     os.remove(countpath + ".lock")
             else:
                 with open(countpath, "w+") as count_f:
@@ -511,7 +510,7 @@ def _get_folder_size(path: str, config: ChunksConfig) -> int:
 
             # handle temporary files containing '.bin'
             elif ".bin" in filename:
-                with contextlib.suppress(FileNotFoundError):
+                with suppress(FileNotFoundError):
                     size += entry.stat(follow_symlinks=False).st_size
 
             # warn about unrecognized files
