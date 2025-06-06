@@ -832,6 +832,11 @@ class BaseWorker:
                 if self.use_checkpoint:
                     checkpoint_filepath = self.cache.save_checkpoint()
                     self._try_upload(checkpoint_filepath)
+        except StopIteration:
+            # If a StopIteration occurs, the iterator is exhausted.
+            # This is expected behavior for the StreamingDataLoader iterator.
+            # We catch it to ensure smooth operation.
+            pass
         except Exception as e:
             raise RuntimeError(f"Failed processing {item=}; {index=}") from e
 
