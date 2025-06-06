@@ -749,12 +749,15 @@ def test_optimize_with_queues_as_input(tmpdir, num_workers):
 
 
 def optimize_fn(data):
-    return {"question": data["question"][0], "answer": data["answer"][0]}
+    # Extract single elements from list-based record
+    question = data["question"][0]
+    answer = data["answer"][0]
+    return {"question": question, "answer": answer}
 
 
 @pytest.mark.parametrize("num_workers", [5, 6])
 def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
-    # prepare parquet dataset
+    # Prepare parquet dataset
     parquet_dir = os.path.join(tmpdir, "parquet")
     os.makedirs(parquet_dir, exist_ok=True)
     import polars as pl
@@ -764,14 +767,15 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     answers = ["The capital of France is Paris."] * num_items
 
     df = pl.DataFrame({"question": questions, "answer": answers})
-    df.write_parquet(os.path.join(parquet_dir, "sample.parquet"))
+    parquet_file = os.path.join(parquet_dir, "sample.parquet")
+    df.write_parquet(parquet_file)
 
-    # streaming dataset
+    # Index the parquet dataset and create a streaming dataset and dataloader
     index_parquet_dataset(parquet_dir)
     dataset = StreamingDataset(parquet_dir, item_loader=ParquetLoader())
     dataloader = StreamingDataLoader(dataset)
 
-    # optimize
+    # Optimize the dataset using the streaming dataloader as input
     output_dir = os.path.join(tmpdir, "out")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -783,6 +787,14 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
         chunk_bytes="64MB",
     )
 
-    # verify len of optimized dataset
+    # Verify optimized dataset length
     ds = StreamingDataset(output_dir)
     assert len(ds) == num_items
+
+    # Verify a sample record
+    sample_record = ds[0]
+    # Check that expected keys exist and their values match the expected output
+    assert "question" in sample_record
+    assert "answer" in sample_record
+    assert sample_record["question"] == "What is the capital of France?"
+    assert sample_record["answer"] == "The capital of France is Paris."
