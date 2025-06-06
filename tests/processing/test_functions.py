@@ -755,7 +755,7 @@ def optimize_fn(data):
     return {"question": question, "answer": answer}
 
 
-@pytest.mark.parametrize("num_workers", [5, 6])
+@pytest.mark.parametrize("num_workers", [5, 6, 8])
 def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
     # Prepare parquet dataset
     parquet_dir = os.path.join(tmpdir, "parquet")
