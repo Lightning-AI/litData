@@ -759,9 +759,9 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     os.makedirs(parquet_dir, exist_ok=True)
     import polars as pl
 
-    num_of_items = 500
-    questions = ["What is the capital of France?"] * num_of_items
-    answers = ["The capital of France is Paris."] * num_of_items
+    num_items = 500
+    questions = ["What is the capital of France?"] * num_items
+    answers = ["The capital of France is Paris."] * num_items
 
     df = pl.DataFrame({"question": questions, "answer": answers})
     df.write_parquet(os.path.join(parquet_dir, "sample.parquet"))
@@ -785,4 +785,4 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
 
     # verify len of optimized dataset
     ds = StreamingDataset(output_dir)
-    assert len(ds) == num_of_items
+    assert len(ds) == num_items
