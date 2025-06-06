@@ -774,6 +774,38 @@ train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memor
 for batch in tqdm(train_dataloader):
     pass
 ```
+
+**Batching Methods**
+
+The `CombinedStreamingDataset` supports two different batching methods through the `batching_method` parameter:
+
+**Stratified Batching (Default)**:
+With `batching_method="stratified"` (the default), each batch contains samples from multiple datasets according to the specified weights:
+
+```python
+# Default stratified batching - batches mix samples from all datasets
+combined_dataset = CombinedStreamingDataset(
+    datasets=[dataset1, dataset2], 
+    batching_method="stratified"  # This is the default
+)
+```
+
+**Per-Stream Batching**:
+With `batching_method="per_stream"`, each batch contains samples exclusively from a single dataset. This is useful when datasets have different shapes or structures:
+
+```python
+# Per-stream batching - each batch contains samples from only one dataset
+combined_dataset = CombinedStreamingDataset(
+    datasets=[dataset1, dataset2], 
+    batching_method="per_stream"
+)
+
+# This ensures each batch has consistent structure, helpful for datasets with varying:
+# - Image sizes
+# - Sequence lengths  
+# - Data types
+# - Feature dimensions
+```
 </details>
 
 <details>
