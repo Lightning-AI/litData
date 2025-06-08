@@ -106,7 +106,7 @@ class S3Downloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if self._s5cmd_available and not _DISABLE_S5CMD:
@@ -191,7 +191,7 @@ class GCPDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if os.path.exists(local_filepath):
@@ -236,7 +236,7 @@ class AzureDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if os.path.exists(local_filepath):
@@ -254,7 +254,7 @@ class LocalDownloader(Downloader):
         if not os.path.exists(remote_filepath):
             raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0
         ):
             if remote_filepath == local_filepath or os.path.exists(local_filepath):
@@ -300,7 +300,9 @@ class HFDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(local_filepath + ".lock", timeout=0), tempfile.TemporaryDirectory() as tmpdir:
+        with suppress(Timeout, FileNotFoundError), FileLock(
+            local_filepath + ".lock", timeout=0
+        ), tempfile.TemporaryDirectory() as tmpdir:
             _, _, _, repo_org, repo_name, path = remote_filepath.split("/", 5)
             repo_id = f"{repo_org}/{repo_name}"
             downloaded_path = hf_hub_download(
