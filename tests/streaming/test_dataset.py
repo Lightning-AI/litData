@@ -1676,7 +1676,6 @@ def test_dataset_transform(tmpdir, shuffle):
         """A simple transform function that doubles the input."""
         return x * 2
 
-    # Create dataset with appropriate configuration and limited cache size
     dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
     dataset_length = len(dataset)
     assert dataset_length == 100
