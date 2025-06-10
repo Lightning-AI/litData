@@ -14,7 +14,7 @@
 import logging
 import os
 from time import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -62,6 +62,7 @@ class StreamingDataset(IterableDataset):
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
+        transform: Optional[Callable] = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -88,6 +89,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a directory, the function will look for `index.json` within it.
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
+            transform: Optional transformation function to apply to each item in the dataset.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -195,6 +197,10 @@ class StreamingDataset(IterableDataset):
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
+        if transform is not None:
+            if not callable(transform):
+                raise ValueError(f"Transform should be a callable. Found {transform}")
+            self.transform = transform
 
     def set_shuffle(self, shuffle: bool) -> None:
         self.shuffle = shuffle
@@ -419,7 +425,7 @@ class StreamingDataset(IterableDataset):
                 {"name": f"getitem_dataset_for_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"}
             )
         )
-        return item
+        return self.transform(item) if hasattr(self, "transform") else item
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)
@@ -480,6 +486,8 @@ class StreamingDataset(IterableDataset):
         self.global_index += 1  # total number of samples processed by the current worker
         self.consumed_sample_count_in_curr_chunk += 1  # number of samples processed in the current chunk
 
+        # print(f"iter got {data=}")
+        # return self.transform(data) if hasattr(self, "transform") else data
         return data
 
     def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> Dict[str, Any]:

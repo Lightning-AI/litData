@@ -600,3 +600,45 @@ def test_combined_dataset_dataloader_states_partial_iterations(combined_dataset,
         assert dataloader.current_epoch == 2, "Current epoch should be 2 in the second iteration"
         samples_yielded += len(batch)
     assert samples_yielded == len(combined_dataset), "All samples should be yielded in the second epoch."
+
+
+def test_combined_dataset_transform(tmpdir):
+    for i in range(2):
+        dataset_path = tmpdir.join(f"dataset_{i}")
+        os.makedirs(dataset_path)
+
+        cache = Cache(input_dir=str(dataset_path), chunk_size=2)
+
+        for j in range(10):
+            cache[j] = j
+
+        cache.done()
+        cache.merge()
+
+    def transform_fn_1(x):
+        return x * 2
+
+    def transform_fn_2(x):
+        return x * 3
+
+    datasets_dir = [str(tmpdir.join(f"dataset_{i}")) for i in range(2)]
+
+    dataset_1 = StreamingDataset(datasets_dir[0], transform=transform_fn_1)
+    dataset_2 = StreamingDataset(datasets_dir[1], transform=transform_fn_2)
+
+    ds = CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
+
+    assert len(ds) == 20, "Combined dataset should have 20 items (10 from each dataset)"
+
+    expected_data_1 = [i * 2 for i in range(10)]
+    expected_data_2 = [i * 3 for i in range(10)]
+    complete_expected_data = expected_data_1 + expected_data_2
+    complete_expected_data.sort()
+
+    complete_data = []
+
+    for data in ds:
+        complete_data.append(data)
+
+    complete_data.sort()
+    assert complete_data == complete_expected_data, "Data should be transformed correctly"
