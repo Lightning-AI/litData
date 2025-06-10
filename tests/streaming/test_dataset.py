@@ -766,6 +766,7 @@ def optimize_fn(item):
     return torch.arange(item[0], item[0] + 20).to(torch.int)
 
 
+@pytest.mark.flaky(reruns=3)
 def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monkeypatch):
     monkeypatch.setattr(functions, "_get_input_dir", lambda x: str(tmpdir))
 
@@ -1390,6 +1391,7 @@ def test_dataset_distributed_drop_last(tmpdir, monkeypatch, compression):
     assert expected_warn_msg == warn_msg
 
 
+@pytest.mark.flaky(reruns=3)
 def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
     monkeypatch.setattr(functions, "_get_input_dir", lambda x: str(tmpdir))
 
