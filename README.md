@@ -921,6 +921,43 @@ if __name__ == "__main__":
 </details>
 
 <details>
+  <summary> ✅ Transform datasets while Streaming</summary>
+&nbsp;
+
+Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
+
+- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+
+- Or, You can also create a child class of `StreamingDataset` and override the `transform` method to apply custom transformations to each sample.
+
+```python
+# Define a simple transform function
+def transform_fn(x, *args, **kwargs):
+    """A simple transform function that doubles the input."""
+    return x * 2
+
+# Create dataset with appropriate configuration and limited cache size
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+
+# ---- or, using a child class ----
+
+class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        # Define a simple transform function
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function that doubles the input."""
+            return x * 2
+
+dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+```
+
+</details>
+
+<details>
   <summary> ✅ Split datasets for train, val, test</summary>
 
 &nbsp;
