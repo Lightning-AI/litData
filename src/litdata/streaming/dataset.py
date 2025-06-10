@@ -486,8 +486,6 @@ class StreamingDataset(IterableDataset):
         self.global_index += 1  # total number of samples processed by the current worker
         self.consumed_sample_count_in_curr_chunk += 1  # number of samples processed in the current chunk
 
-        # print(f"iter got {data=}")
-        # return self.transform(data) if hasattr(self, "transform") else data
         return data
 
     def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> Dict[str, Any]:
