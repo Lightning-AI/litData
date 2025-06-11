@@ -1308,12 +1308,13 @@ class DataProcessor:
                 msg = self.msg_queue.get()
                 msgs.append(msg)
 
-            if _TQDM_AVAILABLE and len(msgs) > 0:
-                pbar.clear()  # clear the previous progress bar
-            for msg in msgs:
-                print(msg)
-            if _TQDM_AVAILABLE and len(msgs) > 0:
-                pbar.display()  # display the progress bar again
+            if len(msgs) > 0:
+                if _TQDM_AVAILABLE:
+                    pbar.clear()  # clear the previous progress bar
+                for msg in msgs:
+                    print(msg)
+                if _TQDM_AVAILABLE:
+                    pbar.display()  # display the progress bar again
 
             # Exit early if all the workers are done.
             # This means either there were some kinda of errors, or optimize function was very small.
