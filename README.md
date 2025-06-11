@@ -928,8 +928,6 @@ Transform datasets on-the-fly while streaming them, allowing for efficient data 
 
 - You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
 
-- Or, You can also create a child class of `StreamingDataset` and override the `transform` method to apply custom transformations to each sample.
-
 ```python
 # Define a simple transform function
 torch_transform = transforms.Compose([
@@ -942,14 +940,16 @@ torch_transform = transforms.Compose([
 ])
 
 def transform_fn(x, *args, **kwargs):
-    """A simple transform function that doubles the input."""
+    """Define your transform function."""
     return torch_transform(x)  # Apply the transform to the input image
 
 # Create dataset with appropriate configuration
 dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+```
 
-# ---- or, using a child class ----
+- Or, You can also create a child class of `StreamingDataset` and override the `transform` method to apply custom transformations to each sample.
 
+```python
 class StreamingDatasetWithTransform(StreamingDataset):
         """A custom dataset class that inherits from StreamingDataset and applies a transform."""
 
