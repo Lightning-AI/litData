@@ -936,7 +936,7 @@ def transform_fn(x, *args, **kwargs):
     """A simple transform function that doubles the input."""
     return x * 2
 
-# Create dataset with appropriate configuration and limited cache size
+# Create dataset with appropriate configuration
 dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
 
 # ---- or, using a child class ----
@@ -947,10 +947,20 @@ class StreamingDatasetWithTransform(StreamingDataset):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
 
-        # Define a simple transform function
+            self.torch_transform = transforms.Compose([
+                transforms.Resize((256, 256)),       # Resize to 256x256
+                transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
+                transforms.Normalize(                # Normalize using ImageNet stats
+                    mean=[0.485, 0.456, 0.406], 
+                    std=[0.229, 0.224, 0.225]
+                )
+            ])
+
+        # Define your transform method
         def transform(self, x, *args, **kwargs):
-            """A simple transform function that doubles the input."""
-            return x * 2
+            """A simple transform function."""
+            return self.torch_transform(x)
+
 
 dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
 ```
