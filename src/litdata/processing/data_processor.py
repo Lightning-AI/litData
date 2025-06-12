@@ -1304,9 +1304,12 @@ class DataProcessor:
         while True:
             # check if there're msgs in the msg queue
             msgs = []
-            while not self.msg_queue.empty():
-                msg = self.msg_queue.get(timeout=0.001)
-                msgs.append(msg)
+            while True:
+                try:
+                    msg = self.msg_queue.get(timeout=0.001)
+                    msgs.append(msg)
+                except Empty:
+                    break
 
             if len(msgs) > 0:
                 if _TQDM_AVAILABLE:
@@ -1356,6 +1359,24 @@ class DataProcessor:
             if _IS_IN_STUDIO and node_rank == 0 and _ENABLE_STATUS:
                 with open("status.json", "w") as f:
                     json.dump({"progress": str(100 * current_total * num_nodes / total_num_items) + "%"}, f)
+
+        # check if there're msgs in the msg queue
+        msgs = []
+        while True:
+            try:
+                # Slightly longer wait to ensure all messages are received from the queue
+                msg = self.msg_queue.get(timeout=0.01)
+                msgs.append(msg)
+            except Empty:
+                break
+
+        if len(msgs) > 0:
+            if _TQDM_AVAILABLE:
+                pbar.clear()  # clear the previous progress bar
+            for msg in msgs:
+                print(msg)
+            if _TQDM_AVAILABLE:
+                pbar.display()  # display the progress bar again
 
         if _TQDM_AVAILABLE:
             pbar.clear()
