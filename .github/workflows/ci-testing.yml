@@ -44,7 +44,7 @@ jobs:
           pip list
 
       - name: Tests
-        run: pytest tests -v --cov=litdata --durations=100
+        run: pytest tests -v --cov=litdata --durations=100 --capture=tee-sys --exitfirst
 
       - name: Statistics
         run: |
