@@ -45,9 +45,10 @@ jobs:
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100 --ignore=processing --ignore=streaming
+        run: pytest . -v --cov=litdata --durations=100 --ignore=streaming
 
       - name: Statistics
+        continue-on-error: true
         run: |
           coverage report
           coverage xml
