@@ -45,7 +45,7 @@ from litdata.constants import (
     _TQDM_AVAILABLE,
 )
 from litdata.processing.readers import BaseReader, StreamingDataLoaderReader
-from litdata.processing.utilities import _create_dataset, list_all_files, remove_uuid_from_filename
+from litdata.processing.utilities import _create_dataset, remove_uuid_from_filename
 from litdata.streaming import Cache
 from litdata.streaming.cache import Dir
 from litdata.streaming.dataloader import StreamingDataLoader
@@ -965,7 +965,7 @@ class DataChunkRecipe(DataRecipe):
         num_nodes = _get_num_nodes()
         cache_dir = _get_cache_dir()
 
-        chunks = [file for file in list_all_files(cache_dir) if file.endswith(".bin")]
+        chunks = [file for file in os.listdir(cache_dir) if file.endswith(".bin")]
         if chunks and delete_cached_files and output_dir.path is not None:
             raise RuntimeError(f"All the chunks should have been deleted. Found {chunks} in cache: {cache_dir}")
 
