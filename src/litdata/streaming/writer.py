@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABLE
-from litdata.processing.utilities import get_worker_rank, list_all_files
+from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.serializers import Serializer, _get_serializers
@@ -123,7 +123,7 @@ class BinaryWriter:
         """Returns whether the caching phase is done."""
         if self._is_done:
             return True
-        files = list_all_files(self._cache_dir)
+        files = os.listdir(self._cache_dir)
         index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
         worker_env = _WorkerEnv.detect()
         data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
