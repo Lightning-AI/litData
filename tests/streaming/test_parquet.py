@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import uuid
 from contextlib import nullcontext
 from fnmatch import fnmatch
 from unittest.mock import Mock, patch
@@ -135,7 +136,8 @@ def test_get_parquet_indexer_cls(pq_url, tmp_path, cls, expectation, monkeypatch
 @pytest.mark.parametrize(("pre_load_chunk"), [False, True])
 @pytest.mark.parametrize(("low_memory"), [False, True])
 def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data, pre_load_chunk, low_memory):
-    hf_url = "hf://datasets/some_org/some_repo/some_path"
+    uuid_str = uuid.uuid4().hex  # Unique identifier for the dataset
+    hf_url = f"hf://datasets/some_org/some_repo/{uuid_str}"
 
     # Test case 1: Invalid item_loader
     with pytest.raises(ValueError, match="Invalid item_loader for hf://datasets."):
