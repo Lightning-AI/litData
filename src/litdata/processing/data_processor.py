@@ -45,7 +45,7 @@ from litdata.constants import (
     _TQDM_AVAILABLE,
 )
 from litdata.processing.readers import BaseReader, StreamingDataLoaderReader
-from litdata.processing.utilities import _create_dataset, remove_uuid_from_filename
+from litdata.processing.utilities import _create_dataset, list_all_files, remove_uuid_from_filename
 from litdata.streaming import Cache
 from litdata.streaming.cache import Dir
 from litdata.streaming.dataloader import StreamingDataLoader
@@ -556,6 +556,8 @@ class BaseWorker:
         if self.remover and self.remover.is_alive():
             self.remover.join()
 
+        time.sleep(5)  # Give some buffer time for file creation/deletion
+
     def _loop(self) -> None:
         """The main loop of the worker.
 
@@ -655,8 +657,8 @@ class BaseWorker:
         os.environ["DATA_OPTIMIZER_NUM_WORKERS"] = str(self.num_workers)
 
     def _create_cache(self) -> None:
-        self.cache_data_dir = _get_cache_data_dir()
-        self.cache_chunks_dir = _get_cache_dir()
+        self.cache_data_dir = os.path.join(_get_cache_data_dir(), f"{self.worker_index}")
+        self.cache_chunks_dir = os.path.join(_get_cache_dir(), f"{self.worker_index}")
 
         if isinstance(self.data_recipe, MapRecipe):
             return
@@ -963,7 +965,7 @@ class DataChunkRecipe(DataRecipe):
         num_nodes = _get_num_nodes()
         cache_dir = _get_cache_dir()
 
-        chunks = [file for file in os.listdir(cache_dir) if file.endswith(".bin")]
+        chunks = [file for file in list_all_files(cache_dir) if file.endswith(".bin")]
         if chunks and delete_cached_files and output_dir.path is not None:
             raise RuntimeError(f"All the chunks should have been deleted. Found {chunks} in cache: {cache_dir}")
 
@@ -1339,6 +1341,9 @@ class DataProcessor:
             pbar.close()
 
         print("Workers are finished.")
+
+        time.sleep(5)  # Give some buffer time for file creation/deletion
+
         size = len(workers_user_items) if workers_user_items is not None else None
         result = data_recipe._done(size, self.delete_cached_files, self.output_dir)
 

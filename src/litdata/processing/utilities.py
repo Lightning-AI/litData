@@ -17,6 +17,7 @@ import os
 import tempfile
 import urllib
 from contextlib import contextmanager
+from pathlib import Path
 from subprocess import DEVNULL, Popen
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib import parse
@@ -272,3 +273,7 @@ def remove_uuid_from_filename(filepath: str) -> str:
 
     # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
     return filepath[:-38] + ".json"
+
+
+def list_all_files(root_dir):
+    return [str(p) for p in Path(root_dir).rglob("*") if p.is_file()]

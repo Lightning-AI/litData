@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from litdata.processing import utilities as utilities_module
 from litdata.processing.utilities import (
     extract_rank_and_index_from_filename,
+    list_all_files,
     optimize_dns_context,
     read_index_file_content,
     remove_uuid_from_filename,
@@ -120,3 +121,19 @@ def test_remove_uuid_from_filename():
         filepath = ".checkpoints/" + filepath
         result = remove_uuid_from_filename(filepath)
         assert result == ".checkpoints/" + expected[idx]
+
+
+def test_list_all_files(tmp_path):  # pragma: no cover
+    # Setup
+    file1 = tmp_path / "a.txt"
+    file2 = tmp_path / "subdir" / "b.txt"
+    file2.parent.mkdir()
+    file1.write_text("hello")
+    file2.write_text("world")
+
+    # Run
+    result = list_all_files(tmp_path)
+
+    # Assert
+    expected = {str(file1), str(file2)}
+    assert set(result) == expected
