@@ -657,8 +657,8 @@ class BaseWorker:
         os.environ["DATA_OPTIMIZER_NUM_WORKERS"] = str(self.num_workers)
 
     def _create_cache(self) -> None:
-        self.cache_data_dir = os.path.join(_get_cache_data_dir(), f"{self.worker_index}")
-        self.cache_chunks_dir = os.path.join(_get_cache_dir(), f"{self.worker_index}")
+        self.cache_data_dir = _get_cache_data_dir()
+        self.cache_chunks_dir = _get_cache_dir()
 
         if isinstance(self.data_recipe, MapRecipe):
             return

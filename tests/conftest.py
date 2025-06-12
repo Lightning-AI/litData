@@ -2,6 +2,7 @@ import os
 import shutil
 import sys
 import threading
+import uuid
 from collections import OrderedDict
 from types import ModuleType
 from unittest.mock import Mock
@@ -25,9 +26,12 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
-def set_env():
+def set_env(monkeypatch):
     # Set environment variable before each test to configure BaseWorker's maximum wait time
     os.environ["DATA_OPTIMIZER_TIMEOUT"] = "20"
+    uuid_str = uuid.uuid4().hex
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", f"/tmp/{uuid_str}/")  # noqa: S108
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", f"/tmp/{uuid_str}/")  # noqa: S108
 
 
 @pytest.fixture
