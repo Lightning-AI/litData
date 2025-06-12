@@ -43,7 +43,6 @@ jobs:
 
       - name: Tests
         run: |
-          pip install pytest-xdist
           coverage run --source litdata -m pytest tests -v --durations=100 -n auto
 
       - name: Statistics
