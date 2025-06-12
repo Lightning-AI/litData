@@ -178,6 +178,8 @@ def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data
     ],
 )
 def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length, context):
+    unique_path = f"temp_path_{uuid.uuid4().hex[:8]}"
+    hf_url = hf_url.replace("some_path", unique_path)
     with context:
         ds = StreamingDataset(hf_url)
         pattern = os.path.basename(hf_url)
@@ -190,7 +192,8 @@ def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
 @pytest.mark.parametrize("default", [False, True])
 def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
-    hf_url = "hf://datasets/some_org/some_repo/some_path"
+    unique_path = f"temp_path_{uuid.uuid4().hex[:8]}"
+    hf_url = f"hf://datasets/some_org/some_repo/{unique_path}"
     with tempfile.TemporaryDirectory() as tmpdir:
         ds = StreamingDataset(hf_url, cache_dir=None if default else tmpdir)
         assert ds.cache_dir.path == (None if default else os.path.realpath(tmpdir))
