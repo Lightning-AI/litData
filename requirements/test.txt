@@ -1,7 +1,7 @@
 coverage ==7.8.*
 cryptography==42.0.8
 mosaicml-streaming==0.8.1
-pytest ==8.3.*
+pytest ==8.4.*
 pytest-cov ==6.1.1
 pytest-timeout ==2.3.1
 pytest-rerunfailures ==14.0
