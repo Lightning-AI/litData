@@ -1305,7 +1305,7 @@ class DataProcessor:
             # check if there're msgs in the msg queue
             msgs = []
             while not self.msg_queue.empty():
-                msg = self.msg_queue.get()
+                msg = self.msg_queue.get(timeout=0.001)
                 msgs.append(msg)
 
             if len(msgs) > 0:

@@ -92,8 +92,7 @@ class BinaryWriter:
         self._compression = compression
         self._encryption = encryption
         self._item_loader = item_loader or PyTreeLoader()
-        if msg_queue is not None:
-            self.msg_queue = msg_queue
+        self.msg_queue = msg_queue
 
         self._data_format: Optional[List[str]] = None
         self._data_spec: Optional[PyTree] = None
@@ -179,7 +178,7 @@ class BinaryWriter:
             worker_rank = get_worker_rank()
             if worker_rank is not None:
                 msg = f"Rank {worker_rank} inferred the following `{data_format}` data format."
-                if hasattr(self, "msg_queue"):
+                if self.msg_queue is not None:
                     self.msg_queue.put_nowait(msg)
                 else:
                     print(msg, flush=True)
