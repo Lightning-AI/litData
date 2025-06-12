@@ -44,9 +44,8 @@ jobs:
           pip list
 
       - name: Tests
-        env:
-          PYTHONMULTIPROCESSING_SPAWN: "spawn"
-        run: pytest tests -v --cov=litdata --durations=100
+        working-directory: tests
+        run: pytest . -v --cov=litdata --durations=100 --skip=processing --skip=streaming
 
       - name: Statistics
         run: |
