@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import uuid
 from collections import OrderedDict
@@ -26,7 +27,7 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
-def set_env(monkeypatch, tempfile):
+def set_env(monkeypatch):
     # Set environment variable before each test to configure BaseWorker's maximum wait time
     os.environ["DATA_OPTIMIZER_TIMEOUT"] = "20"
 
