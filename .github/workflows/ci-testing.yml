@@ -44,7 +44,9 @@ jobs:
           pip list
 
       - name: Tests
-        run: pytest tests -v --cov=litdata --durations=100 --capture=tee-sys --exitfirst
+        env:
+          PYTHONMULTIPROCESSING_SPAWN: "spawn"
+        run: pytest tests -v --cov=litdata --durations=100
 
       - name: Statistics
         run: |
