@@ -35,6 +35,13 @@ class ParquetDir(ABC):
         Yields:
             Generator[Tuple[str, int], None, None]: A generator yielding tuples of file name, file path, and order.
         """
+        if not self.files:
+            raise RuntimeError(
+                f"No Parquet files were found at '{self.dir.url or self.dir.path}'. "
+                "Please verify that the provided path is correct and that it contains at least one .parquet file. "
+                "If the files are located in a subdirectory, please specify the correct path."
+            )
+
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
             futures = {executor.submit(self.task, _file): (order, _file) for order, _file in enumerate(self.files)}
             for future in futures:

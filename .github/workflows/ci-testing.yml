@@ -42,7 +42,7 @@ jobs:
           pip list
 
       - name: Tests
-        run: coverage run --source litdata -m pytest tests -v
+        run: coverage run --source litdata -m pytest tests -v --durations=100
 
       - name: Statistics
         run: |

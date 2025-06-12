@@ -39,7 +39,12 @@ logger = logging.getLogger("litdata.streaming.downloader")
 
 class Downloader(ABC):
     def __init__(
-        self, remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: List[Dict[str, Any]],
+        storage_options: Optional[Dict] = {},
+        **kwargs: Any,
     ):
         self._remote_dir = remote_dir
         self._cache_dir = cache_dir
@@ -49,7 +54,7 @@ class Downloader(ABC):
     def _increment_local_lock(self, chunkpath: str) -> None:
         logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "B"}))
         countpath = chunkpath + ".cnt"
-        with suppress(Timeout), FileLock(countpath + ".lock", timeout=1):
+        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=1):
             try:
                 with open(countpath) as count_f:
                     curr_count = int(count_f.read().strip())
@@ -77,13 +82,20 @@ class Downloader(ABC):
 
 class S3Downloader(Downloader):
     def __init__(
-        self, remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: List[Dict[str, Any]],
+        storage_options: Optional[Dict] = {},
+        **kwargs: Any,
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
         self._s5cmd_available = os.system("s5cmd > /dev/null 2>&1") == 0
+        # check if kwargs contains session_options
+        self.session_options = kwargs.get("session_options", {})
 
         if not self._s5cmd_available or _DISABLE_S5CMD:
-            self._client = S3Client(storage_options=self._storage_options)
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -94,7 +106,7 @@ class S3Downloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if self._s5cmd_available and not _DISABLE_S5CMD:
@@ -156,7 +168,12 @@ class S3Downloader(Downloader):
 
 class GCPDownloader(Downloader):
     def __init__(
-        self, remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: List[Dict[str, Any]],
+        storage_options: Optional[Dict] = {},
+        **kwargs: Any,
     ):
         if not _GOOGLE_STORAGE_AVAILABLE:
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
@@ -174,7 +191,7 @@ class GCPDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if os.path.exists(local_filepath):
@@ -194,7 +211,12 @@ class GCPDownloader(Downloader):
 
 class AzureDownloader(Downloader):
     def __init__(
-        self, remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: List[Dict[str, Any]],
+        storage_options: Optional[Dict] = {},
+        **kwargs: Any,
     ):
         if not _AZURE_STORAGE_AVAILABLE:
             raise ModuleNotFoundError(str(_AZURE_STORAGE_AVAILABLE))
@@ -214,7 +236,7 @@ class AzureDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
         ):
             if os.path.exists(local_filepath):
@@ -232,7 +254,7 @@ class LocalDownloader(Downloader):
         if not os.path.exists(remote_filepath):
             raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
 
-        with suppress(Timeout), FileLock(
+        with suppress(Timeout, FileNotFoundError), FileLock(
             local_filepath + ".lock", timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0
         ):
             if remote_filepath == local_filepath or os.path.exists(local_filepath):
@@ -247,7 +269,12 @@ class LocalDownloader(Downloader):
 
 class HFDownloader(Downloader):
     def __init__(
-        self, remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: List[Dict[str, Any]],
+        storage_options: Optional[Dict] = {},
+        **kwargs: Any,
     ):
         if not _HF_HUB_AVAILABLE:
             raise ModuleNotFoundError(
@@ -273,7 +300,9 @@ class HFDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout), FileLock(local_filepath + ".lock", timeout=0), tempfile.TemporaryDirectory() as tmpdir:
+        with suppress(Timeout, FileNotFoundError), FileLock(
+            local_filepath + ".lock", timeout=0
+        ), tempfile.TemporaryDirectory() as tmpdir:
             _, _, _, repo_org, repo_name, path = remote_filepath.split("/", 5)
             repo_id = f"{repo_org}/{repo_name}"
             downloaded_path = hf_hub_download(
@@ -331,7 +360,11 @@ def unregister_downloader(prefix: str) -> None:
 
 
 def get_downloader(
-    remote_dir: str, cache_dir: str, chunks: List[Dict[str, Any]], storage_options: Optional[Dict] = {}
+    remote_dir: str,
+    cache_dir: str,
+    chunks: List[Dict[str, Any]],
+    storage_options: Optional[Dict] = {},
+    session_options: Optional[Dict] = {},
 ) -> Downloader:
     """Get the appropriate downloader instance based on the remote directory prefix.
 
@@ -340,13 +373,14 @@ def get_downloader(
         cache_dir (str): The local cache directory.
         chunks (List[Dict[str, Any]]): List of chunks to managed by the downloader.
         storage_options (Optional[Dict], optional): Additional storage options. Defaults to {}.
+        session_options (Optional[Dict], optional): Additional S3 session options. Defaults to {}.
 
     Returns:
         Downloader: An instance of the appropriate downloader class.
     """
     for k, cls in _DOWNLOADERS.items():
         if str(remote_dir).startswith(k):
-            return cls(remote_dir, cache_dir, chunks, storage_options)
+            return cls(remote_dir, cache_dir, chunks, storage_options, session_options=session_options)
     else:
         # Default to LocalDownloader if no prefix is matched
         return LocalDownloader(remote_dir, cache_dir, chunks, storage_options)

@@ -36,14 +36,17 @@ from torch.utils.data.sampler import BatchSampler, Sampler
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
 from litdata.debugger import _get_log_msg
 from litdata.streaming import Cache
-from litdata.streaming.combined import (
-    __NUM_SAMPLES_YIELDED_KEY__,
-    __SAMPLES_KEY__,
-    CombinedStreamingDataset,
-)
+from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
+from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.sampler import CacheBatchSampler
 from litdata.utilities._pytree import tree_flatten
+from litdata.utilities.base import (
+    __NUM_CYCLES_KEY__,
+    __NUM_SAMPLES_YIELDED_KEY__,
+    __SAMPLES_KEY__,
+    _BaseStreamingDatasetWrapper,
+)
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
@@ -505,6 +508,11 @@ class StreamingDataLoaderCollateFn:
             return {
                 __SAMPLES_KEY__: batch,
                 __NUM_SAMPLES_YIELDED_KEY__: list(torch.tensor(items[-1][__NUM_SAMPLES_YIELDED_KEY__]).reshape(-1, 1)),
+                **(
+                    {__NUM_CYCLES_KEY__: list(torch.tensor(items[-1][__NUM_CYCLES_KEY__]).reshape(-1, 1))}
+                    if __NUM_CYCLES_KEY__ in items[0]
+                    else {}
+                ),
             }
 
         return self.collate_fn(items)
@@ -567,7 +575,7 @@ class StreamingDataLoader(DataLoader):
 
     def __init__(
         self,
-        dataset: Union[StreamingDataset, CombinedStreamingDataset],
+        dataset: Union[StreamingDataset, _BaseStreamingDatasetWrapper],
         *args: Any,
         batch_size: int = 1,
         num_workers: int = 0,
@@ -580,10 +588,10 @@ class StreamingDataLoader(DataLoader):
         collate_fn: Optional[Callable] = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
-        if not isinstance(dataset, (StreamingDataset, CombinedStreamingDataset)):
+        if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
             raise RuntimeError(
-                "The provided dataset should be either an instance of StreamingDataset or CombinedStreamingDataset."
-                f" Found {dataset}."
+                "The provided dataset should be either an instance of StreamingDataset, CombinedStreamingDataset or "
+                f"ParallelStreamingDataset. Found {dataset}."
             )
 
         if shuffle is not None:
@@ -613,7 +621,8 @@ class StreamingDataLoader(DataLoader):
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
         self._num_samples_yielded_streaming = 0
-        self._num_samples_yielded_combined: Dict[int, List[Any]] = {}
+        self._num_samples_yielded_wrapper: Dict[int, List[int]] = {}
+        self._num_cycles: Dict[int, List[int]] = {}
         self.rng_state: Optional[Any] = None
         self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
         self._worker_idx_iter: Optional[Any] = None
@@ -631,13 +640,19 @@ class StreamingDataLoader(DataLoader):
 
     def __iter__(self) -> Any:
         if not self.restore:
-            self._latest_worker_idx = 0
-            self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
-            self._worker_idx_iter = iter(self._worker_idx)
+            if (
+                not isinstance(self.dataset, ParallelStreamingDataset)
+                or not self.dataset.is_cycling()
+                or self.current_epoch == 0
+            ):
+                self._latest_worker_idx = 0
+                self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
+                self._worker_idx_iter = iter(self._worker_idx)
+                self._num_samples_yielded_wrapper = {}
+                self._num_samples_yielded_streaming = 0
+                self._num_cycles = {}
+                self.dataset.reset_state_dict()
             self.current_epoch += 1
-            self._num_samples_yielded_combined = {}
-            self._num_samples_yielded_streaming = 0
-            self.dataset.reset_state_dict()
 
         self.dataset.set_epoch(self.current_epoch)
         logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "B"}))
@@ -655,14 +670,27 @@ class StreamingDataLoader(DataLoader):
             for batch in super().__iter__():
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
                 if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
-                    self._num_samples_yielded_combined[self._latest_worker_idx] = [
+                    self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
                         sample[-1].item() if self.batch_size > 1 else sample.item()
                         for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
                     ]
 
+                    if __NUM_CYCLES_KEY__ in batch:
+                        self._num_cycles[self._latest_worker_idx] = [
+                            cycle[-1].item() if self.batch_size > 1 else cycle.item()
+                            for cycle in batch[__NUM_CYCLES_KEY__]
+                        ]
+                        self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
+
                     yield batch[__SAMPLES_KEY__]
                 else:
                     yield batch
+
+        # For ParallelStreamingDataset with _length != None we want to cycle the wrapped datasets i.e. we do not want to
+        # restart at index 0 at every epoch. So we set them in restore state.
+        if isinstance(self.dataset, ParallelStreamingDataset) and self.dataset.is_cycling():
+            self.load_state_dict(self.state_dict())
+
         logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
         self.restore = False
 
@@ -688,18 +716,34 @@ class StreamingDataLoader(DataLoader):
                 "latest_worker_idx": self._latest_worker_idx,
             }
 
-        # initialize a list to track the number of samples yielded for each dataset
-        num_samples_yieled = [0 for _ in range(len(self.dataset._datasets))]
+        if isinstance(self.dataset, CombinedStreamingDataset):
+            # initialize a list to track the number of samples yielded for each dataset
+            num_samples_yielded = [0 for _ in range(len(self.dataset._datasets))]
 
-        for worker_idx in self._num_samples_yielded_combined:
-            for dataset_idx, samples_yieled in enumerate(self._num_samples_yielded_combined[worker_idx]):
-                num_samples_yieled[dataset_idx] += samples_yieled
+            for worker_idx in self._num_samples_yielded_wrapper:
+                for dataset_idx, samples_yielded in enumerate(self._num_samples_yielded_wrapper[worker_idx]):
+                    num_samples_yielded[dataset_idx] += samples_yielded
 
+        elif isinstance(self.dataset, ParallelStreamingDataset):
+            num_samples_yielded, _ = self.dataset.get_num_samples_yielded(
+                self._num_samples_yielded_wrapper, self._num_cycles
+            )
+
+        else:
+            raise RuntimeError(
+                "The provided dataset should be a `StreamingDataset`, a `CombinedStreamingDataset` or a "
+                "`ParallelStreamingDataset`."
+            )
+
+        assert self.batch_size
         return {
-            "dataset": self.dataset.state_dict(self.num_workers, self.batch_size, num_samples_yieled),
+            "dataset": self.dataset.state_dict(self.num_workers, self.batch_size, num_samples_yielded),
             "current_epoch": self.current_epoch,
             "latest_worker_idx": self._latest_worker_idx,
-            "num_samples_yielded": deepcopy(self._num_samples_yielded_combined),
+            "num_samples_yielded": deepcopy(self._num_samples_yielded_wrapper),
+            **(
+                {"num_cycles": deepcopy(self._num_cycles)} if isinstance(self.dataset, ParallelStreamingDataset) else {}
+            ),
         }
 
     def load_state_dict(self, obj: Dict[str, Any]) -> None:
@@ -716,7 +760,10 @@ class StreamingDataLoader(DataLoader):
         if isinstance(self.dataset, StreamingDataset):
             self._num_samples_yielded_streaming = obj["num_samples_yielded"]
         else:
-            self._num_samples_yielded_combined = obj["num_samples_yielded"]
+            self._num_samples_yielded_wrapper = obj["num_samples_yielded"]
+
+        if isinstance(self.dataset, ParallelStreamingDataset):
+            self._num_cycles = obj["num_cycles"]
 
         # Used to restart on the next DataLoader worker from the previous run.
         self._latest_worker_idx = obj["latest_worker_idx"] + 1
@@ -732,7 +779,7 @@ class StreamingDataLoader(DataLoader):
             self.dataset._set_use_streaming_dataloader(True)
             self.dataset.load_state_dict(obj)
 
-            total_samples_yielded = sum([sum(samples) for samples in self._num_samples_yielded_combined.values()])
+            total_samples_yielded = sum([sum(samples) for samples in self._num_samples_yielded_wrapper.values()])
 
             # Check if we need to restore for the case without weights.
             if (
@@ -748,6 +795,28 @@ class StreamingDataLoader(DataLoader):
             if not self.dataset._iterate_over_all:
                 self.restore = True
 
+        elif isinstance(self.dataset, ParallelStreamingDataset):
+            self.dataset._set_use_streaming_dataloader(True)
+            self.dataset.load_state_dict(obj)
+            num_samples_yielded, num_cycles = self.dataset.get_num_samples_yielded(
+                self._num_samples_yielded_wrapper, self._num_cycles
+            )
+            if self.dataset.is_infinite():
+                if any(samples > 0 for samples in num_samples_yielded):
+                    self.restore = True
+            else:
+                dset_len = len(self.dataset)  # type: ignore
+                if self.dataset.is_cycling():
+                    dset_lens = self.dataset.get_all_lens()
+                    for samples, cycles, length in zip(num_samples_yielded, num_cycles, dset_lens):
+                        # infer where we are in the current epoch from the number of times we cycled, the dataset length
+                        # i.e. cycle length, the number of samples yielded in the current cycle, and the epoch length
+                        if 0 < (cycles * length + samples) % dset_len < dset_len:
+                            self.restore = True
+                            break
+                elif any(0 < samples < dset_len for samples in num_samples_yielded):
+                    self.restore = True
+
         elif isinstance(self.dataset, StreamingDataset):
             self.dataset.load_state_dict(obj["dataset"])
 
@@ -755,7 +824,10 @@ class StreamingDataLoader(DataLoader):
             if self._num_samples_yielded_streaming > 0 and self._num_samples_yielded_streaming < len(self.dataset):
                 self.restore = True
         else:
-            raise RuntimeError("The provided dataset should be a `StreamingDataset` or a `CombinedStreamingDataset`.")
+            raise RuntimeError(
+                "The provided dataset should be a `StreamingDataset`, a `CombinedStreamingDataset` or a "
+                "`ParallelStreamingDataset`."
+            )
 
     def _get_iterator(self) -> "_BaseDataLoaderIter":
         """Overridden to ensure the `Cache.done()` method is triggered on iteration done."""

@@ -74,6 +74,7 @@ _TORCH_DTYPES_MAPPING = {
     17: torch.int64,
     18: torch.long,
     19: torch.bool,
+    20: torch.uint16,
 }
 
 _NUMPY_SCTYPES = [  # All NumPy scalar types from np.core.sctypes.values()

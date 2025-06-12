@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import logging
 import os
 import warnings
@@ -117,10 +116,10 @@ class PrepareChunksThread(Thread):
                     curr_count = 1
             curr_count -= 1
             if curr_count <= 0:
-                with contextlib.suppress(FileNotFoundError, PermissionError):
+                with suppress(FileNotFoundError, PermissionError):
                     os.remove(countpath)
 
-                with contextlib.suppress(FileNotFoundError, PermissionError):
+                with suppress(FileNotFoundError, PermissionError):
                     os.remove(countpath + ".lock")
             else:
                 with open(countpath, "w+") as count_f:
@@ -265,6 +264,7 @@ class BinaryReader:
         item_loader: Optional[BaseItemLoader] = None,
         serializers: Optional[Dict[str, Serializer]] = None,
         storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
         max_pre_download: int = 2,
     ) -> None:
         """The BinaryReader enables to read chunked dataset in an efficient way.
@@ -281,6 +281,7 @@ class BinaryReader:
             max_cache_size: The maximum cache size used by the reader when fetching the chunks.
             serializers: Provide your own serializers.
             storage_options: Additional connection options for accessing storage services.
+            session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the reader.
 
         """
@@ -308,6 +309,7 @@ class BinaryReader:
         self._chunks_queued_for_download = False
         self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
         self._storage_options = storage_options
+        self._session_options = session_options
         self._max_pre_download = max_pre_download
 
     def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
@@ -327,6 +329,7 @@ class BinaryReader:
             self.subsampled_files,
             self.region_of_interest,
             self._storage_options,
+            self._session_options,
         )
         return self._config
 
@@ -507,15 +510,16 @@ def _get_folder_size(path: str, config: ChunksConfig) -> int:
 
             # handle temporary files containing '.bin'
             elif ".bin" in filename:
-                with contextlib.suppress(FileNotFoundError):
+                with suppress(FileNotFoundError):
                     size += entry.stat(follow_symlinks=False).st_size
 
             # warn about unrecognized files
             else:
-                logger.warning(
-                    f"Ignoring '{filename}': "
-                    "This file doesn't appear to be a valid chunk file and has been excluded from the size calculation."
-                )
+                if _DEBUG:
+                    logger.warning(
+                        f"Ignoring '{filename}': This file doesn't appear to be a valid chunk file"
+                        " and has been excluded from the cache size calculation."
+                    )
 
     return size
 

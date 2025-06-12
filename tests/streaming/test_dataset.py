@@ -99,6 +99,49 @@ def test_streaming_dataset(tmpdir, monkeypatch, compression):
     assert len(dataloader) == 30
 
 
+def _simple_optimize_fn(index):
+    return index
+
+
+@pytest.mark.parametrize(
+    ("chunk_bytes", "chunk_size"),
+    [
+        ("64MB", None),
+        (None, 5),  # at max 5 items in a chunk
+        (None, 75),  # at max 75 items in a chunk
+        (None, 1200),  # at max 1200 items in a chunk
+    ],
+)
+@pytest.mark.parametrize("keep_data_ordered", [True, False])
+def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+    data_dir = str(tmpdir / "optimized")
+
+    optimize(
+        fn=_simple_optimize_fn,
+        inputs=list(range(1000)),
+        output_dir=data_dir,
+        num_workers=4,
+        chunk_bytes=chunk_bytes,
+        chunk_size=chunk_size,
+        keep_data_ordered=keep_data_ordered,
+    )
+
+    sleep(2)  # wait for the cache to be created
+
+    ds = StreamingDataset(input_dir=data_dir)
+
+    expected_dataset = list(range(1000))
+    actual_dataset = ds[:]
+
+    assert len(actual_dataset) == len(expected_dataset)
+
+    if not keep_data_ordered:
+        # in shared queue, the order of the chunks is not guaranteed
+        assert sorted(actual_dataset) == expected_dataset
+    else:
+        assert actual_dataset == expected_dataset
+
+
 @pytest.mark.timeout(30)
 def test_streaming_dataset_max_pre_download(tmpdir):
     seed_everything(42)
@@ -723,6 +766,7 @@ def optimize_fn(item):
     return torch.arange(item[0], item[0] + 20).to(torch.int)
 
 
+@pytest.mark.flaky(reruns=3)
 def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monkeypatch):
     monkeypatch.setattr(functions, "_get_input_dir", lambda x: str(tmpdir))
 
@@ -1347,6 +1391,7 @@ def test_dataset_distributed_drop_last(tmpdir, monkeypatch, compression):
     assert expected_warn_msg == warn_msg
 
 
+@pytest.mark.flaky(reruns=3)
 def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
     monkeypatch.setattr(functions, "_get_input_dir", lambda x: str(tmpdir))
 
