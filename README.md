@@ -947,7 +947,7 @@ def transform_fn(x, *args, **kwargs):
 dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
 ```
 
-- Or, You can also create a child class of `StreamingDataset` and override the `transform` method to apply custom transformations to each sample.
+Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
 
 ```python
 class StreamingDatasetWithTransform(StreamingDataset):
