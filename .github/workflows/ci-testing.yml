@@ -45,7 +45,7 @@ jobs:
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100 --skip=processing --skip=streaming
+        run: pytest . -v --cov=litdata --durations=100 --ignore=processing --ignore=streaming
 
       - name: Statistics
         run: |
