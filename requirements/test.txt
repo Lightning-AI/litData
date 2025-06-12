@@ -8,6 +8,6 @@ pytest-rerunfailures ==14.0
 pytest-random-order ==1.1.1
 pandas
 lightning
-transformers <4.50.0
+transformers <4.53.0
 zstd
 numpy < 2.0
