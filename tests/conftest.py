@@ -1,5 +1,6 @@
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -37,6 +38,11 @@ def set_env(monkeypatch):
 
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", tmp_path)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def disable_signals(monkeypatch):
+    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
