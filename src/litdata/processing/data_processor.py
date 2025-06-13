@@ -30,7 +30,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union
 from urllib import parse
 
 import numpy as np
@@ -57,6 +57,9 @@ from litdata.utilities.broadcast import broadcast_object
 from litdata.utilities.dataset_utilities import load_index_file
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.packing import _pack_greedily
+
+if TYPE_CHECKING and _TQDM_AVAILABLE:
+    from tqdm import tqdm_asyncio
 
 logger = logging.Logger(__name__)
 
@@ -1302,22 +1305,7 @@ class DataProcessor:
         total_num_items = len(user_items) if isinstance(user_items, list) else -1
 
         while True:
-            # check if there're msgs in the msg queue
-            msgs = []
-            while True:
-                try:
-                    msg = self.msg_queue.get(timeout=0.001)
-                    msgs.append(msg)
-                except Empty:
-                    break
-
-            if len(msgs) > 0:
-                if _TQDM_AVAILABLE:
-                    pbar.clear()  # clear the previous progress bar
-                for msg in msgs:
-                    print(msg)
-                if _TQDM_AVAILABLE:
-                    pbar.display()  # display the progress bar again
+            flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
 
             # Exit early if all the workers are done.
             # This means either there were some kinda of errors, or optimize function was very small.
@@ -1360,23 +1348,7 @@ class DataProcessor:
                 with open("status.json", "w") as f:
                     json.dump({"progress": str(100 * current_total * num_nodes / total_num_items) + "%"}, f)
 
-        # check if there're msgs in the msg queue
-        msgs = []
-        while True:
-            try:
-                # Slightly longer wait to ensure all messages are received from the queue
-                msg = self.msg_queue.get(timeout=0.01)
-                msgs.append(msg)
-            except Empty:
-                break
-
-        if len(msgs) > 0:
-            if _TQDM_AVAILABLE:
-                pbar.clear()  # clear the previous progress bar
-            for msg in msgs:
-                print(msg)
-            if _TQDM_AVAILABLE:
-                pbar.display()  # display the progress bar again
+        flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
 
         if _TQDM_AVAILABLE:
             pbar.clear()
@@ -1647,3 +1619,29 @@ def in_notebook() -> bool:
     shell.
     """
     return "ipykernel" in sys.modules
+
+
+def flush_msg_queue(msg_queue: Queue, pbar: Optional[tqdm_asyncio] = None):
+    """Flush messages from a queue and print them without breaking the tqdm progress bar.
+
+    This function drains all available messages from the given queue and prints them.
+    If a tqdm progress bar is provided, it temporarily clears and restores the bar
+    to avoid visual glitches during printing.
+
+    Args:
+        msg_queue (Queue): The queue containing log or status messages.
+        pbar (Optional[tqdm]): The tqdm progress bar to preserve formatting. Optional.
+    """
+    # check if there're msgs in the msg queue
+    msgs = []
+    while not msg_queue.empty():
+        msg = msg_queue.get()
+        msgs.append(msg)
+
+    if len(msgs) > 0:
+        if _TQDM_AVAILABLE:
+            pbar.clear()  # clear the previous progress bar
+        for msg in msgs:
+            print(msg)
+        if _TQDM_AVAILABLE:
+            pbar.display()  # display the progress bar again
