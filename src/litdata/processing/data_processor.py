@@ -30,7 +30,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 from urllib import parse
 
 import numpy as np
@@ -57,9 +57,6 @@ from litdata.utilities.broadcast import broadcast_object
 from litdata.utilities.dataset_utilities import load_index_file
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.packing import _pack_greedily
-
-if TYPE_CHECKING and _TQDM_AVAILABLE:
-    from tqdm import tqdm_asyncio
 
 logger = logging.Logger(__name__)
 
@@ -1621,7 +1618,7 @@ def in_notebook() -> bool:
     return "ipykernel" in sys.modules
 
 
-def flush_msg_queue(msg_queue: Queue, pbar: Optional[tqdm_asyncio] = None):
+def flush_msg_queue(msg_queue: Queue, pbar: Optional[Any] = None):
     """Flush messages from a queue and print them without breaking the tqdm progress bar.
 
     This function drains all available messages from the given queue and prints them.
