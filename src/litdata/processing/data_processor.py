@@ -1631,10 +1631,12 @@ def flush_msg_queue(msg_queue: Queue, pbar: Optional[Any] = None):
     """
     # check if there're msgs in the msg queue
     msgs = []
-    while not msg_queue.empty():
-        msg = msg_queue.get()
-        msgs.append(msg)
-
+    while True:
+        try:
+            msg = msg_queue.get_nowait()
+            msgs.append(msg)
+        except Empty:
+            break
     if len(msgs) > 0:
         if _TQDM_AVAILABLE:
             pbar.clear()  # clear the previous progress bar
