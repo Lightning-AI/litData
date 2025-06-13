@@ -1652,3 +1652,93 @@ def test_cache_get_clear_after_dataset_stream(tmpdir, shuffle):
         f"All of the chunks should have been cleared from the cache directory after streaming."
         f"Found {len(chunks)} chunk files: {chunks}"
     )
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_transform(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define a simple transform function
+    def transform_fn(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_transform_inheritance(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        # Define a simple transform function
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function that doubles the input."""
+            return x * 2
+
+    dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"
