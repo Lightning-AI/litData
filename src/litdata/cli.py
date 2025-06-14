@@ -19,7 +19,7 @@ from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 app = typer.Typer(
     help="""
-⚡ LitData CLI – Transform, Optimize & Stream data for AI at scale.
+LitData CLI – Transform, Optimize & Stream data for AI at scale.
 
 LitData simplifies and accelerates data workflows for machine learning.
 Easily scale data processing tasks—like scraping, resizing, inference, or embedding creation
@@ -56,5 +56,9 @@ def show_cache_path() -> None:
     typer.echo(f"Default cache directory: {streaming_default_cache_dir}")
 
 
-if __name__ == "__main__":
+def main():
     app()
+
+
+if __name__ == "__main__":
+    main()

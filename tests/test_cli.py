@@ -1,24 +1,24 @@
-import subprocess
-import sys
-from pathlib import Path
+from typer.testing import CliRunner
 
-import pytest
+from litdata.cli import app  # or from litdata.cli import main if you prefer that
 
-CLI_SCRIPT = Path("src/litdata/cli.py")
+runner = CliRunner()
 
 
-@pytest.mark.parametrize(
-    ("args", "expected"),
-    [
-        (["--help"], "LitData CLI"),
-        (["cache", "--help"], "cache-related operations"),
-        (["cache", "path"], "Default cache directory:"),
-        (["cache", "clear"], "cleared."),
-    ],
-)
-def test_litdata_cli_commands(args, expected):
-    result = subprocess.run(  # noqa: S603
-        [sys.executable, CLI_SCRIPT] + args, capture_output=True, text=True
-    )
-    assert result.returncode == 0
-    assert expected in result.stdout
+def test_litdata_help_command():
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "LitData CLI" in result.output
+    assert "cache" in result.output
+
+
+def test_cache_path_command():
+    result = runner.invoke(app, ["cache", "path"])
+    assert result.exit_code == 0
+    assert "Default cache directory" in result.output
+
+
+def test_cache_clear_command(tmp_path, monkeypatch):
+    result = runner.invoke(app, ["cache", "clear"])
+    assert result.exit_code == 0
+    assert "cleared" in result.output
