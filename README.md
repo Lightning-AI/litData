@@ -921,6 +921,62 @@ if __name__ == "__main__":
 </details>
 
 <details>
+  <summary> ✅ Transform datasets while Streaming</summary>
+&nbsp;
+
+Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
+
+- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+
+```python
+# Define a simple transform function
+torch_transform = transforms.Compose([
+  transforms.Resize((256, 256)),       # Resize to 256x256
+  transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
+  transforms.Normalize(                # Normalize using ImageNet stats
+      mean=[0.485, 0.456, 0.406], 
+      std=[0.229, 0.224, 0.225]
+  )
+])
+
+def transform_fn(x, *args, **kwargs):
+    """Define your transform function."""
+    return torch_transform(x)  # Apply the transform to the input image
+
+# Create dataset with appropriate configuration
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+```
+
+Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
+
+```python
+class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+            self.torch_transform = transforms.Compose([
+                transforms.Resize((256, 256)),       # Resize to 256x256
+                transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
+                transforms.Normalize(                # Normalize using ImageNet stats
+                    mean=[0.485, 0.456, 0.406], 
+                    std=[0.229, 0.224, 0.225]
+                )
+            ])
+
+        # Define your transform method
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function."""
+            return self.torch_transform(x)
+
+
+dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+```
+
+</details>
+
+<details>
   <summary> ✅ Split datasets for train, val, test</summary>
 
 &nbsp;
