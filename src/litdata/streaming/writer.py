@@ -16,6 +16,7 @@ import os
 import uuid
 import warnings
 from dataclasses import dataclass
+from multiprocessing import Queue
 from time import sleep, time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -57,6 +58,7 @@ class BinaryWriter:
         serializers: Optional[Dict[str, Serializer]] = None,
         chunk_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
+        msg_queue: Optional[Queue] = None,
     ):
         """The BinaryWriter enables to chunk dataset into an efficient streaming format for cloud training.
 
@@ -70,6 +72,7 @@ class BinaryWriter:
             serializers: Provide your own serializers.
             chunk_index: The index of the chunk to start from.
             item_loader: The object responsible to generate the chunk intervals and load an item from a chunk.
+            msg_queue: Optional message queue to send messages to the main process.
 
         """
         self._cache_dir = cache_dir
@@ -89,6 +92,7 @@ class BinaryWriter:
         self._compression = compression
         self._encryption = encryption
         self._item_loader = item_loader or PyTreeLoader()
+        self.msg_queue = msg_queue
 
         self._data_format: Optional[List[str]] = None
         self._data_spec: Optional[PyTree] = None
@@ -173,7 +177,11 @@ class BinaryWriter:
 
             worker_rank = get_worker_rank()
             if worker_rank is not None:
-                print(f"Rank {worker_rank} inferred the following `{data_format}` data format.")
+                msg = f"Rank {worker_rank} inferred the following `{data_format}` data format."
+                if self.msg_queue is not None:
+                    self.msg_queue.put_nowait(msg)
+                else:
+                    print(msg, flush=True)
             self._data_format = data_format
             self._data_spec = data_spec
         else:

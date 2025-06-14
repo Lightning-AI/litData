@@ -1288,11 +1288,13 @@ def test_data_processor_start_method(monkeypatch):
 @pytest.mark.parametrize("keep_data_ordered", [True, False])
 def test_base_worker_collect_paths_no_downloader(keep_data_ordered):
     shared_queue = mp.Queue() if not keep_data_ordered else None
+    msg_queue = mp.Queue()
 
     worker = BaseWorker(
         worker_index=0,
         num_workers=1,
         node_rank=0,
+        msg_queue=msg_queue,
         data_recipe=DataRecipe(),
         input_dir=Dir(),
         output_dir=Dir(),
