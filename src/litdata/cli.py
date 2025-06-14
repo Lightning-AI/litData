@@ -35,12 +35,12 @@ app.add_typer(cache_app, name="cache")
 
 
 @cache_app.callback()
-def cache(ctx: typer.Context):
+def cache(ctx: typer.Context) -> None:
     """Subcommand group for cache-related operations."""
 
 
 @cache_app.command("clear")
-def clear_cache():
+def clear_cache() -> None:
     """Clear default cache used for StreamingDataset and other utilities."""
     streaming_default_cache_dir = get_default_cache_dir()
 
@@ -50,7 +50,7 @@ def clear_cache():
 
 
 @cache_app.command("path")
-def show_cache_path():
+def show_cache_path() -> None:
     """Show the path to the cache directory."""
     streaming_default_cache_dir = get_default_cache_dir()
     typer.echo(f"Default cache directory: {streaming_default_cache_dir}")
