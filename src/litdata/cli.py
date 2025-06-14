@@ -56,7 +56,7 @@ def show_cache_path() -> None:
     typer.echo(f"Default cache directory: {streaming_default_cache_dir}")
 
 
-def main():
+def main() -> None:
     app()
 
 
