@@ -1638,9 +1638,9 @@ def flush_msg_queue(msg_queue: Queue, pbar: Optional[Any] = None):
         except Empty:
             break
     if len(msgs) > 0:
-        if _TQDM_AVAILABLE:
+        if pbar is not None:
             pbar.clear()  # clear the previous progress bar
         for msg in msgs:
             print(msg)
-        if _TQDM_AVAILABLE:
+        if pbar is not None:
             pbar.display()  # display the progress bar again
