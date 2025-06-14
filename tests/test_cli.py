@@ -1,6 +1,6 @@
 from typer.testing import CliRunner
 
-from litdata.cli import app  # or from litdata.cli import main if you prefer that
+from litdata.cli import app
 
 runner = CliRunner()
 
