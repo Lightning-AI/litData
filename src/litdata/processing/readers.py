@@ -143,6 +143,10 @@ class StreamingDataLoaderReader(BaseReader):
         """Read the next item from the dataloader."""
         if self.dataloader_iter is None:
             self.dataloader_iter = iter(self.dataloader)
+
+        # Data is distributed across workers through iterator, similar to DDP.
+        # Although the iterator is created within this worker process,
+        # distribution is already managed by the StreamingDataLoader and StreamingDataset.
         return next(self.dataloader_iter)
 
     def remap_items(self, dataloader: StreamingDataLoader, _: int) -> List[Any]:
