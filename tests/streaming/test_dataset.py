@@ -589,6 +589,7 @@ def test_dataset_for_text_tokens(tmpdir):
 @pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
 def test_dataset_for_text_tokens_with_large_num_chunks(tmpdir):
     import resource
+
     resource.setrlimit(resource.RLIMIT_NOFILE, (512, 512))
 
     block_size = 1024
