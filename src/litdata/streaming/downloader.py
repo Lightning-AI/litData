@@ -76,7 +76,7 @@ class Downloader(ABC):
 
         logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "E"}))
 
-    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> None:
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
         chunk_filename = self._chunks[chunk_index]["filename"]
         remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
 

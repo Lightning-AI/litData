@@ -401,7 +401,7 @@ class BinaryReader:
         chunk_filepath, begin, filesize_bytes = self.config[index]
 
         if isinstance(self._item_loader, PyTreeLoader):
-            if self.no_chunk_download and self._config._remote_dir:
+            if self.no_chunk_download and self._config and self._config._remote_dir:
                 # we need to download relevant bytes only
                 # then deserialize them, and reconstruct the item with pytree's unflatten function
                 offset = (1 + (index.index - begin) if index.index >= begin else index.index + 1) * 4
