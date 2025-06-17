@@ -66,7 +66,6 @@ def update_msg(file_path: Path, output_dir: Path):
         f.write("Bonjour!")
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 def test_map_with_path(tmpdir):
     input_dir = Path(tmpdir) / "input_dir"
     output_dir = Path(tmpdir) / "output_dir"
