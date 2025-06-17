@@ -214,6 +214,7 @@ class StreamingDataset(IterableDataset):
         if not isinstance(value, bool):
             raise ValueError(f"no_chunk_download should be a boolean. Found {value}")
         self._no_chunk_download = value
+        assert self.cache is not None, "Cache must be initialized before setting no_chunk_download."
         self.cache._reader.no_chunk_download = value
 
     def set_shuffle(self, shuffle: bool) -> None:
