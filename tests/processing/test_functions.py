@@ -536,6 +536,7 @@ def tokenize(filename: str):
     yield tokenized
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_race_condition(tmpdir):
     # issue: https://github.com/Lightning-AI/litdata/issues/367
@@ -722,6 +723,7 @@ def simple_optimize_fn(index):
     return index, index**2
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.parametrize("num_workers", [1, 2])
 def test_optimize_with_queues_as_input(tmpdir, num_workers):
     output_dir = str(tmpdir / "output_dir")
