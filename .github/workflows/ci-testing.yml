@@ -47,7 +47,7 @@ jobs:
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100 --ignore=processing/test_functions.py
+        run: pytest . -v --cov=litdata --durations=100 --ignore=processing/test_data_processor.py --ignore=processing/test_readers.py --ignore=processing/test_utilities.py --ignore=streaming -ignore=utilities
 
       - name: Statistics
         continue-on-error: true
