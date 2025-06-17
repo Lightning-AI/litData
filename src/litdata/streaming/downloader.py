@@ -76,8 +76,20 @@ class Downloader(ABC):
 
         logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "E"}))
 
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> None:
+        chunk_filename = self._chunks[chunk_index]["filename"]
+        remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
+
+        return self.download_bytes(remote_chunkpath, offset, length)
+
     def download_file(self, remote_chunkpath: str, local_chunkpath: str) -> None:
         pass
+
+    def download_bytes(self, remote_chunkpath: str, offset: int, length: int) -> bytes:
+        raise NotImplementedError(
+            f"`download_bytes` method is not implemented for the {self.__class__.__name__} class. "
+            "Please use a specific downloader implementation that supports byte range downloads."
+        )
 
 
 class S3Downloader(Downloader):
@@ -164,6 +176,21 @@ class S3Downloader(Downloader):
                         ExtraArgs=extra_args,
                         Config=TransferConfig(use_threads=False),
                     )
+
+    def download_bytes(self, remote_filepath: str, offset: int, length: int) -> bytes:
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        byte_range = f"bytes={offset}-{offset + length - 1}"
+
+        response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
+
+        return response["Body"].read()
 
 
 class GCPDownloader(Downloader):

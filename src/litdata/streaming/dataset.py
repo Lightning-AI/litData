@@ -63,6 +63,7 @@ class StreamingDataset(IterableDataset):
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
         transform: Optional[Callable] = None,
+        no_chunk_download: bool = False,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -90,6 +91,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function to apply to each item in the dataset.
+            no_chunk_download: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -201,6 +203,7 @@ class StreamingDataset(IterableDataset):
             if not callable(transform):
                 raise ValueError(f"Transform should be a callable. Found {transform}")
             self.transform = transform
+        self.no_chunk_download = no_chunk_download
 
     def set_shuffle(self, shuffle: bool) -> None:
         self.shuffle = shuffle
@@ -240,6 +243,7 @@ class StreamingDataset(IterableDataset):
             storage_options=self.storage_options,
             session_options=self.session_options,
             max_pre_download=self.max_pre_download,
+            no_chunk_download=self.no_chunk_download,
         )
         cache._reader._try_load_config()
 
