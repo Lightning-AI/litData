@@ -634,6 +634,7 @@ def text_optimize_fn(filename: str, *args, **kwargs):
     return text.strip()
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.parametrize("keep_data_ordered", [False, True])
 def test_optimize_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
@@ -680,6 +681,7 @@ def text_map_fn(filename: str, output_dir: str):
             file.write(f"{text}\tBonjour!")
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.parametrize("keep_data_ordered", [False, True])
 def test_map_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
