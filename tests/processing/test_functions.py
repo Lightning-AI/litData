@@ -596,7 +596,6 @@ def process_with_jpeg_array(index):
     return {"index": index, "images": images}
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 def test_optimize_with_jpeg_array(tmpdir):
     """Test optimizing data containing lists of bytearrays which should use the jpeg_array serializer."""
     output_dir = str(tmpdir)
