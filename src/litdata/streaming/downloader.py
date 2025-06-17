@@ -235,6 +235,26 @@ class GCPDownloader(Downloader):
             blob = bucket.blob(key)
             blob.download_to_filename(local_filepath)
 
+    def download_bytes(self, remote_filepath: str, offset: int, length: int) -> bytes:
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        # GCS uses end as *inclusive*, so end = offset + length - 1
+        end = offset + length - 1
+
+        return blob.download_as_bytes(start=offset, end=end)
+
 
 class AzureDownloader(Downloader):
     def __init__(
