@@ -203,7 +203,18 @@ class StreamingDataset(IterableDataset):
             if not callable(transform):
                 raise ValueError(f"Transform should be a callable. Found {transform}")
             self.transform = transform
-        self.no_chunk_download = no_chunk_download
+        self._no_chunk_download = no_chunk_download
+
+    @property
+    def no_chunk_download(self) -> bool:
+        return self._no_chunk_download
+
+    @no_chunk_download.setter
+    def no_chunk_download(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise ValueError(f"no_chunk_download should be a boolean. Found {value}")
+        self._no_chunk_download = value
+        self.cache._reader.no_chunk_download = value
 
     def set_shuffle(self, shuffle: bool) -> None:
         self.shuffle = shuffle
@@ -243,7 +254,7 @@ class StreamingDataset(IterableDataset):
             storage_options=self.storage_options,
             session_options=self.session_options,
             max_pre_download=self.max_pre_download,
-            no_chunk_download=self.no_chunk_download,
+            no_chunk_download=self._no_chunk_download,
         )
         cache._reader._try_load_config()
 

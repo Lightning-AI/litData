@@ -409,7 +409,6 @@ class BinaryReader:
                 begin, end = np.frombuffer(pair, np.uint32)
                 actual_item_length = end - begin
                 raw_bytes = self.config.download_chunk_bytes_from_index(index.chunk_index, begin, actual_item_length)
-                # download 8 bytes to get the start and end of the item
                 item = self._item_loader.load_item_from_bytes(raw_bytes, index.chunk_index)
             else:
                 item = self._item_loader.load_item_from_chunk(
