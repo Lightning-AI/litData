@@ -122,7 +122,6 @@ def random_image(index):
     return {"image": fake_img, "class": index}
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 def test_optimize_append_overwrite(tmpdir):
     output_dir = str(tmpdir / "output_dir")
@@ -372,7 +371,6 @@ def test_merge_compressed_datasets(tmpdir):
     assert ds[:] == list(range(20))
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_with_fernet_encryption(tmpdir):
     output_dir = str(tmpdir / "output_dir")
@@ -462,7 +460,6 @@ def test_optimize_with_fernet_encryption(tmpdir):
     assert ds[0]["class"] == 0
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_with_rsa_encryption(tmpdir):
     output_dir = str(tmpdir / "output_dir")
@@ -540,7 +537,6 @@ def tokenize(filename: str):
     yield tokenized
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_race_condition(tmpdir):
     # issue: https://github.com/Lightning-AI/litdata/issues/367
@@ -638,7 +634,6 @@ def text_optimize_fn(filename: str, *args, **kwargs):
     return text.strip()
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.parametrize("keep_data_ordered", [False, True])
 def test_optimize_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
@@ -685,7 +680,6 @@ def text_map_fn(filename: str, output_dir: str):
             file.write(f"{text}\tBonjour!")
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.parametrize("keep_data_ordered", [False, True])
 def test_map_with_text_files(tmpdir, keep_data_ordered):
     """Test optimizing data containing text manipulation."""
@@ -729,7 +723,6 @@ def simple_optimize_fn(index):
     return index, index**2
 
 
-@pytest.mark.skip(reason="temporarily skipped")
 @pytest.mark.parametrize("num_workers", [1, 2])
 def test_optimize_with_queues_as_input(tmpdir, num_workers):
     output_dir = str(tmpdir / "output_dir")
