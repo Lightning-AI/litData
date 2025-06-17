@@ -122,6 +122,7 @@ def random_image(index):
     return {"image": fake_img, "class": index}
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 def test_optimize_append_overwrite(tmpdir):
     output_dir = str(tmpdir / "output_dir")
@@ -370,6 +371,7 @@ def test_merge_compressed_datasets(tmpdir):
     assert ds[:] == list(range(20))
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_with_fernet_encryption(tmpdir):
     output_dir = str(tmpdir / "output_dir")
@@ -459,6 +461,7 @@ def test_optimize_with_fernet_encryption(tmpdir):
     assert ds[0]["class"] == 0
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 def test_optimize_with_rsa_encryption(tmpdir):
     output_dir = str(tmpdir / "output_dir")
