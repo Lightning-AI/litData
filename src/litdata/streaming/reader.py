@@ -405,6 +405,7 @@ class BinaryReader:
                 self.no_store
                 and self._config
                 and self._config._remote_dir
+                and self._config._config
                 and not self._config._config.get("encryption", None)
                 and not self._config._config.get("compression", None)
             ):
