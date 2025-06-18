@@ -158,7 +158,9 @@ class ChunksConfig:
         local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
 
         if os.path.exists(local_chunkpath):
-            raise ValueError("`download_chunk_bytes_from_index` should not be called for already downloaded chunks.")
+            with open(local_chunkpath, "rb") as f:
+                f.seek(offset)
+                return f.read(length)
 
         if self._compressor is not None:
             raise ValueError(

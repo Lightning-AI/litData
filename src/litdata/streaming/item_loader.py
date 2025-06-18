@@ -107,7 +107,11 @@ class BaseItemLoader(ABC):
     ) -> Any:
         """Returns an item loaded from a chunk."""
 
-    def load_item_from_bytes(self, raw_bytes: bytes) -> Any:
+    def load_item_from_bytes(
+        self,
+        raw_bytes: bytes,
+        chunk_index: int,
+    ) -> Any:
         """Returns an item loaded from bytes."""
         raise NotImplementedError("The `load_item_from_bytes` method is not implemented for this item loader.")
 
