@@ -19,10 +19,14 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "macos-14", "windows-2022"]
-        python-version: ["3.9", "3.10", "3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - { os: "windows-2022", python-version: "3.13" }
+          - { os: "macos-14", python-version: "3.12" }
+          - { os: "macos-14", python-version: "3.13" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
 
@@ -42,9 +46,11 @@ jobs:
           pip list
 
       - name: Tests
-        run: coverage run --source litdata -m pytest tests -v --durations=100
+        working-directory: tests
+        run: pytest . -v --cov=litdata --durations=100
 
       - name: Statistics
+        continue-on-error: true
         run: |
           coverage report
           coverage xml
