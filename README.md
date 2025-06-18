@@ -417,6 +417,28 @@ The `StreamingDataset` provides support for reading optimized datasets from comm
 import os
 import litdata as ld
 
+# Read data from AWS S3 using boto3
+aws_storage_options={
+    "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
+    "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
+}
+# You can also pass the session options. (for boto3 only)
+aws_session_options = {
+  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
+  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
+
+# Read Data from AWS S3 with Unsigned Request using boto3
+aws_storage_options={
+  "config": botocore.config.Config(
+        retries={"max_attempts": 1000, "mode": "adaptive"}, # Configure retries for S3 operations
+        signature_version=botocore.UNSIGNED, # Use unsigned requests
+  )
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
+
+
 # Read data from AWS S3 using s5cmd
 # Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
 aws_storage_options={
@@ -432,19 +454,6 @@ aws_storage_options={
   "S3_ENDPOINT_URL": os.environ['AWS_ENDPOINT_URL'],  # Required only for custom endpoints
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
-
-# Read data from AWS S3 using boto3
-os.environ["DISABLE_S5CMD"] = "1"
-aws_storage_options={
-    "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
-    "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
-}
-# You can also pass the session options. (for boto3 only)
-aws_session_options = {
-  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
-  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
-}
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
 
 
 # Read data from GCS
@@ -918,6 +927,62 @@ if __name__ == "__main__":
     print(len(dataset))
     # out: 1000
 ```
+</details>
+
+<details>
+  <summary> ✅ Transform datasets while Streaming</summary>
+&nbsp;
+
+Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
+
+- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+
+```python
+# Define a simple transform function
+torch_transform = transforms.Compose([
+  transforms.Resize((256, 256)),       # Resize to 256x256
+  transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
+  transforms.Normalize(                # Normalize using ImageNet stats
+      mean=[0.485, 0.456, 0.406], 
+      std=[0.229, 0.224, 0.225]
+  )
+])
+
+def transform_fn(x, *args, **kwargs):
+    """Define your transform function."""
+    return torch_transform(x)  # Apply the transform to the input image
+
+# Create dataset with appropriate configuration
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+```
+
+Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
+
+```python
+class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+            self.torch_transform = transforms.Compose([
+                transforms.Resize((256, 256)),       # Resize to 256x256
+                transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
+                transforms.Normalize(                # Normalize using ImageNet stats
+                    mean=[0.485, 0.456, 0.406], 
+                    std=[0.229, 0.224, 0.225]
+                )
+            ])
+
+        # Define your transform method
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function."""
+            return self.torch_transform(x)
+
+
+dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+```
+
 </details>
 
 <details>

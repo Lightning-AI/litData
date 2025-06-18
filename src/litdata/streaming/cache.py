@@ -13,6 +13,7 @@
 
 import logging
 import os
+from multiprocessing import Queue
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from litdata.constants import (
@@ -48,6 +49,7 @@ class Cache:
         storage_options: Optional[Dict] = {},
         session_options: Optional[Dict] = {},
         max_pre_download: int = 2,
+        msg_queue: Optional[Queue] = None,
     ):
         """The Cache enables to optimise dataset format for cloud training. This is done by grouping several elements
         together in order to accelerate fetching.
@@ -67,6 +69,7 @@ class Cache:
             storage_options: Additional connection options for accessing storage services.
             session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded while filling up the cache.
+            msg_queue: Optional message queue to send messages to the main process.
 
         """
         super().__init__()
@@ -82,6 +85,7 @@ class Cache:
             serializers=serializers,
             chunk_index=writer_chunk_index or 0,
             item_loader=item_loader,
+            msg_queue=msg_queue,
         )
         self._reader = BinaryReader(
             self._cache_dir,

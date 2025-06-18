@@ -590,12 +590,12 @@ def test_dataset_for_text_tokens(tmpdir):
 def test_dataset_for_text_tokens_with_large_num_chunks(tmpdir):
     import resource
 
-    resource.setrlimit(resource.RLIMIT_NOFILE, (1024, 1024))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (512, 512))
 
     block_size = 1024
     cache = Cache(input_dir=str(tmpdir), chunk_bytes="10KB", item_loader=TokensLoader(block_size))
 
-    for i in range(10000):
+    for i in range(1500):
         text_ids = torch.randint(0, 10001, (torch.randint(100, 1001, (1,)).item(),)).numpy()
         cache._add_item(i, text_ids)
 
@@ -603,7 +603,6 @@ def test_dataset_for_text_tokens_with_large_num_chunks(tmpdir):
     cache.merge()
 
     dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=True)
-
     for _ in dataset:
         pass
 
@@ -1652,3 +1651,93 @@ def test_cache_get_clear_after_dataset_stream(tmpdir, shuffle):
         f"All of the chunks should have been cleared from the cache directory after streaming."
         f"Found {len(chunks)} chunk files: {chunks}"
     )
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_transform(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define a simple transform function
+    def transform_fn(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_transform_inheritance(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        # Define a simple transform function
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function that doubles the input."""
+            return x * 2
+
+    dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"

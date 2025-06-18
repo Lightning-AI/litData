@@ -404,3 +404,95 @@ def test_resume_parallel_dataset(tmp_path, length, num_workers, transform):
     dloader.load_state_dict(state)
     for i, x in enumerate(dloader):
         assert x == data[i]
+
+
+# Define a simple transform function
+def transform_fn(x, *args, **kwargs):
+    """A simple transform function that doubles the input."""
+    return x * 2
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataloader_dataset_transform(tmpdir, shuffle):
+    """Test if the dataset's transform is applied correctly with dataloader."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    dl = StreamingDataLoader(dataset, batch_size=10, num_workers=2, shuffle=shuffle)
+
+    complete_data = []
+    for batch in dl:
+        complete_data.extend(batch)
+
+    complete_data.sort()
+    print(f"Complete data: {complete_data}")
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+class StreamingDatasetWithTransform(StreamingDataset):
+    """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    # Define a simple transform function
+    def transform(self, x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataloader_dataset_transform_inheritance(tmpdir, shuffle):
+    """Test if the dataset's transform is applied correctly with dataloader."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    dl = StreamingDataLoader(dataset, batch_size=10, num_workers=2, shuffle=shuffle)
+
+    complete_data = []
+    for batch in dl:
+        complete_data.extend(batch)
+
+    complete_data.sort()
+    print(f"Complete data: {complete_data}")
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2, f"Expected {i * 2}, got {item}"
