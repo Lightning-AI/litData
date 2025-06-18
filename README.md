@@ -417,6 +417,28 @@ The `StreamingDataset` provides support for reading optimized datasets from comm
 import os
 import litdata as ld
 
+# Read data from AWS S3 using boto3
+aws_storage_options={
+    "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
+    "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
+}
+# You can also pass the session options. (for boto3 only)
+aws_session_options = {
+  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
+  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
+
+# Read Data from AWS S3 with Unsigned Request using boto3
+aws_storage_options={
+  "config": botocore.config.Config(
+        retries={"max_attempts": 1000, "mode": "adaptive"}, # Configure retries for S3 operations
+        signature_version=botocore.UNSIGNED, # Use unsigned requests
+  )
+}
+dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
+
+
 # Read data from AWS S3 using s5cmd
 # Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
 aws_storage_options={
@@ -432,19 +454,6 @@ aws_storage_options={
   "S3_ENDPOINT_URL": os.environ['AWS_ENDPOINT_URL'],  # Required only for custom endpoints
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
-
-# Read data from AWS S3 using boto3
-os.environ["DISABLE_S5CMD"] = "1"
-aws_storage_options={
-    "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
-    "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
-}
-# You can also pass the session options. (for boto3 only)
-aws_session_options = {
-  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
-  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
-}
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
 
 
 # Read data from GCS

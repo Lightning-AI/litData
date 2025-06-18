@@ -460,6 +460,7 @@ class BaseWorker:
         worker_index: int,
         num_workers: int,
         node_rank: int,
+        msg_queue: Queue,
         data_recipe: "DataRecipe",
         input_dir: Dir,
         output_dir: Dir,
@@ -485,6 +486,7 @@ class BaseWorker:
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.node_rank = node_rank
+        self.msg_queue = msg_queue
         self.data_recipe = data_recipe
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -533,7 +535,7 @@ class BaseWorker:
         except Exception:
             traceback_format = traceback.format_exc()
             self.error_queue.put(traceback_format)
-        print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is done.")
+        self.msg_queue.put_nowait(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is done.")
 
     def _setup(self) -> None:
         self._set_environ_variables()
@@ -590,7 +592,9 @@ class BaseWorker:
                     or combined_data == ALL_DONE
                     or (self.keep_data_ordered and num_downloader_finished == self.num_downloaders)
                 ):
-                    print(f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating.")
+                    self.msg_queue.put_nowait(
+                        f"Worker {str(_get_node_rank() * self.num_workers + self.worker_index)} is terminating."
+                    )
 
                     if isinstance(self.data_recipe, DataChunkRecipe):
                         self._handle_data_chunk_recipe_end()
@@ -669,6 +673,7 @@ class BaseWorker:
             encryption=self.data_recipe.encryption,
             writer_chunk_index=self.writer_starting_chunk_index,
             item_loader=self.item_loader,
+            msg_queue=self.msg_queue,
         )
         self.cache._reader._rank = _get_node_rank() * self.num_workers + self.worker_index
 
@@ -1143,6 +1148,9 @@ class DataProcessor:
         self.keep_data_ordered = keep_data_ordered
         self.shared_queue: Union[Queue, FakeQueue, None] = None
 
+        # Queue for routing worker logs to the main process without breaking tqdm output.
+        self.msg_queue: Queue = Queue()
+
         self.state_dict = state_dict or dict.fromkeys(range(self.num_workers), 0)
 
         if self.reader is not None and self.weights is not None:
@@ -1294,6 +1302,8 @@ class DataProcessor:
         total_num_items = len(user_items) if isinstance(user_items, list) else -1
 
         while True:
+            flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
+
             # Exit early if all the workers are done.
             # This means either there were some kinda of errors, or optimize function was very small.
             if all(not w.is_alive() for w in self.workers):
@@ -1335,7 +1345,10 @@ class DataProcessor:
                 with open("status.json", "w") as f:
                     json.dump({"progress": str(100 * current_total * num_nodes / total_num_items) + "%"}, f)
 
+        flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
+
         if _TQDM_AVAILABLE:
+            pbar.clear()
             pbar.close()
 
         print("Workers are finished.")
@@ -1386,6 +1399,7 @@ class DataProcessor:
                 worker_idx,
                 self.num_workers,
                 _get_node_rank(),
+                self.msg_queue,
                 data_recipe,
                 self.input_dir,
                 self.output_dir,
@@ -1602,3 +1616,31 @@ def in_notebook() -> bool:
     shell.
     """
     return "ipykernel" in sys.modules
+
+
+def flush_msg_queue(msg_queue: Queue, pbar: Optional[Any] = None):
+    """Flush messages from a queue and print them without breaking the tqdm progress bar.
+
+    This function drains all available messages from the given queue and prints them.
+    If a tqdm progress bar is provided, it temporarily clears and restores the bar
+    to avoid visual glitches during printing.
+
+    Args:
+        msg_queue (Queue): The queue containing log or status messages.
+        pbar (Optional[tqdm]): The tqdm progress bar to preserve formatting. Optional.
+    """
+    # check if there're msgs in the msg queue
+    msgs = []
+    while True:
+        try:
+            msg = msg_queue.get_nowait()
+            msgs.append(msg)
+        except Empty:
+            break
+    if len(msgs) > 0:
+        if pbar is not None:
+            pbar.clear()  # clear the previous progress bar
+        for msg in msgs:
+            print(msg)
+        if pbar is not None:
+            pbar.display()  # display the progress bar again

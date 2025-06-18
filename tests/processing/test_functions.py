@@ -225,6 +225,7 @@ def test_optimize_append_overwrite(tmpdir):
     assert ds[:] == [(i, i**2, i**3) for i in range(0, 5)]
 
 
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="Multiprocessing issues on Python 3.12+")
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 def test_optimize_checkpoint_in_none_and_append_mode(tmpdir):
     output_dir = str(tmpdir / "output_dir")
