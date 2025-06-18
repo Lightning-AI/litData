@@ -19,6 +19,7 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
@@ -266,6 +267,7 @@ class BinaryReader:
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
         max_pre_download: int = 2,
+        no_store: bool = False,
     ) -> None:
         """The BinaryReader enables to read chunked dataset in an efficient way.
 
@@ -283,6 +285,7 @@ class BinaryReader:
             storage_options: Additional connection options for accessing storage services.
             session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the reader.
+            no_store: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
 
         """
         super().__init__()
@@ -311,6 +314,7 @@ class BinaryReader:
         self._storage_options = storage_options
         self._session_options = session_options
         self._max_pre_download = max_pre_download
+        self.no_store = no_store
 
     def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
         # Load the config containing the index
@@ -365,7 +369,7 @@ class BinaryReader:
         if self._config is None and self._try_load_config() is None:
             raise Exception("The reader index isn't defined.")
 
-        if self._config and (self._config._remote_dir or self._config._compressor):
+        if self._config and (self._config._remote_dir or self._config._compressor) and not self.no_store:
             # Create and start the prepare chunks thread
             if self._prepare_thread is None and self._config:
                 self._prepare_thread = PrepareChunksThread(
@@ -397,9 +401,20 @@ class BinaryReader:
         chunk_filepath, begin, filesize_bytes = self.config[index]
 
         if isinstance(self._item_loader, PyTreeLoader):
-            item = self._item_loader.load_item_from_chunk(
-                index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
-            )
+            if (
+                self.no_store
+                and self._config
+                and self._config._remote_dir
+                and self._config._config
+                and not self._config._config.get("encryption", None)
+                and not self._config._config.get("compression", None)
+            ):
+                raw_bytes = self.read_item_bytes(index, begin)
+                item = self._item_loader.load_item_from_bytes(raw_bytes, index.chunk_index)
+            else:
+                item = self._item_loader.load_item_from_chunk(
+                    index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
+                )
         else:
             item = self._item_loader.load_item_from_chunk(
                 index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes
@@ -411,6 +426,7 @@ class BinaryReader:
             self._config
             and (self._config._remote_dir or self._config._compressor)
             and index.chunk_index != self._last_chunk_index
+            and not self.no_store
         ):
             assert self._prepare_thread
             assert self._last_chunk_index is not None
@@ -449,6 +465,27 @@ class BinaryReader:
             _get_log_msg({"name": f"reader_reading_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"})
         )
         return item
+
+    def read_item_bytes(self, index: ChunkedIndex, begin: int) -> bytes:
+        """Reads the raw byte content for a specific item in a chunk without downloading the full chunk.
+
+        Computes the byte offset for the item based on its index, retrieves the start and end positions
+        from the chunk's index table, and downloads only the relevant byte range corresponding to the item.
+
+        Args:
+            index (ChunkedIndex): The index of the item within a chunk.
+            begin (int): The starting index of the chunk (used to compute relative offset).
+
+        Returns:
+            bytes: The raw byte content for the specified item.
+        """
+        UINT32_BYTE_WIDTH = 4  # Number of bytes in a uint32
+        offset_multiplier = 1 + (index.index - begin) if index.index >= begin else index.index + 1
+        offset = offset_multiplier * UINT32_BYTE_WIDTH
+        pair = self.config.download_chunk_bytes_from_index(index.chunk_index, offset, 8)
+        begin, end = np.frombuffer(pair, np.uint32)
+        actual_item_length = end - begin
+        return self.config.download_chunk_bytes_from_index(index.chunk_index, begin, actual_item_length)
 
     def get_length(self) -> int:
         """Get the number of samples across all chunks."""

@@ -90,6 +90,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function to apply to each item in the dataset.
+            no_store: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -201,6 +202,19 @@ class StreamingDataset(IterableDataset):
             if not callable(transform):
                 raise ValueError(f"Transform should be a callable. Found {transform}")
             self.transform = transform
+        self._no_store = True  # true by default, when iterating, turn this off to store the chunks in the cache
+
+    @property
+    def no_store(self) -> bool:
+        return self._no_store
+
+    @no_store.setter
+    def no_store(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise ValueError(f"no_store should be a boolean. Found {value}")
+        self._no_store = value
+        assert self.cache is not None, "Cache must be initialized before setting no_store."
+        self.cache._reader.no_store = value
 
     def set_shuffle(self, shuffle: bool) -> None:
         self.shuffle = shuffle
@@ -240,6 +254,7 @@ class StreamingDataset(IterableDataset):
             storage_options=self.storage_options,
             session_options=self.session_options,
             max_pre_download=self.max_pre_download,
+            no_store=self._no_store,
         )
         cache._reader._try_load_config()
 
@@ -279,6 +294,7 @@ class StreamingDataset(IterableDataset):
         return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
 
     def __iter__(self) -> "StreamingDataset":
+        print("data set iter called")
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
         logger.debug(_get_log_msg({"name": "iterating_dataset", "ph": "B"}))
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
@@ -287,6 +303,7 @@ class StreamingDataset(IterableDataset):
         self.worker_env = _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
+        self.no_store = False  # reset no_store to False, and store chunks in the cache
 
         # Handle restart
         if self._state_dict:
@@ -403,6 +420,7 @@ class StreamingDataset(IterableDataset):
         self.worker_next_chunk_index += 1
 
     def __getitem__(self, index: Union[ChunkedIndex, int]) -> Any:
+        print(f"dataset getitem called with {index=}")
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -410,8 +428,13 @@ class StreamingDataset(IterableDataset):
         if isinstance(index, int):
             index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
         elif isinstance(index, slice):
+            if index == slice(None, None, None):  # [:]
+                # reset no_store to False, and store chunks in cache to avoid making multiple requests for same chunk
+                self.no_store = False
             start, stop, step = index.indices(len(self))
+            print(f"dataset getitem called with {start=}, {stop=}, {step=}")
             _my_indices = list(range(start, stop, step))
+            print(f"dataset getitem called with {len(_my_indices)=}; {_my_indices=}")
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
             return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
         logger.debug(
@@ -436,6 +459,7 @@ class StreamingDataset(IterableDataset):
             self.current_epoch += 1
             self.reset_state_dict()
             logger.debug(_get_log_msg({"name": "iterating_dataset", "ph": "E"}))
+            self.no_store = True  # reset no_store to True
             raise StopIteration
 
         # Lazily re-populate the interval to reduce memory usage.
@@ -444,6 +468,7 @@ class StreamingDataset(IterableDataset):
             if self.num_chunks is not None and self.worker_next_chunk_index >= self.num_chunks:
                 self.current_epoch += 1
                 self.reset_state_dict()
+                self.no_store = True  # reset no_store to True
                 raise StopIteration
 
             # if upcoming_indexes is empty, means either:
