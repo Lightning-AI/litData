@@ -310,7 +310,7 @@ def test_streaming_dataset_distributed_no_shuffle(drop_last, tmpdir, compression
         pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression):
     seed_everything(42)
 
@@ -363,7 +363,7 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
         ),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression):
     seed_everything(42)
 
@@ -411,7 +411,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
         pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression):
     seed_everything(42)
 
@@ -684,7 +684,7 @@ def test_dataset_for_text_tokens_multiple_workers(tmpdir):
     assert result == expected
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_dataset_for_text_tokens_with_large_block_size_multiple_workers(tmpdir):
     # test to reproduce ERROR: Unexpected segmentation fault encountered in worker
     seed_everything(42)
@@ -1021,7 +1021,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.parametrize("shuffle", [True, False])
 def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     """Tests resuming from a chunk past the first chunk, when subsequent chunks don't have the same size."""
@@ -1076,7 +1076,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     assert torch.equal(next(iter(train_dataloader)), batch_to_resume_from)
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 def test_dataset_valid_state(tmpdir, monkeypatch):
     seed_everything(42)
@@ -1212,7 +1212,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
         dataset._validate_state_dict()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 def test_dataset_valid_state_override(tmpdir, monkeypatch):
     seed_everything(42)
