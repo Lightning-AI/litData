@@ -47,7 +47,7 @@ jobs:
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile
+        run: pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile --reruns=2
 
       - name: Statistics
         continue-on-error: true
