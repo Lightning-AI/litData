@@ -734,12 +734,7 @@ def test_data_processing_optimize(monkeypatch, tmpdir):
 
     optimize(optimize_fn, inputs, output_dir=output_dir, chunk_size=2, num_workers=1)
 
-    assert sorted(os.listdir(output_dir)) == [
-        "chunk-0-0.bin",
-        "chunk-0-1.bin",
-        "chunk-0-2.bin",
-        "index.json",
-    ]
+    assert sorted(os.listdir(output_dir)) == ["chunk-0-0.bin", "chunk-0-1.bin", "chunk-0-2.bin", "index.json"]
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
@@ -844,12 +839,7 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
 
     optimize(OptimizeYield(), inputs, output_dir=output_dir, chunk_size=2, num_workers=1)
 
-    assert sorted(os.listdir(output_dir)) == [
-        "chunk-0-0.bin",
-        "chunk-0-1.bin",
-        "chunk-0-2.bin",
-        "index.json",
-    ]
+    assert sorted(os.listdir(output_dir)) == ["chunk-0-0.bin", "chunk-0-1.bin", "chunk-0-2.bin", "index.json"]
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
