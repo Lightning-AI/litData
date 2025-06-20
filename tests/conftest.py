@@ -1,6 +1,5 @@
 import os
 import shutil
-import signal
 import sys
 import tempfile
 import threading
@@ -19,7 +18,7 @@ from litdata.streaming.reader import PrepareChunksThread
 from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def teardown_process_group():
     """Ensures distributed process group gets closed before the next test runs."""
     yield
@@ -40,9 +39,9 @@ def set_env(monkeypatch):
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def disable_signals(monkeypatch):
-    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
+# @pytest.fixture(autouse=True)
+# def disable_signals(monkeypatch):
+#     monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
@@ -149,7 +148,7 @@ def lightning_sdk_mock(monkeypatch):
     return lightning_sdk
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def _thread_police():
     """Attempts stopping left-over threads to avoid test interactions.
 

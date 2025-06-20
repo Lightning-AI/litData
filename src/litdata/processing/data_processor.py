@@ -558,8 +558,6 @@ class BaseWorker:
         if self.remover and self.remover.is_alive():
             self.remover.join()
 
-        sleep(5)  # Give some buffer time for file creation/deletion
-
     def _loop(self) -> None:
         """The main loop of the worker.
 
@@ -1354,8 +1352,6 @@ class DataProcessor:
             pbar.close()
 
         print("Workers are finished.")
-
-        sleep(5)  # Give some buffer time for file creation/deletion
 
         size = len(workers_user_items) if workers_user_items is not None else None
         result = data_recipe._done(size, self.delete_cached_files, self.output_dir)
