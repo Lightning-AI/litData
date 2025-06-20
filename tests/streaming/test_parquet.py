@@ -2,7 +2,6 @@ import json
 import os
 import sys
 import tempfile
-import uuid
 from contextlib import nullcontext
 from fnmatch import fnmatch
 from unittest.mock import Mock, patch
@@ -136,9 +135,7 @@ def test_get_parquet_indexer_cls(pq_url, tmp_path, cls, expectation, monkeypatch
 @pytest.mark.parametrize(("pre_load_chunk"), [False, True])
 @pytest.mark.parametrize(("low_memory"), [False, True])
 def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data, pre_load_chunk, low_memory):
-    uuid_str = uuid.uuid4().hex  # Unique identifier for the dataset
-    hf_url = f"hf://datasets/some_org/some_repo/{uuid_str}"
-
+    hf_url = "hf://datasets/some_org/some_repo/some_path"
     # Test case 1: Invalid item_loader
     with pytest.raises(ValueError, match="Invalid item_loader for hf://datasets."):
         StreamingDataset(hf_url, item_loader=PyTreeLoader)
@@ -178,8 +175,6 @@ def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data
     ],
 )
 def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length, context):
-    unique_path = f"temp_path_{uuid.uuid4().hex[:8]}"
-    hf_url = hf_url.replace("some_path", unique_path)
     with context:
         ds = StreamingDataset(hf_url)
         pattern = os.path.basename(hf_url)
@@ -192,8 +187,7 @@ def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
 @pytest.mark.parametrize("default", [False, True])
 def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
-    unique_path = f"temp_path_{uuid.uuid4().hex[:8]}"
-    hf_url = f"hf://datasets/some_org/some_repo/{unique_path}"
+    hf_url = "hf://datasets/some_org/some_repo/some_path"
     with tempfile.TemporaryDirectory() as tmpdir:
         ds = StreamingDataset(hf_url, cache_dir=None if default else tmpdir)
         assert ds.cache_dir.path == (None if default else os.path.realpath(tmpdir))
