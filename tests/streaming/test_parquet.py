@@ -136,6 +136,7 @@ def test_get_parquet_indexer_cls(pq_url, tmp_path, cls, expectation, monkeypatch
 @pytest.mark.parametrize(("low_memory"), [False, True])
 def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data, pre_load_chunk, low_memory):
     hf_url = "hf://datasets/some_org/some_repo/some_path"
+
     # Test case 1: Invalid item_loader
     with pytest.raises(ValueError, match="Invalid item_loader for hf://datasets."):
         StreamingDataset(hf_url, item_loader=PyTreeLoader)
