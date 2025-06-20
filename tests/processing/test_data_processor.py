@@ -739,7 +739,7 @@ def test_data_processing_optimize(monkeypatch, tmpdir):
         "chunk-0-1.bin",
         "chunk-0-2.bin",
         "index.json",
-    ], f"{tmpdir=}"
+    ]
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
@@ -849,7 +849,7 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
         "chunk-0-1.bin",
         "chunk-0-2.bin",
         "index.json",
-    ], f"{tmpdir=}"
+    ]
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
