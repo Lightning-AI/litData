@@ -1352,7 +1352,6 @@ class DataProcessor:
             pbar.close()
 
         print("Workers are finished.")
-
         size = len(workers_user_items) if workers_user_items is not None else None
         result = data_recipe._done(size, self.delete_cached_files, self.output_dir)
 
