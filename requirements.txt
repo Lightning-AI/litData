@@ -1,6 +1,6 @@
 torch
 torchvision
-lightning-utilities>=0.14.2
+lightning-utilities
 filelock
 numpy
 boto3
