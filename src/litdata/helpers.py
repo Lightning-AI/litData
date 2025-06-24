@@ -1,19 +1,18 @@
 import functools
-import warnings
-from typing import Any, Optional
+from typing import Optional
 
 import requests
+from lightning_utilities import WarningCache
 from packaging import version as packaging_version
 
+# class WarningCache(set):
+#     """Cache for warnings."""
 
-class WarningCache(set):
-    """Cache for warnings."""
-
-    def warn(self, message: str, stacklevel: int = 5, **kwargs: Any) -> None:
-        """Trigger warning message."""
-        if message not in self:
-            self.add(message)
-            warnings.warn(message, stacklevel=stacklevel, **kwargs)
+#     def warn(self, message: str, stacklevel: int = 5, **kwargs: Any) -> None:
+#         """Trigger warning message."""
+#         if message not in self:
+#             self.add(message)
+#             warnings.warn(message, stacklevel=stacklevel, **kwargs)
 
 
 warning_cache = WarningCache()
