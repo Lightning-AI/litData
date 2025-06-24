@@ -50,7 +50,6 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
 
         The length of the sequence must match the number of wrapped datasets.
         """
-
         # Defer the import to avoid overhead when not required
         from collections.abc import Sequence
 

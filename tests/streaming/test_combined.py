@@ -612,9 +612,8 @@ def test_combined_dataset_per_dataset_batch_size(batch_sizes):
     """Validate that when individual batch sizes are provided for each inner dataset
     the iterator respects these limits when *batching_method='per_stream'*.
     """
-
     # Build two trivial iterable datasets that produce easily distinguishable values
-    dataset1 = SimpleDataset(0, 200)   # dataset 0 values 0-199
+    dataset1 = SimpleDataset(0, 200)  # dataset 0 values 0-199
     dataset2 = SimpleDataset(1000, 1200)  # dataset 1 values 1000-1199
 
     cds = CombinedStreamingDataset(

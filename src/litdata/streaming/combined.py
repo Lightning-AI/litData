@@ -187,6 +187,7 @@ class _CombinedDatasetIterator(Iterator):
         self._batch_size = batch_size
         # Validate when a sequence is provided
         from collections.abc import Sequence as _Sequence
+
         if isinstance(batch_size, _Sequence):
             if len(batch_size) != len(datasets):
                 raise ValueError(
