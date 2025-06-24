@@ -41,13 +41,19 @@ jobs:
       - name: Install package & dependencies
         run: |
           pip --version
-          pip install -U lightning-sdk
+          pip install -U --force-reinstall --no-cache-dir lightning-sdk
           pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
           pip list
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile --reruns=2
+        run: |
+          PYVER="${{ matrix.python-version }}"
+          if [ "$RUNNER_OS" = "Windows" ] && [ "$PYVER" != "3.12" ]; then
+            pytest . -v --cov=litdata --durations=100
+          else
+            pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile --reruns=2
+          fi
 
       - name: Statistics
         continue-on-error: true

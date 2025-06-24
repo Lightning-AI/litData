@@ -4,6 +4,7 @@ import random
 import sys
 from functools import partial
 from queue import Empty
+from time import sleep
 from typing import Any, List
 from unittest import mock
 from unittest.mock import ANY, Mock
@@ -463,6 +464,8 @@ def test_data_processsor(fast_dev_run, delete_cached_files, tmpdir, monkeypatch)
 
     chunks = fast_dev_run_enabled_chunks if fast_dev_run == 10 else fast_dev_run_disabled_chunks
 
+    sleep(5)  # wait for some time to ensure all files are written
+
     assert sorted(os.listdir(cache_dir)) == chunks
 
     files = []
@@ -646,6 +649,8 @@ def test_data_process_transform(monkeypatch, tmpdir):
         fast_dev_run=False,
     )
     data_processor.run(ImageResizeRecipe())
+
+    sleep(5)  # Ensure all files are written
 
     assert sorted(os.listdir(output_dir)) == ["0.JPEG", "1.JPEG", "2.JPEG", "3.JPEG", "4.JPEG"]
 
