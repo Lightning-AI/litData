@@ -338,8 +338,8 @@ class BinaryReader:
         return self._config
 
     def setup_thread_and_download_chunk(self, index: ChunkedIndex) -> None:
-        # Create and start the prepare chunks thread
         if self._config and (self._config._remote_dir or self._config._compressor):
+            # Create and start the prepare chunks thread
             if self._prepare_thread is None and self._config:
                 self._prepare_thread = PrepareChunksThread(
                     self._config,
