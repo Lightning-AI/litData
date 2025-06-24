@@ -1,13 +1,19 @@
+av >=14.0.0
 coverage ==7.8.*
 cryptography==42.0.8
 mosaicml-streaming==0.11.0
+torchaudio >=2.7.0
 pytest ==8.4.*
 pytest-cov ==6.1.1
 pytest-timeout ==2.3.1
 pytest-rerunfailures ==14.0
 pytest-random-order ==1.1.1
 pandas
+pyarrow >=20.0.0
+polars >1.0.0
 lightning
 transformers <4.53.0
 zstd
 numpy < 2.0
+s5cmd >=0.2.0
+soundfile >=0.13.0 # required for torchaudio backend
