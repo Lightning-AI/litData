@@ -624,7 +624,6 @@ def test_data_process_transform(monkeypatch, tmpdir):
 
     input_dir = os.path.join(tmpdir, "input_dir")
     os.makedirs(input_dir)
-
     imgs = []
     for i in range(5):
         np_data = np.random.randint(255, size=(28, 28), dtype=np.uint32)
