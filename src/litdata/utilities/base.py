@@ -40,11 +40,34 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         for dataset in self._datasets:
             dataset.set_shuffle(shuffle)
 
-    def set_batch_size(self, batch_size: int) -> None:
-        """Set the current batch size to the datasets."""
-        self.batch_size = batch_size
-        for dataset in self._datasets:
-            dataset.set_batch_size(batch_size)
+    def set_batch_size(self, batch_size):  # type: ignore[override]
+        """Set the current batch size.
+
+        This method now supports either:
+
+        1. a single ``int`` applied to all wrapped datasets (previous behaviour), or
+        2. a ``Sequence[int]`` that specifies one batch size per wrapped dataset.
+
+        The length of the sequence must match the number of wrapped datasets.
+        """
+
+        # Defer the import to avoid overhead when not required
+        from collections.abc import Sequence
+
+        self.batch_size = batch_size  # store as-is for access in the iterator
+
+        # Apply to each dataset
+        if isinstance(batch_size, Sequence):
+            if len(batch_size) != len(self._datasets):
+                raise ValueError(
+                    "The length of `batch_size` must match the number of datasets when passing a sequence."
+                )
+            for bs, dataset in zip(batch_size, self._datasets):
+                dataset.set_batch_size(bs)
+        else:
+            # Assume scalar int
+            for dataset in self._datasets:
+                dataset.set_batch_size(batch_size)
 
     def set_num_workers(self, num_workers: int) -> None:
         """Set the current number of workers to the datasets."""
