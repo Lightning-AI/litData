@@ -267,7 +267,7 @@ class BinaryReader:
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
         max_pre_download: int = 2,
-        no_store: bool = False,
+        on_demand_bytes: bool = False,
     ) -> None:
         """The BinaryReader enables to read chunked dataset in an efficient way.
 
@@ -285,7 +285,7 @@ class BinaryReader:
             storage_options: Additional connection options for accessing storage services.
             session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the reader.
-            no_store: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
+            on_demand_bytes: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
 
         """
         super().__init__()
@@ -314,7 +314,7 @@ class BinaryReader:
         self._storage_options = storage_options
         self._session_options = session_options
         self._max_pre_download = max_pre_download
-        self.no_store = no_store
+        self.on_demand_bytes = on_demand_bytes
 
     def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
         # Load the config containing the index
@@ -403,7 +403,7 @@ class BinaryReader:
 
         if isinstance(self._item_loader, PyTreeLoader):
             if (
-                self.no_store
+                self.on_demand_bytes
                 and self._config
                 and self._config._remote_dir
                 and self._config._config

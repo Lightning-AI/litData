@@ -203,13 +203,13 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     assert thread._has_exited
 
 
-@pytest.mark.parametrize("no_store", [True, False])
-def test_reader_read_bytes(tmpdir, monkeypatch, no_store):
+@pytest.mark.parametrize("on_demand_bytes", [True, False])
+def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
     monkeypatch.setattr(reader, "_LONG_DEFAULT_TIMEOUT", 0.1)
 
     cache_dir = os.path.join(tmpdir, "cache_dir")
     os.makedirs(cache_dir, exist_ok=True)
-    cache = Cache(input_dir=cache_dir, chunk_size=2, max_cache_size=28020, no_store=no_store)
+    cache = Cache(input_dir=cache_dir, chunk_size=2, max_cache_size=28020, on_demand_bytes=on_demand_bytes)
 
     for i in range(25):
         cache[i] = i
