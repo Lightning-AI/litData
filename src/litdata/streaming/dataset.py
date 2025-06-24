@@ -90,7 +90,6 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function to apply to each item in the dataset.
-            no_store: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
         """
         _check_version_and_prompt_upgrade(__version__)
 
