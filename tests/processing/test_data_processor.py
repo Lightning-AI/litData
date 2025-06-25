@@ -3,6 +3,7 @@ import os
 import random
 import sys
 from functools import partial
+from io import BytesIO
 from queue import Empty
 from typing import Any, List
 from unittest import mock
@@ -1146,6 +1147,8 @@ def test_load_torch_audio(tmpdir, compression):
 
     import torchaudio
 
+    torchaudio.set_audio_backend("soundfile")
+
     optimize(
         fn=create_synthetic_audio_bytes,
         inputs=list(range(100)),
@@ -1157,9 +1160,11 @@ def test_load_torch_audio(tmpdir, compression):
 
     dataset = StreamingDataset(input_dir=str(tmpdir))
     sample = dataset[0]
-    tensor = torchaudio.load(sample["content"])
-    assert tensor[0].shape == torch.Size([1, 16000])
-    assert tensor[1] == 16000
+    buffer = BytesIO(sample["content"])
+    buffer.seek(0)
+    tensor, sample_rate = torchaudio.load(buffer, format="wav")
+    assert tensor.shape == torch.Size([1, 16000])
+    assert sample_rate == 16000
 
 
 def create_synthetic_audio_file(filepath) -> dict:
