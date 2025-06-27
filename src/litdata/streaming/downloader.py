@@ -78,18 +78,25 @@ class Downloader(ABC):
 
     def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
         chunk_filename = self._chunks[chunk_index]["filename"]
+        local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
         remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
 
-        return self.download_bytes(remote_chunkpath, offset, length)
+        return self.download_bytes(remote_chunkpath, offset, length, local_chunkpath)
 
     def download_file(self, remote_chunkpath: str, local_chunkpath: str) -> None:
         pass
 
-    def download_bytes(self, remote_chunkpath: str, offset: int, length: int) -> bytes:
-        raise NotImplementedError(
-            f"`download_bytes` method is not implemented for the {self.__class__.__name__} class. "
-            "Please use a specific downloader implementation that supports byte range downloads."
-        )
+    def download_bytes(self, remote_chunkpath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Download a specific range of bytes from the remote file.
+
+        If this method is not overridden in a subclass, it defaults to downloading the full file
+        by calling `download_file` and then reading the desired byte range from the local copy.
+        """
+        self.download_file(remote_chunkpath, local_chunkpath)
+        # read the specified byte range from the local file
+        with open(local_chunkpath, "rb") as f:
+            f.seek(offset)
+            return f.read(length)
 
 
 class S3Downloader(Downloader):
@@ -177,7 +184,7 @@ class S3Downloader(Downloader):
                         Config=TransferConfig(use_threads=False),
                     )
 
-    def download_bytes(self, remote_filepath: str, offset: int, length: int) -> bytes:
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
@@ -238,7 +245,7 @@ class GCPDownloader(Downloader):
             blob = bucket.blob(key)
             blob.download_to_filename(local_filepath)
 
-    def download_bytes(self, remote_filepath: str, offset: int, length: int) -> bytes:
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         from google.cloud import storage
 
         obj = parse.urlparse(remote_filepath)
