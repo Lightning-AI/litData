@@ -24,6 +24,7 @@ _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")
 _DEFAULT_LIGHTNING_CACHE_DIR = os.path.join("/cache", "chunks")
+_LITDATA_CACHE_DIR = os.getenv("LITDATA_CACHE_DIR", None)
 _SUPPORTED_PROVIDERS = ("s3", "gs")  # cloud providers supported by litdata for uploading (optimize, map, merge, etc)
 
 # This is required for full pytree serialization / deserialization support
