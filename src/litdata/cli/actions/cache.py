@@ -12,53 +12,21 @@
 # limitations under the License.
 
 import shutil
-
-import typer
+from argparse import Namespace
 
 from litdata.utilities.dataset_utilities import get_default_cache_dir
 
-app = typer.Typer(
-    help="""
-LitData CLI – Transform, Optimize & Stream data for AI at scale.
 
-LitData simplifies and accelerates data workflows for machine learning.
-Easily scale data processing tasks—like scraping, resizing, inference, or embedding creation
-across local or cloud environments.
-
-Optimize datasets to boost model training speed and handle large remote datasets efficiently,
-without full local downloads.
-"""
-)
-
-cache_app = typer.Typer()
-app.add_typer(cache_app, name="cache")
-
-
-@cache_app.callback()
-def cache(ctx: typer.Context) -> None:
-    """Subcommand group for cache-related operations."""
-
-
-@cache_app.command("clear")
-def clear_cache() -> None:
+def clear_cache(args: Namespace) -> None:
     """Clear default cache used for StreamingDataset and other utilities."""
     streaming_default_cache_dir = get_default_cache_dir()
 
     shutil.rmtree(streaming_default_cache_dir, ignore_errors=True)
 
-    typer.echo(f"Cache directory '{streaming_default_cache_dir}' cleared.")
+    print(f"Cache directory '{streaming_default_cache_dir}' cleared.")
 
 
-@cache_app.command("path")
-def show_cache_path() -> None:
+def show_cache_path(args: Namespace) -> None:
     """Show the path to the cache directory."""
     streaming_default_cache_dir = get_default_cache_dir()
-    typer.echo(f"Default cache directory: {streaming_default_cache_dir}")
-
-
-def main() -> None:
-    app()
-
-
-if __name__ == "__main__":
-    main()
+    print(f"Default cache directory: {streaming_default_cache_dir}")

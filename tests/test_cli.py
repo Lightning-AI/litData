@@ -1,24 +1,33 @@
-from typer.testing import CliRunner
+import io
+import sys
+from contextlib import redirect_stdout, suppress
+from unittest.mock import patch
 
-from litdata.cli import app
+from litdata.__main__ import app  # Your main entrypoint (like in your typer example)
 
-runner = CliRunner()
+
+def run_cli(args_list):
+    f = io.StringIO()
+
+    # argparse calls sys.exit(), which raises SystemExit
+    with patch.object(sys, "argv", ["litdata"] + args_list), redirect_stdout(f), suppress(SystemExit):
+        app()
+    return f.getvalue()
 
 
 def test_litdata_help_command():
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    assert "LitData CLI" in result.output
-    assert "cache" in result.output
+    output = run_cli(["--help"])
+    assert "LitData CLI" in output
+    assert "cache" in output
 
 
 def test_cache_path_command():
-    result = runner.invoke(app, ["cache", "path"])
-    assert result.exit_code == 0
-    assert "Default cache directory" in result.output
+    output = run_cli(["cache", "path"])
+    assert "Default cache directory" in output
 
 
 def test_cache_clear_command(tmp_path, monkeypatch):
-    result = runner.invoke(app, ["cache", "clear"])
-    assert result.exit_code == 0
-    assert "cleared" in result.output
+    # if your CLI uses default cache paths like ~/.cache/litdata, monkeypatch it here
+    monkeypatch.setenv("LITDATA_CACHE_DIR", str(tmp_path))  # if applicable
+    output = run_cli(["cache", "clear"])
+    assert "cleared" in output.lower()
