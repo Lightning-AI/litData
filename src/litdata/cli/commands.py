@@ -53,7 +53,7 @@ def register_cache_subcommand(subparser: _SubParsersAction) -> None:
 def register_optimize_subcommand(subparser: _SubParsersAction) -> None:
     """Add the optimize subcommand to the main parser."""
     optimize_parser = subparser.add_parser("optimize", help="Optimize related commands.", formatter_class=LitFormatter)
-    optimize_parser.description = "Optimize related commands for managing dataset optimizations."
+    optimize_parser.description = "Optimize your dataset for faster streaming and AI model training."
 
     optimize_parser.add_argument(
         "--dataset",
