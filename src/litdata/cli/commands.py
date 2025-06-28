@@ -13,8 +13,8 @@
 
 from argparse import _SubParsersAction
 
-from litdata.cli.actions.cache import clear_cache, show_cache_path
-from litdata.cli.actions.optimize import optimize_dataset
+from litdata.cli.handler.cache import clear_cache, show_cache_path
+from litdata.cli.handler.optimize import optimize_dataset
 from litdata.cli.parser import LitFormatter
 
 
