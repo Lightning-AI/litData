@@ -14,6 +14,7 @@
 from argparse import _SubParsersAction
 
 from litdata.cli.actions.cache import clear_cache, show_cache_path
+from litdata.cli.actions.optimize import optimize_dataset
 from litdata.cli.parser import LitFormatter
 
 
@@ -61,11 +62,6 @@ def register_optimize_subcommand(subparser: _SubParsersAction) -> None:
         help="Path to the dataset to optimize.",
     )
     optimize_parser.set_defaults(func=optimize_dataset)
-
-
-def optimize_dataset(args) -> None:
-    """Handle the optimize command."""
-    print(f"Optimizing dataset at {args.dataset}...")
 
 
 # List containing references to all functions that register subcommands
