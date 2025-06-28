@@ -1,6 +1,5 @@
 torch
 torchvision
-typer
 lightning-utilities
 filelock
 numpy
