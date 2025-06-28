@@ -60,9 +60,11 @@ def register_optimize_subcommand(subparser: _SubParsersAction) -> None:
         required=True,
         help="Path to the dataset to optimize.",
     )
-    optimize_parser.set_defaults(func=lambda args: print(f"Optimizing dataset at {args.dataset}..."))
+    optimize_parser.set_defaults(func=optimize_dataset)
 
-
+def optimize_dataset(args) -> None:
+    """Handle the optimize command."""
+    print(f"Optimizing dataset at {args.dataset}...")
 # List containing references to all functions that register subcommands
 _REGISTERED_COMMANDS = [
     register_cache_subcommand,
