@@ -69,7 +69,7 @@ def optimize_dataset(args) -> None:
 
 
 # List containing references to all functions that register subcommands
-_REGISTERED_COMMANDS = [
+COMMAND_REGISTRY = [
     register_cache_subcommand,
     register_optimize_subcommand,
 ]

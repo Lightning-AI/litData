@@ -15,7 +15,7 @@ from argparse import ArgumentParser, Namespace
 from typing import Tuple
 
 from litdata.cli import LitFormatter
-from litdata.cli.commands import _REGISTERED_COMMANDS
+from litdata.cli.commands import COMMAND_REGISTRY
 
 
 def parse_args() -> Tuple[Namespace, ArgumentParser]:
@@ -41,7 +41,7 @@ without full local downloads.""",
     )
 
     # register all commands
-    for cmd_fn in _REGISTERED_COMMANDS:
+    for cmd_fn in COMMAND_REGISTRY:
         cmd_fn(subparsers)
 
     return parser.parse_args(), parser
