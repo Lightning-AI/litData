@@ -52,9 +52,9 @@ def mosaic_mds_index_data():
     }
 
 
-@pytest.fixture
-def combined_dataset(tmpdir_factory):
-    tmpdir = tmpdir_factory.mktemp("data")
+@pytest.fixture(scope="session")
+def prepare_combined_dataset(tmpdir_factory):
+    tmpdir = tmpdir_factory.mktemp("combined_dataset")
     datasets = [str(tmpdir.join(f"dataset_{i}")) for i in range(2)]
     for dataset in datasets:
         cache = Cache(input_dir=dataset, chunk_bytes="64MB")
@@ -62,9 +62,14 @@ def combined_dataset(tmpdir_factory):
             cache[i] = i
         cache.done()
         cache.merge()
+    return datasets
 
-    dataset_1 = StreamingDataset(datasets[0], shuffle=True)
-    dataset_2 = StreamingDataset(datasets[1], shuffle=True)
+
+@pytest.fixture
+def combined_dataset(prepare_combined_dataset):
+    dataset_1_path, dataset_2_path = prepare_combined_dataset
+    dataset_1 = StreamingDataset(dataset_1_path)
+    dataset_2 = StreamingDataset(dataset_2_path)
     return CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
 
 

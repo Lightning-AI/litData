@@ -19,6 +19,7 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
@@ -266,6 +267,7 @@ class BinaryReader:
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
         max_pre_download: int = 2,
+        on_demand_bytes: bool = False,
     ) -> None:
         """The BinaryReader enables to read chunked dataset in an efficient way.
 
@@ -283,6 +285,7 @@ class BinaryReader:
             storage_options: Additional connection options for accessing storage services.
             session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded by the reader.
+            on_demand_bytes: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
 
         """
         super().__init__()
@@ -311,6 +314,7 @@ class BinaryReader:
         self._storage_options = storage_options
         self._session_options = session_options
         self._max_pre_download = max_pre_download
+        self.on_demand_bytes = on_demand_bytes
 
     def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
         # Load the config containing the index
@@ -332,6 +336,35 @@ class BinaryReader:
             self._session_options,
         )
         return self._config
+
+    def setup_thread_and_download_chunk(self, index: ChunkedIndex) -> None:
+        if self._config and (self._config._remote_dir or self._config._compressor):
+            # Create and start the prepare chunks thread
+            if self._prepare_thread is None and self._config:
+                self._prepare_thread = PrepareChunksThread(
+                    self._config,
+                    self._item_loader,
+                    self._distributed_env,
+                    self._max_cache_size,
+                    self._max_pre_download,
+                    self._rank,
+                )
+                # Attach the force download queue
+                self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
+                self._prepare_thread.start()
+                if index.chunk_indexes:
+                    self._prepare_thread.download(index.chunk_indexes)
+                    self._chunks_queued_for_download = True
+
+            # Only request individual chunk download if:
+            # 1. We haven't already queued all chunks for the download
+            # 2. We're processing a new chunk (different from the last one)
+            if not self._chunks_queued_for_download and index.chunk_index != self._last_chunk_index:
+                assert self._prepare_thread
+                self._prepare_thread.download([index.chunk_index])
+
+            if self._last_chunk_index is None:
+                self._last_chunk_index = index.chunk_index
 
     @property
     def config(self) -> ChunksConfig:
@@ -365,42 +398,27 @@ class BinaryReader:
         if self._config is None and self._try_load_config() is None:
             raise Exception("The reader index isn't defined.")
 
-        if self._config and (self._config._remote_dir or self._config._compressor):
-            # Create and start the prepare chunks thread
-            if self._prepare_thread is None and self._config:
-                self._prepare_thread = PrepareChunksThread(
-                    self._config,
-                    self._item_loader,
-                    self._distributed_env,
-                    self._max_cache_size,
-                    self._max_pre_download,
-                    self._rank,
-                )
-                # Attach the force download queue
-                self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
-                self._prepare_thread.start()
-                if index.chunk_indexes:
-                    self._prepare_thread.download(index.chunk_indexes)
-                    self._chunks_queued_for_download = True
-
-            # Only request individual chunk download if:
-            # 1. We haven't already queued all chunks for the download
-            # 2. We're processing a new chunk (different from the last one)
-            if not self._chunks_queued_for_download and index.chunk_index != self._last_chunk_index:
-                assert self._prepare_thread
-                self._prepare_thread.download([index.chunk_index])
-
-            if self._last_chunk_index is None:
-                self._last_chunk_index = index.chunk_index
-
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
 
         if isinstance(self._item_loader, PyTreeLoader):
-            item = self._item_loader.load_item_from_chunk(
-                index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
-            )
+            if (
+                self.on_demand_bytes
+                and self._config
+                and self._config._remote_dir
+                and self._config._config
+                and not self._config._config.get("encryption", None)
+                and not self._config._config.get("compression", None)
+            ):
+                raw_bytes = self.read_item_bytes(index, begin)
+                item = self._item_loader.load_item_from_bytes(raw_bytes, index.chunk_index)
+            else:
+                self.setup_thread_and_download_chunk(index)
+                item = self._item_loader.load_item_from_chunk(
+                    index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
+                )
         else:
+            self.setup_thread_and_download_chunk(index)
             item = self._item_loader.load_item_from_chunk(
                 index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes
             )
@@ -411,8 +429,8 @@ class BinaryReader:
             self._config
             and (self._config._remote_dir or self._config._compressor)
             and index.chunk_index != self._last_chunk_index
+            and self._prepare_thread is not None
         ):
-            assert self._prepare_thread
             assert self._last_chunk_index is not None
 
             # inform the chunk has been completely consumed
@@ -449,6 +467,27 @@ class BinaryReader:
             _get_log_msg({"name": f"reader_reading_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"})
         )
         return item
+
+    def read_item_bytes(self, index: ChunkedIndex, begin: int) -> bytes:
+        """Reads the raw byte content for a specific item in a chunk without downloading the full chunk.
+
+        Computes the byte offset for the item based on its index, retrieves the start and end positions
+        from the chunk's index table, and downloads only the relevant byte range corresponding to the item.
+
+        Args:
+            index (ChunkedIndex): The index of the item within a chunk.
+            begin (int): The starting index of the chunk (used to compute relative offset).
+
+        Returns:
+            bytes: The raw byte content for the specified item.
+        """
+        UINT32_BYTE_WIDTH = 4  # Number of bytes in a uint32
+        offset_multiplier = 1 + (index.index - begin) if index.index >= begin else index.index + 1
+        offset = offset_multiplier * UINT32_BYTE_WIDTH
+        pair = self.config.download_chunk_bytes_from_index(index.chunk_index, offset, 8)
+        begin, end = np.frombuffer(pair, np.uint32)
+        actual_item_length = end - begin
+        return self.config.download_chunk_bytes_from_index(index.chunk_index, begin, actual_item_length)
 
     def get_length(self) -> int:
         """Get the number of samples across all chunks."""

@@ -107,6 +107,14 @@ class BaseItemLoader(ABC):
     ) -> Any:
         """Returns an item loaded from a chunk."""
 
+    def load_item_from_bytes(
+        self,
+        raw_bytes: bytes,
+        chunk_index: int,
+    ) -> Any:
+        """Returns an item loaded from bytes."""
+        raise NotImplementedError("The `load_item_from_bytes` method is not implemented for this item loader.")
+
     @abstractmethod
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         """Delete a chunk from the local filesystem."""
@@ -142,6 +150,22 @@ class PyTreeLoader(BaseItemLoader):
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         pass
+
+    def load_item_from_bytes(
+        self,
+        raw_bytes: bytes,
+        chunk_index: int,
+    ) -> bytes:
+        if self._config.get("encryption"):
+            raise ValueError("The `load_item_from_bytes` method does not support encrypted data loading currently.")
+
+        # check for mosaic mds format
+        if "format" in self._config and self._config["format"] == "mds":
+            item_data = self.mds_deserialize(raw_bytes, chunk_index)
+        else:
+            item_data = self.deserialize(raw_bytes)
+
+        return item_data
 
     def load_item_from_chunk(
         self,
