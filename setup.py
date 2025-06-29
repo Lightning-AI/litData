@@ -64,6 +64,9 @@ setup(
     long_description=readme,
     packages=find_packages(where="src"),
     package_dir={"": "src"},
+    entry_points={
+        "console_scripts": ["litdata = litdata.__main__:app"],
+    },
     long_description_content_type="text/markdown",
     include_package_data=True,
     zip_safe=False,
