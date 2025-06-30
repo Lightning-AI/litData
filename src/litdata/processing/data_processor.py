@@ -619,8 +619,7 @@ class BaseWorker:
                 continue
 
             if self.using_queue_optimize:
-                # using random index number, just to satisfy the default combined_data structure.
-                index = -5  # not using -1, as items will be of length 0, so last_index (0-1 = -1) will become true.
+                index = None
                 item = combined_data
                 paths = None
             else:
