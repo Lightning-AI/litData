@@ -1,13 +1,18 @@
+import importlib
 import json
 import os
 from unittest import mock
 
-from litdata.constants import _INDEX_FILENAME
+import litdata.constants
+import litdata.utilities
+import litdata.utilities.dataset_utilities
+from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _try_create_cache_dir,
     adapt_mds_shards_to_chunks,
     generate_roi,
+    get_default_cache_dir,
     load_index_file,
 )
 
@@ -91,3 +96,16 @@ def test_adapt_mds_shards_to_chunks(mosaic_mds_index_data):
     assert "chunks" in adapted_data
     assert "config" in adapted_data
     assert len(mosaic_mds_index_data["shards"]) == len(adapted_data["chunks"])
+
+
+def test_get_default_cache_dir():
+    with mock.patch.dict(os.environ, {}, clear=True):
+        assert get_default_cache_dir() == _DEFAULT_CACHE_DIR
+
+    with mock.patch.dict(os.environ, {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}):
+        assert get_default_cache_dir() == _DEFAULT_LIGHTNING_CACHE_DIR
+
+    with mock.patch.dict(os.environ, {"LITDATA_CACHE_DIR": "/custom/cache/dir"}):
+        importlib.reload(litdata.constants)
+        importlib.reload(litdata.utilities.dataset_utilities)
+        assert litdata.utilities.dataset_utilities.get_default_cache_dir() == "/custom/cache/dir"
