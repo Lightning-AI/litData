@@ -150,6 +150,7 @@ def _resolve_s3_connections(dir_path: str) -> Dir:
     target_name = dir_path.split("/")[3]
 
     data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
+    print(f"{data_connections=}")
 
     data_connection = [dc for dc in data_connections if dc.name == target_name]
 
