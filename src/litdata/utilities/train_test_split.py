@@ -47,23 +47,25 @@ def train_test_split(
     # we need subsampled chunk filenames, original chunk file, and subsampled_roi
 
     dummy_streaming_dataset = deepcopy_dataset(streaming_dataset)
-    dummy_subsampled_chunk_filename = dummy_streaming_dataset.subsampled_files
+    # Note: We make this a set to speed up the computation of subsampled_chunks.
+    dummy_subsampled_chunk_filename = set(dummy_streaming_dataset.subsampled_files)
     dummy_subsampled_roi = dummy_streaming_dataset.region_of_interest
     subsampled_chunks: List[Dict[str, Any]] = []
 
     input_dir = dummy_streaming_dataset.input_dir
     assert input_dir.path
 
-    if os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
-        # load chunks from `index.json` file
-        data = load_index_file(input_dir.path)
-
-        original_chunks = data["chunks"]
-        subsampled_chunks = [
-            _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
-        ]
-    else:
+    if not os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
         raise ValueError("Couldn't load original chunk file.")
+
+    # load chunks from `index.json` file
+    data = load_index_file(input_dir.path)
+
+    # subsample the chunks defined in the index file
+    original_chunks = data["chunks"]
+    subsampled_chunks = [
+        _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
+    ]
 
     new_datasets = [deepcopy_dataset(streaming_dataset) for _ in splits]
 
