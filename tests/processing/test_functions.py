@@ -756,6 +756,7 @@ def optimize_fn(data):
     answer = data["answer"][0]
     return {"index": index, "question": question, "answer": answer}
 
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 @pytest.mark.parametrize("num_workers", [5, 6, 8])
 def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
