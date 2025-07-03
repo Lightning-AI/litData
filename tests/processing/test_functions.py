@@ -751,9 +751,10 @@ def test_optimize_with_queues_as_input(tmpdir, num_workers):
 
 def optimize_fn(data):
     # Extract single elements from list-based record
+    index = data["index"][0]
     question = data["question"][0]
     answer = data["answer"][0]
-    return {"question": question, "answer": answer}
+    return {"index": index, "question": question, "answer": answer}
 
 
 @pytest.mark.parametrize("num_workers", [5, 6, 8])
@@ -764,10 +765,11 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     import polars as pl
 
     num_items = 500
+    indexes = list(range(num_items))
     questions = ["What is the capital of France?"] * num_items
     answers = ["The capital of France is Paris."] * num_items
 
-    df = pl.DataFrame({"question": questions, "answer": answers})
+    df = pl.DataFrame({"index": indexes, "question": questions, "answer": answers})
     parquet_file = os.path.join(parquet_dir, "sample.parquet")
     df.write_parquet(parquet_file)
 
@@ -795,7 +797,13 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     # Verify a sample record
     sample_record = ds[0]
     # Check that expected keys exist and their values match the expected output
+    assert "index" in sample_record
     assert "question" in sample_record
     assert "answer" in sample_record
+    assert sample_record["index"] == 0
     assert sample_record["question"] == "What is the capital of France?"
     assert sample_record["answer"] == "The capital of France is Paris."
+
+    # check all the indexes are correct
+    indexes = [sample_record["index"].item() for sample_record in ds]
+    assert indexes == list(range(num_items)), f"Expected indexes to be {list(range(num_items))}, but got {indexes}"
