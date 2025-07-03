@@ -759,6 +759,14 @@ def optimize_fn(data):
 
 @pytest.mark.parametrize("num_workers", [5, 6, 8])
 def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
+    """Test optimization with StreamingDataLoader on parquet data with multiple workers.
+
+    This test ensures that when using StreamingDataLoader as input to optimize(),
+    all items are processed correctly without loss due to StopIteration issues
+    that can occur with multiple workers.
+
+    Reproduces issue: https://github.com/Lightning-AI/litdata/issues/599
+    """
     # Prepare parquet dataset
     parquet_dir = os.path.join(tmpdir, "parquet")
     os.makedirs(parquet_dir, exist_ok=True)
@@ -766,8 +774,8 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
 
     num_items = 500
     indexes = list(range(num_items))
-    questions = ["What is the capital of France?"] * num_items
-    answers = ["The capital of France is Paris."] * num_items
+    questions = [f"What is the capital of country {i}?" for i in range(num_items)]
+    answers = [f"The capital of country {i} is city {i}." for i in range(num_items)]
 
     df = pl.DataFrame({"index": indexes, "question": questions, "answer": answers})
     parquet_file = os.path.join(parquet_dir, "sample.parquet")
@@ -777,6 +785,9 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     index_parquet_dataset(parquet_dir)
     dataset = StreamingDataset(parquet_dir, item_loader=ParquetLoader())
     dataloader = StreamingDataLoader(dataset)
+
+    # Verify the dataloader has the expected length
+    assert len(dataloader) == num_items, f"Expected dataloader length {num_items}, got {len(dataloader)}"
 
     # Optimize the dataset using the streaming dataloader as input
     output_dir = os.path.join(tmpdir, "out")
@@ -790,19 +801,28 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
         chunk_bytes="64MB",
     )
 
-    # Verify optimized dataset length
+    # Verify optimized dataset length - this is the critical test
     ds = StreamingDataset(output_dir)
-    assert len(ds) == num_items
+    actual_length = len(ds)
+    assert actual_length == num_items, (
+        f"Expected {num_items} items, got {actual_length}. "
+        f"Missing {num_items - actual_length} items with {num_workers} workers."
+    )
 
-    # Verify a sample record
+    # Verify a sample record structure
     sample_record = ds[0]
-    # Check that expected keys exist and their values match the expected output
-    assert "index" in sample_record
-    assert "question" in sample_record
-    assert "answer" in sample_record
-    assert sample_record["index"] == 0
-    assert sample_record["question"] == "What is the capital of France?"
-    assert sample_record["answer"] == "The capital of France is Paris."
+    assert "index" in sample_record, "Missing 'index' field in sample record"
+    assert "question" in sample_record, "Missing 'question' field in sample record"
+    assert "answer" in sample_record, "Missing 'answer' field in sample record"
+
+    # Verify the first record has expected values
+    assert sample_record["index"] == 0, f"Expected index 0, got {sample_record['index']}"
+    assert sample_record["question"] == "What is the capital of country 0?", (
+        f"Unexpected question: {sample_record['question']}"
+    )
+    assert sample_record["answer"] == "The capital of country 0 is city 0.", (
+        f"Unexpected answer: {sample_record['answer']}"
+    )
 
     # check all the indexes are correct
     indexes = [sample_record["index"].item() for sample_record in ds]
