@@ -856,7 +856,7 @@ class BaseWorker:
                 if isinstance(chunk_filepath, str) and os.path.exists(chunk_filepath):
                     self.to_upload_queues[i % self.num_uploaders].put(chunk_filepath)
 
-        if self.use_checkpoint and not getattr(self.data_recipe, "is_generator", False):
+        if self.use_checkpoint and not self.data_recipe.is_generator:
             checkpoint_filepath = self.cache.save_checkpoint()
             self._try_upload(checkpoint_filepath)
 
