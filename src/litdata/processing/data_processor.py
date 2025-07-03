@@ -822,6 +822,11 @@ class BaseWorker:
         """
         try:
             current_item = item if self.reader is None else self.reader.read(item)
+
+            # Handle case where StreamingDataLoaderReader returns None (worker exhausted its data)
+            if current_item is None:
+                return
+
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:
@@ -836,11 +841,6 @@ class BaseWorker:
                 if self.use_checkpoint:
                     checkpoint_filepath = self.cache.save_checkpoint()
                     self._try_upload(checkpoint_filepath)
-        except StopIteration:
-            # If a StopIteration occurs, the iterator is exhausted.
-            # This is expected behavior for the StreamingDataLoader iterator.
-            # We catch it to ensure smooth operation.
-            pass
         except Exception as e:
             raise RuntimeError(f"Failed processing {item=}; {index=}") from e
 
@@ -856,7 +856,7 @@ class BaseWorker:
                 if isinstance(chunk_filepath, str) and os.path.exists(chunk_filepath):
                     self.to_upload_queues[i % self.num_uploaders].put(chunk_filepath)
 
-        if self.use_checkpoint and not self.data_recipe.is_generator:
+        if self.use_checkpoint and not getattr(self.data_recipe, "is_generator", False):
             checkpoint_filepath = self.cache.save_checkpoint()
             self._try_upload(checkpoint_filepath)
 
