@@ -822,6 +822,11 @@ class BaseWorker:
         """
         try:
             current_item = item if self.reader is None else self.reader.read(item)
+
+            # Handle case where StreamingDataLoaderReader returns None (worker exhausted its data)
+            if current_item is None:
+                return
+
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:

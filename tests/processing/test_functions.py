@@ -16,10 +16,11 @@ import requests
 import torch
 from PIL import Image
 
-from litdata import StreamingDataset, map, merge_datasets, optimize, walk
+from litdata import StreamingDataLoader, StreamingDataset, index_parquet_dataset, map, merge_datasets, optimize, walk
 from litdata.processing.data_processor import ALL_DONE
 from litdata.processing.functions import _get_input_dir, _resolve_dir
 from litdata.streaming.cache import Cache
+from litdata.streaming.item_loader import ParquetLoader
 from litdata.utilities.encryption import FernetEncryption, RSAEncryption
 
 
@@ -746,3 +747,84 @@ def test_optimize_with_queues_as_input(tmpdir, num_workers):
     complete_data = sorted(ds[:])  # Sort to ensure order
     for idx, data in enumerate(complete_data):
         assert data == (idx, idx**2)
+
+
+def optimize_fn(data):
+    # Extract single elements from list-based record
+    index = data["index"][0]
+    question = data["question"][0]
+    answer = data["answer"][0]
+    return {"index": index, "question": question, "answer": answer}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+@pytest.mark.parametrize("num_workers", [5, 6, 8])
+def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
+    """Test optimization with StreamingDataLoader on parquet data with multiple workers.
+
+    This test ensures that when using StreamingDataLoader as input to optimize(),
+    all items are processed correctly without loss due to StopIteration issues
+    that can occur with multiple workers.
+
+    Reproduces issue: https://github.com/Lightning-AI/litdata/issues/599
+    """
+    # Prepare parquet dataset
+    parquet_dir = os.path.join(tmpdir, "parquet")
+    os.makedirs(parquet_dir, exist_ok=True)
+    import polars as pl
+
+    num_items = 500
+    indexes = list(range(num_items))
+    questions = [f"What is the capital of country {i}?" for i in range(num_items)]
+    answers = [f"The capital of country {i} is city {i}." for i in range(num_items)]
+
+    df = pl.DataFrame({"index": indexes, "question": questions, "answer": answers})
+    parquet_file = os.path.join(parquet_dir, "sample.parquet")
+    df.write_parquet(parquet_file)
+
+    # Index the parquet dataset and create a streaming dataset and dataloader
+    index_parquet_dataset(parquet_dir)
+    dataset = StreamingDataset(parquet_dir, item_loader=ParquetLoader())
+    dataloader = StreamingDataLoader(dataset)
+
+    # Verify the dataloader has the expected length
+    assert len(dataloader) == num_items, f"Expected dataloader length {num_items}, got {len(dataloader)}"
+
+    # Optimize the dataset using the streaming dataloader as input
+    output_dir = os.path.join(tmpdir, "out")
+    os.makedirs(output_dir, exist_ok=True)
+
+    optimize(
+        fn=optimize_fn,
+        inputs=dataloader,
+        num_workers=num_workers,
+        output_dir=output_dir,
+        chunk_bytes="64MB",
+    )
+
+    # Verify optimized dataset length - this is the critical test
+    ds = StreamingDataset(output_dir)
+    actual_length = len(ds)
+    assert actual_length == num_items, (
+        f"Expected {num_items} items, got {actual_length}. "
+        f"Missing {num_items - actual_length} items with {num_workers} workers."
+    )
+
+    # Verify a sample record structure
+    sample_record = ds[0]
+    assert "index" in sample_record, "Missing 'index' field in sample record"
+    assert "question" in sample_record, "Missing 'question' field in sample record"
+    assert "answer" in sample_record, "Missing 'answer' field in sample record"
+
+    # Verify the first record has expected values
+    assert sample_record["index"] == 0, f"Expected index 0, got {sample_record['index']}"
+    assert sample_record["question"] == "What is the capital of country 0?", (
+        f"Unexpected question: {sample_record['question']}"
+    )
+    assert sample_record["answer"] == "The capital of country 0 is city 0.", (
+        f"Unexpected answer: {sample_record['answer']}"
+    )
+
+    # check all the indexes are correct
+    indexes = [sample_record["index"].item() for sample_record in ds]
+    assert indexes == list(range(num_items)), f"Expected indexes to be {list(range(num_items))}, but got {indexes}"
