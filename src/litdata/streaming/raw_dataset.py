@@ -53,12 +53,25 @@ def _try_create_raw_cache_dir(input_dir: Optional[str], cache_dir: Optional[str]
 
 
 class StreamingRawDataset(IterableDataset):
-    """Streaming raw dataset for efficient loading from cloud storage.
+    """Stream raw files from cloud storage with fast indexing and caching.
+
+    Supports ImageFolder-style datasets with this structure:
+
+    s3://bucket/dataset/
+    ├── class_1/
+    │   ├── file_001.jpg
+    │   ├── file_002.jpg
+    │   └── ...
+    ├── class_2/
+    │   ├── file_001.jpg
+    │   └── ...
+    └── ...
 
     Features:
-    - Efficient multithreaded indexing
-    - Optional index caching for large datasets
-    - PyTorch DataLoader compatibility
+    - Fast multithreaded indexing
+    - Automatic index caching
+    - Works with S3 and GCS
+    - PyTorch DataLoader compatible
     """
 
     def __init__(
@@ -71,8 +84,9 @@ class StreamingRawDataset(IterableDataset):
         """Initialize StreamingRawDataset.
 
         Args:
-            input_dir: Path or URI to dataset root (local or cloud, e.g. s3://...)
-            cache_dir: Directory for caching downloaded files (not implemented yet)
+            input_dir: Path to dataset root (local or cloud, e.g. s3://bucket/dataset/)
+            cache_dir: Directory for caching files (optional)
+            index_workers: Number of threads for indexing (default: 8)
             **kwargs: Additional arguments
         """
         # Resolve input directory
