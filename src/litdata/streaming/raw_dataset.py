@@ -10,57 +10,79 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib import parse
 
 import fsspec
 from torch.utils.data import IterableDataset
 from tqdm import tqdm
 
+from litdata.streaming.downloader import get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
 
 INDEX_FILE_NAME = "index.txt"
 CLASSES_FILE_NAME = "classes.txt"
 
 
-def _try_create_raw_cache_dir(input_dir: Optional[str], cache_dir: Optional[str] = None) -> Optional[str]:
-    """Try to create the raw cache directory for the dataset.
+class CacheManager:
+    """Manages local file caching with directory structure preservation."""
 
-    Args:
-        input_dir (Optional[str]): The input directory for the dataset.
-        cache_dir (Optional[str]): The cache directory to create.
+    def __init__(self, cache_dir: str, remote_dir: str, storage_options: Optional[Dict] = None):
+        self.cache_dir = cache_dir
+        self.remote_dir = remote_dir
+        self.storage_options = storage_options or {}
+        self.downloader = None
 
-    Returns:
-        Optional[str]: The path to the created cache directory, or None if creation failed.
-    """
-    dir_url_hash = generate_md5_hash(input_dir or "")
-    cache_dir = cache_dir if cache_dir is not None else get_default_cache_dir()
+        os.makedirs(cache_dir, exist_ok=True)
 
-    # Create the cache directory path based on the input_dir hash
-    cache_dir = os.path.join(cache_dir, dir_url_hash, dir_url_hash)
+    def get_local_path(self, file_path: str, class_name: str) -> str:
+        """Get local cache path maintaining class directory structure."""
+        filename = os.path.basename(file_path)
+        class_cache_dir = os.path.join(self.cache_dir, class_name)
+        os.makedirs(class_cache_dir, exist_ok=True)
+        return os.path.join(class_cache_dir, filename)
 
-    # Create the cache directory if it doesn't exist
-    os.makedirs(cache_dir, exist_ok=True)
-    return cache_dir
+    def download_file(self, file_path: str, class_name: str) -> str:
+        """Download file to cache and return local path."""
+        local_path = self.get_local_path(file_path, class_name)
+
+        # Return if already cached
+        if os.path.exists(local_path):
+            return local_path
+
+        # Initialize downloader if needed
+        if self.downloader is None:
+            chunks = [{"filename": os.path.basename(file_path)}]
+            self.downloader = get_downloader(
+                remote_dir=os.path.dirname(file_path),
+                cache_dir=os.path.dirname(local_path),
+                chunks=chunks,
+                storage_options=self.storage_options,
+            )
+
+        try:
+            self.downloader.download_file(file_path, local_path)
+            return local_path
+        except Exception as e:
+            logger.warning(f"Failed to download {file_path}: {e}")
+            return file_path  # Return remote path as fallback
 
 
 class StreamingRawDataset(IterableDataset):
     """Stream raw files from cloud storage with fast indexing and caching.
 
-    Supports ImageFolder-style datasets with this structure:
+    Supports ImageFolder-style datasets:
 
     s3://bucket/dataset/
     ├── class_1/
     │   ├── file_001.jpg
-    │   ├── file_002.jpg
     │   └── ...
     ├── class_2/
     │   ├── file_001.jpg
@@ -70,7 +92,7 @@ class StreamingRawDataset(IterableDataset):
     Features:
     - Fast multithreaded indexing
     - Automatic index caching
-    - Works with S3 and GCS
+    - Preloading for performance
     - PyTorch DataLoader compatible
     """
 
@@ -79,125 +101,235 @@ class StreamingRawDataset(IterableDataset):
         input_dir: Union[str, "Dir"],
         cache_dir: Optional[Union[str, "Dir"]] = None,
         index_workers: int = 8,
+        max_preload_size: int = 10,
+        storage_options: Optional[Dict] = None,
         **kwargs,
     ):
         """Initialize StreamingRawDataset.
 
         Args:
-            input_dir: Path to dataset root (local or cloud, e.g. s3://bucket/dataset/)
+            input_dir: Path to dataset root (e.g. s3://bucket/dataset/)
             cache_dir: Directory for caching files (optional)
             index_workers: Number of threads for indexing (default: 8)
+            max_preload_size: Maximum number of files to preload (default: 10)
+            storage_options: Cloud storage options
             **kwargs: Additional arguments
         """
-        # Resolve input directory
-        input_dir = _resolve_dir(input_dir)
-        cache_dir = _resolve_dir(cache_dir)
+        # Resolve directories
+        self.input_dir = _resolve_dir(input_dir)
+        cache_dir = _resolve_dir(cache_dir) if cache_dir else None
 
-        # create cache directory if it doesn't exist
-        cache_path = _try_create_raw_cache_dir(
-            input_dir=input_dir.path if input_dir.path else input_dir.url,
-            cache_dir=cache_dir.path if cache_dir else None,
-        )
-        if cache_path is not None:
-            input_dir.path = cache_path
+        # Setup cache
+        if cache_dir:
+            cache_path = cache_dir.path or cache_dir.url
+        else:
+            dir_hash = generate_md5_hash(self.input_dir.url)
+            cache_path = os.path.join(get_default_cache_dir(), dir_hash)
 
-        self.input_dir = input_dir
-        self.cache_dir = cache_dir
+        self.cache_manager = CacheManager(cache_path, self.input_dir.url, storage_options)
+
+        # Configuration
         self.index_workers = index_workers
-        self.classes: List[str] = None
-        self.files: List[str] = []
+        self.max_preload_size = max_preload_size
+        self.storage_options = storage_options or {}
+
+        # State
+        self.classes: List[str] = []
+        self.files: List[Tuple[str, str]] = []  # (file_path, class_name)
         self.fs: Optional[fsspec.AbstractFileSystem] = None
 
-        # Index dataset files
+        # Preloading
+        self._preload_executor = None
+        self._preload_futures = {}
+
+        # Build index
         self._build_index()
         if not self.files:
-            raise ValueError(f"No files found in {input_dir}")
+            raise ValueError(f"No files found in {self.input_dir.url}")
 
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
 
-    def _build_index(self) -> List[Tuple[str, str]]:
-        """Build index of all files in the input_dir."""
-        logger.info(f"Indexing files in {self.input_dir}...")
-        self.index_cache_path = os.path.join(self.input_dir.path, INDEX_FILE_NAME)
-        self.classes_cache_path = os.path.join(self.input_dir.path, CLASSES_FILE_NAME)
+    def _build_index(self) -> None:
+        """Build or load file index."""
+        index_path = os.path.join(self.cache_manager.cache_dir, INDEX_FILE_NAME)
+        classes_path = os.path.join(self.cache_manager.cache_dir, CLASSES_FILE_NAME)
 
-        if os.path.exists(self.index_cache_path) and os.path.exists(self.classes_cache_path):
-            with open(self.index_cache_path) as f:
-                files_list = f.readlines()
-            self.files = [line.strip() for line in files_list if line.strip()]
-
-            with open(self.classes_cache_path) as f:
-                classes_list = f.readlines()
-            self.classes = [line.strip() for line in classes_list if line.strip()]
-
-            logger.info(f"Loaded index from {self.index_cache_path} with {len(self.files)} samples")
+        # Try loading cached index
+        if os.path.exists(index_path) and os.path.exists(classes_path):
+            self._load_cached_index(index_path, classes_path)
         else:
-            _CLOUD_PROVIDER = ("s3", "gs")
+            self._build_fresh_index()
+            self._save_index(index_path, classes_path)
 
-            obj = parse.urlparse(self.input_dir.url)
-            provider = obj.scheme
-            if provider not in _CLOUD_PROVIDER:
-                raise ValueError(
-                    f"Unsupported cloud provider: {provider}. Supported providers are: {', '.join(_CLOUD_PROVIDER)}"
-                )
+    def _load_cached_index(self, index_path: str, classes_path: str) -> None:
+        """Load index from cache."""
+        with open(index_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and "," in line:
+                    file_path, class_name = line.rsplit(",", 1)
+                    self.files.append((file_path, class_name))
 
-            self.fs = fsspec.filesystem(provider)
-            logger.info(f"Using provider: {provider}")
+        with open(classes_path) as f:
+            self.classes = [line.strip() for line in f if line.strip()]
 
-            # get classes
-            folders = self.fs.ls(self.input_dir.url)
-            self.classes = [os.path.basename(folder) for folder in folders if self.fs.isdir(folder)]
-            logger.info(f"Found {len(self.classes)} classes")
+        logger.info(f"Loaded cached index with {len(self.files)} samples")
 
-            def list_files_for_class(class_name: str) -> List[Tuple[str, str]]:
-                """List all files in a class directory."""
-                class_dir = os.path.join(self.input_dir.url, class_name)
+    def _build_fresh_index(self) -> None:
+        """Build fresh index by scanning cloud storage."""
+        obj = parse.urlparse(self.input_dir.url)
+        if obj.scheme not in ("s3", "gs"):
+            raise ValueError(f"Unsupported provider: {obj.scheme}")
+
+        self.fs = fsspec.filesystem(obj.scheme, **self.storage_options)
+
+        # Get class directories
+        folders = self.fs.ls(self.input_dir.url)
+        self.classes = [os.path.basename(f) for f in folders if self.fs.isdir(f)]
+
+        def list_class_files(class_name: str) -> List[Tuple[str, str]]:
+            class_dir = f"{self.input_dir.url.rstrip('/')}/{class_name}"
+            try:
                 files = self.fs.ls(class_dir, detail=True)
-                return [os.path.join(class_dir, f["name"]) for f in files if f["type"] == "file"]
+                return [
+                    (os.path.join(class_dir, os.path.basename(f["name"])), class_name)
+                    for f in files
+                    if f["type"] == "file"
+                ]
+            except Exception as e:
+                logger.warning(f"Error listing {class_dir}: {e}")
+                return []
 
-            # Index files in parallel
-            results = []
-            with ThreadPoolExecutor(max_workers=self.index_workers) as executor:
-                future_to_class = {executor.submit(list_files_for_class, c): c for c in self.classes}
-                for future in tqdm(as_completed(future_to_class), total=len(self.classes), desc="Indexing classes"):
-                    try:
-                        results.extend(future.result())
-                    except Exception as e:
-                        logger.warning(f"Error indexing class directory:{e}")
+        # Index in parallel
+        results = []
+        with ThreadPoolExecutor(max_workers=self.index_workers) as executor:
+            futures = {executor.submit(list_class_files, cls): cls for cls in self.classes}
+            for future in tqdm(as_completed(futures), total=len(self.classes), desc="Indexing"):
+                results.extend(future.result())
 
-            self.files = results
-            logger.info(f"Indexed {len(self.files)} files")
-            # Save index to cache
-            with open(self.index_cache_path, "w") as f:
-                for file_path in self.files:
-                    f.write(f"{file_path}\n")
+        self.files = results
+        logger.info(f"Indexed {len(self.files)} files")
 
-            with open(self.classes_cache_path, "w") as f:
-                for class_name in self.classes:
-                    f.write(f"{class_name}\n")
+    def _save_index(self, index_path: str, classes_path: str) -> None:
+        """Save index to cache."""
+        with open(index_path, "w") as f:
+            for file_path, class_name in self.files:
+                f.write(f"{file_path},{class_name}\n")
 
-            logger.info(f"Saved index to {self.index_cache_path} and classes to {self.classes_cache_path}")
+        with open(classes_path, "w") as f:
+            for class_name in self.classes:
+                f.write(f"{class_name}\n")
+
+    def _init_preloading(self) -> None:
+        """Initialize preloading executor."""
+        if self._preload_executor is None and self.max_preload_size > 0:
+            self._preload_executor = ThreadPoolExecutor(max_workers=4)
+            # Start preloading first files
+            for i in range(min(self.max_preload_size, len(self.files))):
+                self._submit_preload(i)
+
+    def _submit_preload(self, index: int) -> None:
+        """Submit a file for preloading."""
+        if index < len(self.files) and index not in self._preload_futures:
+            file_path, class_name = self.files[index]
+            future = self._preload_executor.submit(self.cache_manager.download_file, file_path, class_name)
+            self._preload_futures[index] = future
+
+    def _get_file(self, index: int) -> str:
+        """Get local file path, downloading if necessary."""
+        file_path, class_name = self.files[index]
+
+        # Check if preloaded
+        if index in self._preload_futures:
+            future = self._preload_futures.pop(index)
+            try:
+                local_path = future.result(timeout=30)
+                # Queue next file for preloading
+                next_idx = index + self.max_preload_size
+                if next_idx < len(self.files):
+                    self._submit_preload(next_idx)
+                return local_path
+            except Exception as e:
+                logger.warning(f"Preload failed for {index}: {e}")
+
+        # Download directly
+        return self.cache_manager.download_file(file_path, class_name)
+
+    def load_sample(self, local_path: str, file_path: str, class_name: str, index: int) -> Any:
+        """Load sample data. Override this method to customize loading.
+
+        Args:
+            local_path: Path to local cached file
+            file_path: Original remote file path
+            class_name: Class name
+            index: Sample index
+
+        Returns:
+            Loaded sample data
+        """
+        # Default: return file content as bytes
+        try:
+            from PIL import Image
+
+            image = Image.open(local_path)
+            return {"index": index, "path": local_path, "image": image, "label": class_name}
+        except Exception:
+            # Fallback for remote files
+            return {"path": file_path, "class_name": class_name, "index": index}
 
     def __iter__(self):
-        """Iterate over the dataset."""
-        yield from self.files
+        """Iterate over dataset."""
+        # Initialize preloading on first iteration
+        if self._preload_executor is None:
+            self._init_preloading()
 
-    def __len__(self):
-        """Return the number of samples in the dataset."""
+        for i in range(len(self.files)):
+            file_path, class_name = self.files[i]
+            local_path = self._get_file(i)
+            yield self.load_sample(local_path, file_path, class_name, i)
+
+    def __getitem__(self, index: int) -> Any:
+        """Get item by index."""
+        if index >= len(self.files):
+            raise IndexError(f"Index {index} out of range")
+
+        if self._preload_executor is None:
+            self._init_preloading()
+
+        file_path, class_name = self.files[index]
+        local_path = self._get_file(index)
+        return self.load_sample(local_path, file_path, class_name, index)
+
+    def __len__(self) -> int:
+        """Return dataset size."""
         return len(self.files)
+
+    def get_class_counts(self) -> Dict[str, int]:
+        """Get samples per class."""
+        counts = {}
+        for _, class_name in self.files:
+            counts[class_name] = counts.get(class_name, 0) + 1
+        return counts
 
 
 if __name__ == "__main__":
     # Example usage
     import time
 
-    start_time = time.perf_counter()
+    start = time.perf_counter()
     dataset = StreamingRawDataset(
-        # input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-        input_dir="s3://imagenet-1m-template/raw/train",
-        # cache_dir="s3://my-bucket/my-cache",
-        index_workers=16,
+        input_dir="s3://imagenet-1m-template/raw/train", index_workers=16, max_preload_size=20, cache_dir="raw_cache"
     )
+    end = time.perf_counter()
+    print(f"Dataset loaded in {end - start:.2f} seconds")
+    print("sample files :", dataset.files[:3])
 
-    end_time = time.perf_counter()
-    print(f"Dataset initialized in {end_time - start_time:.2f} seconds")
+    print(f"Dataset: {len(dataset)} samples, {len(dataset.classes)} classes")
+
+    # Test iteration
+    for i, sample in enumerate(dataset):
+        if i >= 3:
+            break
+        print(f"Sample {i}: {sample} ({len(sample) if isinstance(sample, bytes) else 'metadata'})")
+
+    print("✅ Test completed")
