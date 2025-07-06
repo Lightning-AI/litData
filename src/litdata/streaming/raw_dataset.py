@@ -102,6 +102,7 @@ class StreamingRawDataset(IterableDataset):
         cache_dir: Optional[Union[str, "Dir"]] = None,
         index_workers: int = 8,
         max_preload_size: int = 10,
+        download_workers: int = 4,
         storage_options: Optional[Dict] = None,
         **kwargs,
     ):
@@ -112,6 +113,7 @@ class StreamingRawDataset(IterableDataset):
             cache_dir: Directory for caching files (optional)
             index_workers: Number of threads for indexing (default: 8)
             max_preload_size: Maximum number of files to preload (default: 10)
+            download_workers: Number of download threads (default: 4)
             storage_options: Cloud storage options
             **kwargs: Additional arguments
         """
@@ -131,6 +133,7 @@ class StreamingRawDataset(IterableDataset):
         # Configuration
         self.index_workers = index_workers
         self.max_preload_size = max_preload_size
+        self.download_workers = download_workers
         self.storage_options = storage_options or {}
 
         # State
@@ -138,9 +141,11 @@ class StreamingRawDataset(IterableDataset):
         self.files: List[Tuple[str, str]] = []  # (file_path, class_name)
         self.fs: Optional[fsspec.AbstractFileSystem] = None
 
-        # Preloading
+        # Preloading with adaptive performance tracking
         self._preload_executor = None
         self._preload_futures = {}
+        self._cache_hit_count = 0
+        self._total_requests = 0
 
         # Build index
         self._build_index()
@@ -221,11 +226,15 @@ class StreamingRawDataset(IterableDataset):
                 f.write(f"{class_name}\n")
 
     def _init_preloading(self) -> None:
-        """Initialize preloading executor."""
+        """Initialize preloading executor with adaptive worker count."""
         if self._preload_executor is None and self.max_preload_size > 0:
-            self._preload_executor = ThreadPoolExecutor(max_workers=4)
-            # Start preloading first files
-            for i in range(min(self.max_preload_size, len(self.files))):
+            # Adaptive worker count based on dataset size
+            worker_count = min(self.download_workers, len(self.files) // 100 + 1, 8)
+            self._preload_executor = ThreadPoolExecutor(max_workers=worker_count)
+
+            # Start preloading first files with adaptive batch size
+            initial_batch = min(self.max_preload_size, len(self.files), 50)
+            for i in range(initial_batch):
                 self._submit_preload(i)
 
     def _submit_preload(self, index: int) -> None:
@@ -236,24 +245,44 @@ class StreamingRawDataset(IterableDataset):
             self._preload_futures[index] = future
 
     def _get_file(self, index: int) -> str:
-        """Get local file path, downloading if necessary."""
+        """Get local file path with adaptive preloading strategy."""
         file_path, class_name = self.files[index]
+        self._total_requests += 1
 
         # Check if preloaded
         if index in self._preload_futures:
             future = self._preload_futures.pop(index)
             try:
                 local_path = future.result(timeout=30)
-                # Queue next file for preloading
-                next_idx = index + self.max_preload_size
-                if next_idx < len(self.files):
-                    self._submit_preload(next_idx)
+                self._cache_hit_count += 1
+
+                # Adaptive preloading: adjust based on cache hit rate
+                cache_hit_rate = self._cache_hit_count / self._total_requests
+                preload_window = min(self.max_preload_size * 2, 100) if cache_hit_rate > 0.8 else self.max_preload_size
+
+                # Queue next files for preloading with smart scheduling
+                for offset in range(1, min(4, preload_window // 4 + 1)):
+                    next_idx = index + offset * preload_window // 4
+                    if next_idx < len(self.files):
+                        self._submit_preload(next_idx)
+
                 return local_path
             except Exception as e:
                 logger.warning(f"Preload failed for {index}: {e}")
 
         # Download directly
         return self.cache_manager.download_file(file_path, class_name)
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache performance statistics for monitoring."""
+        hit_rate = self._cache_hit_count / max(self._total_requests, 1)
+        return {
+            "cache_hit_rate": hit_rate,
+            "total_requests": self._total_requests,
+            "preload_queue_size": len(self._preload_futures),
+            "cache_dir": self.cache_manager.cache_dir,
+            "adaptive_preload_window": min(self.max_preload_size * 2, 100) if hit_rate > 0.8 else self.max_preload_size,
+        }
 
     def load_sample(self, local_path: str, file_path: str, class_name: str, index: int) -> Any:
         """Load sample data. Override this method to customize loading.
@@ -284,15 +313,14 @@ class StreamingRawDataset(IterableDataset):
             self._init_preloading()
 
         for i in range(len(self.files)):
-            file_path, class_name = self.files[i]
-            local_path = self._get_file(i)
-            yield self.load_sample(local_path, file_path, class_name, i)
+            yield self[i]
 
     def __getitem__(self, index: int) -> Any:
         """Get item by index."""
         if index >= len(self.files):
             raise IndexError(f"Index {index} out of range")
 
+        # Initialize preloading only when actually needed
         if self._preload_executor is None:
             self._init_preloading()
 
@@ -318,7 +346,12 @@ if __name__ == "__main__":
 
     start = time.perf_counter()
     dataset = StreamingRawDataset(
-        input_dir="s3://imagenet-1m-template/raw/train", index_workers=16, max_preload_size=20, cache_dir="raw_cache"
+        input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
+        cache_dir="caltech_cache",
+        # input_dir="s3://imagenet-1m-template/raw/train",
+        # cache_dir="raw_cache",
+        index_workers=16,
+        max_preload_size=20,
     )
     end = time.perf_counter()
     print(f"Dataset loaded in {end - start:.2f} seconds")
