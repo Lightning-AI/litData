@@ -172,10 +172,6 @@ class StreamingRawDataset(IterableDataset):
         """Return the number of samples in the dataset."""
         return len(self.files)
 
-    def get_classes(self) -> List[str]:
-        """Get unique class names."""
-        return sorted(set(self.classes))
-
 
 if __name__ == "__main__":
     # Example usage
