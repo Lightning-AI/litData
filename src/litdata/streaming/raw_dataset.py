@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO)
 INDEX_FILE_NAME = "index.txt"
 CLASSES_FILE_NAME = "classes.txt"
 
+
 def _try_create_raw_cache_dir(input_dir: Optional[str], cache_dir: Optional[str] = None) -> Optional[str]:
     """Try to create the raw cache directory for the dataset.
 
@@ -165,11 +166,7 @@ class StreamingRawDataset(IterableDataset):
 
     def __iter__(self):
         """Iterate over the dataset."""
-        for file_path, class_name in self.index:
-            sample = {"path": file_path, "class_name": class_name}
-            if self.transform:
-                sample = self.transform(sample)
-            yield sample
+        yield from self.files
 
     def __len__(self):
         """Return the number of samples in the dataset."""
