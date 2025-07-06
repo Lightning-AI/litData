@@ -57,19 +57,35 @@ class CacheManager:
         if os.path.exists(local_path):
             return local_path
 
-        # Initialize downloader if needed
-        if self.downloader is None:
-            chunks = [{"filename": os.path.basename(file_path)}]
-            self.downloader = get_downloader(
-                remote_dir=os.path.dirname(file_path),
-                cache_dir=os.path.dirname(local_path),
-                chunks=chunks,
-                storage_options=self.storage_options,
-            )
-
         try:
+            # Ensure local directory exists
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+            # Create a temporary downloader for this specific file
+            filename = os.path.basename(file_path)
+
+            # Create chunk info for this specific file
+            chunks = [{"filename": filename}]
+
+            # Get downloader instance
+            if self.downloader is None:
+                # Initialize downloader only once
+                self.downloader = get_downloader(
+                    remote_dir=self.remote_dir,
+                    cache_dir=self.cache_dir,
+                    chunks=chunks,
+                    storage_options=self.storage_options,
+                )
+
+            # Download the file
             self.downloader.download_file(file_path, local_path)
-            return local_path
+
+            # Verify download was successful
+            if os.path.exists(local_path):
+                return local_path
+
+            raise FileNotFoundError(f"Downloaded file not found at {local_path}")
+
         except Exception as e:
             logger.warning(f"Failed to download {file_path}: {e}")
             return file_path  # Return remote path as fallback
@@ -341,13 +357,11 @@ class StreamingRawDataset(IterableDataset):
 
 
 if __name__ == "__main__":
-    # Example usage
+    # Example usage on litserve teamspace
     import time
 
     start = time.perf_counter()
     dataset = StreamingRawDataset(
-        input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-        cache_dir="caltech_cache",
         # input_dir="s3://imagenet-1m-template/raw/train",
         # cache_dir="raw_cache",
         index_workers=16,
