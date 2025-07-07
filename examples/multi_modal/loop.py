@@ -2,7 +2,8 @@
 
 import logging
 import os
-from typing import Any, Dict, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Dict, Union
 
 import lightning as pl
 import pandas as pd

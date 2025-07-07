@@ -13,8 +13,9 @@
 
 import logging
 import random
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset

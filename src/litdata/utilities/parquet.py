@@ -5,9 +5,10 @@ import json
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from time import time
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib import parse
 
 from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE

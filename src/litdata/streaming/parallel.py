@@ -15,8 +15,9 @@ import hashlib
 import inspect
 import logging
 import random
+from collections.abc import Iterator
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Protocol, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Protocol, Tuple, Union
 
 import numpy as np
 import torch

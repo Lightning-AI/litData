@@ -12,7 +12,8 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any, Dict, List, Optional
 
 from torch.utils.data import IterableDataset
 

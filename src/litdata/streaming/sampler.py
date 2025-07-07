@@ -12,8 +12,9 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
