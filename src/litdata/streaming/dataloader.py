@@ -18,7 +18,7 @@ import os
 from copy import deepcopy
 from importlib import reload
 from itertools import cycle
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 from torch.utils.data import Dataset, IterableDataset
@@ -124,7 +124,7 @@ class CacheCollateFn:
     def __init__(self, collate_fn: Optional[Callable] = None) -> None:
         self.collate_fn = collate_fn or default_collate
 
-    def __call__(self, items: List[Any]) -> Any:
+    def __call__(self, items: list[Any]) -> Any:
         if all(item is None for item in items):
             return None
 
@@ -502,7 +502,7 @@ class StreamingDataLoaderCollateFn:
     def __init__(self, collate_fn: Optional[Callable] = None) -> None:
         self.collate_fn = collate_fn or default_collate
 
-    def __call__(self, items: List[Any]) -> Any:
+    def __call__(self, items: list[Any]) -> Any:
         if len(items) > 0 and isinstance(items[0], dict) and __NUM_SAMPLES_YIELDED_KEY__ in items[0]:
             batch = self.collate_fn([item[__SAMPLES_KEY__] for item in items])
             return {
@@ -621,8 +621,8 @@ class StreamingDataLoader(DataLoader):
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
         self._num_samples_yielded_streaming = 0
-        self._num_samples_yielded_wrapper: Dict[int, List[int]] = {}
-        self._num_cycles: Dict[int, List[int]] = {}
+        self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
+        self._num_cycles: dict[int, list[int]] = {}
         self.rng_state: Optional[Any] = None
         self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
         self._worker_idx_iter: Optional[Any] = None
@@ -704,7 +704,7 @@ class StreamingDataLoader(DataLoader):
             return length
         return len(self._index_sampler)
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
             return {
@@ -746,7 +746,7 @@ class StreamingDataLoader(DataLoader):
             ),
         }
 
-    def load_state_dict(self, obj: Dict[str, Any]) -> None:
+    def load_state_dict(self, obj: dict[str, Any]) -> None:
         """Load a dict containing training state (called from non-worker process).
 
         This is called on each copy of the dataset when resuming.
