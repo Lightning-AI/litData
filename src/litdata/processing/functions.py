@@ -18,12 +18,13 @@ import multiprocessing as mp
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 from urllib import parse
 
 import torch
@@ -62,7 +63,7 @@ def _is_remote_file(path: str) -> bool:
     return obj.scheme in _SUPPORTED_PROVIDERS
 
 
-def _get_indexed_paths(data: Any) -> Dict[int, str]:
+def _get_indexed_paths(data: Any) -> dict[int, str]:
     flattened_item, _ = tree_flatten(data)
 
     return {
@@ -111,7 +112,7 @@ class LambdaMapRecipe(MapRecipe):
         self,
         fn: Callable[[str, Any], None],
         inputs: Union[Sequence[Any], StreamingDataLoader],
-        storage_options: Dict[str, Any] = {},
+        storage_options: dict[str, Any] = {},
     ):
         super().__init__(storage_options)
         self._fn = fn
@@ -130,7 +131,7 @@ class LambdaMapRecipe(MapRecipe):
         if self._contains_device and self._device is None:
             self._find_device()
 
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
 
         if self._contains_device:
             kwargs["device"] = self._device
@@ -165,8 +166,8 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         chunk_bytes: Optional[Union[int, str]],
         compression: Optional[str],
         encryption: Optional[Encryption] = None,
-        existing_index: Optional[Dict[str, Any]] = None,
-        storage_options: Dict[str, Any] = {},
+        existing_index: Optional[dict[str, Any]] = None,
+        storage_options: dict[str, Any] = {},
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -216,8 +217,8 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         chunk_bytes: Optional[Union[int, str]],
         compression: Optional[str],
         encryption: Optional[Encryption] = None,
-        existing_index: Optional[Dict[str, Any]] = None,
-        storage_options: Dict[str, Any] = {},
+        existing_index: Optional[dict[str, Any]] = None,
+        storage_options: dict[str, Any] = {},
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -243,7 +244,7 @@ def map(
     inputs: Union[Sequence[Any], StreamingDataLoader],
     output_dir: Union[str, Path, Dir],
     input_dir: Optional[Union[str, Path]] = None,
-    weights: Optional[List[int]] = None,
+    weights: Optional[list[int]] = None,
     num_workers: Optional[int] = None,
     fast_dev_run: Union[bool, int] = False,
     num_nodes: Optional[int] = None,
@@ -256,7 +257,7 @@ def map(
     batch_size: Optional[int] = None,
     start_method: Optional[str] = None,
     optimize_dns: Optional[bool] = None,
-    storage_options: Dict[str, Any] = {},
+    storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
@@ -389,7 +390,7 @@ def optimize(
     output_dir: str = "optimized_data",
     queue: Optional[mp.Queue] = None,
     input_dir: Optional[str] = None,
-    weights: Optional[List[int]] = None,
+    weights: Optional[list[int]] = None,
     chunk_size: Optional[int] = None,
     chunk_bytes: Optional[Union[int, str]] = None,
     compression: Optional[str] = None,
@@ -408,7 +409,7 @@ def optimize(
     item_loader: Optional[BaseItemLoader] = None,
     start_method: Optional[str] = None,
     optimize_dns: Optional[bool] = None,
-    storage_options: Dict[str, Any] = {},
+    storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
@@ -601,7 +602,7 @@ def optimize(
     )
 
 
-def _listdir(folder: str) -> Tuple[str, List[str]]:
+def _listdir(folder: str) -> tuple[str, list[str]]:
     return folder, os.listdir(folder)
 
 
@@ -615,7 +616,7 @@ class walk:
     def __init__(self, folder: str, max_workers: Optional[int] = os.cpu_count()) -> None:
         self.folders = [folder]
         self.max_workers = max_workers or 1
-        self.futures: List[concurrent.futures.Future] = []
+        self.futures: list[concurrent.futures.Future] = []
 
         if not _IS_IN_STUDIO:
             print("This method is optimized to run on https://lightning.ai/. Don't use it otherwise.")
@@ -660,10 +661,10 @@ class CopyInfo:
 
 
 def merge_datasets(
-    input_dirs: List[str],
+    input_dirs: list[str],
     output_dir: str,
     max_workers: Optional[int] = os.cpu_count(),
-    storage_options: Dict[str, Any] = {},
+    storage_options: dict[str, Any] = {},
 ) -> None:
     """Enables to merge multiple existing optimized datasets into a single optimized dataset.
 
@@ -706,7 +707,7 @@ def merge_datasets(
             raise ValueError("Your are trying to merge datasets with different compression configuration.")
 
     chunks = []
-    copy_infos: List[CopyInfo] = []
+    copy_infos: list[CopyInfo] = []
     counter = 0
     for input_dir, input_dir_file_content in zip(resolved_input_dirs, input_dirs_file_content):
         compression = input_dir_file_content["config"]["compression"]  # type: ignore
@@ -726,7 +727,7 @@ def merge_datasets(
     _tqdm = _get_tqdm_iterator_if_available()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures: List[concurrent.futures.Future] = []
+        futures: list[concurrent.futures.Future] = []
         for copy_info in copy_infos:
             future = executor.submit(_apply_copy, copy_info, resolved_output_dir, storage_options)
             futures.append(future)
@@ -737,7 +738,7 @@ def merge_datasets(
     _save_index(index_json, resolved_output_dir, storage_options)
 
 
-def _apply_copy(copy_info: CopyInfo, output_dir: Dir, storage_options: Dict[str, Any] = {}) -> None:
+def _apply_copy(copy_info: CopyInfo, output_dir: Dir, storage_options: dict[str, Any] = {}) -> None:
     if output_dir.url is None and copy_info.input_dir.url is None:
         assert copy_info.input_dir.path
         assert output_dir.path
@@ -756,7 +757,7 @@ def _apply_copy(copy_info: CopyInfo, output_dir: Dir, storage_options: Dict[str,
         raise NotImplementedError
 
 
-def _save_index(index_json: Dict, output_dir: Dir, storage_options: Dict[str, Any] = {}) -> None:
+def _save_index(index_json: dict, output_dir: Dir, storage_options: dict[str, Any] = {}) -> None:
     if output_dir.url is None:
         assert output_dir.path
         with open(os.path.join(output_dir.path, _INDEX_FILENAME), "w") as f:

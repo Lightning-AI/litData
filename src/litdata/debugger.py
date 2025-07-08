@@ -15,7 +15,6 @@ import logging
 import os
 import sys
 from functools import lru_cache
-from typing import Tuple
 
 from litdata.constants import _PRINT_DEBUG_LOGS
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
@@ -39,7 +38,7 @@ class LitDataLogger:
         self.setup_logger()
 
     @staticmethod
-    def get_log_file_and_level() -> Tuple[str, int]:
+    def get_log_file_and_level() -> tuple[str, int]:
         log_file = os.getenv("LITDATA_LOG_FILE", "litdata_debug.log")
         log_lvl = os.getenv("LITDATA_LOG_LEVEL", "DEBUG")
 

@@ -12,7 +12,7 @@
 # limitations under the License.
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from urllib import parse
 
 from litdata.constants import _GOOGLE_STORAGE_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -20,7 +20,7 @@ from litdata.streaming.client import S3Client
 
 
 class FsProvider(ABC):
-    def __init__(self, storage_options: Optional[Dict[str, Any]] = {}):
+    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         self.storage_options = storage_options
 
     @abstractmethod
@@ -36,7 +36,7 @@ class FsProvider(ABC):
     def copy(self, remote_source: str, remote_destination: str) -> None:
         raise NotImplementedError
 
-    def list_directory(self, path: str) -> List[str]:
+    def list_directory(self, path: str) -> list[str]:
         raise NotImplementedError
 
     def delete_file_or_directory(self, path: str) -> None:
@@ -50,7 +50,7 @@ class FsProvider(ABC):
 
 
 class GCPFsProvider(FsProvider):
-    def __init__(self, storage_options: Optional[Dict[str, Any]] = {}):
+    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         if not _GOOGLE_STORAGE_AVAILABLE:
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
         from google.cloud import storage
@@ -89,7 +89,7 @@ class GCPFsProvider(FsProvider):
 
         return saved_file_dir
 
-    def list_directory(self, path: str) -> List[str]:
+    def list_directory(self, path: str) -> list[str]:
         raise NotImplementedError
 
     def copy(self, remote_source: str, remote_destination: str) -> None:
@@ -133,7 +133,7 @@ class GCPFsProvider(FsProvider):
 
 
 class S3FsProvider(FsProvider):
-    def __init__(self, storage_options: Optional[Dict[str, Any]] = {}):
+    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         super().__init__(storage_options=storage_options)
         self.client = S3Client(storage_options=storage_options)
 
@@ -183,7 +183,7 @@ class S3FsProvider(FsProvider):
             output_obj.path.lstrip("/"),
         )
 
-    def list_directory(self, path: str) -> List[str]:
+    def list_directory(self, path: str) -> list[str]:
         raise NotImplementedError
 
     def delete_file_or_directory(self, path: str) -> None:
@@ -224,7 +224,7 @@ class S3FsProvider(FsProvider):
         return not objects["KeyCount"] > 0
 
 
-def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> Tuple[str, str]:
+def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> tuple[str, str]:
     """Parse the remote filepath and return the bucket name and the blob path.
 
     Args:
@@ -253,7 +253,7 @@ def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> Tu
     return bucket_name, blob_path
 
 
-def _get_fs_provider(remote_filepath: str, storage_options: Optional[Dict[str, Any]] = {}) -> FsProvider:
+def _get_fs_provider(remote_filepath: str, storage_options: Optional[dict[str, Any]] = {}) -> FsProvider:
     obj = parse.urlparse(remote_filepath)
     if obj.scheme == "gs":
         return GCPFsProvider(storage_options=storage_options)

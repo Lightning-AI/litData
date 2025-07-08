@@ -12,8 +12,9 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 
@@ -44,7 +45,7 @@ class ChunkedIndex:
 
     index: int
     chunk_index: int
-    chunk_indexes: Optional[List[int]] = None
+    chunk_indexes: Optional[list[int]] = None
     is_last_index: bool = False
 
 
@@ -94,7 +95,7 @@ class CacheBatchSampler:
     def _validate(self) -> None:
         """Checks each worker is getting successive indices."""
         if self._num_workers > 1 and not self._cache.filled:
-            batches: Dict[int, Any] = {}
+            batches: dict[int, Any] = {}
             for batch_index, batch_indices in enumerate(self):
                 self._length += 1
                 worker_index = batch_index % self._num_workers
@@ -110,7 +111,7 @@ class CacheBatchSampler:
                 if diff.sum() != 0:
                     raise RuntimeError("This shouldn't have happened. There is a bug in the CacheSampler.")
 
-    def __iter__(self) -> Iterator[List[Union[int, ChunkedIndex]]]:
+    def __iter__(self) -> Iterator[list[Union[int, ChunkedIndex]]]:
         # When the cache is filled, we need to iterate though the chunks
         if self._cache.filled:
             if self._num_replicas == 1:
@@ -122,7 +123,7 @@ class CacheBatchSampler:
             return self.__iter_non_distributed__()
         return self.__iter_distributed__()
 
-    def __iter_non_distributed__(self) -> Iterator[List[Union[int, ChunkedIndex]]]:
+    def __iter_non_distributed__(self) -> Iterator[list[Union[int, ChunkedIndex]]]:
         worker_size = self._dataset_size // self._num_workers
         indices = list(range(self._dataset_size))
         worker_indices = []
@@ -138,7 +139,7 @@ class CacheBatchSampler:
 
         yield from self.__iter_indices_per_workers__(worker_indices_batches)
 
-    def __iter_distributed__(self) -> Iterator[List[Union[int, ChunkedIndex]]]:
+    def __iter_distributed__(self) -> Iterator[list[Union[int, ChunkedIndex]]]:
         self.indices = list(range(self._dataset_size))
         replica_size = self._dataset_size // self._num_replicas
         worker_size = self._dataset_size // (self._num_replicas * self._num_workers)
@@ -166,13 +167,13 @@ class CacheBatchSampler:
 
         yield from self.__iter_indices_per_workers__(worker_indices_batches)
 
-    def __iter_from_chunks_non_distributed__(self) -> Iterator[List[Union[int, ChunkedIndex]]]:
+    def __iter_from_chunks_non_distributed__(self) -> Iterator[list[Union[int, ChunkedIndex]]]:
         chunk_intervals = self._cache.get_chunk_intervals()
         shuffled_indexes = np.random.permutation(range(len(chunk_intervals)))
         shuffled_chunk_intervals = np.asarray(chunk_intervals)[shuffled_indexes]
         yield from self.__iter_from_shuffled_chunks(shuffled_indexes.tolist(), shuffled_chunk_intervals)
 
-    def __iter_from_chunks_distributed__(self) -> Iterator[List[Union[int, ChunkedIndex]]]:
+    def __iter_from_chunks_distributed__(self) -> Iterator[list[Union[int, ChunkedIndex]]]:
         chunk_intervals = self._cache.get_chunk_intervals()
         shuffled_indexes = np.random.permutation(range(len(chunk_intervals)))
         shuffled_chunk_intervals = np.asarray(chunk_intervals)[shuffled_indexes]
@@ -187,13 +188,13 @@ class CacheBatchSampler:
         yield from self.__iter_from_shuffled_chunks(replica_chunks, replica_intervals)
 
     def __iter_from_shuffled_chunks(
-        self, shuffled_indexes: List[int], shuffled_chunk_intervals: List[List[int]]
-    ) -> Iterator[List[Union[int, ChunkedIndex]]]:
-        chunks_per_workers: List[List[int]] = [[] for _ in range(self._num_workers)]
+        self, shuffled_indexes: list[int], shuffled_chunk_intervals: list[list[int]]
+    ) -> Iterator[list[Union[int, ChunkedIndex]]]:
+        chunks_per_workers: list[list[int]] = [[] for _ in range(self._num_workers)]
         for i, chunk_index in enumerate(shuffled_indexes):
             chunks_per_workers[i % self._num_workers].append(chunk_index)
 
-        indices_per_workers: List[List[ChunkedIndex]] = [[] for _ in range(self._num_workers)]
+        indices_per_workers: list[list[ChunkedIndex]] = [[] for _ in range(self._num_workers)]
         for i, (chunk_index, chunk_interval) in enumerate(zip(shuffled_indexes, shuffled_chunk_intervals)):
             worker_id = i % self._num_workers
             interval_indices = np.arange(chunk_interval[1], chunk_interval[2])
@@ -218,9 +219,9 @@ class CacheBatchSampler:
         return self._length
 
     def __iter_indices_per_workers__(
-        self, indices_per_workers: List[List[List[Union[int, ChunkedIndex]]]]
-    ) -> Iterator[List[Union[int, ChunkedIndex]]]:
-        batches: List[List[Union[int, ChunkedIndex]]] = []
+        self, indices_per_workers: list[list[list[Union[int, ChunkedIndex]]]]
+    ) -> Iterator[list[Union[int, ChunkedIndex]]]:
+        batches: list[list[Union[int, ChunkedIndex]]] = []
         counter = 0
         while sum([len(v) for v in indices_per_workers]) != 0:
             worker_indices = indices_per_workers[counter % self._num_workers]
@@ -238,7 +239,7 @@ class CacheBatchSampler:
 
         yield from batches
 
-    def _chunk_list(self, arr: List[Any], chunk_size: int) -> List[List[Any]]:
+    def _chunk_list(self, arr: list[Any], chunk_size: int) -> list[list[Any]]:
         out = []
         for i in range(0, len(arr), chunk_size):
             slice_item = slice(i, i + chunk_size, 1)

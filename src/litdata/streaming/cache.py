@@ -14,7 +14,7 @@
 import logging
 import os
 from multiprocessing import Queue
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from litdata.constants import (
     _INDEX_FILENAME,
@@ -36,18 +36,18 @@ class Cache:
     def __init__(
         self,
         input_dir: Optional[Union[str, Dir]],
-        subsampled_files: Optional[List[str]] = None,
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        subsampled_files: Optional[list[str]] = None,
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
         compression: Optional[str] = None,
         encryption: Optional[Encryption] = None,
         chunk_size: Optional[int] = None,
         chunk_bytes: Optional[Union[int, str]] = None,
         item_loader: Optional[BaseItemLoader] = None,
         max_cache_size: Union[int, str] = "100GB",
-        serializers: Optional[Dict[str, Serializer]] = None,
+        serializers: Optional[dict[str, Serializer]] = None,
         writer_chunk_index: Optional[int] = None,
-        storage_options: Optional[Dict] = {},
-        session_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
         max_pre_download: int = 2,
         msg_queue: Optional[Queue] = None,
         on_demand_bytes: bool = False,
@@ -148,13 +148,13 @@ class Cache:
         """Store an item in the writer and optionally return the chunk path."""
         return self._writer.add_item(index, data)
 
-    def __getitem__(self, index: Union[int, ChunkedIndex]) -> Dict[str, Any]:
+    def __getitem__(self, index: Union[int, ChunkedIndex]) -> dict[str, Any]:
         """Read an item in the reader."""
         if isinstance(index, int):
             index = ChunkedIndex(*self._get_chunk_index_from_index(index))
         return self._reader.read(index)
 
-    def done(self) -> Optional[List[str]]:
+    def done(self) -> Optional[list[str]]:
         """Inform the writer the chunking phase is finished."""
         return self._writer.done()
 
@@ -162,17 +162,17 @@ class Cache:
         """Inform the writer the chunking phase is finished."""
         self._writer.merge(num_workers, node_rank=node_rank)
 
-    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[Dict[str, Any]] = None) -> None:
+    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[dict[str, Any]] = None) -> None:
         """Inform the writer the chunking phase is finished."""
         self._writer._merge_no_wait(node_rank=node_rank, existing_index=existing_index)
 
     def __len__(self) -> int:
         return self._reader.get_length()
 
-    def get_chunk_intervals(self) -> List[Interval]:
+    def get_chunk_intervals(self) -> list[Interval]:
         return self._reader.get_chunk_intervals()
 
-    def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
+    def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         return self._reader._get_chunk_index_from_index(index)
 
     def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> Optional[str]:

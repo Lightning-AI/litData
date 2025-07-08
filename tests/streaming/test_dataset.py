@@ -18,7 +18,7 @@ import random
 import shutil
 import sys
 from time import sleep
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from unittest import mock
 from unittest.mock import patch
 
@@ -1081,7 +1081,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
 def test_dataset_valid_state(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: Optional[dict[str, Any]] = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1217,7 +1217,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
 def test_dataset_valid_state_override(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: Optional[dict[str, Any]] = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(

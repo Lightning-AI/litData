@@ -15,8 +15,9 @@ import hashlib
 import inspect
 import logging
 import random
+from collections.abc import Iterator
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Protocol, Tuple, Union
+from typing import Any, Literal, Optional, Protocol, Union
 
 import numpy as np
 import torch
@@ -37,7 +38,7 @@ GeneratorName = Literal["random", "numpy", "torch"]
 
 
 class Transform(Protocol):
-    def __call__(self, samples: Tuple[Any, ...], rng: Optional[Dict[GeneratorName, RandomGenerator]] = None) -> Any: ...
+    def __call__(self, samples: tuple[Any, ...], rng: Optional[dict[GeneratorName, RandomGenerator]] = None) -> Any: ...
 
 
 class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
@@ -82,7 +83,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         length: Optional[Union[int, float]] = None,
         force_override_state_dict: bool = False,
         transform: Optional[Transform] = None,
@@ -132,8 +133,8 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         self._reset_rngs = reset_rngs
         self._iterator: Optional[_ParallelDatasetIterator] = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[Dict[int, List[int]]] = None
-        self._num_cycles: Optional[Dict[int, List[int]]] = None
+        self._num_samples_yielded: Optional[dict[int, list[int]]] = None
+        self._num_cycles: Optional[dict[int, list[int]]] = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
@@ -166,7 +167,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         for dataset in self._datasets:
             dataset.set_epoch(current_epoch)
 
-    def update_epoch_counters(self, num_cycles: List[int]) -> None:
+    def update_epoch_counters(self, num_cycles: list[int]) -> None:
         """Update the epoch counter of the wrapped datasets when cycling."""
         if self.is_cycling():
             assert len(num_cycles) == len(self._datasets)
@@ -190,7 +191,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
             return self._length
         raise ValueError(f"ParallelStreamingDataset length must be None, int, or float('inf'), got {self._length}.")
 
-    def get_all_lens(self) -> List[int]:
+    def get_all_lens(self) -> list[int]:
         return [self._get_len(d) for d in self._datasets]
 
     def __iter__(self) -> Iterator[Any]:
@@ -229,7 +230,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
             state = (self._seed, worker_env.rank, *tot_samples_yielded, *tot_cycles)
         # produce a seed from the state in a stable way; there might be a better way to do this
         seed = int(hashlib.sha256(str(state).encode()).hexdigest(), 16) % (2**32 - 1)
-        rngs: Dict[GeneratorName, RandomGenerator] = {
+        rngs: dict[GeneratorName, RandomGenerator] = {
             "random": random.Random(seed),  # noqa: S311
             "numpy": np.random.default_rng(seed),
             "torch": torch.Generator().manual_seed(seed),
@@ -253,9 +254,9 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def get_num_samples_yielded(
         self,
-        num_samples_yielded: Optional[Dict[int, List[int]]] = None,
-        num_cycles: Optional[Dict[int, List[int]]] = None,
-    ) -> Tuple[List[int], List[int]]:
+        num_samples_yielded: Optional[dict[int, list[int]]] = None,
+        num_cycles: Optional[dict[int, list[int]]] = None,
+    ) -> tuple[list[int], list[int]]:
         """Get the number of samples yielded and the number of cycles for each dataset across workers.
 
         Get the total number of samples yielded by each dataset across workers since it was last cycled, and the number
@@ -284,14 +285,14 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
             output[i] = sum(s for (s, c) in zip(num_samples_yielded, num_cycles) if c == cycles[i])
         return output, cycles
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         super().load_state_dict(state_dict)
         if self._use_streaming_dataloader:
             self._num_cycles = state_dict["num_cycles"]
 
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[List[int]] = None
-    ) -> Dict[str, Any]:
+        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+    ) -> dict[str, Any]:
         if self._iterator is None and num_samples_yielded is None:
             return {}
         num_samples_yielded = num_samples_yielded or [0 for _ in range(len(self._datasets))]
@@ -308,15 +309,15 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
 class _ParallelDatasetIterator(Iterator):
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
         num_cycles: Any,
         length: Optional[Union[int, float]],
-        dset_lengths: List[int],
+        dset_lengths: list[int],
         transform: Optional[Transform],
         transform_nargs: Optional[int],
-        rngs: Dict[GeneratorName, RandomGenerator],
+        rngs: dict[GeneratorName, RandomGenerator],
     ) -> None:
         self._datasets = datasets
         self._dataset_iters = [iter(dataset) for dataset in datasets]
@@ -339,7 +340,7 @@ class _ParallelDatasetIterator(Iterator):
         else:
             self._count = 0
 
-    def transform(self, samples: Tuple[Any, ...]) -> Any:
+    def transform(self, samples: tuple[Any, ...]) -> Any:
         if self._transform is None:
             return samples
         assert self._transform_nargs is not None
@@ -349,7 +350,7 @@ class _ParallelDatasetIterator(Iterator):
             return self._transform(samples, self._rngs)
         raise RuntimeError(f"transform function must take 1 or 2 arguments, got {self._transform_nargs} instead.")
 
-    def __next__(self) -> Union[Any, Dict[str, Any]]:
+    def __next__(self) -> Union[Any, dict[str, Any]]:
         if self._length is not None and self._count >= self._length:
             raise StopIteration
         samples, _resets = zip(*[self._get_sample(i) for i in range(len(self._datasets))])
@@ -367,7 +368,7 @@ class _ParallelDatasetIterator(Iterator):
             }
         return samples
 
-    def _get_sample(self, dataset_index: int) -> Tuple[Any, bool]:
+    def _get_sample(self, dataset_index: int) -> tuple[Any, bool]:
         _reset = False
         try:
             sample = next(self._dataset_iters[dataset_index])

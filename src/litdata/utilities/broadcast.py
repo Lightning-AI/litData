@@ -16,7 +16,7 @@ import os
 import pickle
 from logging import Logger
 from time import sleep
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -90,7 +90,7 @@ class _HTTPClient:
         return self.session.get(url)
 
     def post(
-        self, path: str, *, query_params: Optional[Dict] = None, data: Optional[bytes] = None, json: Any = None
+        self, path: str, *, query_params: Optional[dict] = None, data: Optional[bytes] = None, json: Any = None
     ) -> Any:
         url = urljoin(self.base_url, path)
         return self.session.post(url, data=data, params=query_params, json=json)

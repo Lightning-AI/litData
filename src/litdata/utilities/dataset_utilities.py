@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 
@@ -23,11 +23,11 @@ def subsample_streaming_dataset(
     subsample: float = 1.0,
     shuffle: bool = False,
     seed: int = 42,
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
+    storage_options: Optional[dict] = {},
+    session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
     fnmatch_pattern: Optional[str] = None,
-) -> Tuple[List[str], List[Tuple[int, int]]]:
+) -> tuple[list[str], list[tuple[int, int]]]:
     """Subsample streaming dataset.
 
     But before doing that, we will do some preprocessing:
@@ -38,8 +38,8 @@ def subsample_streaming_dataset(
     - Once chunks are ready, subsample (chunk filenames, region_of_interest).
 
     """
-    subsampled_files: List[str] = []
-    roi: List[Tuple[int, int]] = []
+    subsampled_files: list[str] = []
+    roi: list[tuple[int, int]] = []
 
     # Make sure input_dir contains cache path and remote url
     if _should_replace_path(input_dir.path):
@@ -96,8 +96,8 @@ def subsample_streaming_dataset(
 
         return subsampled_files, roi
 
-    final_files: List[str] = []
-    final_roi: List[Tuple[int, int]] = []
+    final_files: list[str] = []
+    final_roi: list[tuple[int, int]] = []
 
     random_seed_sampler = None
     if shuffle:
@@ -142,8 +142,8 @@ def _should_replace_path(path: Optional[str]) -> bool:
 
 def _read_updated_at(
     input_dir: Optional[Dir],
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
+    storage_options: Optional[dict] = {},
+    session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
 ) -> str:
     """Read last updated timestamp from index.json file."""
@@ -217,8 +217,8 @@ def get_default_cache_dir() -> str:
 def _try_create_cache_dir(
     input_dir: Optional[str],
     cache_dir: Optional[str] = None,
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
+    storage_options: Optional[dict] = {},
+    session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
 ) -> Optional[str]:
     """Prepare and return the cache directory for a dataset."""
@@ -241,7 +241,7 @@ def _try_create_cache_dir(
     return cache_dir
 
 
-def generate_roi(chunks: List[Dict[str, Any]], item_loader: Optional[BaseItemLoader] = None) -> List[Tuple[int, int]]:
+def generate_roi(chunks: list[dict[str, Any]], item_loader: Optional[BaseItemLoader] = None) -> list[tuple[int, int]]:
     """Generates default region_of_interest for chunks."""
     roi = []
 
@@ -256,7 +256,7 @@ def generate_roi(chunks: List[Dict[str, Any]], item_loader: Optional[BaseItemLoa
     return roi
 
 
-def load_index_file(input_dir: str) -> Dict[str, Any]:
+def load_index_file(input_dir: str) -> dict[str, Any]:
     """Load index file from the specified input directory.
 
     This function supports loading both chunk-based and mds shard-based index files.
@@ -286,7 +286,7 @@ def load_index_file(input_dir: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Index file not found at {index_filepath}.")
 
 
-def adapt_mds_shards_to_chunks(data: Dict[str, Any]) -> Dict[str, Any]:
+def adapt_mds_shards_to_chunks(data: dict[str, Any]) -> dict[str, Any]:
     """Adapt mds shard-based index data to chunk-based format for compatibility.
     For more details about MDS, refer to the MosaicML Streaming documentation: https://github.com/mosaicml/streaming.
 

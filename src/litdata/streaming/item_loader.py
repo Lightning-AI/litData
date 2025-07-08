@@ -19,7 +19,7 @@ from copy import deepcopy
 from io import BytesIO, FileIO
 from multiprocessing import Queue
 from time import sleep, time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import torch
@@ -47,10 +47,10 @@ class BaseItemLoader(ABC):
 
     def setup(
         self,
-        config: Dict,
-        chunks: List,
-        serializers: Dict[str, Serializer],
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        config: dict,
+        chunks: list,
+        serializers: dict[str, Serializer],
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
         force_download_queue: Optional[Queue] = None,
     ) -> None:
         self._config = config
@@ -80,11 +80,11 @@ class BaseItemLoader(ABC):
             return serialier
         return data_format
 
-    def state_dict(self) -> Dict:
+    def state_dict(self) -> dict:
         return {}
 
     @abstractmethod
-    def generate_intervals(self) -> List[Interval]:
+    def generate_intervals(self) -> list[Interval]:
         """Returns a list of intervals.
 
         The structure is: [chunk_start, region_of_interest_start, region_of_interest_end, chunk_end]
@@ -120,7 +120,7 @@ class BaseItemLoader(ABC):
         """Delete a chunk from the local filesystem."""
 
     @abstractmethod
-    def encode_data(self, data: List[bytes], sizes: List[int], flattened: List[Any]) -> Any:
+    def encode_data(self, data: list[bytes], sizes: list[int], flattened: list[Any]) -> Any:
         pass
 
 
@@ -130,10 +130,10 @@ class PyTreeLoader(BaseItemLoader):
     def __init__(self) -> None:
         super().__init__()
         self._chunk_filepath: str | None = None
-        self._decrypted_chunks: Dict[int, bytes] = {}
+        self._decrypted_chunks: dict[int, bytes] = {}
         self._open_handle: FileIO | None = None
 
-    def generate_intervals(self) -> List[Interval]:
+    def generate_intervals(self) -> list[Interval]:
         intervals = []
         begin = 0
         end = 0
@@ -358,7 +358,7 @@ class PyTreeLoader(BaseItemLoader):
             raise ValueError("Encryption level mismatch.")
 
     @classmethod
-    def encode_data(cls, data: List[bytes], sizes: List[int], flattened: List[Any]) -> Tuple[bytes, Optional[int]]:
+    def encode_data(cls, data: list[bytes], sizes: list[int], flattened: list[Any]) -> tuple[bytes, Optional[int]]:
         """Encodes multiple serialized objects into a single binary format with size metadata.
 
         This method combines multiple serialized objects into a single byte array, prefixed with their sizes.
@@ -404,14 +404,14 @@ class TokensLoader(BaseItemLoader):
         """
         super().__init__()
         self._block_size = block_size
-        self._mmaps: Dict[int, np.memmap] = {}
-        self._buffers: Dict[int, bytes] = {}
+        self._mmaps: dict[int, np.memmap] = {}
+        self._buffers: dict[int, bytes] = {}
         # keeps track of number of readers for each chunk (can be more than 1 if multiple workers are reading)
         self._counter = defaultdict(int)
         self._dtype: Optional[torch.dtype] = None
-        self._chunk_filepaths: Dict[str, bool] = {}
+        self._chunk_filepaths: dict[str, bool] = {}
 
-    def state_dict(self) -> Dict:
+    def state_dict(self) -> dict:
         assert self._block_size
         return {
             "block_size": self._block_size,
@@ -419,10 +419,10 @@ class TokensLoader(BaseItemLoader):
 
     def setup(
         self,
-        config: Dict,
-        chunks: List,
-        serializers: Dict[str, Serializer],
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        config: dict,
+        chunks: list,
+        serializers: dict[str, Serializer],
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
     ) -> None:
         super().setup(config, chunks, serializers, region_of_interest)
 
@@ -439,7 +439,7 @@ class TokensLoader(BaseItemLoader):
         if all(chunk["dim"] is None for chunk in self._chunks):
             raise ValueError("The provided chunks isn't properly setup.")
 
-    def generate_intervals(self) -> List[Interval]:
+    def generate_intervals(self) -> list[Interval]:
         assert self._block_size
         intervals = []
         begin = 0
@@ -582,7 +582,7 @@ class TokensLoader(BaseItemLoader):
                 del self._mmaps[chunk_index]
 
     @classmethod
-    def encode_data(cls, data: List[bytes], _: List[int], flattened: List[Any]) -> Tuple[bytes, Optional[int]]:
+    def encode_data(cls, data: list[bytes], _: list[int], flattened: list[Any]) -> tuple[bytes, Optional[int]]:
         r"""Encodes tokenized data into a raw byte format while preserving dimensional information.
 
         Parameters:
@@ -617,7 +617,7 @@ class ParquetLoader(BaseItemLoader):
         if not _PYARROW_AVAILABLE:
             raise ModuleNotFoundError("Please, run: `pip install pyarrow`")
 
-        self._chunk_filepaths: Dict[str, bool] = {}
+        self._chunk_filepaths: dict[str, bool] = {}
         self._pre_load_chunk = pre_load_chunk
         self._low_memory = low_memory
 
@@ -630,10 +630,10 @@ class ParquetLoader(BaseItemLoader):
 
     def setup(
         self,
-        config: Dict,
-        chunks: List,
-        serializers: Dict[str, Serializer],
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        config: dict,
+        chunks: list,
+        serializers: dict[str, Serializer],
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
     ) -> None:
         self._config = config
         self._chunks = chunks
@@ -641,11 +641,11 @@ class ParquetLoader(BaseItemLoader):
         self._data_format = self._config["data_format"]
         self._shift_idx = len(self._data_format) * 4
         self.region_of_interest = region_of_interest
-        self._df: Dict[int, Any] = {}
-        self._chunk_row_groups: Dict[int, Any] = {}
-        self._chunk_row_group_item_read_count: Dict[int, Any] = {}
+        self._df: dict[int, Any] = {}
+        self._chunk_row_groups: dict[int, Any] = {}
+        self._chunk_row_group_item_read_count: dict[int, Any] = {}
 
-    def generate_intervals(self) -> List[Interval]:
+    def generate_intervals(self) -> list[Interval]:
         intervals = []
         begin = 0
         end = 0
@@ -828,5 +828,5 @@ class ParquetLoader(BaseItemLoader):
         if chunk_index in self._chunk_row_group_item_read_count:
             del self._chunk_row_group_item_read_count[chunk_index]
 
-    def encode_data(self, data: List[bytes], sizes: List[int], flattened: List[Any]) -> Any:
+    def encode_data(self, data: list[bytes], sizes: list[int], flattened: list[Any]) -> Any:
         pass

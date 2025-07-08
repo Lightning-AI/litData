@@ -13,7 +13,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, TypeVar
+from typing import TypeVar
 
 from litdata.constants import _ZSTD_AVAILABLE
 from litdata.debugger import ChromeTraceColors, _get_log_msg
@@ -36,7 +36,7 @@ class Compressor(ABC):
 
     @classmethod
     @abstractmethod
-    def register(cls, compressors: Dict[str, "Compressor"]) -> None:
+    def register(cls, compressors: dict[str, "Compressor"]) -> None:
         pass
 
 
@@ -68,7 +68,7 @@ class ZSTDCompressor(Compressor):
         return decompressed_data
 
     @classmethod
-    def register(cls, compressors: Dict[str, "Compressor"]) -> None:
+    def register(cls, compressors: dict[str, "Compressor"]) -> None:
         if not _ZSTD_AVAILABLE:
             return
 
@@ -79,6 +79,6 @@ class ZSTDCompressor(Compressor):
             compressors[f"zstd:{level}"] = ZSTDCompressor(level)
 
 
-_COMPRESSORS: Dict[str, Compressor] = {}
+_COMPRESSORS: dict[str, Compressor] = {}
 
 ZSTDCompressor.register(_COMPRESSORS)

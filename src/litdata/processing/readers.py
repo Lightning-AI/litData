@@ -14,7 +14,7 @@
 import contextlib
 import os
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import Any
 
 from litdata.constants import _PYARROW_AVAILABLE
 from litdata.streaming.dataloader import StreamingDataLoader
@@ -49,7 +49,7 @@ class BaseReader(ABC):
         return int(os.getenv("DATA_OPTIMIZER_NODE_RANK", 0))
 
     @abstractmethod
-    def remap_items(self, items: Any, num_workers: int) -> List[Any]:
+    def remap_items(self, items: Any, num_workers: int) -> list[Any]:
         """Remap the items provided by the users into items more adapted to be distributed."""
 
     @abstractmethod
@@ -92,7 +92,7 @@ class ParquetReader(BaseReader):
         self.parquet_file = pq.ParquetFile(filepath, memory_map=True)
         return self.parquet_file
 
-    def remap_items(self, filepaths: List[str], _: int) -> List[str]:
+    def remap_items(self, filepaths: list[str], _: int) -> list[str]:
         """Reshard the parquet files for optimized processing.
 
         If a parquet file contains more number of rows than a specified `num_rows`,
@@ -155,7 +155,7 @@ class StreamingDataLoaderReader(BaseReader):
             # We return None to signal that this worker has no more data to process.
             return None
 
-    def remap_items(self, items: Any, num_workers: int) -> List[Any]:
+    def remap_items(self, items: Any, num_workers: int) -> list[Any]:
         """For StreamingDataLoader, we need to be smarter about item distribution.
         We create enough virtual items so that each worker can process until its
         portion of the dataloader is exhausted.

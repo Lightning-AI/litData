@@ -12,7 +12,8 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any, Optional
 
 from torch.utils.data import IterableDataset
 
@@ -27,13 +28,13 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
     # Base class for datasets that wrap multiple streaming datasets
     # This includes CombinedStreamingDataset and ParallelStreamingDataset
 
-    _datasets: List[StreamingDataset]
+    _datasets: list[StreamingDataset]
     _current_epoch: int
     batch_size: int
     num_workers: int
     _force_override_state_dict: bool
     _use_streaming_dataloader: bool
-    _num_samples_yielded: Optional[Dict[int, List[int]]] = None
+    _num_samples_yielded: Optional[dict[int, list[int]]] = None
 
     def set_shuffle(self, shuffle: bool) -> None:
         """Set the current shuffle to the datasets."""
@@ -62,7 +63,7 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         for dataset in self._datasets:
             dataset.reset_state_dict()
 
-    def _check_datasets(self, datasets: List[StreamingDataset]) -> None:
+    def _check_datasets(self, datasets: list[StreamingDataset]) -> None:
         if any(not isinstance(d, StreamingDataset) for d in datasets):
             raise RuntimeError("The provided datasets should be instances of the StreamingDataset.")
 
@@ -70,7 +71,7 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         # Used to prevent returning num_samples_yielded when using PyTorch DataLoader
         self._use_streaming_dataloader = use_streaming_dataloader
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if not state_dict:
             return
 
@@ -111,8 +112,8 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
 
     @abstractmethod
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[List[int]] = None
-    ) -> Dict[str, Any]: ...
+        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     def __iter__(self) -> Iterator[Any]: ...

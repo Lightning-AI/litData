@@ -12,7 +12,7 @@
 # limitations under the License.
 
 import copy
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -23,10 +23,10 @@ from litdata.utilities.env import _DistributedEnv
 def _intra_node_chunk_shuffle(
     distributed_env: _DistributedEnv,
     num_workers: int,
-    chunks_per_workers: List[List[int]],
+    chunks_per_workers: list[list[int]],
     seed: int,
     current_epoch: int,
-) -> List[int]:
+) -> list[int]:
     chunk_indexes_per_nodes = _group_chunks_by_nodes(
         chunks_per_workers=chunks_per_workers,
         world_size=distributed_env.world_size,
@@ -45,11 +45,11 @@ def _intra_node_chunk_shuffle(
 
 
 def _group_chunks_by_nodes(
-    chunks_per_workers: List[List[int]],
+    chunks_per_workers: list[list[int]],
     world_size: int,
     num_nodes: int,
     num_workers_per_process: int,
-) -> List[List[int]]:
+) -> list[list[int]]:
     """Takes a list representing chunks grouped by worker (global worker id across ranks and nodes) and returns a list
     in which the chunks are grouped by node.
     """
@@ -65,11 +65,11 @@ def _group_chunks_by_nodes(
 def _associate_chunks_and_intervals_to_workers(
     distributed_env: _DistributedEnv,
     indexes: Any,
-    chunk_intervals: List[Interval],
+    chunk_intervals: list[Interval],
     drop_last: bool = False,
     num_workers: int = 1,
     batch_size: int = 1,
-) -> Tuple[List[List[int]], List[Any]]:
+) -> tuple[list[list[int]], list[Any]]:
     num_items = sum([(interval[2] - interval[1]) for interval in chunk_intervals])
     max_batches = num_items // batch_size
     global_num_workers = distributed_env.world_size * num_workers
@@ -102,8 +102,8 @@ def _associate_chunks_and_intervals_to_workers(
         else:
             num_items_per_workers.extend(tmp_arr)
 
-    chunks_per_workers: List[List[int]] = [[] for _ in range(global_num_workers)]
-    intervals_per_workers: List[List[List[int]]] = [[] for _ in range(global_num_workers)]
+    chunks_per_workers: list[list[int]] = [[] for _ in range(global_num_workers)]
+    intervals_per_workers: list[list[list[int]]] = [[] for _ in range(global_num_workers)]
 
     # 4. Assign the chunk & intervals to each rank
     for chunk_index, chunk_interval in zip(indexes, chunk_intervals):
@@ -147,9 +147,9 @@ def _associate_chunks_and_intervals_to_workers(
 def _find_chunks_per_workers_on_which_to_skip_deletion(
     num_workers: int,
     batch_size: int,
-    workers_chunks: List[List[int]],
-    workers_intervals: List[List[Interval]],
-) -> Dict[int, List[int]]:
+    workers_chunks: list[list[int]],
+    workers_intervals: list[list[Interval]],
+) -> dict[int, list[int]]:
     """Returns a dictionary mapping a chunk index to a list of workers that should not delete that chunk.
 
     If a worker is included in this list, it should not delete the chunk after fully reading it, because another worker
@@ -267,7 +267,7 @@ def _find_chunks_per_workers_on_which_to_skip_deletion(
     return to_disable
 
 
-def _get_shared_chunks(workers_chunks: List[List[int]]) -> Dict[int, List[int]]:
+def _get_shared_chunks(workers_chunks: list[list[int]]) -> dict[int, list[int]]:
     """Returns a dictionary mapping a chunk index to a list of workers that share that same chunk."""
     shared_chunks = {}
     for worker, chunks in enumerate(workers_chunks):
@@ -281,14 +281,14 @@ def _get_shared_chunks(workers_chunks: List[List[int]]) -> Dict[int, List[int]]:
 
 
 def _aggregate_shared_chunks_per_rank(
-    shared_chunks: Dict[int, List[int]], num_workers: int
-) -> Dict[int, Dict[int, List[int]]]:
+    shared_chunks: dict[int, list[int]], num_workers: int
+) -> dict[int, dict[int, list[int]]]:
     """Groups together shared chunks by rank.
 
     The output is a dictionary mapping a chunk index to a dictionary that maps a rank to a list of workers.
 
     """
-    aggregated_shared_chunks_per_rank: Dict[int, Dict[int, List[int]]] = {}
+    aggregated_shared_chunks_per_rank: dict[int, dict[int, list[int]]] = {}
     for chunk_index, workers_ids in shared_chunks.items():
         aggregated_shared_chunks_per_rank[chunk_index] = {}
         for worker_idx in workers_ids:
@@ -298,11 +298,11 @@ def _aggregate_shared_chunks_per_rank(
     return aggregated_shared_chunks_per_rank
 
 
-def _map_node_worker_rank_to_chunk_indexes_to_not_delete(to_disable: Dict[int, List[int]]) -> Dict[int, List[int]]:
+def _map_node_worker_rank_to_chunk_indexes_to_not_delete(to_disable: dict[int, list[int]]) -> dict[int, list[int]]:
     """Takes a dictionary mapping a chunk index to a list of workers and inverts the map such that it returns a
     dictionary mapping a worker to a list of chunk indexes (that should not be deleted by that worker).
     """
-    map_node_worker_rank_to_chunk_indexes: Dict[int, List[int]] = {}
+    map_node_worker_rank_to_chunk_indexes: dict[int, list[int]] = {}
     for chunk_index, worker_ids in to_disable.items():
         for worker_idx in worker_ids:
             if worker_idx not in map_node_worker_rank_to_chunk_indexes:

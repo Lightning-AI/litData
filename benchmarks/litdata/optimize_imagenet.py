@@ -10,7 +10,7 @@ import json
 import os
 import time
 from functools import lru_cache, partial
-from typing import Tuple, Union
+from typing import Union
 
 import numpy as np
 import requests
@@ -53,7 +53,7 @@ def get_inputs(input_dir: str):
     return [(filepath, get_class_from_filepath(filepath, classes)) for filepath in filepaths]
 
 
-def optimize_fn(data: Tuple[str, int], args: dict) -> Tuple[Image.Image, int]:
+def optimize_fn(data: tuple[str, int], args: dict) -> tuple[Image.Image, int]:
     """Optimization function for each image."""
     filepath, class_index = data
     img = Image.open(filepath)
@@ -126,7 +126,7 @@ def main():
     seed_everything(args.seed)
 
     # Handle resize_size: if two ints are given, treat as tuple, else int or None
-    resize_size: Union[int, Tuple[int, int], None] = None
+    resize_size: Union[int, tuple[int, int], None] = None
     if args.resize_size is not None:
         if isinstance(args.resize_size, list):
             if len(args.resize_size) == 1:

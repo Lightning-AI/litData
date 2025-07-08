@@ -12,13 +12,12 @@
 # limitations under the License.
 
 from argparse import ArgumentParser, Namespace
-from typing import Tuple
 
 from litdata.cli import LitFormatter
 from litdata.cli.commands import COMMAND_REGISTRY
 
 
-def parse_args() -> Tuple[Namespace, ArgumentParser]:
+def parse_args() -> tuple[Namespace, ArgumentParser]:
     parser = ArgumentParser(
         prog="litdata",
         usage="%(prog)s [command] [options]",

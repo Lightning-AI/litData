@@ -30,7 +30,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Optional, TypeVar, Union
 from urllib import parse
 
 import numpy as np
@@ -98,7 +98,7 @@ def _get_cache_data_dir(name: Optional[str] = None) -> str:
     return os.path.join(cache_dir, name.lstrip("/"))
 
 
-def _wait_for_file_to_exist(remote_filepath: str, sleep_time: int = 2, storage_options: Dict[str, Any] = {}) -> Any:
+def _wait_for_file_to_exist(remote_filepath: str, sleep_time: int = 2, storage_options: dict[str, Any] = {}) -> Any:
     """Wait until the file exists."""
     file_exists = False
     fs_provider = _get_fs_provider(remote_filepath, storage_options)
@@ -125,14 +125,14 @@ def _wait_for_disk_usage_higher_than_threshold(input_dir: str, threshold_in_gb: 
 # 2. `queue_out`: A queue that sends the index after the files have been downloaded and ready to be used.
 #
 def _download_data_target(
-    input_dir: Dir, cache_dir: str, queue_in: Queue, queue_out: Queue, storage_options: Dict[str, Any] = {}
+    input_dir: Dir, cache_dir: str, queue_in: Queue, queue_out: Queue, storage_options: dict[str, Any] = {}
 ) -> None:
     """Download data from a remote directory to a cache directory to optimise reading."""
     fs_provider = None
 
     while True:
         # 2. Fetch from the queue
-        r: Optional[Tuple[int, Any, List[str]]] = queue_in.get()
+        r: Optional[tuple[int, Any, list[str]]] = queue_in.get()
 
         # 3. Terminate the process if we received a termination signal
         if r is None:
@@ -227,7 +227,7 @@ def keep_path(path: str) -> bool:
 #                    so it can be deleted from the cache directory.
 #
 def _upload_fn(
-    upload_queue: Queue, remove_queue: Queue, cache_dir: str, output_dir: Dir, storage_options: Dict[str, Any] = {}
+    upload_queue: Queue, remove_queue: Queue, cache_dir: str, output_dir: Dir, storage_options: dict[str, Any] = {}
 ) -> None:
     """Upload optimised chunks from a local to remote dataset directory."""
     obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
@@ -236,7 +236,7 @@ def _upload_fn(
         fs_provider = _get_fs_provider(output_dir.url, storage_options)
 
     while True:
-        data: Optional[Union[str, Tuple[str, str]]] = upload_queue.get()
+        data: Optional[Union[str, tuple[str, str]]] = upload_queue.get()
 
         tmpdir = None
 
@@ -296,7 +296,7 @@ def _upload_fn(
             remove_queue.put([local_filepath])
 
 
-def _map_items_to_workers_sequentially(num_workers: int, user_items: List[Any]) -> List[List[Any]]:
+def _map_items_to_workers_sequentially(num_workers: int, user_items: list[Any]) -> list[list[Any]]:
     """Map the items to the workers sequentially.
 
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
@@ -306,7 +306,7 @@ def _map_items_to_workers_sequentially(num_workers: int, user_items: List[Any]) 
     world_size = num_nodes * num_workers
     num_items_per_worker = len(user_items) // world_size
 
-    num_items_per_worker: List[int] = [num_items_per_worker for _ in range(world_size)]
+    num_items_per_worker: list[int] = [num_items_per_worker for _ in range(world_size)]
     reminder = len(user_items) % world_size
 
     for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
@@ -336,10 +336,10 @@ def _map_items_to_workers_sequentially(num_workers: int, user_items: List[Any]) 
 
 def _map_items_to_workers_weighted(
     num_workers: int,
-    user_items: List[Any],
-    weights: Optional[List[int]] = None,
+    user_items: list[Any],
+    weights: Optional[list[int]] = None,
     file_size: bool = True,
-) -> List[List[Any]]:
+) -> list[list[Any]]:
     """Map the items to the workers based on the weights.
 
     >>> workers_user_items = _map_items_to_workers_weighted(2, list(range(5)), weights=[1, 2, 3, 4, 5])
@@ -382,7 +382,7 @@ def _get_num_bytes(item: Any, base_path: str) -> int:
     return num_bytes
 
 
-def _get_item_filesizes(items: List[Any], base_path: str = "") -> List[int]:
+def _get_item_filesizes(items: list[Any], base_path: str = "") -> list[int]:
     """Computes the total size in bytes of all file paths for every datastructure in the given list."""
     item_sizes = []
 
@@ -422,11 +422,11 @@ class FakeQueue:
     """This class enables us to replace multiprocessing Queue when not required and avoid serializing data."""
 
     def __init__(self) -> None:
-        self._index: List[Any] = []
-        self._items: List[Any] = []
-        self._paths: List[Any] = []
+        self._index: list[Any] = []
+        self._items: list[Any] = []
+        self._paths: list[Any] = []
 
-    def add_items(self, index: List[Any], items: List[Any], paths: List[Any]) -> None:
+    def add_items(self, index: list[Any], items: list[Any], paths: list[Any]) -> None:
         self._index.extend(index)
         self._items.extend(items)
         self._paths.extend(paths)
@@ -464,7 +464,7 @@ class BaseWorker:
         data_recipe: "DataRecipe",
         input_dir: Dir,
         output_dir: Dir,
-        items: Optional[List[Any]],
+        items: Optional[list[Any]],
         progress_queue: Queue,
         error_queue: Queue,
         stop_queue: Queue,
@@ -474,10 +474,10 @@ class BaseWorker:
         reader: Optional[BaseReader] = None,
         writer_starting_chunk_index: int = 0,
         use_checkpoint: bool = False,
-        checkpoint_chunks_info: Optional[List[Dict[str, Any]]] = None,
+        checkpoint_chunks_info: Optional[list[dict[str, Any]]] = None,
         checkpoint_next_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
-        storage_options: Dict[str, Any] = {},
+        storage_options: dict[str, Any] = {},
         keep_data_ordered: bool = True,
         shared_queue: Union[Queue, FakeQueue, None] = None,
         using_queue_optimize: bool = False,  # using queues as inputs for optimize fn
@@ -496,12 +496,12 @@ class BaseWorker:
         self.num_uploaders = num_uploaders
         self.remove = remove
         self.reader = reader
-        self.paths: List[List[str]] = []
+        self.paths: list[list[str]] = []
         self.remover: Optional[Process] = None
-        self.downloaders: List[Process] = []
-        self.uploaders: List[Process] = []
-        self.to_download_queues: List[Queue] = []
-        self.to_upload_queues: List[Queue] = []
+        self.downloaders: list[Process] = []
+        self.uploaders: list[Process] = []
+        self.to_download_queues: list[Queue] = []
+        self.to_upload_queues: list[Queue] = []
         self.stop_queue = stop_queue
         self.no_downloaders = self.input_dir.path is None or self.reader is not None
 
@@ -522,7 +522,7 @@ class BaseWorker:
         self._index_counter = 0
         self.writer_starting_chunk_index: int = writer_starting_chunk_index
         self.use_checkpoint: bool = use_checkpoint
-        self.checkpoint_chunks_info: Optional[List[Dict[str, Any]]] = checkpoint_chunks_info
+        self.checkpoint_chunks_info: Optional[list[dict[str, Any]]] = checkpoint_chunks_info
         self.checkpoint_next_index: Optional[int] = checkpoint_next_index
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
@@ -689,7 +689,7 @@ class BaseWorker:
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
             self.cache._writer._chunk_index += self.checkpoint_next_index
 
-    def _try_upload(self, data: Optional[Union[str, Tuple[str, str]]]) -> None:
+    def _try_upload(self, data: Optional[Union[str, tuple[str, str]]]) -> None:
         if not data or (self.output_dir.url if self.output_dir.url else self.output_dir.path) is None:
             return
 
@@ -899,7 +899,7 @@ class _Result:
     compression: Optional[str] = None
     encryption: Optional[Encryption] = None
     num_chunks: Optional[int] = None
-    num_bytes_per_chunk: Optional[List[int]] = None
+    num_bytes_per_chunk: Optional[list[int]] = None
 
 
 T = TypeVar("T")
@@ -913,7 +913,7 @@ class DataRecipe:
     """
 
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> List[T]:
+    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
         """Prepare the structure of the data.
 
         This is the structure of the data that will be used by the worker. (inputs)
@@ -930,7 +930,7 @@ class DataRecipe:
         """
         pass
 
-    def __init__(self, storage_options: Dict[str, Any] = {}) -> None:
+    def __init__(self, storage_options: dict[str, Any] = {}) -> None:
         self._name: Optional[str] = None
         self.storage_options = storage_options
 
@@ -945,7 +945,7 @@ class DataChunkRecipe(DataRecipe):
         chunk_bytes: Optional[Union[int, str]] = None,
         compression: Optional[str] = None,
         encryption: Optional[Encryption] = None,
-        storage_options: Dict[str, Any] = {},
+        storage_options: dict[str, Any] = {},
     ):
         super().__init__(storage_options)
         if chunk_size is not None and chunk_bytes is not None:
@@ -957,7 +957,7 @@ class DataChunkRecipe(DataRecipe):
         self.encryption = encryption
 
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> List[T]:
+    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
         """Return the structure of your data.
 
         Each element should contain at least a filepath.
@@ -1057,7 +1057,7 @@ class DataChunkRecipe(DataRecipe):
 
 class MapRecipe(DataRecipe):
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> List[T]:
+    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
         """Return the structure of your data.
 
         Each element should contain at least a filepath.
@@ -1081,13 +1081,13 @@ class DataProcessor:
         fast_dev_run: Optional[Union[bool, int]] = None,
         random_seed: Optional[int] = 42,
         reorder_files: bool = True,
-        weights: Optional[List[int]] = None,
+        weights: Optional[list[int]] = None,
         reader: Optional[BaseReader] = None,
-        state_dict: Optional[Dict[int, int]] = None,
+        state_dict: Optional[dict[int, int]] = None,
         use_checkpoint: bool = False,
         item_loader: Optional[BaseItemLoader] = None,
         start_method: Optional[str] = None,
-        storage_options: Dict[str, Any] = {},
+        storage_options: dict[str, Any] = {},
         keep_data_ordered: bool = True,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
@@ -1137,16 +1137,16 @@ class DataProcessor:
         self.delete_cached_files = delete_cached_files
         self.fast_dev_run = _get_fast_dev_run() if fast_dev_run is None else fast_dev_run
         self.workers: Any = []
-        self.workers_tracker: Dict[int, int] = {}
+        self.workers_tracker: dict[int, int] = {}
         self.progress_queue: Optional[Queue] = None
         self.error_queue: Queue = Queue()
-        self.stop_queues: List[Queue] = []
+        self.stop_queues: list[Queue] = []
         self.reorder_files = reorder_files
         self.weights = weights
         self.reader = reader
         self.use_checkpoint = use_checkpoint
-        self.checkpoint_chunks_info: Optional[List[List[Dict[str, Any]]]] = None
-        self.checkpoint_next_index: Optional[List[int]] = None
+        self.checkpoint_chunks_info: Optional[list[list[dict[str, Any]]]] = None
+        self.checkpoint_next_index: Optional[list[int]] = None
         self.item_loader = item_loader
         self.storage_options = storage_options
         self.keep_data_ordered = keep_data_ordered
@@ -1187,7 +1187,7 @@ class DataProcessor:
         torch.manual_seed(self.random_seed)
 
         # Call the setup method of the user
-        user_items: Union[List[Any], StreamingDataLoader, Queue] = data_recipe.prepare_structure(
+        user_items: Union[list[Any], StreamingDataLoader, Queue] = data_recipe.prepare_structure(
             self.input_dir.path if self.input_dir else None
         )
         if not isinstance(user_items, (list, StreamingDataLoader, multiprocessing.queues.Queue)):
@@ -1388,14 +1388,14 @@ class DataProcessor:
         raise RuntimeError(f"We found the following error {error}.")
 
     def _create_process_workers(
-        self, data_recipe: DataRecipe, workers_user_items: Optional[List[List[Any]]] = None
+        self, data_recipe: DataRecipe, workers_user_items: Optional[list[list[Any]]] = None
     ) -> None:
         if not self.keep_data_ordered and workers_user_items is not None:
             self.shared_queue = Queue()
 
         self.progress_queue = Queue()
-        workers: List[DataWorkerProcess] = []
-        stop_queues: List[Queue] = []
+        workers: list[DataWorkerProcess] = []
+        stop_queues: list[Queue] = []
         for worker_idx in range(self.num_workers):
             worker_user_items = workers_user_items[worker_idx] if workers_user_items is not None else None
             stop_queues.append(Queue())
@@ -1483,7 +1483,7 @@ class DataProcessor:
         fs_provider = _get_fs_provider(self.output_dir.url, self.storage_options)
         fs_provider.delete_file_or_directory(checkpoint_prefix)
 
-    def _save_current_config(self, workers_user_items: List[List[Any]]) -> None:
+    def _save_current_config(self, workers_user_items: list[list[Any]]) -> None:
         if not self.use_checkpoint:
             return
 
@@ -1526,11 +1526,11 @@ class DataProcessor:
         except Exception as e:
             print(e)
 
-    def _load_checkpoint_config(self, workers_user_items: List[List[Any]]) -> None:
+    def _load_checkpoint_config(self, workers_user_items: list[list[Any]]) -> None:
         if not self.use_checkpoint:
             return
 
-        default_chunk_info: List[Dict[str, Any]] = []
+        default_chunk_info: list[dict[str, Any]] = []
 
         self.checkpoint_chunks_info = [default_chunk_info for _ in range(self.num_workers)]
         self.checkpoint_next_index = [0 for _ in range(self.num_workers)]

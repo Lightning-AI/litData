@@ -17,7 +17,7 @@ import warnings
 from contextlib import suppress
 from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 from filelock import FileLock, Timeout
@@ -64,7 +64,7 @@ class PrepareChunksThread(Thread):
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
 
-        self._chunks_index_to_be_deleted: List[int] = []
+        self._chunks_index_to_be_deleted: list[int] = []
         self._max_cache_size = max_cache_size
         self._parent_cache_dir = os.path.dirname(self._config._cache_dir)
         self._to_download_queue: Queue = Queue()
@@ -81,12 +81,12 @@ class PrepareChunksThread(Thread):
         self._delete_chunks_when_processed = num_bytes_per_nodes > max_cache_size if max_cache_size else False
         self._has_exited = False
 
-    def download(self, chunk_indexes: List[int]) -> None:
+    def download(self, chunk_indexes: list[int]) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
         for chunk_index in chunk_indexes:
             self._to_download_queue.put(chunk_index)
 
-    def delete(self, chunk_indexes: List[int]) -> None:
+    def delete(self, chunk_indexes: list[int]) -> None:
         """Receive the list of the chunk indices to delete for the current epoch."""
         for chunk_index in chunk_indexes:
             self._to_delete_queue.put(chunk_index)
@@ -256,14 +256,14 @@ class BinaryReader:
     def __init__(
         self,
         cache_dir: str,
-        subsampled_files: Optional[List[str]] = None,
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        subsampled_files: Optional[list[str]] = None,
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
         max_cache_size: Optional[Union[int, str]] = None,
         remote_input_dir: Optional[str] = None,
         compression: Optional[str] = None,
         encryption: Optional[Encryption] = None,
         item_loader: Optional[BaseItemLoader] = None,
-        serializers: Optional[Dict[str, Serializer]] = None,
+        serializers: Optional[dict[str, Serializer]] = None,
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
         max_pre_download: int = 2,
@@ -299,10 +299,10 @@ class BinaryReader:
 
         self._compression = compression
         self._encryption = encryption
-        self._intervals: Optional[List[str]] = None
+        self._intervals: Optional[list[str]] = None
         self.subsampled_files = subsampled_files
         self.region_of_interest = region_of_interest
-        self._serializers: Dict[str, Serializer] = _get_serializers(serializers)
+        self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._distributed_env = _DistributedEnv.detect()
         self._rank: Optional[int] = None
         self._config: Optional[ChunksConfig] = None
@@ -316,7 +316,7 @@ class BinaryReader:
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
 
-    def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
+    def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
         if self._config is None and self._try_load_config() is None:
             raise Exception("The reader index isn't defined.")
@@ -496,14 +496,14 @@ class BinaryReader:
 
         return len(self.config)
 
-    def get_chunk_intervals(self) -> List[Interval]:
+    def get_chunk_intervals(self) -> list[Interval]:
         """Get the index interval of each chunk."""
         if self._config is None and self._try_load_config() is None:
             raise Exception("The reader index isn't defined.")
 
         return self.config.intervals
 
-    def __getstate__(self) -> Dict[str, Any]:
+    def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_prepare_thread"] = None
         return state

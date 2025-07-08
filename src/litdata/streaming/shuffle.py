@@ -13,7 +13,7 @@
 
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 
@@ -53,7 +53,7 @@ class Shuffle(ABC):
         pass
 
     @abstractmethod
-    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> List[int]:
+    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         pass
 
 
@@ -76,7 +76,7 @@ class NoShuffle(Shuffle):
         )
         return workers_chunks, workers_intervals
 
-    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> List[int]:
+    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         return array.tolist()
 
 
@@ -137,5 +137,5 @@ class FullShuffle(Shuffle):
 
         return workers_chunks, workers_intervals
 
-    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> List[int]:
+    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()
