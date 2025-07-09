@@ -1,7 +1,10 @@
 import os
 import shutil
+import signal
 import sys
+import tempfile
 import threading
+import uuid
 from collections import OrderedDict
 from types import ModuleType
 from unittest.mock import Mock
@@ -16,7 +19,7 @@ from litdata.streaming.reader import PrepareChunksThread
 from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def teardown_process_group():
     """Ensures distributed process group gets closed before the next test runs."""
     yield
@@ -25,9 +28,21 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
-def set_env():
+def set_env(monkeypatch):
     # Set environment variable before each test to configure BaseWorker's maximum wait time
     os.environ["DATA_OPTIMIZER_TIMEOUT"] = "20"
+
+    uuid_str = uuid.uuid4().hex
+    tmp_base = tempfile.gettempdir() if sys.platform == "win32" else "/tmp"  # noqa: S108
+    tmp_path = os.path.join(tmp_base, uuid_str)
+
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", tmp_path)
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def disable_signals(monkeypatch):
+    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
@@ -124,7 +139,7 @@ def lightning_sdk_mock(monkeypatch):
     return lightning_sdk
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def _thread_police():
     """Attempts stopping left-over threads to avoid test interactions.
 
