@@ -268,8 +268,13 @@ class _CombinedDatasetIterator(Iterator):
             )
 
             if self._samples_yielded_in_batch >= limit:
-                # Current dataset has provided its quota; switch to a new one
-                self._cur_dataset_index = self._set_new_dataset_index()
+                # Current dataset reached its quota; pick a *different* dataset if possible
+                candidate_idx = self._cur_dataset_index
+                if len([i for i in self._dataset_indexes if i is not None]) > 1:
+                    while candidate_idx == self._cur_dataset_index:
+                        candidate_idx = self._set_new_dataset_index()
+                # Update tracking
+                self._cur_dataset_index = candidate_idx
                 self._samples_yielded_in_batch = 0
                 dataset_idx = self._cur_dataset_index
                 # Re-compute limit for the new dataset
