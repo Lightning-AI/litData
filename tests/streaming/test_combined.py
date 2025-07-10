@@ -609,14 +609,15 @@ def test_combined_dataset_dataloader_states_partial_iterations(combined_dataset,
 
 @pytest.mark.parametrize("batch_sizes", [[1, 2], [2, 3]])
 def test_combined_dataset_per_dataset_batch_size(batch_sizes):
-    """Validate that when individual batch sizes are provided for each inner dataset
-    the iterator respects these limits when *batching_method='per_stream'*.
+    """Validate that when individual batch sizes are provided for each inner dataset.
+
+    The iterator respects these limits when *batching_method='per_stream'*.
     """
     # Build two trivial iterable datasets that produce easily distinguishable values
     dataset1 = SimpleDataset(0, 200)  # dataset 0 values 0-199
     dataset2 = SimpleDataset(1000, 1200)  # dataset 1 values 1000-1199
 
-    cds = CombinedStreamingDataset(
+    cds = TestCombinedStreamingDataset(
         datasets=[dataset1, dataset2],
         weights=[0.5, 0.5],
         batching_method="per_stream",

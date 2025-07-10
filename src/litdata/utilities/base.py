@@ -12,7 +12,7 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 
 from torch.utils.data import IterableDataset
 
@@ -40,7 +40,7 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         for dataset in self._datasets:
             dataset.set_shuffle(shuffle)
 
-    def set_batch_size(self, batch_size):  # type: ignore[override]
+    def set_batch_size(self, batch_size: Union[int, Sequence[int]]) -> None:  # noqa: D401
         """Set the current batch size.
 
         This method now supports either:
@@ -53,9 +53,8 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         # Defer the import to avoid overhead when not required
         from collections.abc import Sequence
 
-        self.batch_size = batch_size  # store as-is for access in the iterator
+        self.batch_size = batch_size  # store as-is for later access
 
-        # Apply to each dataset
         if isinstance(batch_size, Sequence):
             if len(batch_size) != len(self._datasets):
                 raise ValueError(
@@ -64,9 +63,8 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
             for bs, dataset in zip(batch_size, self._datasets):
                 dataset.set_batch_size(bs)
         else:
-            # Assume scalar int
             for dataset in self._datasets:
-                dataset.set_batch_size(batch_size)
+                dataset.set_batch_size(int(batch_size))
 
     def set_num_workers(self, num_workers: int) -> None:
         """Set the current number of workers to the datasets."""

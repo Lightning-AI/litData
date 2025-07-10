@@ -14,7 +14,7 @@
 import logging
 import random
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Union
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -169,7 +169,7 @@ class _CombinedDatasetIterator(Iterator):
         weights: Sequence[Optional[float]],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
-        batch_size,
+        batch_size: Union[int, Sequence[int]],
         batching_method: BatchingMethodType,
         iterate_over_all: bool = False,
     ) -> None:
@@ -185,14 +185,12 @@ class _CombinedDatasetIterator(Iterator):
         # Batch size can be an int (applied to all datasets) or a sequence providing
         # a specific batch size per dataset.
         self._batch_size = batch_size
-        # Validate when a sequence is provided
         from collections.abc import Sequence as _Sequence
-
-        if isinstance(batch_size, _Sequence):
-            if len(batch_size) != len(datasets):
-                raise ValueError(
-                    "When providing a sequence of batch sizes, its length must match the number of datasets."
-                )
+        # Validate when a sequence is provided
+        if isinstance(batch_size, _Sequence) and len(batch_size) != len(datasets):
+            raise ValueError(
+                "When providing a sequence of batch sizes, its length must match the number of datasets."
+            )
         self._is_done = False
 
         if num_samples_yielded is not None:
@@ -263,10 +261,11 @@ class _CombinedDatasetIterator(Iterator):
             dataset_idx = self._cur_dataset_index
 
             # Determine the batch-size limit for the current dataset
-            if isinstance(self._batch_size, _Sequence):
-                limit = self._batch_size[dataset_idx]
-            else:
-                limit = self._batch_size
+            limit = (
+                self._batch_size[dataset_idx]
+                if isinstance(self._batch_size, _Sequence)
+                else self._batch_size
+            )
 
             if self._samples_yielded_in_batch >= limit:
                 # Current dataset has provided its quota; switch to a new one
