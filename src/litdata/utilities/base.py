@@ -40,7 +40,7 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         for dataset in self._datasets:
             dataset.set_shuffle(shuffle)
 
-    def set_batch_size(self, batch_size: Union[int, Sequence[int]]) -> None:  # noqa: D401
+    def set_batch_size(self, batch_size: Union[int, Sequence[int]]) -> None:
         """Set the current batch size.
 
         This method now supports either:

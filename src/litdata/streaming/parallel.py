@@ -245,9 +245,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         # the first element if a sequence is provided.
         from typing import Sequence
 
-        bs_int: int = (
-            int(self.batch_size[0]) if isinstance(self.batch_size, Sequence) else int(self.batch_size)
-        )
+        bs_int: int = int(self.batch_size[0]) if isinstance(self.batch_size, Sequence) else int(self.batch_size)
         return self.get_len(self.num_workers, bs_int if bs_int else 1)
 
     def get_num_samples_yielded(

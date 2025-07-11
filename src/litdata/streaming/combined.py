@@ -186,11 +186,10 @@ class _CombinedDatasetIterator(Iterator):
         # a specific batch size per dataset.
         self._batch_size = batch_size
         from collections.abc import Sequence as _Sequence
+
         # Validate when a sequence is provided
         if isinstance(batch_size, _Sequence) and len(batch_size) != len(datasets):
-            raise ValueError(
-                "When providing a sequence of batch sizes, its length must match the number of datasets."
-            )
+            raise ValueError("When providing a sequence of batch sizes, its length must match the number of datasets.")
         self._is_done = False
 
         if num_samples_yielded is not None:
@@ -261,11 +260,7 @@ class _CombinedDatasetIterator(Iterator):
             dataset_idx = self._cur_dataset_index
 
             # Determine the batch-size limit for the current dataset
-            limit = (
-                self._batch_size[dataset_idx]
-                if isinstance(self._batch_size, _Sequence)
-                else self._batch_size
-            )
+            limit = self._batch_size[dataset_idx] if isinstance(self._batch_size, _Sequence) else self._batch_size
 
             if self._samples_yielded_in_batch >= limit:
                 # Current dataset reached its quota; pick a *different* dataset if possible
