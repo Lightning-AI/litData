@@ -121,16 +121,15 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
         # ``get_len`` signature.  We pass an `int` in both cases and use the
         # first element of the sequence when a per-dataset list is provided.
 
-        from typing import Sequence, cast
+        from typing import Sequence
 
-        bs: int
         if isinstance(self.batch_size, Sequence):
-            bs = cast(int, self.batch_size[0] if self.batch_size else 1)
+            bs_int: int = int(self.batch_size[0] if self.batch_size else 1)
         else:
-            bs = cast(int, self.batch_size)
+            bs_int = int(self.batch_size)
 
         if isinstance(d, StreamingDataset):
-            return d.get_len(self.num_workers, bs)
+            return d.get_len(self.num_workers, bs_int)
         return len(d)
 
     @abstractmethod
