@@ -29,7 +29,7 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
 
     _datasets: List[StreamingDataset]
     _current_epoch: int
-    batch_size: int
+    batch_size: Union[int, Sequence[int]]
     num_workers: int
     _force_override_state_dict: bool
     _use_streaming_dataloader: bool
