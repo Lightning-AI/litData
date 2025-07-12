@@ -201,6 +201,19 @@ class StreamingDataset(IterableDataset):
             if not callable(transform):
                 raise ValueError(f"Transform should be a callable. Found {transform}")
             self.transform = transform
+        self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
+
+    @property
+    def on_demand_bytes(self) -> bool:
+        return self._on_demand_bytes
+
+    @on_demand_bytes.setter
+    def on_demand_bytes(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise ValueError(f"on_demand_bytes should be a boolean. Found {value}")
+        self._on_demand_bytes = value
+        assert self.cache is not None, "Cache must be initialized before setting on_demand_bytes."
+        self.cache._reader.on_demand_bytes = value
 
     def set_shuffle(self, shuffle: bool) -> None:
         self.shuffle = shuffle
@@ -240,6 +253,7 @@ class StreamingDataset(IterableDataset):
             storage_options=self.storage_options,
             session_options=self.session_options,
             max_pre_download=self.max_pre_download,
+            on_demand_bytes=self._on_demand_bytes,
         )
         cache._reader._try_load_config()
 
@@ -287,6 +301,7 @@ class StreamingDataset(IterableDataset):
         self.worker_env = _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
+        self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
 
         # Handle restart
         if self._state_dict:
@@ -402,7 +417,7 @@ class StreamingDataset(IterableDataset):
         # bump the chunk_index
         self.worker_next_chunk_index += 1
 
-    def __getitem__(self, index: Union[ChunkedIndex, int]) -> Any:
+    def __getitem__(self, index: Union[ChunkedIndex, int, slice]) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -410,6 +425,7 @@ class StreamingDataset(IterableDataset):
         if isinstance(index, int):
             index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
         elif isinstance(index, slice):
+            self.on_demand_bytes = False  # for slices, we always want to store the chunks
             start, stop, step = index.indices(len(self))
             _my_indices = list(range(start, stop, step))
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
@@ -436,6 +452,7 @@ class StreamingDataset(IterableDataset):
             self.current_epoch += 1
             self.reset_state_dict()
             logger.debug(_get_log_msg({"name": "iterating_dataset", "ph": "E"}))
+            self.on_demand_bytes = True  # reset on_demand_bytes to True
             raise StopIteration
 
         # Lazily re-populate the interval to reduce memory usage.
@@ -444,6 +461,7 @@ class StreamingDataset(IterableDataset):
             if self.num_chunks is not None and self.worker_next_chunk_index >= self.num_chunks:
                 self.current_epoch += 1
                 self.reset_state_dict()
+                self.on_demand_bytes = True  # reset on_demand_bytes to True
                 raise StopIteration
 
             # if upcoming_indexes is empty, means either:

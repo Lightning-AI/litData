@@ -76,8 +76,27 @@ class Downloader(ABC):
 
         logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "E"}))
 
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
+        chunk_filename = self._chunks[chunk_index]["filename"]
+        local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
+        remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
+
+        return self.download_bytes(remote_chunkpath, offset, length, local_chunkpath)
+
     def download_file(self, remote_chunkpath: str, local_chunkpath: str) -> None:
         pass
+
+    def download_bytes(self, remote_chunkpath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Download a specific range of bytes from the remote file.
+
+        If this method is not overridden in a subclass, it defaults to downloading the full file
+        by calling `download_file` and then reading the desired byte range from the local copy.
+        """
+        self.download_file(remote_chunkpath, local_chunkpath)
+        # read the specified byte range from the local file
+        with open(local_chunkpath, "rb") as f:
+            f.seek(offset)
+            return f.read(length)
 
 
 class S3Downloader(Downloader):
@@ -165,6 +184,24 @@ class S3Downloader(Downloader):
                         Config=TransferConfig(use_threads=False),
                     )
 
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        byte_range = f"bytes={offset}-{offset + length - 1}"
+
+        response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
+
+        return response["Body"].read()
+
 
 class GCPDownloader(Downloader):
     def __init__(
@@ -207,6 +244,26 @@ class GCPDownloader(Downloader):
             bucket = client.bucket(bucket_name)
             blob = bucket.blob(key)
             blob.download_to_filename(local_filepath)
+
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        # GCS uses end as *inclusive*, so end = offset + length - 1
+        end = offset + length - 1
+
+        return blob.download_as_bytes(start=offset, end=end)
 
 
 class AzureDownloader(Downloader):

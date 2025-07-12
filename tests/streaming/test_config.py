@@ -1,5 +1,9 @@
+import os
+
+import numpy as np
 import pytest
 
+from litdata.streaming.cache import Cache
 from litdata.streaming.config import load_subsampled_chunks
 
 
@@ -30,3 +34,27 @@ def test_load_subsampled_chunks():
 
     with pytest.raises(ValueError, match="Mismatch in subsampled files"):
         load_subsampled_chunks(my_subsampled_files, original_chunks)
+
+
+def test_config_download_chunk_bytes(tmpdir, monkeypatch):
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache = Cache(input_dir=cache_dir, chunk_size=2, max_cache_size=28020)
+
+    for i in range(25):
+        cache[i] = i
+
+    cache.done()
+    cache.merge()
+
+    cache._reader._try_load_config()
+
+    chunk_idx = 0
+    offset = 4
+    length = 8
+
+    data = cache._reader._config.download_chunk_bytes_from_index(chunk_index=chunk_idx, offset=offset, length=length)
+    assert isinstance(data, bytes)
+    assert len(data) == length
+    original_data = np.frombuffer(data, dtype=np.int32)  # original data is expected to be []
+    assert isinstance(original_data, np.ndarray)

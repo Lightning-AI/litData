@@ -49,8 +49,9 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
     datasets.
 
     The parallel dataset can be configured to raise a ``StopIteration`` as soon as any of the datasets is exhausted, or
-    to cycle through the datasets until a given number of samples are yielded. When cycling, each epoch resumes from
-    where the previous one left off in the current cycle, i.e. the yielded samples are not the same across epochs.
+    to cycle through the datasets until a given number of samples are yielded. When cycling and using a
+    ``StreamingDataLoader``, the ``resume`` option can be used to either yield the same ``length`` samples in each
+    epoch, or to resume the dataset from where it left off in the previous epoch.
 
     New data can be generated on-the-fly from a sample from each dataset by providing a ``transform`` function. This
     function can take a single tuple argument containing a sample from each dataset, and optionally a dictionary of
@@ -86,6 +87,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         force_override_state_dict: bool = False,
         transform: Optional[Transform] = None,
         seed: int = 42,
+        resume: bool = True,
         reset_rngs: bool = False,
     ) -> None:
         """Enable to stream data from multiple StreamingDataset in parallel.
@@ -100,9 +102,12 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
                 argument a tuple containing one sample from each dataset, and optionally a dictionary of random
                 number generators which are seeded using the current state of the dataset.
             seed: Seed for the random number generators provided to ``transform``.
+            resume: If ``True`` and ``length`` is not ``None``, tells the dataloader to resume the dataset from where it
+                left off in the previous epoch. If ``False``, the same ``length`` samples are yielded in each epoch.
+                Ignored if ``length`` is ``None``.
             reset_rngs: If ``True``, the random number generators provided to ``transform`` are reset to their initial
-                state at the beginning of each epoch. Together with ``length=None`` and ``shuffle=False``, this ensures
-                that the same samples are yielded in each epoch.
+                state at the beginning of each epoch. Together with ``resume=False``, this allows to produce the same
+                samples in each epoch.
         """
         self._check_datasets(datasets)
 
@@ -132,6 +137,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
+        self.resume = resume
 
         if length is not None:
             for dataset in self._datasets:
@@ -154,7 +160,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def set_epoch(self, current_epoch: int) -> None:
         self._current_epoch = current_epoch
-        if self.is_cycling():
+        if self.is_cycling() and self.resume:
             # do not set the epoch as cycling datasets have their own epoch counter
             return
         for dataset in self._datasets:
@@ -188,6 +194,9 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         return [self._get_len(d) for d in self._datasets]
 
     def __iter__(self) -> Iterator[Any]:
+        if self.is_cycling() and not self.resume:
+            self.set_epoch(1)
+
         worker_env = _WorkerEnv.detect()
 
         num_samples_yielded = None

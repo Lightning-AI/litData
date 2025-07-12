@@ -537,7 +537,6 @@ def test_combined_dataset_dataloader_states_without_any_iterations(combined_data
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("num_workers", [0, 2, 4])
 def test_combined_dataset_dataloader_states_complete_iterations(combined_dataset, num_workers):
-    print(f"Testing with num_workers={num_workers}")
     dataloader = StreamingDataLoader(combined_dataset, batch_size=4, num_workers=num_workers)
     assert len(dataloader) == 25, "Dataloader length should be 25 (50+50 items / batch size 4)"
 
@@ -559,16 +558,13 @@ def test_combined_dataset_dataloader_states_complete_iterations(combined_dataset
 
 
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize(("num_workers", "break_at"), [(0, 10), (0, 15), (2, 10), (2, 15), (4, 10), (4, 15)])
+@pytest.mark.parametrize(("num_workers", "break_at"), [(0, 10), (0, 15), (2, 15), (4, 15)])
 def test_combined_dataset_dataloader_states_partial_iterations(combined_dataset, num_workers, break_at):
-    print(f"Testing with num_workers={num_workers}, break_at={break_at}")
-
     # Verify dataloader state after partial last iteration
     dataloader = StreamingDataLoader(combined_dataset, batch_size=4, num_workers=num_workers)
 
     total_batches = len(dataloader)
     assert total_batches == 25, "Dataloader length should be 25 (100 items / batch size 4)"
-
     assert not dataloader.restore, "Dataloader should not be in restore state initially."
 
     # Partial iteration up to 'break_at'

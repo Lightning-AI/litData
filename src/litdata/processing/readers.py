@@ -143,10 +143,25 @@ class StreamingDataLoaderReader(BaseReader):
         """Read the next item from the dataloader."""
         if self.dataloader_iter is None:
             self.dataloader_iter = iter(self.dataloader)
-        return next(self.dataloader_iter)
 
-    def remap_items(self, dataloader: StreamingDataLoader, _: int) -> List[Any]:
-        """Remap the items from the dataloader. But here, we don't do anything.
-        No splitting or batching is done here. As streaming dataloader is already optimized for this.
+        try:
+            # Data is distributed across workers through iterator, similar to DDP.
+            # Although the iterator is created within this worker process,
+            # distribution is already managed by the StreamingDataLoader and StreamingDataset.
+            return next(self.dataloader_iter)
+        except StopIteration:
+            # This can happen when some workers finish their data slice before others.
+            # In multiprocessing scenarios with StreamingDataLoader, this is expected behavior.
+            # We return None to signal that this worker has no more data to process.
+            return None
+
+    def remap_items(self, items: Any, num_workers: int) -> List[Any]:
+        """For StreamingDataLoader, we need to be smarter about item distribution.
+        We create enough virtual items so that each worker can process until its
+        portion of the dataloader is exhausted.
         """
-        return list(range(len(dataloader)))
+        # The items parameter is the StreamingDataLoader in this case
+        total_items = len(items)
+        # Create more virtual items than actual items to ensure all workers
+        # get enough chances to process their portion of the dataloader
+        return list(range(total_items * 2))

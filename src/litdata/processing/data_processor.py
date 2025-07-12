@@ -619,8 +619,7 @@ class BaseWorker:
                 continue
 
             if self.using_queue_optimize:
-                # using random index number, just to satisfy the default combined_data structure.
-                index = -5  # not using -1, as items will be of length 0, so last_index (0-1 = -1) will become true.
+                index = None
                 item = combined_data
                 paths = None
             else:
@@ -823,6 +822,11 @@ class BaseWorker:
         """
         try:
             current_item = item if self.reader is None else self.reader.read(item)
+
+            # Handle case where StreamingDataLoaderReader returns None (worker exhausted its data)
+            if current_item is None:
+                return
+
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:

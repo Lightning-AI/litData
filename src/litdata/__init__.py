@@ -10,6 +10,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import warnings
+
 from lightning_utilities.core.imports import RequirementCache
 
 from litdata.__about__ import *  # noqa: F403
@@ -23,6 +25,13 @@ from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.train_test_split import train_test_split
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"A newer version of lightning-sdk.*",
+    category=UserWarning,
+)
+
 
 __all__ = [
     "StreamingDataset",

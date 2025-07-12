@@ -151,6 +151,28 @@ class ChunksConfig:
 
         self.try_decompress(local_chunkpath)
 
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
+        assert self._chunks is not None
+        chunk_filename = self._chunks[chunk_index]["filename"]
+
+        local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
+
+        if os.path.exists(local_chunkpath):
+            with open(local_chunkpath, "rb") as f:
+                f.seek(offset)
+                return f.read(length)
+
+        if self._compressor is not None:
+            raise ValueError(
+                "The `download_chunk_bytes_from_index` method is not supported for compressed chunks. "
+                "Please, use `download_chunk_from_index` instead."
+            )
+
+        if self._downloader is None:
+            raise RuntimeError("The downloader is not initialized. Please, initialize it before downloading chunks.")
+
+        return self._downloader.download_chunk_bytes_from_index(chunk_index, offset, length)
+
     def try_decompress(self, local_chunkpath: str) -> None:
         if self._compressor is None:
             return

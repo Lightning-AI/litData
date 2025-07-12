@@ -50,6 +50,7 @@ class Cache:
         session_options: Optional[Dict] = {},
         max_pre_download: int = 2,
         msg_queue: Optional[Queue] = None,
+        on_demand_bytes: bool = False,
     ):
         """The Cache enables to optimise dataset format for cloud training. This is done by grouping several elements
         together in order to accelerate fetching.
@@ -70,6 +71,7 @@ class Cache:
             session_options: Additional options for the S3 session.
             max_pre_download: Maximum number of chunks that can be pre-downloaded while filling up the cache.
             msg_queue: Optional message queue to send messages to the main process.
+            on_demand_bytes: If True, fetch only the requested sample's bytes instead of downloading the entire chunk.
 
         """
         super().__init__()
@@ -100,6 +102,7 @@ class Cache:
             storage_options=storage_options,
             session_options=session_options,
             max_pre_download=max_pre_download,
+            on_demand_bytes=on_demand_bytes,
         )
         self._is_done = False
         self._distributed_env = _DistributedEnv.detect()
