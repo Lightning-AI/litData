@@ -124,7 +124,8 @@ def random_image(index):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
-def test_optimize_append_overwrite(tmpdir):
+@pytest.mark.parametrize("verbose", [False, True])
+def test_optimize_append_overwrite(tmpdir, verbose):
     output_dir = str(tmpdir / "output_dir")
 
     optimize(
@@ -133,6 +134,7 @@ def test_optimize_append_overwrite(tmpdir):
         num_workers=1,
         output_dir=output_dir,
         chunk_bytes="64MB",
+        verbose=verbose,
     )
 
     ds = StreamingDataset(output_dir)

@@ -203,6 +203,37 @@ def huggingface_hub_mock(monkeypatch):
 
 
 @pytest.fixture
+def mock_ultralytics(monkeypatch, tmp_path):
+    fake_ultralytics = ModuleType("ultralytics")
+    fake_data = ModuleType("ultralytics.data")
+    fake_utils = ModuleType("ultralytics.data.utils")
+
+    # Create fake dataset paths using tmp_path (safe on all OSes)
+    train_dir = tmp_path / "train"
+    val_dir = tmp_path / "val"
+    train_dir.mkdir()
+    val_dir.mkdir()
+
+    def check_det_dataset(yaml_path):
+        return {
+            "train": str(train_dir),
+            "val": str(val_dir),
+            "test": None,
+            "names": [],
+        }
+
+    fake_utils.check_det_dataset = check_det_dataset
+
+    # Register in sys.modules
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
+    monkeypatch.setitem(sys.modules, "ultralytics.data", fake_data)
+    monkeypatch.setitem(sys.modules, "ultralytics.data.utils", fake_utils)
+
+    fake_data.utils = fake_utils
+    fake_ultralytics.data = fake_data
+
+
+@pytest.fixture
 def huggingface_hub_fs_mock(monkeypatch, write_pq_data, tmp_path):
     huggingface_hub = ModuleType("huggingface_hub")
     hf_file_system = ModuleType("hf_file_system")

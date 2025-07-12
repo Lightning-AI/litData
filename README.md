@@ -1554,6 +1554,100 @@ map(
 
 &nbsp;
 
+## Ultralytics (YOLO) Integration
+
+<details>
+  <summary>✅ Stream Large Datasets to Ultralytics Models with LitData</summary>
+
+ 
+
+This feature enables **training Ultralytics models (like YOLO)** directly from **LitData’s optimized streaming datasets**. Now you can train on massive datasets (e.g., 500GB+) without downloading everything to disk — just stream from **S3, GCS, local paths, or HTTP(S)** with minimal overhead.
+
+---
+
+### 🔧 How It Works
+
+#### **Step 1: Optimize Your Dataset (One-time Step)**
+
+Convert your existing Ultralytics-style dataset into an optimized streaming format:
+
+```python
+from litdata.integrations.ultralytics import optimize_ultralytics_dataset
+
+optimize_ultralytics_dataset(
+    "coco128.yaml",                            # Original dataset config
+    "s3://some-bucket/optimized-data",         # Cloud path or local directory
+    num_workers=4,                             # Number of concurrent workers
+    chunk_bytes="64MB",                        # Chunk size for streaming
+)
+```
+
+This generates an optimized dataset and creates a new `litdata_coco128.yaml` config to use for training.
+
+---
+
+#### **Step 2: Patch Ultralytics for Streaming**
+
+Before training, patch Ultralytics internals to enable LitData streaming:
+
+```python
+from litdata.integrations.ultralytics import patch_ultralytics
+
+patch_ultralytics()
+```
+
+---
+
+#### **Step 3: Train Like Usual — But Now From the Cloud ☁️**
+
+```python
+from litdata.integrations.ultralytics import patch_ultralytics
+
+patch_ultralytics()
+
+# -------
+
+from ultralytics import YOLO
+
+patch_ultralytics()
+
+model = YOLO("yolo11n.pt")
+model.train(data="litdata_coco128.yaml", epochs=100, imgsz=640)
+```
+
+That’s it — Ultralytics now streams your data via LitData under the hood!
+
+---
+
+### ✅ Benefits
+
+* 🔁 **Stream datasets of any size** — no need to fully download.
+* 💾 **Save disk space** — only minimal local caching is used.
+* 🧪 **Benchmark-tested** — supports both local and cloud training.
+* 🧩 **Plug-and-play with Ultralytics** — zero training code changes.
+* ☁️ Supports **S3, GCS, HTTP(S), and local disk** out-of-the-box.
+* ✅ **Minimal code changes** to existing Ultralytics training scripts
+
+---
+
+### 📊 Benchmarks (Lightning Studio L4 GPU)
+
+- On local machine:
+<img width="580" height="234" alt="Screenshot 2025-07-09 at 10 14 27 AM" src="https://github.com/user-attachments/assets/8c735a48-c0d9-4c1d-8a03-7de58147d889" />
+
+- On lightning studio (L4 GPU machine)
+<img width="478" height="183" alt="Screenshot 2025-07-11 at 12 50 11 AM" src="https://github.com/user-attachments/assets/98bfa8cc-5cea-4dd2-8957-f2ad5600246c" />
+
+While the performance gains aren't drastic (due to Ultralytics caching internally), this integration **unlocks all the benefits of streaming** and enables training on large-scale datasets from the cloud.
+
+Instead of downloading entire datasets (which can be hundreds of GBs), you can now **stream data on-the-fly from S3, GCS, HTTP(S), or even local disk** — making it ideal for training in the cloud with limited storage and more efficient utilization of resources.
+
+We’re also exploring a **custom LitData dataloader** built from scratch (potentially breaking GIL using Rust or multithreading). If it outperforms `torch.DataLoader`, future benchmarks could reflect significant performance boosts. 💡
+
+</details>
+
+&nbsp;
+
 ----
 
 # Benchmarks

@@ -1089,6 +1089,7 @@ class DataProcessor:
         start_method: Optional[str] = None,
         storage_options: Dict[str, Any] = {},
         keep_data_ordered: bool = True,
+        verbose: bool = True,
     ):
         """Provides an efficient way to process data across multiple machine into chunks to make training faster.
 
@@ -1115,6 +1116,7 @@ class DataProcessor:
                 inside an interactive shell like Ipython.
             storage_options: Storage options for the cloud provider.
             keep_data_ordered: Whether to use a shared queue for the workers or not.
+            verbose: Whether to print the progress of the workers. Defaults to True.
         """
         # spawn doesn't work in IPython
         start_method = start_method or ("fork" if in_notebook() else "spawn")
@@ -1124,7 +1126,8 @@ class DataProcessor:
             msg += "Tip: Libraries relying on lock can hang with `fork`. To use `spawn` in notebooks, "
             msg += "move your code to files and import it within the notebook."
 
-        print(msg)
+        if verbose:
+            print(msg)
 
         multiprocessing.set_start_method(start_method, force=True)
 
@@ -1166,9 +1169,13 @@ class DataProcessor:
         if self.output_dir:
             # Ensure the output dir is the same across all nodes
             self.output_dir = broadcast_object("output_dir", self.output_dir, rank=_get_node_rank())
-            print(f"Storing the files under {self.output_dir.path if self.output_dir.path else self.output_dir.url}")
+            if verbose:
+                print(
+                    f"Storing the files under {self.output_dir.path if self.output_dir.path else self.output_dir.url}"
+                )
 
         self.random_seed = random_seed
+        self.verbose = verbose
 
     def run(self, data_recipe: DataRecipe) -> None:
         """Triggers the data recipe processing over your dataset."""
@@ -1179,7 +1186,8 @@ class DataProcessor:
             self._cleanup_checkpoints()
 
         t0 = time()
-        print(f"Setup started with fast_dev_run={self.fast_dev_run}.")
+        if self.verbose:
+            print(f"Setup started with fast_dev_run={self.fast_dev_run}.")
 
         # Force random seed to be fixed
         random.seed(self.random_seed)
@@ -1231,7 +1239,8 @@ class DataProcessor:
             if isinstance(user_items, list)
             else "Using a Queue to process items on demand."
         )
-        print(f"Setup finished in {round(time() - t0, 3)} seconds. {msg}")
+        if self.verbose:
+            print(f"Setup finished in {round(time() - t0, 3)} seconds. {msg}")
 
         if self.use_checkpoint:
             if isinstance(user_items, multiprocessing.queues.Queue):
@@ -1244,49 +1253,56 @@ class DataProcessor:
                 # Checkpoint feature is not supported for generators for now.
                 raise ValueError("Checkpoint feature is not supported for generators, yet.")
             # get the last checkpoint details
-            print("Resuming from last saved checkpoint...")
+            if self.verbose:
+                print("Resuming from last saved checkpoint...")
             self._load_checkpoint_config(workers_user_items)
 
             assert isinstance(self.checkpoint_next_index, list)
 
             if all(self.checkpoint_next_index[i] == 0 for i in range(self.num_workers)):
                 # save the current configuration in the checkpoints.json file
-                print("No checkpoints found. Saving current configuration...")
+                if self.verbose:
+                    print("No checkpoints found. Saving current configuration...")
                 self._save_current_config(workers_user_items)
             else:
                 # load the last checkpoint details
                 assert isinstance(self.checkpoint_next_index, list)
                 workers_user_items = [w[self.checkpoint_next_index[i] :] for i, w in enumerate(workers_user_items)]
-                print("Checkpoints loaded successfully.")
+                if self.verbose:
+                    print("Checkpoints loaded successfully.")
 
         if self.fast_dev_run and not isinstance(user_items, multiprocessing.queues.Queue):
             assert isinstance(workers_user_items, list)
 
             items_to_keep = self.fast_dev_run if isinstance(self.fast_dev_run, int) else _DEFAULT_FAST_DEV_RUN_ITEMS
             workers_user_items = [w[:items_to_keep] for w in workers_user_items]
-            print(f"Fast dev run is enabled. Limiting to {items_to_keep} items per process.")
+            if self.verbose:
+                print(f"Fast dev run is enabled. Limiting to {items_to_keep} items per process.")
 
         self._cleanup_cache()
 
         num_items = sum([len(items) for items in workers_user_items]) if workers_user_items is not None else -1
 
-        if workers_user_items is not None:
-            print(
-                f"Starting {self.num_workers} workers with {num_items} items."
-                f" The progress bar is only updated when a worker finishes."
-            )
-        else:
-            print(f"Starting {self.num_workers} workers with a Queue to process items on demand.")
+        if self.verbose:
+            if workers_user_items is not None:
+                print(
+                    f"Starting {self.num_workers} workers with {num_items} items."
+                    f" The progress bar is only updated when a worker finishes."
+                )
+            else:
+                print(f"Starting {self.num_workers} workers with a Queue to process items on demand.")
 
         if self.input_dir is None and self.src_resolver is not None and self.input_dir:
             self.input_dir = self.src_resolver(self.input_dir)
-            print(f"The remote_dir is `{self.input_dir}`.")
+            if self.verbose:
+                print(f"The remote_dir is `{self.input_dir}`.")
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
         self._create_process_workers(data_recipe, workers_user_items)
 
-        print("Workers are ready ! Starting data processing...")
+        if self.verbose:
+            print("Workers are ready ! Starting data processing...")
 
         current_total = 0
         if _TQDM_AVAILABLE:
@@ -1306,7 +1322,8 @@ class DataProcessor:
         total_num_items = len(user_items) if isinstance(user_items, list) else -1
 
         while True:
-            flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
+            if self.verbose:
+                flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
 
             # Exit early if all the workers are done.
             # This means either there were some kinda of errors, or optimize function was very small.
@@ -1315,7 +1332,8 @@ class DataProcessor:
                     error = self.error_queue.get(timeout=0.01)
                     self._exit_on_error(error)
                 except Empty:
-                    print("All workers are done. Exiting!")
+                    if self.verbose:
+                        print("All workers are done. Exiting!")
                     break
 
             try:
@@ -1349,13 +1367,15 @@ class DataProcessor:
                 with open("status.json", "w") as f:
                     json.dump({"progress": str(100 * current_total * num_nodes / total_num_items) + "%"}, f)
 
-        flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
+        if self.verbose:
+            flush_msg_queue(self.msg_queue, pbar if _TQDM_AVAILABLE else None)
 
         if _TQDM_AVAILABLE:
             pbar.clear()
             pbar.close()
 
-        print("Workers are finished.")
+        if self.verbose:
+            print("Workers are finished.")
         size = len(workers_user_items) if workers_user_items is not None else None
         result = data_recipe._done(size, self.delete_cached_files, self.output_dir)
 
@@ -1375,8 +1395,8 @@ class DataProcessor:
                 num_chunks=result.num_chunks,
                 num_bytes_per_chunk=result.num_bytes_per_chunk,
             )
-
-        print("Finished data processing!")
+        if self.verbose:
+            print("Finished data processing!")
         if self.use_checkpoint and isinstance(data_recipe, DataChunkRecipe):
             # clean up checkpoints
             self._cleanup_checkpoints()

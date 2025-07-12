@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import inspect
 import logging
 import os
 from time import time
@@ -62,7 +62,10 @@ class StreamingDataset(IterableDataset):
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
-        transform: Optional[Callable] = None,
+        transform: Optional[Union[Callable, List[Callable]]] = None,
+        transform_kwargs: Optional[Dict[str, Any]] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -89,7 +92,10 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a directory, the function will look for `index.json` within it.
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
-            transform: Optional transformation function to apply to each item in the dataset.
+            transform: Optional transformation function or list of functions to apply to each item in the dataset.
+            transform_kwargs: Keyword arguments for the transformation function.
+            args: Additional positional arguments.
+            kwargs: Additional keyword arguments.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -198,9 +204,12 @@ class StreamingDataset(IterableDataset):
         self.session_options = session_options
         self.max_pre_download = max_pre_download
         if transform is not None:
-            if not callable(transform):
-                raise ValueError(f"Transform should be a callable. Found {transform}")
+            transform = transform if isinstance(transform, list) else [transform]
+            for t in transform:
+                if not callable(t):
+                    raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
+        self.transform_kwargs = transform_kwargs or {}
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
     @property
@@ -441,7 +450,24 @@ class StreamingDataset(IterableDataset):
                 {"name": f"getitem_dataset_for_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"}
             )
         )
-        return self.transform(item) if hasattr(self, "transform") else item
+        if hasattr(self, "transform"):
+            local_transform_kwargs = self.transform_kwargs.copy()
+            local_transform_kwargs["index"] = index.index
+            if isinstance(self.transform, list):
+                for transform_fn in self.transform:
+                    signature = inspect.signature(transform_fn)
+                    accepts_kwargs = any(
+                        param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+                    )
+                    item = transform_fn(item, **local_transform_kwargs) if accepts_kwargs else transform_fn(item)
+            else:
+                # check if transform function accepts kwargs
+                signature = inspect.signature(self.transform)
+                accepts_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+                )
+                item = self.transform(item, **local_transform_kwargs) if accepts_kwargs else self.transform(item)
+        return item
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)

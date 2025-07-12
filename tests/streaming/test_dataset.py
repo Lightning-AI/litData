@@ -1696,6 +1696,59 @@ def test_dataset_transform(tmpdir, shuffle):
 
 
 @pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_multiple_transform(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define two simple transform function
+    def transform_fn_1(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    def transform_fn_2(x, *args, **kwargs):
+        """A simple transform function that adds one to the input."""
+        extra_num = kwargs.get("extra_num", 0)
+        return x + extra_num
+
+    dataset = StreamingDataset(
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=shuffle,
+        transform=[transform_fn_1, transform_fn_2],
+        transform_kwargs={"extra_num": 100},
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2 + 100, f"Expected {i * 2 + 100}, got {item}"
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
 def test_dataset_transform_inheritance(tmpdir, shuffle):
     """Test if the dataset transform is applied correctly."""
     # Create a simple dataset
