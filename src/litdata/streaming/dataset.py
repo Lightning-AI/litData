@@ -66,8 +66,8 @@ class StreamingDataset(IterableDataset):
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
-        transform: Optional[Union[Callable, List[Callable]]] = None,
-        transform_kwargs: Optional[Dict[str, Any]] = None,
+        transform: Optional[Union[Callable, list[Callable]]] = None,
+        transform_kwargs: Optional[dict[str, Any]] = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
