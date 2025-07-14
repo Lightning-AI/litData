@@ -11,7 +11,6 @@ from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _try_create_cache_dir,
     adapt_mds_shards_to_chunks,
-    function_accepts_kwargs,
     generate_roi,
     get_default_cache_dir,
     load_index_file,
@@ -110,20 +109,3 @@ def test_get_default_cache_dir():
         importlib.reload(litdata.constants)
         importlib.reload(litdata.utilities.dataset_utilities)
         assert litdata.utilities.dataset_utilities.get_default_cache_dir() == "/custom/cache/dir"
-
-
-def test_function_accepts_kwargs():
-    """Check if a function accepts keyword arguments."""
-
-    def func_with_kwargs(a, b=1, *args, **kwargs):
-        return a + b
-
-    def func_without_kwargs(a, b=1):
-        return a + b
-
-    assert function_accepts_kwargs(func_with_kwargs)
-    assert not function_accepts_kwargs(func_without_kwargs)
-
-    # Test with a lambda function
-    lambda_func = lambda x, y=2: x + y
-    assert not function_accepts_kwargs(lambda_func)

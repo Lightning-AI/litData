@@ -31,7 +31,6 @@ from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _try_create_cache_dir,
-    function_accepts_kwargs,
     subsample_streaming_dataset,
 )
 from litdata.utilities.encryption import Encryption
@@ -67,9 +66,6 @@ class StreamingDataset(IterableDataset):
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
         transform: Optional[Union[Callable, list[Callable]]] = None,
-        transform_kwargs: Optional[dict[str, Any]] = None,
-        *args: Any,
-        **kwargs: Any,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -97,9 +93,6 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
-            transform_kwargs: Keyword arguments for the transformation function.
-            args: Additional positional arguments.
-            kwargs: Additional keyword arguments.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -213,7 +206,6 @@ class StreamingDataset(IterableDataset):
                 if not callable(t):
                     raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
-        self.transform_kwargs = transform_kwargs or {}
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
     @property
@@ -455,17 +447,12 @@ class StreamingDataset(IterableDataset):
             )
         )
         if hasattr(self, "transform"):
-            local_transform_kwargs = self.transform_kwargs.copy()
-            local_transform_kwargs["index"] = index.index
-
             # check if transform function accepts kwargs
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
-                    accepts_kwargs = function_accepts_kwargs(transform_fn)
-                    item = transform_fn(item, **local_transform_kwargs) if accepts_kwargs else transform_fn(item)
+                    item = transform_fn(item)
             else:
-                accepts_kwargs = function_accepts_kwargs(self.transform)
-                item = self.transform(item, **local_transform_kwargs) if accepts_kwargs else self.transform(item)
+                item = self.transform(item)
 
         return item
 
