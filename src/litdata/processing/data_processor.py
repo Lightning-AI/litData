@@ -1116,7 +1116,7 @@ class DataProcessor:
                 inside an interactive shell like Ipython.
             storage_options: Storage options for the cloud provider.
             keep_data_ordered: Whether to use a shared queue for the workers or not.
-            verbose: Whether to print the progress of the workers. Defaults to True.
+            verbose: Whether to print the progress & logs of the workers. Defaults to True.
         """
         # spawn doesn't work in IPython
         start_method = start_method or ("fork" if in_notebook() else "spawn")
