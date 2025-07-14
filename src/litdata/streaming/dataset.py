@@ -10,6 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import logging
 import os
 from time import time
@@ -447,7 +448,6 @@ class StreamingDataset(IterableDataset):
             )
         )
         if hasattr(self, "transform"):
-            # check if transform function accepts kwargs
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
                     item = transform_fn(item)

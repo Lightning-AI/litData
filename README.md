@@ -981,76 +981,9 @@ class StreamingDatasetWithTransform(StreamingDataset):
 
 
 dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
+
+
 ```
-
-#### 🚀 Passing keyword arguments to your transform function(s)
-
-You can pass custom keyword arguments to your transform function(s) using the `transform_kwargs` argument in `StreamingDataset`.
-
-This allows for more flexible and dynamic preprocessing, especially useful `when transforms depend on external configuration, state, or shared dataset attributes`.
-
-```python
-def transform_fn_1(x, **kwargs):
-    """Apply a custom transform using additional arguments."""
-    some_val = kwargs["key1"]
-    index = kwargs["index"]  # Automatically included
-    return transform_logic_1(index, some_val, x)
-
-def transform_fn_2(x, **kwargs):
-    """Apply a second transform using shared config."""
-    some_val = kwargs["key2"]
-    return transform_logic_2(some_val, x)
-
-dataset = StreamingDataset(
-    data_dir,
-    cache_dir=str(cache_dir),
-    shuffle=shuffle,
-    transform=[transform_fn_1, transform_fn_2],
-    transform_kwargs={"key1": "value1", "key2": "value2"}
-)
-```
-
-> ℹ️ **Note:** `transform_kwargs` will always include the `index` key automatically.
-
-##### 💡 Why this is useful
-
-Traditionally, transform functions are self-contained. But in real-world pipelines, transforms often depend on shared context like:
-
-* Dataset-specific configurations (`img_size`, `augmentation`, `task_type`)
-* Class methods (e.g., parsing logic, tokenizers, decoders)
-* External tools (like label mappers or precomputed metadata)
-
-Instead of wrapping these in closures or using global variables, you can now **pass them cleanly via `transform_kwargs`**.
-
-##### 📦 Real-world use case: Integrating Ultralytics datasets
-
-Ultralytics datasets have their own logic for parsing labels and transforming images. You can wrap that logic inside a `StreamingDataset` by:
-
-1. Subclassing `StreamingDataset`
-2. Extracting needed attributes from a preconfigured Ultralytics dataset
-3. Passing them to transform functions using `transform_kwargs`
-
-#### Example
-
-```python
-class StreamingUltralyticsDataset(StreamingDataset):
-    def __init__(self, yolo_dataset, *args, **kwargs):
-        self.yolo_dataset = yolo_dataset  # Ultralytics dataset instance
-
-        super().__init__(
-            *args,
-            transform=[ultralytics.parse_labels, ultralytics.postprocess],
-            transform_kwargs={
-                "names": yolo_dataset.names,
-                "is_coco": yolo_dataset.is_coco_format,
-                "imgsz": yolo_dataset.imgsz,
-            },
-            **kwargs
-        )
-```
-
-> 🔁 Each transform receives all `transform_kwargs` (including `index`), making it easy to pass dynamic state without breaking encapsulation.
-
 </details>
 
 <details>
