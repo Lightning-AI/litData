@@ -13,7 +13,6 @@
 
 import os
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import torch
@@ -24,6 +23,7 @@ _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")
 _DEFAULT_LIGHTNING_CACHE_DIR = os.path.join("/cache", "chunks")
+_LITDATA_CACHE_DIR = os.getenv("LITDATA_CACHE_DIR", None)
 _SUPPORTED_PROVIDERS = ("s3", "gs")  # cloud providers supported by litdata for uploading (optimize, map, merge, etc)
 
 # This is required for full pytree serialization / deserialization support
@@ -97,7 +97,7 @@ _NUMPY_SCTYPES = [  # All NumPy scalar types from np.core.sctypes.values()
     str,
     np.void,
 ]
-_NUMPY_DTYPES_MAPPING: Dict[int, np.dtype] = {i: np.dtype(v) for i, v in enumerate(_NUMPY_SCTYPES)}
+_NUMPY_DTYPES_MAPPING: dict[int, np.dtype] = {i: np.dtype(v) for i, v in enumerate(_NUMPY_SCTYPES)}
 
 _TIME_FORMAT = "%Y-%m-%d_%H-%M-%S.%fZ"
 _IS_IN_STUDIO = bool(os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)) and bool(os.getenv("LIGHTNING_CLUSTER_ID", None))

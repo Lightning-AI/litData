@@ -18,7 +18,7 @@ import tempfile
 import urllib
 from contextlib import contextmanager
 from subprocess import DEVNULL, Popen
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 from urllib import parse
 
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
@@ -34,10 +34,10 @@ def _create_dataset(
     empty: Optional[bool] = None,
     size: Optional[int] = None,
     num_bytes: Optional[str] = None,
-    data_format: Optional[Union[str, Tuple[str]]] = None,
+    data_format: Optional[Union[str, tuple[str]]] = None,
     compression: Optional[str] = None,
     num_chunks: Optional[int] = None,
-    num_bytes_per_chunk: Optional[List[int]] = None,
+    num_bytes_per_chunk: Optional[list[int]] = None,
     name: Optional[str] = None,
     version: Optional[int] = None,
 ) -> None:
@@ -101,7 +101,7 @@ def get_worker_rank() -> Optional[str]:
 
 #! TODO: Do we still need this? It is not used anywhere.
 def catch(func: Callable) -> Callable:
-    def _wrapper(*args: Any, **kwargs: Any) -> Tuple[Any, Optional[Exception]]:
+    def _wrapper(*args: Any, **kwargs: Any) -> tuple[Any, Optional[Exception]]:
         try:
             return func(*args, **kwargs), None
         except Exception as e:
@@ -200,7 +200,7 @@ def _get_work_dir() -> str:
     return f"s3://{bucket_name}/projects/{project_id}/lightningapps/{app_id}/artifacts/{work_id}/content/"
 
 
-def read_index_file_content(output_dir: Dir, storage_options: Dict[str, Any] = {}) -> Optional[Dict[str, Any]]:
+def read_index_file_content(output_dir: Dir, storage_options: dict[str, Any] = {}) -> Optional[dict[str, Any]]:
     """Read the index file content."""
     if not isinstance(output_dir, Dir):
         raise ValueError("The provided output_dir should be a Dir object.")
@@ -241,7 +241,7 @@ def read_index_file_content(output_dir: Dir, storage_options: Dict[str, Any] = {
             return None
 
 
-def extract_rank_and_index_from_filename(chunk_filename: str) -> Tuple[int, int]:
+def extract_rank_and_index_from_filename(chunk_filename: str) -> tuple[int, int]:
     """Extract the rank and index from the filename.
 
     It is assumed that the filename is in the format `chunk-<rank>-<index>.bin` or

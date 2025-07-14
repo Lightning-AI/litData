@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 import torch.distributed
 
-from litdata import CombinedStreamingDataset, ParallelStreamingDataset, StreamingDataset
+from litdata import CombinedStreamingDataset, StreamingDataset
 from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
@@ -52,9 +52,9 @@ def mosaic_mds_index_data():
     }
 
 
-@pytest.fixture
-def combined_dataset(tmpdir_factory):
-    tmpdir = tmpdir_factory.mktemp("data")
+@pytest.fixture(scope="session")
+def prepare_combined_dataset(tmpdir_factory):
+    tmpdir = tmpdir_factory.mktemp("combined_dataset")
     datasets = [str(tmpdir.join(f"dataset_{i}")) for i in range(2)]
     for dataset in datasets:
         cache = Cache(input_dir=dataset, chunk_bytes="64MB")
@@ -62,25 +62,15 @@ def combined_dataset(tmpdir_factory):
             cache[i] = i
         cache.done()
         cache.merge()
-
-    dataset_1 = StreamingDataset(datasets[0], shuffle=True)
-    dataset_2 = StreamingDataset(datasets[1], shuffle=True)
-    return CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
+    return datasets
 
 
 @pytest.fixture
-def parallel_dataset(tmp_path_factory, request):
-    tmpdir = tmp_path_factory.mktemp("data")
-    datasets = [str(tmpdir / f"dataset_{i}") for i in range(2)]
-    for dataset, num_items in zip(datasets, [48, 56]):
-        cache = Cache(input_dir=dataset, chunk_size=10)
-        for i in range(num_items):
-            cache[i] = i
-        cache.done()
-        cache.merge()
-    dataset_1 = StreamingDataset(datasets[0], shuffle=True)
-    dataset_2 = StreamingDataset(datasets[1], shuffle=True)
-    return ParallelStreamingDataset(datasets=[dataset_1, dataset_2], length=request.param), request.param
+def combined_dataset(prepare_combined_dataset):
+    dataset_1_path, dataset_2_path = prepare_combined_dataset
+    dataset_1 = StreamingDataset(dataset_1_path)
+    dataset_2 = StreamingDataset(dataset_2_path)
+    return CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
 
 
 @pytest.fixture

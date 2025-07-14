@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from abc import ABC
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Optional
 from urllib import parse
 
 from filelock import FileLock, Timeout
@@ -42,8 +42,8 @@ class Downloader(ABC):
         self,
         remote_dir: str,
         cache_dir: str,
-        chunks: List[Dict[str, Any]],
-        storage_options: Optional[Dict] = {},
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
         **kwargs: Any,
     ):
         self._remote_dir = remote_dir
@@ -76,8 +76,27 @@ class Downloader(ABC):
 
         logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "E"}))
 
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
+        chunk_filename = self._chunks[chunk_index]["filename"]
+        local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
+        remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
+
+        return self.download_bytes(remote_chunkpath, offset, length, local_chunkpath)
+
     def download_file(self, remote_chunkpath: str, local_chunkpath: str) -> None:
         pass
+
+    def download_bytes(self, remote_chunkpath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Download a specific range of bytes from the remote file.
+
+        If this method is not overridden in a subclass, it defaults to downloading the full file
+        by calling `download_file` and then reading the desired byte range from the local copy.
+        """
+        self.download_file(remote_chunkpath, local_chunkpath)
+        # read the specified byte range from the local file
+        with open(local_chunkpath, "rb") as f:
+            f.seek(offset)
+            return f.read(length)
 
 
 class S3Downloader(Downloader):
@@ -85,8 +104,8 @@ class S3Downloader(Downloader):
         self,
         remote_dir: str,
         cache_dir: str,
-        chunks: List[Dict[str, Any]],
-        storage_options: Optional[Dict] = {},
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
         **kwargs: Any,
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
@@ -106,8 +125,9 @@ class S3Downloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout, FileNotFoundError), FileLock(
-            local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if self._s5cmd_available and not _DISABLE_S5CMD:
                 env = None
@@ -153,7 +173,7 @@ class S3Downloader(Downloader):
             else:
                 from boto3.s3.transfer import TransferConfig
 
-                extra_args: Dict[str, Any] = {}
+                extra_args: dict[str, Any] = {}
 
                 if not os.path.exists(local_filepath):
                     # Issue: https://github.com/boto/boto3/issues/3113
@@ -165,14 +185,32 @@ class S3Downloader(Downloader):
                         Config=TransferConfig(use_threads=False),
                     )
 
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        byte_range = f"bytes={offset}-{offset + length - 1}"
+
+        response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
+
+        return response["Body"].read()
+
 
 class GCPDownloader(Downloader):
     def __init__(
         self,
         remote_dir: str,
         cache_dir: str,
-        chunks: List[Dict[str, Any]],
-        storage_options: Optional[Dict] = {},
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
         **kwargs: Any,
     ):
         if not _GOOGLE_STORAGE_AVAILABLE:
@@ -191,8 +229,9 @@ class GCPDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout, FileNotFoundError), FileLock(
-            local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -208,14 +247,34 @@ class GCPDownloader(Downloader):
             blob = bucket.blob(key)
             blob.download_to_filename(local_filepath)
 
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        # GCS uses end as *inclusive*, so end = offset + length - 1
+        end = offset + length - 1
+
+        return blob.download_as_bytes(start=offset, end=end)
+
 
 class AzureDownloader(Downloader):
     def __init__(
         self,
         remote_dir: str,
         cache_dir: str,
-        chunks: List[Dict[str, Any]],
-        storage_options: Optional[Dict] = {},
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
         **kwargs: Any,
     ):
         if not _AZURE_STORAGE_AVAILABLE:
@@ -236,8 +295,9 @@ class AzureDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout, FileNotFoundError), FileLock(
-            local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -254,8 +314,9 @@ class LocalDownloader(Downloader):
         if not os.path.exists(remote_filepath):
             raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
 
-        with suppress(Timeout, FileNotFoundError), FileLock(
-            local_filepath + ".lock", timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0),
         ):
             if remote_filepath == local_filepath or os.path.exists(local_filepath):
                 return
@@ -272,8 +333,8 @@ class HFDownloader(Downloader):
         self,
         remote_dir: str,
         cache_dir: str,
-        chunks: List[Dict[str, Any]],
-        storage_options: Optional[Dict] = {},
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
         **kwargs: Any,
     ):
         if not _HF_HUB_AVAILABLE:
@@ -300,9 +361,11 @@ class HFDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
-        with suppress(Timeout, FileNotFoundError), FileLock(
-            local_filepath + ".lock", timeout=0
-        ), tempfile.TemporaryDirectory() as tmpdir:
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=0),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
             _, _, _, repo_org, repo_name, path = remote_filepath.split("/", 5)
             repo_id = f"{repo_org}/{repo_name}"
             downloaded_path = hf_hub_download(
@@ -324,7 +387,7 @@ class LocalDownloaderWithCache(LocalDownloader):
         super().download_file(remote_filepath, local_filepath)
 
 
-_DOWNLOADERS: Dict[str, Type[Downloader]] = {
+_DOWNLOADERS: dict[str, type[Downloader]] = {
     "s3://": S3Downloader,
     "gs://": GCPDownloader,
     "azure://": AzureDownloader,
@@ -333,7 +396,7 @@ _DOWNLOADERS: Dict[str, Type[Downloader]] = {
 }
 
 
-def register_downloader(prefix: str, downloader_cls: Type[Downloader], overwrite: bool = False) -> None:
+def register_downloader(prefix: str, downloader_cls: type[Downloader], overwrite: bool = False) -> None:
     """Register a new downloader class with a specific prefix.
 
     Args:
@@ -362,9 +425,9 @@ def unregister_downloader(prefix: str) -> None:
 def get_downloader(
     remote_dir: str,
     cache_dir: str,
-    chunks: List[Dict[str, Any]],
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
+    chunks: list[dict[str, Any]],
+    storage_options: Optional[dict] = {},
+    session_options: Optional[dict] = {},
 ) -> Downloader:
     """Get the appropriate downloader instance based on the remote directory prefix.
 

@@ -14,7 +14,7 @@
 import logging
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.debugger import ChromeTraceColors, _get_log_msg
@@ -33,13 +33,13 @@ class ChunksConfig:
     def __init__(
         self,
         cache_dir: str,
-        serializers: Dict[str, Serializer],
+        serializers: dict[str, Serializer],
         remote_dir: Optional[str],
         item_loader: Optional[BaseItemLoader] = None,
-        subsampled_files: Optional[List[str]] = None,
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
-        storage_options: Optional[Dict] = {},
-        session_options: Optional[Dict] = {},
+        subsampled_files: Optional[list[str]] = None,
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
+        storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
     ) -> None:
         """Reads the index files associated a chunked dataset and enables to map an index to its chunk.
 
@@ -56,7 +56,7 @@ class ChunksConfig:
 
         """
         self._cache_dir = cache_dir
-        self._intervals: List[Interval] = []
+        self._intervals: list[Interval] = []
         self._config = None
         self._chunks = None
         self._remote_dir = remote_dir
@@ -105,9 +105,9 @@ class ChunksConfig:
                 )
             self._compressor = _COMPRESSORS[self._compressor_name]
 
-        self._skip_chunk_indexes_deletion: Optional[List[int]] = None
-        self.zero_based_roi: Optional[List[Tuple[int, int]]] = None
-        self.filename_to_size_map: Dict[str, int] = {}
+        self._skip_chunk_indexes_deletion: Optional[list[int]] = None
+        self.zero_based_roi: Optional[list[tuple[int, int]]] = None
+        self.filename_to_size_map: dict[str, int] = {}
         for cnk in _original_chunks:
             # since files downloaded while reading will be decompressed, we need to store the name without compression
             filename_without_compression = cnk["filename"].replace(f".{self._compressor_name}", "")
@@ -119,11 +119,11 @@ class ChunksConfig:
         return chunk_index not in self._skip_chunk_indexes_deletion
 
     @property
-    def skip_chunk_indexes_deletion(self) -> Optional[List[int]]:
+    def skip_chunk_indexes_deletion(self) -> Optional[list[int]]:
         return self._skip_chunk_indexes_deletion
 
     @skip_chunk_indexes_deletion.setter
-    def skip_chunk_indexes_deletion(self, skip_chunk_indexes_deletion: List[int]) -> None:
+    def skip_chunk_indexes_deletion(self, skip_chunk_indexes_deletion: list[int]) -> None:
         self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
@@ -151,6 +151,28 @@ class ChunksConfig:
 
         self.try_decompress(local_chunkpath)
 
+    def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
+        assert self._chunks is not None
+        chunk_filename = self._chunks[chunk_index]["filename"]
+
+        local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
+
+        if os.path.exists(local_chunkpath):
+            with open(local_chunkpath, "rb") as f:
+                f.seek(offset)
+                return f.read(length)
+
+        if self._compressor is not None:
+            raise ValueError(
+                "The `download_chunk_bytes_from_index` method is not supported for compressed chunks. "
+                "Please, use `download_chunk_from_index` instead."
+            )
+
+        if self._downloader is None:
+            raise RuntimeError("The downloader is not initialized. Please, initialize it before downloading chunks.")
+
+        return self._downloader.download_chunk_bytes_from_index(chunk_index, offset, length)
+
     def try_decompress(self, local_chunkpath: str) -> None:
         if self._compressor is None:
             return
@@ -173,7 +195,7 @@ class ChunksConfig:
             f.write(data)
 
     @property
-    def intervals(self) -> List[Interval]:
+    def intervals(self) -> list[Interval]:
         if self._intervals is None:
             raise RuntimeError("The intervals should be defined.")
         return self._intervals
@@ -210,12 +232,12 @@ class ChunksConfig:
         return self._config["chunk_bytes"]
 
     @property
-    def config(self) -> Dict[str, Any]:
+    def config(self) -> dict[str, Any]:
         if self._config is None:
             raise RuntimeError("The config should be defined.")
         return self._config
 
-    def _get_chunk_index_from_index(self, index: int) -> Tuple[int, int]:
+    def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         if self.zero_based_roi is None:
             # zero_based_roi is a list of tuples (start, end),
             # to efficiently find the chunk index.
@@ -238,7 +260,7 @@ class ChunksConfig:
             f"The provided index {index} didn't find a match within the chunk intervals {self._intervals}."
         )
 
-    def __getitem__(self, index: ChunkedIndex) -> Tuple[str, int, int]:
+    def __getitem__(self, index: ChunkedIndex) -> tuple[str, int, int]:
         """Find the associated chunk metadata."""
         logger.debug(
             _get_log_msg(
@@ -285,11 +307,11 @@ class ChunksConfig:
     def load(
         cls,
         cache_dir: str,
-        serializers: Dict[str, Serializer],
+        serializers: dict[str, Serializer],
         remote_dir: Optional[str] = None,
         item_loader: Optional[BaseItemLoader] = None,
-        subsampled_files: Optional[List[str]] = None,
-        region_of_interest: Optional[List[Tuple[int, int]]] = None,
+        subsampled_files: Optional[list[str]] = None,
+        region_of_interest: Optional[list[tuple[int, int]]] = None,
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
     ) -> Optional["ChunksConfig"]:
@@ -339,9 +361,9 @@ class ChunksConfig:
                 raise ValueError("Please, use Cache(..., item_loader=TokensLoader(block_size=...))")
 
 
-def load_subsampled_chunks(subsampled_files: List[str], original_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def load_subsampled_chunks(subsampled_files: list[str], original_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Loads Chunks based on subsample provided."""
-    _subsampled_chunks: List[Dict[str, Any]] = [{} for _ in range(len(subsampled_files))]
+    _subsampled_chunks: list[dict[str, Any]] = [{} for _ in range(len(subsampled_files))]
 
     assert len(_subsampled_chunks) == len(subsampled_files)
 

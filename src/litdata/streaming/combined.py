@@ -13,8 +13,13 @@
 
 import logging
 import random
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
+
 from typing import Any, Iterator, Literal, Optional, Sequence, Union
+
+from typing import Any, Literal, Optional
+
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -164,7 +169,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 class _CombinedDatasetIterator(Iterator):
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         seed: int,
         weights: Sequence[Optional[float]],
         use_streaming_dataloader: bool,
