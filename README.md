@@ -953,7 +953,7 @@ def transform_fn(x, *args, **kwargs):
     return torch_transform(x)  # Apply the transform to the input image
 
 # Create dataset with appropriate configuration
-dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=[transform_fn])
 ```
 
 Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
@@ -981,9 +981,8 @@ class StreamingDatasetWithTransform(StreamingDataset):
 
 
 dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
-
-
 ```
+
 </details>
 
 <details>
