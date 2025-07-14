@@ -1,7 +1,7 @@
 import logging
 import os
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 
@@ -12,8 +12,8 @@ from litdata.utilities.subsample import shuffle_lists_together, subsample_filena
 
 
 def train_test_split(
-    streaming_dataset: StreamingDataset, splits: List[float], seed: int = 42
-) -> List[StreamingDataset]:
+    streaming_dataset: StreamingDataset, splits: list[float], seed: int = 42
+) -> list[StreamingDataset]:
     """Splits a StreamingDataset into multiple subsets for training, testing, and validation.
 
     This function splits a StreamingDataset into multiple non-overlapping subsets based on the provided proportions.
@@ -50,7 +50,7 @@ def train_test_split(
     # Note: We make this a set to speed up the computation of subsampled_chunks.
     dummy_subsampled_chunk_filename = set(dummy_streaming_dataset.subsampled_files)
     dummy_subsampled_roi = dummy_streaming_dataset.region_of_interest
-    subsampled_chunks: List[Dict[str, Any]] = []
+    subsampled_chunks: list[dict[str, Any]] = []
 
     input_dir = dummy_streaming_dataset.input_dir
     assert input_dir.path

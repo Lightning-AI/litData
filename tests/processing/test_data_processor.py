@@ -5,7 +5,7 @@ import sys
 from functools import partial
 from io import BytesIO
 from queue import Empty
-from typing import Any, List
+from typing import Any
 from unittest import mock
 from unittest.mock import ANY, Mock
 
@@ -388,7 +388,7 @@ def test_fake_queue():
 class CustomDataChunkRecipe(DataChunkRecipe):
     is_generator = False
 
-    def prepare_structure(self, input_dir: str) -> List[Any]:
+    def prepare_structure(self, input_dir: str) -> list[Any]:
         filepaths = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
         assert len(filepaths) == 30
         return filepaths
@@ -580,7 +580,7 @@ def test_data_processsor_distributed(fast_dev_run, delete_cached_files, tmpdir, 
 class TextTokenizeRecipe(DataChunkRecipe):
     is_generator = True
 
-    def prepare_structure(self, input_dir: str) -> List[Any]:
+    def prepare_structure(self, input_dir: str) -> list[Any]:
         return [os.path.join(input_dir, "dummy.txt")]
 
     def prepare_item(self, filepath):

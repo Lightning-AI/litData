@@ -14,7 +14,7 @@
 import logging
 import os
 from time import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -53,12 +53,12 @@ class StreamingDataset(IterableDataset):
         shuffle: bool = False,
         drop_last: Optional[bool] = None,
         seed: int = 42,
-        serializers: Optional[Dict[str, Serializer]] = None,
+        serializers: Optional[dict[str, Serializer]] = None,
         max_cache_size: Union[int, str] = "100GB",
         subsample: float = 1.0,
         encryption: Optional[Encryption] = None,
-        storage_options: Optional[Dict] = {},
-        session_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
@@ -122,8 +122,8 @@ class StreamingDataset(IterableDataset):
 
         self.input_dir = input_dir
         self.cache_dir = cache_dir
-        self.subsampled_files: List[str] = []
-        self.region_of_interest: List[Tuple[int, int]] = []
+        self.subsampled_files: list[str] = []
+        self.region_of_interest: list[tuple[int, int]] = []
         self.subsampled_files, self.region_of_interest = subsample_streaming_dataset(
             self.input_dir,
             self.cache_dir,
@@ -169,9 +169,9 @@ class StreamingDataset(IterableDataset):
 
         self.cache: Optional[Cache] = None
         self.worker_env: Optional[_WorkerEnv] = None
-        self.worker_chunks: List[int] = []  # chunk indexes that the current worker will download, read & stream
-        self.worker_intervals: List[List[int]] = []  # chunk index intervals for the current worker
-        self.upcoming_indexes: List[int] = []  # contains list of upcoming indexes to be processed
+        self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
+        self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
+        self.upcoming_indexes: list[int] = []  # contains list of upcoming indexes to be processed
 
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
@@ -187,7 +187,7 @@ class StreamingDataset(IterableDataset):
         self.random_state = None
         self.shuffler: Optional[Shuffle] = None
         self.serializers = serializers
-        self._state_dict: Optional[Dict[str, Any]] = None
+        self._state_dict: Optional[dict[str, Any]] = None
         self._force_override_state_dict = force_override_state_dict
         # Has slightly different meaning in the context of the dataset
         # We consider `num_workers = 0` from `torch.utils.DataLoader` still as 1 worker (the main process)
@@ -269,7 +269,7 @@ class StreamingDataset(IterableDataset):
         seed = self.seed
         drop_last = self.drop_last
         if self._state_dict is not None:
-            state: Dict[str, Any] = self._state_dict
+            state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
         return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
@@ -306,7 +306,7 @@ class StreamingDataset(IterableDataset):
         # Handle restart
         if self._state_dict:
             self._validate_state_dict()
-            state: Dict[str, Any] = self._state_dict
+            state: dict[str, Any] = self._state_dict
             self.current_epoch = state["current_epoch"]
 
         workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
@@ -361,12 +361,12 @@ class StreamingDataset(IterableDataset):
 
         return self
 
-    def _resume(self, workers_chunks: List[List[int]], workers_intervals: List[Any]) -> None:
+    def _resume(self, workers_chunks: list[list[int]], workers_intervals: list[Any]) -> None:
         assert self._state_dict
         assert self.worker_env
         assert self.shuffler
 
-        state: Dict[str, Any] = self._state_dict
+        state: dict[str, Any] = self._state_dict
 
         num_workers = state["num_workers"]
         batch_size = state["batch_size"]
@@ -506,7 +506,7 @@ class StreamingDataset(IterableDataset):
 
         return data
 
-    def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> Dict[str, Any]:
+    def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> dict[str, Any]:
         if _is_in_dataloader_worker():
             raise RuntimeError("The method `state_dict` should only be called in the main process.")
 
@@ -532,7 +532,7 @@ class StreamingDataset(IterableDataset):
             "region_of_interest": self.region_of_interest,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if state_dict:
             # the state is restored within the workers
             self._state_dict = state_dict
@@ -550,7 +550,7 @@ class StreamingDataset(IterableDataset):
         assert self.worker_env
         assert self.cache
 
-        state: Dict[str, Any] = self._state_dict
+        state: dict[str, Any] = self._state_dict
         if state["shuffle"] != self.shuffle:
             if not self._force_override_state_dict:
                 raise ValueError(
@@ -656,7 +656,7 @@ class StreamingDataset(IterableDataset):
 
     def reset(self) -> None:
         # undo all the properties associated with original dataset
-        default_properties: Dict[str, Any] = {
+        default_properties: dict[str, Any] = {
             "cache": None,
             "worker_env": None,
             "worker_chunks": [],
@@ -688,7 +688,7 @@ def is_integer(value: str) -> bool:
         return False
 
 
-def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int) -> Dict[int, int]:
+def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int) -> dict[int, int]:
     """This function replays the sampling from the dataloader."""
     divisible_num_batches_yielded = num_samples_yielded // (num_workers * batch_size)
 
@@ -712,8 +712,8 @@ def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int
 
 
 def _replay_chunks_sampling(
-    workers_intervals: Dict[int, List[Any]], indexes: Dict[int, int]
-) -> Tuple[Dict[int, int], Dict[int, int]]:
+    workers_intervals: dict[int, list[Any]], indexes: dict[int, int]
+) -> tuple[dict[int, int], dict[int, int]]:
     chunks_index = {}
 
     for worker_idx in range(len(workers_intervals)):

@@ -1,11 +1,11 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 
 
 def shuffle_lists_together(
-    list1: List[Any], list2: List[Any], random_seed_sampler: Optional[np.random.RandomState] = None, seed: int = 42
-) -> Tuple[List[Any], List[Any]]:
+    list1: list[Any], list2: list[Any], random_seed_sampler: Optional[np.random.RandomState] = None, seed: int = 42
+) -> tuple[list[Any], list[Any]]:
     """Shuffles list1 and applies the same shuffle order to list2.
 
     Args:
@@ -39,8 +39,8 @@ def shuffle_lists_together(
 
 
 def subsample_filenames_and_roi(
-    chunks: List[Dict[str, Any]], roi_list: List[Tuple[int, int]], item_count: int
-) -> Tuple[List[str], List[Tuple[int, int]], List[Dict[str, Any]], List[Tuple[int, int]]]:
+    chunks: list[dict[str, Any]], roi_list: list[tuple[int, int]], item_count: int
+) -> tuple[list[str], list[tuple[int, int]], list[dict[str, Any]], list[tuple[int, int]]]:
     assert len(chunks) == len(roi_list)
 
     if item_count == 0:
