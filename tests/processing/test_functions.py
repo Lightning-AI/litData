@@ -828,3 +828,24 @@ def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers)
     # check all the indexes are correct
     indexes = [sample_record["index"].item() for sample_record in ds]
     assert indexes == list(range(num_items)), f"Expected indexes to be {list(range(num_items))}, but got {indexes}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+@pytest.mark.parametrize("verbose", [True, False])
+def test_verbose_optimize(tmpdir, verbose):
+    output_dir = str(tmpdir / "output_dir")
+
+    with mock.patch("builtins.print") as mock_print:
+        optimize(
+            fn=compress,
+            inputs=list(range(5)),
+            num_workers=1,
+            output_dir=output_dir,
+            chunk_size=2,
+            verbose=verbose,
+            mode="overwrite",
+        )
+    if verbose:
+        mock_print.assert_called()
+    else:
+        mock_print.assert_not_called()
