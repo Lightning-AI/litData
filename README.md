@@ -983,9 +983,9 @@ class StreamingDatasetWithTransform(StreamingDataset):
 dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
 ```
 
-#### Passing keyword arguments to your transform function(s)
+#### 🚀 Passing keyword arguments to your transform function(s)
 
-You can now pass custom keyword arguments to your transform function(s) using the `transform_kwargs` argument in `StreamingDataset`.
+You can pass custom keyword arguments to your transform function(s) using the `transform_kwargs` argument in `StreamingDataset`.
 
 This allows for more flexible and dynamic preprocessing, especially useful `when transforms depend on external configuration, state, or shared dataset attributes`.
 
