@@ -344,7 +344,7 @@ def copy_index_to_cache_index_filepath(index_path: str, cache_index_filepath: st
     shutil.copy(index_path, cache_index_filepath)
 
 
-def fn_accepts_kwargs(_fn: Callable) -> bool:
+def function_accepts_kwargs(_fn: Callable) -> bool:
     """Check if a function accepts keyword arguments."""
     signature = inspect.signature(_fn)
     return any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())

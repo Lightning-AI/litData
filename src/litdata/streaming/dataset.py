@@ -31,7 +31,7 @@ from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _try_create_cache_dir,
-    fn_accepts_kwargs,
+    function_accepts_kwargs,
     subsample_streaming_dataset,
 )
 from litdata.utilities.encryption import Encryption
@@ -461,10 +461,10 @@ class StreamingDataset(IterableDataset):
             # check if transform function accepts kwargs
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
-                    accepts_kwargs = fn_accepts_kwargs(transform_fn)
+                    accepts_kwargs = function_accepts_kwargs(transform_fn)
                     item = transform_fn(item, **local_transform_kwargs) if accepts_kwargs else transform_fn(item)
             else:
-                accepts_kwargs = fn_accepts_kwargs(self.transform)
+                accepts_kwargs = function_accepts_kwargs(self.transform)
                 item = self.transform(item, **local_transform_kwargs) if accepts_kwargs else self.transform(item)
 
         return item

@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
 Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
 
-- You can use the `transform` argument in `StreamingDataset` to apply a `transformation function` or `a list of transformation function` to each sample as it is streamed.
+- You can use the `transform` argument in `StreamingDataset` to apply a `transformation function` or `a list of transformation functions` to each sample as it is streamed.
 
 ```python
 # Define a simple transform function
