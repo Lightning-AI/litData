@@ -14,7 +14,7 @@
 import logging
 import random
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Union
+from typing import Any, Iterator, Literal, Optional, Sequence, Union
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -50,7 +50,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         seed: int = 42,
         weights: Optional[Sequence[float]] = None,
         iterate_over_all: bool = True,
@@ -99,7 +99,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 
         self._iterator: Optional[_CombinedDatasetIterator] = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[Dict[int, List[int]]] = None
+        self._num_samples_yielded: Optional[dict[int, list[int]]] = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
@@ -152,8 +152,8 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
         return self._iterator
 
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[List[int]] = None
-    ) -> Dict[str, Any]:
+        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+    ) -> dict[str, Any]:
         if self._iterator is None:
             if num_samples_yielded is None:
                 return {}
@@ -175,7 +175,7 @@ class _CombinedDatasetIterator(Iterator):
     ) -> None:
         self._datasets = datasets
         self._dataset_iters = [iter(dataset) for dataset in datasets]
-        self._dataset_indexes: List[Optional[int]] = list(range(len(datasets)))
+        self._dataset_indexes: list[Optional[int]] = list(range(len(datasets)))
         self._num_samples_yielded = num_samples_yielded or [0 for _ in range(len(datasets))]
         self._original_weights = deepcopy(weights)
         self._weights = deepcopy(weights)
@@ -196,8 +196,8 @@ class _CombinedDatasetIterator(Iterator):
         if num_samples_yielded is not None:
             self._num_samples_yielded = num_samples_yielded
             for _ in range(sum(num_samples_yielded)):
-                choice_indexes: List[int] = [index for index in self._dataset_indexes if index is not None]
-                choice_weights: List[float] = [w for w in self._weights if w is not None]
+                choice_indexes: list[int] = [index for index in self._dataset_indexes if index is not None]
+                choice_weights: list[float] = [w for w in self._weights if w is not None]
                 self._rng.choices(choice_indexes, weights=choice_weights, k=1)
 
         self._use_streaming_dataloader = use_streaming_dataloader
@@ -308,13 +308,13 @@ class _CombinedDatasetIterator(Iterator):
             }
         return sample
 
-    def state_dict(self, num_workers: int = 0, batch_size: int = 1) -> Dict[str, Any]:
+    def state_dict(self, num_workers: int = 0, batch_size: int = 1) -> dict[str, Any]:
         return _state_dict(self._datasets, self._num_samples_yielded, num_workers, batch_size)
 
 
 def _state_dict(
-    datasets: List[StreamingDataset], num_samples_yielded: List[int], num_workers: int = 0, batch_size: int = 1
-) -> Dict[str, Any]:
+    datasets: list[StreamingDataset], num_samples_yielded: list[int], num_workers: int = 0, batch_size: int = 1
+) -> dict[str, Any]:
     return {
         str(dataset_idx): dataset.state_dict(
             num_samples_yielded=num_samples_yielded[dataset_idx], num_workers=num_workers, batch_size=batch_size
