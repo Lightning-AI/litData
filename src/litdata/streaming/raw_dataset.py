@@ -453,23 +453,25 @@ if __name__ == "__main__":
     # Example usage on litserve teamspace
     import time
 
+    logging.basicConfig(level=logging.INFO)
+
     start = time.perf_counter()
     dataset = StreamingRawDataset(
-        # input_dir="s3://imagenet-1m-template/raw/train",
+        input_dir="s3://imagenet-1m-template/raw/train",
         # cache_dir="raw_cache",
-        index_workers=16,
         max_preload_size=20,
     )
+    print(f"Discovered {len(dataset.files)} files", dataset.files[:5])
     end = time.perf_counter()
     print(f"Dataset loaded in {end - start:.2f} seconds")
-    print("sample files :", dataset.files[:3])
+    # print("sample files :", dataset.files[:3])
 
-    print(f"Dataset: {len(dataset)} samples, {len(dataset.classes)} classes")
+    # print(f"Dataset: {len(dataset)} samples, {len(dataset.classes)} classes")
 
-    # Test iteration
-    for i, sample in enumerate(dataset):
-        if i >= 3:
-            break
-        print(f"Sample {i}: {sample} ({len(sample) if isinstance(sample, bytes) else 'metadata'})")
+    # # Test iteration
+    # for i, sample in enumerate(dataset):
+    #     if i >= 3:
+    #         break
+    #     print(f"Sample {i}: {sample} ({len(sample) if isinstance(sample, bytes) else 'metadata'})")
 
-    print("✅ Test completed")
+    # print("✅ Test completed")
