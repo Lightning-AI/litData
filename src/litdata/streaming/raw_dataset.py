@@ -11,11 +11,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib import parse
+from urllib.parse import urlparse
 
 import fsspec
 from torch.utils.data import IterableDataset
@@ -27,8 +31,133 @@ from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_c
 
 logger = logging.getLogger(__name__)
 
-INDEX_FILE_NAME = "index.txt"
-CLASSES_FILE_NAME = "classes.txt"
+INDEX_METADATA_FILE = "index_metadata.json"
+
+
+@dataclass(slots=True)
+class FileMetadata:
+    """Metadata for a single file in the dataset."""
+
+    path: str
+    size: int
+    modified_time: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "path": self.path,
+            "size": self.size,
+            "modified_time": self.modified_time,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FileMetadata":
+        """Create from dictionary."""
+        return cls(
+            path=data["path"],
+            size=data["size"],
+            modified_time=data.get("modified_time"),
+            metadata=(data.get("metadata") or {}).copy(),  # Ensure metadata is a copy to avoid shared references
+        )
+
+
+class BaseIndexer(ABC):
+    """Abstract base class for file indexing strategies."""
+
+    @abstractmethod
+    def discover_files(self, input_dir: str, storage_options: Dict[str, Any]) -> List[FileMetadata]:
+        """Discover files and return metadata."""
+
+    @abstractmethod
+    def get_cache_key(self) -> str:
+        """Get a unique cache key for this indexer configuration."""
+
+
+class FileIndexer(BaseIndexer):
+    """File indexer that discovers files recursively by extension and depth.
+
+    - Supports both local and cloud storage (S3, GCS, etc.)
+    - Filters files by extension if provided.
+    - Uses max_depth for recursion in cloud storage.
+    """
+
+    def __init__(
+        self,
+        max_depth: int = 5,
+        extensions: Optional[List[str]] = None,
+    ):
+        self.max_depth = max_depth
+        self.extensions = [ext.lower() for ext in (extensions or [])]
+
+    def discover_files(self, input_dir: str, storage_options: Dict[str, Any] = {}) -> List[FileMetadata]:
+        """Discover files using recursive search."""
+        parsed_url = urlparse(input_dir)
+
+        if parsed_url.scheme in ("s3", "gs", "gcs"):
+            return self._discover_cloud_files(input_dir, storage_options)
+        return self._discover_local_files(input_dir)
+
+    def _discover_cloud_files(self, input_dir: str, storage_options: Dict[str, Any]) -> List[FileMetadata]:
+        """Discover files in cloud storage."""
+        parsed_url = urlparse(input_dir)
+        fs = fsspec.filesystem(parsed_url.scheme, **storage_options)
+        files = fs.find(
+            input_dir, maxdepth=self.max_depth, detail=True, withdirs=False
+        )  # returns dict with file details
+
+        all_metadata = []
+        for _, file_info in tqdm(files.items(), desc="Discovering files"):
+            if file_info.get("type") != "file":
+                continue
+
+            file_path = file_info["name"]
+            modified_time = file_info.get("LastModified")
+            modified_time = modified_time.timestamp() if modified_time else None
+
+            if self._should_include_file(file_path):
+                metadata = FileMetadata(
+                    path=f"{parsed_url.scheme}://{file_path}",
+                    size=file_info.get("size", 0),
+                    modified_time=modified_time,
+                    metadata={"etag": file_info.get("ETag")},
+                )
+                all_metadata.append(metadata)
+
+        return all_metadata
+
+    def _discover_local_files(self, input_dir: str) -> List[FileMetadata]:
+        """Discover files in local filesystem."""
+        path = Path(input_dir)
+        all_metadata = []
+        # Use rglob for recursive search, respects max_depth by filtering
+        for file_path in path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            # Filter by depth
+            if self.max_depth is not None:
+                rel_depth = len(file_path.relative_to(path).parts)
+                if rel_depth > self.max_depth:
+                    continue
+            if self._should_include_file(str(file_path)):
+                metadata = FileMetadata(
+                    path=str(file_path),
+                    size=file_path.stat().st_size,
+                    modified_time=file_path.stat().st_mtime,
+                )
+                all_metadata.append(metadata)
+        return all_metadata
+
+    def _should_include_file(self, file_path: str) -> bool:
+        """Check if file should be included based on extension filters."""
+        file_ext = Path(file_path).suffix.lower()
+        return not self.extensions or file_ext in self.extensions
+
+    def get_cache_key(self) -> str:
+        """Get a unique cache key for this indexer configuration."""
+        config_str = f"{self.max_depth}_{'_'.join(self.extensions) if self.extensions else 'all'}"
+        return generate_md5_hash(config_str)
 
 
 class CacheManager:
@@ -94,16 +223,7 @@ class CacheManager:
 class StreamingRawDataset(IterableDataset):
     """Stream raw files from cloud storage with fast indexing and caching.
 
-    Supports ImageFolder-style datasets:
-
-    s3://bucket/dataset/
-    ├── class_1/
-    │   ├── file_001.jpg
-    │   └── ...
-    ├── class_2/
-    │   ├── file_001.jpg
-    │   └── ...
-    └── ...
+    Supports any folder structure, automatically indexing individual files.
 
     Features:
     - Fast multithreaded indexing
@@ -116,7 +236,7 @@ class StreamingRawDataset(IterableDataset):
         self,
         input_dir: Union[str, "Dir"],
         cache_dir: Optional[Union[str, "Dir"]] = None,
-        index_workers: int = 8,
+        indexer: Optional[BaseIndexer] = None,
         max_preload_size: int = 10,
         download_workers: int = 4,
         storage_options: Optional[Dict] = None,
@@ -127,7 +247,7 @@ class StreamingRawDataset(IterableDataset):
         Args:
             input_dir: Path to dataset root (e.g. s3://bucket/dataset/)
             cache_dir: Directory for caching files (optional)
-            index_workers: Number of threads for indexing (default: 8)
+            indexer: Custom file indexer (default: FileIndexer)
             max_preload_size: Maximum number of files to preload (default: 10)
             download_workers: Number of download threads (default: 4)
             storage_options: Cloud storage options
@@ -147,7 +267,7 @@ class StreamingRawDataset(IterableDataset):
         self.cache_manager = CacheManager(cache_path, self.input_dir.url, storage_options)
 
         # Configuration
-        self.index_workers = index_workers
+        self.indexer = indexer or FileIndexer()
         self.max_preload_size = max_preload_size
         self.download_workers = download_workers
         self.storage_options = storage_options or {}
@@ -163,83 +283,56 @@ class StreamingRawDataset(IterableDataset):
         self._cache_hit_count = 0
         self._total_requests = 0
 
-        # Build index
-        self._build_index()
+        # # Build index
+        # self._build_index()
+        # if not self.files:
+        #     raise ValueError(f"No files found in {self.input_dir.url}")
+        # Discover files
+        input_url = self.input_dir.url or str(self.input_dir)
+        self.files = self._build_or_load_index(input_url)
         if not self.files:
-            raise ValueError(f"No files found in {self.input_dir.url}")
+            raise ValueError(f"No files found in {input_url}")
 
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
 
-    def _build_index(self) -> None:
-        """Build or load file index."""
-        index_path = os.path.join(self.cache_manager.cache_dir, INDEX_FILE_NAME)
-        classes_path = os.path.join(self.cache_manager.cache_dir, CLASSES_FILE_NAME)
+    def _build_or_load_index(self, input_url: str) -> List[FileMetadata]:
+        """Build or load cached file index."""
+        cache_dir = self.cache_manager.cache_dir
+        index_path = os.path.join(cache_dir, INDEX_METADATA_FILE)
 
-        # Try loading cached index
-        if os.path.exists(index_path) and os.path.exists(classes_path):
-            self._load_cached_index(index_path, classes_path)
-        else:
-            self._build_fresh_index()
-            self._save_index(index_path, classes_path)
-
-    def _load_cached_index(self, index_path: str, classes_path: str) -> None:
-        """Load index from cache."""
-        with open(index_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and "," in line:
-                    file_path, class_name = line.rsplit(",", 1)
-                    self.files.append((file_path, class_name))
-
-        with open(classes_path) as f:
-            self.classes = [line.strip() for line in f if line.strip()]
-
-        logger.info(f"Loaded cached index with {len(self.files)} samples")
-
-    def _build_fresh_index(self) -> None:
-        """Build fresh index by scanning cloud storage."""
-        obj = parse.urlparse(self.input_dir.url)
-        if obj.scheme not in ("s3", "gs"):
-            raise ValueError(f"Unsupported provider: {obj.scheme}")
-
-        self.fs = fsspec.filesystem(obj.scheme, **self.storage_options)
-
-        # Get class directories
-        folders = self.fs.ls(self.input_dir.url)
-        self.classes = [os.path.basename(f) for f in folders if self.fs.isdir(f)]
-
-        def list_class_files(class_name: str) -> List[Tuple[str, str]]:
-            class_dir = f"{self.input_dir.url.rstrip('/')}/{class_name}"
+        # Check if cached index exists and is fresh
+        if os.path.exists(index_path):
             try:
-                files = self.fs.ls(class_dir, detail=True)
-                return [
-                    (os.path.join(class_dir, os.path.basename(f["name"])), class_name)
-                    for f in files
-                    if f["type"] == "file"
-                ]
+                with open(index_path) as f:
+                    cached_data = json.load(f)
+
+                # Verify cache key matches current configuration
+                if cached_data.get("cache_key") == self.indexer.get_cache_key():
+                    files = [FileMetadata.from_dict(file_data) for file_data in cached_data["files"]]
+                    logger.info(f"Loaded cached index with {len(files)} files from {index_path}")
+                    return files
             except Exception as e:
-                logger.warning(f"Error listing {class_dir}: {e}")
-                return []
+                logger.warning(f"Error loading cached index: {e}")
 
-        # Index in parallel
-        results = []
-        with ThreadPoolExecutor(max_workers=self.index_workers) as executor:
-            futures = {executor.submit(list_class_files, cls): cls for cls in self.classes}
-            for future in tqdm(as_completed(futures), total=len(self.classes), desc="Indexing"):
-                results.extend(future.result())
+        # Build fresh index
+        logger.info("Building fresh file index...")
 
-        self.files = results
-        logger.info(f"Indexed {len(self.files)} files")
+        files = self.indexer.discover_files(input_url, self.storage_options)
 
-    def _save_index(self, index_path: str, classes_path: str) -> None:
-        """Save index to cache."""
-        with open(index_path, "w") as f:
-            for file_path, class_name in self.files:
-                f.write(f"{file_path},{class_name}\n")
+        # Cache the index
+        try:
+            cache_data = {
+                "cache_key": self.indexer.get_cache_key(),
+                "files": [file_meta.to_dict() for file_meta in files],
+                "created_at": time.time(),
+            }
+            with open(index_path, "w") as f:
+                json.dump(cache_data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Error caching index: {e}")
 
-        with open(classes_path, "w") as f:
-            for class_name in self.classes:
-                f.write(f"{class_name}\n")
+        logger.info(f"Built index with {len(files)} files from {input_url} at {index_path}")
+        return files
 
     def _init_preloading(self) -> None:
         """Initialize preloading executor with adaptive worker count."""
