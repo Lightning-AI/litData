@@ -54,7 +54,7 @@ class FileMetadata:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FileMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> "FileMetadata":
         """Create from dictionary."""
         return cls(
             path=data["path"],
