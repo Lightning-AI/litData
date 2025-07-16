@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
 import fsspec
@@ -42,9 +42,9 @@ class FileMetadata:
     path: str
     size: int
     modified_time: Optional[float] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "path": self.path,
@@ -68,7 +68,7 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(self, input_dir: str, storage_options: Dict[str, Any]) -> List[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any]) -> list[FileMetadata]:
         """Discover files and return metadata."""
 
     @abstractmethod
@@ -76,8 +76,8 @@ class BaseIndexer(ABC):
         """Get a unique cache key for this indexer configuration."""
 
     def build_or_load_index(
-        self, input_dir: str, cache_dir: str, storage_options: Dict[str, Any]
-    ) -> List[FileMetadata]:
+        self, input_dir: str, cache_dir: str, storage_options: dict[str, Any]
+    ) -> list[FileMetadata]:
         """Build or load cached file index using ZSTD compression."""
         index_path = os.path.join(cache_dir, INDEX_METADATA_FILE)
 
@@ -132,12 +132,12 @@ class FileIndexer(BaseIndexer):
     def __init__(
         self,
         max_depth: int = 5,
-        extensions: Optional[List[str]] = None,
+        extensions: Optional[list[str]] = None,
     ):
         self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(self, input_dir: str, storage_options: Dict[str, Any] = {}) -> List[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any] = {}) -> list[FileMetadata]:
         """Discover files using recursive search."""
         parsed_url = urlparse(input_dir)
 
@@ -145,7 +145,7 @@ class FileIndexer(BaseIndexer):
             return self._discover_cloud_files(input_dir, storage_options)
         return self._discover_local_files(input_dir)
 
-    def _discover_cloud_files(self, input_dir: str, storage_options: Dict[str, Any]) -> List[FileMetadata]:
+    def _discover_cloud_files(self, input_dir: str, storage_options: dict[str, Any]) -> list[FileMetadata]:
         """Discover files in cloud storage."""
         parsed_url = urlparse(input_dir)
         fs = fsspec.filesystem(parsed_url.scheme, **storage_options)
@@ -173,7 +173,7 @@ class FileIndexer(BaseIndexer):
 
         return all_metadata
 
-    def _discover_local_files(self, input_dir: str) -> List[FileMetadata]:
+    def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
         """Discover files in local filesystem."""
         path = Path(input_dir)
         all_metadata = []
@@ -213,11 +213,11 @@ class CacheManager:
         self,
         input_dir: Union[Dir, str],
         cache_dir: Optional[Union[Dir, str]] = None,
-        storage_options: Optional[Dict] = None,
+        storage_options: Optional[dict] = None,
     ):
         self.input_dir = _resolve_dir(input_dir)
         self.cache_dir = self._try_create_cache_dir(self.input_dir.path or self.input_dir.url, cache_dir)
-
+        assert self.cache_dir is not None, "Cache directory must be specified or created"
         self.storage_options = storage_options or {}
         self.downloader = None
 
@@ -296,7 +296,7 @@ class StreamingRawDataset(Dataset):
         cache_dir: Optional[Union[str, "Dir"]] = None,
         indexer: Optional[BaseIndexer] = None,
         max_preload_size: int = 10,
-        storage_options: Optional[Dict] = None,
+        storage_options: Optional[dict] = None,
         **kwargs,
     ):
         """Initialize StreamingRawDataset.
@@ -379,7 +379,7 @@ class StreamingRawDataset(Dataset):
         # Download directly
         return self.cache_manager.download_file(file_path, class_name)
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache performance statistics for monitoring."""
         hit_rate = self._cache_hit_count / max(self._total_requests, 1)
         return {
@@ -438,7 +438,7 @@ class StreamingRawDataset(Dataset):
         """Return dataset size."""
         return len(self.files)
 
-    def get_class_counts(self) -> Dict[str, int]:
+    def get_class_counts(self) -> dict[str, int]:
         """Get samples per class."""
         counts = {}
         for _, class_name in self.files:
@@ -455,7 +455,8 @@ if __name__ == "__main__":
     start = time.perf_counter()
     dataset = StreamingRawDataset(
         input_dir="s3://imagenet-1m-template/raw/train",
-        # cache_dir="raw_cache",
+        # input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
+        cache_dir="cache",
         max_preload_size=20,
     )
     print(f"Discovered {len(dataset.files)} files", dataset.files[:5])
