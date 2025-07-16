@@ -11,14 +11,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -217,10 +220,11 @@ class CacheManager:
         storage_options: Optional[dict] = None,
     ):
         self.input_dir = _resolve_dir(input_dir)
-        self.cache_dir = self._try_create_cache_dir(self.input_dir.path or self.input_dir.url, cache_dir)
+        self._input_dir_path = self.input_dir.path or self.input_dir.url
+        self.cache_dir = self._try_create_cache_dir(self._input_dir_path, cache_dir)
         assert self.cache_dir is not None, "Cache directory must be specified or created"
         self.storage_options = storage_options or {}
-        self.downloader = None
+        self._downloader = None
 
     def _try_create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
         """Create cache directory if it doesn't exist."""
@@ -230,53 +234,45 @@ class CacheManager:
         os.makedirs(cache_path, exist_ok=True)
         return cache_path
 
-    def get_local_path(self, file_path: str, class_name: str) -> str:
+    def get_local_path(self, file_path: str) -> str:
         """Get local cache path maintaining class directory structure."""
-        filename = os.path.basename(file_path)
-        class_cache_dir = os.path.join(self.cache_dir, class_name)
-        os.makedirs(class_cache_dir, exist_ok=True)
-        return os.path.join(class_cache_dir, filename)
+        try:
+            # Remove the input directory prefix from file_path to preserve relative directory structure in cache
+            file_path = file_path.lstrip(self._input_dir_path)
+            # Ensure cache directory exists
+            os.makedirs(os.path.join(self.cache_dir, os.path.dirname(file_path)), exist_ok=True)
+            return os.path.join(self.cache_dir, file_path)
+        except Exception as e:
+            logger.error(f"Error getting local path for {file_path}: {e}")
+            raise
 
-    def download_file(self, file_path: str, class_name: str) -> str:
+    def download_file(self, file_path: str) -> str:
         """Download file to cache and return local path."""
-        local_path = self.get_local_path(file_path, class_name)
+        local_path = self.get_local_path(file_path)
 
         # Return if already cached
         if os.path.exists(local_path):
             return local_path
-
         try:
-            # Ensure local directory exists
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-
-            # Create a temporary downloader for this specific file
-            filename = os.path.basename(file_path)
-
-            # Create chunk info for this specific file
-            chunks = [{"filename": filename}]
-
             # Get downloader instance
-            if self.downloader is None:
+            if self._downloader is None:
                 # Initialize downloader only once
-                self.downloader = get_downloader(
-                    remote_dir=self.remote_dir,
+                self._downloader = get_downloader(
+                    remote_dir=self._input_dir_path,
                     cache_dir=self.cache_dir,
-                    chunks=chunks,
+                    chunks=[],
                     storage_options=self.storage_options,
                 )
 
             # Download the file
-            self.downloader.download_file(file_path, local_path)
-
-            # Verify download was successful
-            if os.path.exists(local_path):
-                return local_path
-
-            raise FileNotFoundError(f"Downloaded file not found at {local_path}")
+            logger.info(f"Downloading {file_path} to {local_path}")
+            self._downloader.download_file(file_path, local_path)
+            logger.info(f"Downloaded {file_path} to {local_path}")
+            return local_path
 
         except Exception as e:
-            logger.warning(f"Failed to download {file_path}: {e}")
-            return file_path  # Return remote path as fallback
+            logger.exception(f"Error downloading file {file_path}: {e}")
+            return None
 
 
 class StreamingRawDataset(Dataset):
@@ -298,6 +294,7 @@ class StreamingRawDataset(Dataset):
         indexer: Optional[BaseIndexer] = None,
         max_preload_size: int = 10,
         storage_options: Optional[dict] = None,
+        download_timeout: int = 30,
         **kwargs,
     ):
         """Initialize StreamingRawDataset.
@@ -308,6 +305,7 @@ class StreamingRawDataset(Dataset):
             indexer: Custom file indexer (default: FileIndexer)
             max_preload_size: Maximum number of files to preload (default: 10)
             storage_options: Cloud storage options
+            download_timeout: Timeout for downloading files (default: 30 seconds)
             **kwargs: Additional arguments
         """
         # Resolve directories
@@ -318,6 +316,7 @@ class StreamingRawDataset(Dataset):
         self.indexer = indexer or FileIndexer()
         self.max_preload_size = max_preload_size
         self.storage_options = storage_options or {}
+        self.download_timeout = download_timeout
 
         # Preloading with adaptive performance tracking
         self._preload_executor = None
@@ -330,115 +329,105 @@ class StreamingRawDataset(Dataset):
             self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, self.storage_options
         )
 
+        # Queue
+        self.request_queue = Queue()
+        self._loop_thread = None
+        self._lock = threading.Lock()
+
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
 
-    def _init_preloading(self) -> None:
-        """Initialize preloading executor with adaptive worker count."""
-        if self._preload_executor is None and self.max_preload_size > 0:
-            # Adaptive worker count based on dataset size
-            worker_count = min(self.download_workers, len(self.files) // 100 + 1, 8)
-            self._preload_executor = ThreadPoolExecutor(max_workers=worker_count)
-
-            # Start preloading first files with adaptive batch size
-            initial_batch = min(self.max_preload_size, len(self.files), 50)
-            for i in range(initial_batch):
-                self._submit_preload(i)
-
-    def _submit_preload(self, index: int) -> None:
-        """Submit a file for preloading."""
-        if index < len(self.files) and index not in self._preload_futures:
-            file_path, class_name = self.files[index]
-            future = self._preload_executor.submit(self.cache_manager.download_file, file_path, class_name)
-            self._preload_futures[index] = future
-
-    def _get_file(self, index: int) -> str:
-        """Get local file path with adaptive preloading strategy."""
-        file_path, class_name = self.files[index]
-        self._total_requests += 1
-
-        # Check if preloaded
-        if index in self._preload_futures:
-            future = self._preload_futures.pop(index)
-            try:
-                local_path = future.result(timeout=30)
-                self._cache_hit_count += 1
-
-                # Adaptive preloading: adjust based on cache hit rate
-                cache_hit_rate = self._cache_hit_count / self._total_requests
-                preload_window = min(self.max_preload_size * 2, 100) if cache_hit_rate > 0.8 else self.max_preload_size
-
-                # Queue next files for preloading with smart scheduling
-                for offset in range(1, min(4, preload_window // 4 + 1)):
-                    next_idx = index + offset * preload_window // 4
-                    if next_idx < len(self.files):
-                        self._submit_preload(next_idx)
-
-                return local_path
-            except Exception as e:
-                logger.warning(f"Preload failed for {index}: {e}")
-
-        # Download directly
-        return self.cache_manager.download_file(file_path, class_name)
-
-    def get_cache_stats(self) -> dict[str, Any]:
-        """Get cache performance statistics for monitoring."""
-        hit_rate = self._cache_hit_count / max(self._total_requests, 1)
-        return {
-            "cache_hit_rate": hit_rate,
-            "total_requests": self._total_requests,
-            "preload_queue_size": len(self._preload_futures),
-            "cache_dir": self.cache_manager.cache_dir,
-            "adaptive_preload_window": min(self.max_preload_size * 2, 100) if hit_rate > 0.8 else self.max_preload_size,
-        }
-
-    def load_sample(self, local_path: str, file_path: str, class_name: str, index: int) -> Any:
-        """Load sample data. Override this method to customize loading.
-
-        Args:
-            local_path: Path to local cached file
-            file_path: Original remote file path
-            class_name: Class name
-            index: Sample index
-
-        Returns:
-            Loaded sample data
-        """
-        # Default: return file content as bytes
-        try:
-            from PIL import Image
-
-            image = Image.open(local_path)
-            return {"index": index, "path": local_path, "image": image, "label": class_name}
-        except Exception:
-            # Fallback for remote files
-            return {"path": file_path, "class_name": class_name, "index": index}
-
-    def __iter__(self):
-        """Iterate over dataset."""
-        # Initialize preloading on first iteration
-        if self._preload_executor is None:
-            self._init_preloading()
-
-        for i in range(len(self.files)):
-            yield self[i]
+    @lru_cache(maxsize=1)
+    def __len__(self) -> int:
+        """Return dataset size."""
+        return len(self.files)
 
     def __getitem__(self, index: int) -> Any:
         """Get item by index."""
         if index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
-        # Initialize preloading only when actually needed
-        if self._preload_executor is None:
-            self._init_preloading()
+        # start the background thread + event loop once
+        with self._lock:
+            if self._loop_thread is None:
+                # Start the preloading executor in a separate thread
+                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True)
+                self._loop_thread.start()
 
-        file_path, class_name = self.files[index]
-        local_path = self._get_file(index)
-        return self.load_sample(local_path, file_path, class_name, index)
+        # create a pre-request event and send it to the queue wit the index
+        event = threading.Event()
+        self.request_queue.put((index, event))
 
-    @lru_cache(maxsize=1)
-    def __len__(self) -> int:
-        """Return dataset size."""
-        return len(self.files)
+        # Wait for the event to be set by the preloading thread
+        if not event.wait(timeout=self.download_timeout):
+            raise TimeoutError(f"Timeout waiting for file at index {index} to be preloaded")
+
+        return event.data
+
+        # TODO: cleanup later
+        # file_path = self.files[index].path
+        # local_path = self.cache_manager.get_local_path(file_path)
+        # self.cache_manager.download_file(file_path)
+        # if not os.path.exists(local_path):
+        #     raise FileNotFoundError(f"File not found in cache: {local_path}")
+        # with open(local_path, "rb") as f:
+        #     data = f.read()
+        # return data
+
+    def _start_event_loop(self) -> None:
+        """Event loop for handling preloading requests."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        # run the event loop until stopped
+        loop.run_until_complete(self._handle_requests())
+
+    async def _handle_requests(self):
+        """Handle requests from the queue."""
+        event_loop = asyncio.get_event_loop()
+        pending_requests = set()
+        while True:
+            try:
+                index, event = await event_loop.run_in_executor(
+                    None, self.request_queue.get, 0.1
+                )  # Non-blocking get with timeout
+            except Empty:
+                continue
+
+            if index is None:
+                # Stop signal received
+                break
+
+            if index < 0 or index >= len(self):
+                logger.error(f"Invalid index {index} requested")
+                continue
+
+            # Get the remote and local paths
+            remote_path = self.files[index].path
+            # process incoming request asynchronously to enable concurrent downloads
+            task = asyncio.create_task(self._download_file(remote_path, event), name=f"download_task_{index}")
+
+            # save reference to the task result to prevent it from being garbage collected
+            pending_requests.add(task)
+            task.add_done_callback(pending_requests.discard)
+
+    async def _download_file(self, remote_path: str, event: threading.Event) -> str:
+        """Download file asynchronously and set event data."""
+        try:
+            event_loop = asyncio.get_event_loop()
+            local_path = await event_loop.run_in_executor(None, self.cache_manager.download_file, remote_path)
+            with open(local_path, "rb") as f:
+                event.data = f.read()
+            event.set()
+            return local_path
+        except Exception as e:
+            print("exceptione", e)
+            logger.error(f"Error downloading file {remote_path}: {e}")
+            raise
+
+    def __del__(self):
+        """Clean up resources."""
+        if self._loop_thread and self._loop_thread.is_alive():
+            self.request_queue.put((None, None))  # Signal to stop the loop
+            self._loop_thread.join(timeout=1)
 
 
 if __name__ == "__main__":
@@ -449,15 +438,16 @@ if __name__ == "__main__":
 
     start = time.perf_counter()
     dataset = StreamingRawDataset(
-        input_dir="s3://imagenet-1m-template/raw/train",
-        # input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
+        # input_dir="s3://imagenet-1m-template/raw/train",
+        input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
         cache_dir="cache",
         max_preload_size=20,
     )
-    print(f"Discovered {len(dataset.files)} files", dataset.files[:5])
+    print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
     end = time.perf_counter()
     print(f"Dataset loaded in {end - start:.2f} seconds")
     # print("sample files :", dataset.files[:3])
+    print("sample", dataset[0])  # Access the first item to trigger preloading
 
     # print(f"Dataset: {len(dataset)} samples, {len(dataset.classes)} classes")
 
