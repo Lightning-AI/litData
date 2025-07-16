@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import fsspec
-from torch.utils.data import IterableDataset
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from litdata.streaming.downloader import get_downloader
@@ -163,13 +163,25 @@ class FileIndexer(BaseIndexer):
 class CacheManager:
     """Manages local file caching with directory structure preservation."""
 
-    def __init__(self, cache_dir: str, remote_dir: str, storage_options: Optional[Dict] = None):
-        self.cache_dir = cache_dir
-        self.remote_dir = remote_dir
+    def __init__(
+        self,
+        input_dir: Union[Dir, str],
+        cache_dir: Optional[Union[Dir, str]] = None,
+        storage_options: Optional[Dict] = None,
+    ):
+        self.input_dir = _resolve_dir(input_dir)
+        self.cache_dir = self._try_create_cache_dir(self.input_dir.path or self.input_dir.url, cache_dir)
+
         self.storage_options = storage_options or {}
         self.downloader = None
 
-        os.makedirs(cache_dir, exist_ok=True)
+    def _try_create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
+        """Create cache directory if it doesn't exist."""
+        if cache_dir is None:
+            cache_dir = get_default_cache_dir()
+        cache_path = os.path.join(cache_dir, generate_md5_hash(input_dir))
+        os.makedirs(cache_path, exist_ok=True)
+        return cache_path
 
     def get_local_path(self, file_path: str, class_name: str) -> str:
         """Get local cache path maintaining class directory structure."""
@@ -220,7 +232,7 @@ class CacheManager:
             return file_path  # Return remote path as fallback
 
 
-class StreamingRawDataset(IterableDataset):
+class StreamingRawDataset(Dataset):
     """Stream raw files from cloud storage with fast indexing and caching.
 
     Supports any folder structure, automatically indexing individual files.
@@ -238,7 +250,6 @@ class StreamingRawDataset(IterableDataset):
         cache_dir: Optional[Union[str, "Dir"]] = None,
         indexer: Optional[BaseIndexer] = None,
         max_preload_size: int = 10,
-        download_workers: int = 4,
         storage_options: Optional[Dict] = None,
         **kwargs,
     ):
@@ -249,33 +260,17 @@ class StreamingRawDataset(IterableDataset):
             cache_dir: Directory for caching files (optional)
             indexer: Custom file indexer (default: FileIndexer)
             max_preload_size: Maximum number of files to preload (default: 10)
-            download_workers: Number of download threads (default: 4)
             storage_options: Cloud storage options
             **kwargs: Additional arguments
         """
         # Resolve directories
         self.input_dir = _resolve_dir(input_dir)
-        cache_dir = _resolve_dir(cache_dir) if cache_dir else None
-
-        # Setup cache
-        if cache_dir:
-            cache_path = cache_dir.path or cache_dir.url
-        else:
-            dir_hash = generate_md5_hash(self.input_dir.url)
-            cache_path = os.path.join(get_default_cache_dir(), dir_hash)
-
-        self.cache_manager = CacheManager(cache_path, self.input_dir.url, storage_options)
+        self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options)
 
         # Configuration
         self.indexer = indexer or FileIndexer()
         self.max_preload_size = max_preload_size
-        self.download_workers = download_workers
         self.storage_options = storage_options or {}
-
-        # State
-        self.classes: List[str] = []
-        self.files: List[Tuple[str, str]] = []  # (file_path, class_name)
-        self.fs: Optional[fsspec.AbstractFileSystem] = None
 
         # Preloading with adaptive performance tracking
         self._preload_executor = None
@@ -284,7 +279,7 @@ class StreamingRawDataset(IterableDataset):
         self._total_requests = 0
 
         # Discover files and build index
-        input_url = self.input_dir.url or str(self.input_dir)
+        input_url = self.input_dir.path or self.input_dir.url
         self.files = self._build_or_load_index(input_url)
         if not self.files:
             raise ValueError(f"No files found in {input_url}")
