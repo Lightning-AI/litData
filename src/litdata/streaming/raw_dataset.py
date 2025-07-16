@@ -112,7 +112,7 @@ class BaseIndexer(ABC):
                 "files": [file.to_dict() for file in files],
                 "created_at": time.time(),
             }
-            with open(os.path.join(input_dir, INDEX_METADATA_FILE), "wb") as f:
+            with open(os.path.join(index_path), "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
         except Exception as e:
             logger.warning(f"Error caching index: {e}")
