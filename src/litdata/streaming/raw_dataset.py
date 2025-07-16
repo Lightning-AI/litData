@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import fsspec
+import zstd
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -31,7 +32,7 @@ from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_c
 
 logger = logging.getLogger(__name__)
 
-INDEX_METADATA_FILE = "index_metadata.json"
+INDEX_METADATA_FILE = "index_metadata.json.zstd"
 
 
 @dataclass(slots=True)
@@ -73,6 +74,51 @@ class BaseIndexer(ABC):
     @abstractmethod
     def get_cache_key(self) -> str:
         """Get a unique cache key for this indexer configuration."""
+
+    def build_or_load_index(
+        self, input_dir: str, cache_dir: str, storage_options: Dict[str, Any]
+    ) -> List[FileMetadata]:
+        """Build or load cached file index using ZSTD compression."""
+        index_path = os.path.join(cache_dir, INDEX_METADATA_FILE)
+
+        # Check if cached index exists and is fresh
+        if os.path.exists(index_path):
+            try:
+                logger.info(f"Loading cached index from {index_path}")
+                # Decompress and load
+                with open(index_path, "rb") as f:
+                    compressed_data = f.read()
+                json_data = zstd.decompress(compressed_data)
+                cached_data = json.loads(json_data.decode("utf-8"))
+
+                # Verify cache key matches current configuration
+                if cached_data.get("cache_key") == self.get_cache_key():
+                    files = [FileMetadata.from_dict(file_data) for file_data in cached_data["files"]]
+                    logger.info(f"Loaded cached index with {len(files)} files from {index_path}")
+                    return files
+            except Exception as e:
+                logger.warning(f"Error loading cached index: {e}")
+
+        # Build fresh index
+        logger.info(f"Building index for {input_dir} at {index_path}")
+        files = self.discover_files(input_dir, storage_options)
+        if not files:
+            raise ValueError(f"No files found in {input_dir}")
+
+        # Cache the index with ZSTD compression
+        try:
+            metadata = {
+                "cache_key": self.get_cache_key(),
+                "files": [file.to_dict() for file in files],
+                "created_at": time.time(),
+            }
+            with open(os.path.join(input_dir, INDEX_METADATA_FILE), "wb") as f:
+                f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
+        except Exception as e:
+            logger.warning(f"Error caching index: {e}")
+
+        logger.info(f"Built index with {len(files)} files from {input_dir} at {index_path}")
+        return files
 
 
 class FileIndexer(BaseIndexer):
@@ -279,51 +325,11 @@ class StreamingRawDataset(Dataset):
         self._total_requests = 0
 
         # Discover files and build index
-        input_url = self.input_dir.path or self.input_dir.url
-        self.files = self._build_or_load_index(input_url)
-        if not self.files:
-            raise ValueError(f"No files found in {input_url}")
+        self.files = self.indexer.build_or_load_index(
+            self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, self.storage_options
+        )
 
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
-
-    def _build_or_load_index(self, input_url: str) -> List[FileMetadata]:
-        """Build or load cached file index."""
-        cache_dir = self.cache_manager.cache_dir
-        index_path = os.path.join(cache_dir, INDEX_METADATA_FILE)
-
-        # Check if cached index exists and is fresh
-        if os.path.exists(index_path):
-            try:
-                with open(index_path) as f:
-                    cached_data = json.load(f)
-
-                # Verify cache key matches current configuration
-                if cached_data.get("cache_key") == self.indexer.get_cache_key():
-                    files = [FileMetadata.from_dict(file_data) for file_data in cached_data["files"]]
-                    logger.info(f"Loaded cached index with {len(files)} files from {index_path}")
-                    return files
-            except Exception as e:
-                logger.warning(f"Error loading cached index: {e}")
-
-        # Build fresh index
-        logger.info("Building fresh file index...")
-
-        files = self.indexer.discover_files(input_url, self.storage_options)
-
-        # Cache the index
-        try:
-            cache_data = {
-                "cache_key": self.indexer.get_cache_key(),
-                "files": [file_meta.to_dict() for file_meta in files],
-                "created_at": time.time(),
-            }
-            with open(index_path, "w") as f:
-                json.dump(cache_data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Error caching index: {e}")
-
-        logger.info(f"Built index with {len(files)} files from {input_url} at {index_path}")
-        return files
 
     def _init_preloading(self) -> None:
         """Initialize preloading executor with adaptive worker count."""
