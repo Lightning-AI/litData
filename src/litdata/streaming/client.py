@@ -13,7 +13,7 @@
 
 import os
 from time import time
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import boto3
 import botocore
@@ -29,8 +29,8 @@ class S3Client:
     def __init__(
         self,
         refetch_interval: int = 3300,
-        storage_options: Optional[Dict] = {},
-        session_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
     ) -> None:
         self._refetch_interval = refetch_interval
         self._last_time: Optional[float] = None

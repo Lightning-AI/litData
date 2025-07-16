@@ -5,9 +5,10 @@ import json
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from time import time
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 from urllib import parse
 
 from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE
@@ -20,16 +21,16 @@ class ParquetDir(ABC):
         self,
         dir_path: Optional[Union[str, Dir]],
         cache_path: Optional[str] = None,
-        storage_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
         num_workers: int = 4,
     ):
         self.dir = _resolve_dir(dir_path)
         self.cache_path = cache_path
         self.storage_options = storage_options
-        self.files: List[Any] = []
+        self.files: list[Any] = []
         self.num_workers = num_workers
 
-    def __iter__(self) -> Generator[Tuple[Dict[str, Any], int], None, None]:
+    def __iter__(self) -> Generator[tuple[dict[str, Any], int], None, None]:
         """Iterate over the Parquet files and yield their metadata.
 
         Yields:
@@ -50,10 +51,10 @@ class ParquetDir(ABC):
                 yield file_metadata, order
 
     @abstractmethod
-    def task(self, _file: Any) -> Dict[str, Any]: ...
+    def task(self, _file: Any) -> dict[str, Any]: ...
 
     @abstractmethod
-    def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
+    def write_index(self, chunks_info: list[dict[str, Any]], config: dict[str, Any]) -> None:
         """Write the index file to the cache directory.
 
         Args:
@@ -74,7 +75,7 @@ class LocalParquetDir(ParquetDir):
         self,
         dir_path: Optional[Union[str, Dir]],
         cache_path: Optional[str] = None,
-        storage_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
         num_workers: int = 4,
     ):
         if not _PYARROW_AVAILABLE:
@@ -88,7 +89,7 @@ class LocalParquetDir(ParquetDir):
             if _f.endswith(".parquet"):
                 self.files.append(_f)
 
-    def task(self, _file: str) -> Dict[str, Any]:
+    def task(self, _file: str) -> dict[str, Any]:
         """Extract metadata from a Parquet file on the local filesystem."""
         import pyarrow.parquet as pq
 
@@ -111,7 +112,7 @@ class LocalParquetDir(ParquetDir):
             "data_types": data_types,
         }
 
-    def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
+    def write_index(self, chunks_info: list[dict[str, Any]], config: dict[str, Any]) -> None:
         """Write the index file to the cache directory."""
         if self.cache_path is None:
             self.cache_path = self.dir.path
@@ -123,7 +124,7 @@ class CloudParquetDir(ParquetDir):
         self,
         dir_path: Optional[Union[str, Dir]],
         cache_path: Optional[str] = None,
-        storage_options: Optional[Dict] = None,
+        storage_options: Optional[dict] = None,
         num_workers: int = 4,
     ):
         if not _FSSPEC_AVAILABLE:
@@ -155,7 +156,7 @@ class CloudParquetDir(ParquetDir):
             if _f["type"] == "file" and _f["name"].endswith(".parquet"):
                 self.files.append(_f)
 
-    def task(self, _file: Any) -> Dict[str, Any]:
+    def task(self, _file: Any) -> dict[str, Any]:
         """Extract metadata from a Parquet file on the cloud filesystem without downloading the entire file."""
         import pyarrow.parquet as pq
 
@@ -194,7 +195,7 @@ class CloudParquetDir(ParquetDir):
             "data_types": data_types,
         }
 
-    def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
+    def write_index(self, chunks_info: list[dict[str, Any]], config: dict[str, Any]) -> None:
         """Write the index file and upload it to the cloud."""
         assert self.dir.url is not None
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -223,7 +224,7 @@ class HFParquetDir(ParquetDir):
         self,
         dir_path: Optional[Union[str, Dir]],
         cache_path: Optional[str] = None,
-        storage_options: Optional[Dict] = None,
+        storage_options: Optional[dict] = None,
         num_workers: int = 4,
     ):
         if not _HF_HUB_AVAILABLE:
@@ -250,7 +251,7 @@ class HFParquetDir(ParquetDir):
             if isinstance(_f, dict) and _f["name"].endswith(".parquet"):
                 self.files.append(_f)
 
-    def task(self, _file: dict) -> Dict[str, Any]:
+    def task(self, _file: dict) -> dict[str, Any]:
         """Extract metadata from a Parquet file on Hugging Face Hub without downloading the entire file."""
         import pyarrow.parquet as pq
 
@@ -289,7 +290,7 @@ class HFParquetDir(ParquetDir):
             "data_types": data_types,
         }
 
-    def write_index(self, chunks_info: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
+    def write_index(self, chunks_info: list[dict[str, Any]], config: dict[str, Any]) -> None:
         """Write the index file to the cache directory."""
         assert self.cache_path is not None
         assert self.dir.url is not None
@@ -300,7 +301,7 @@ class HFParquetDir(ParquetDir):
 def get_parquet_indexer_cls(
     dir_path: str,
     cache_path: Optional[str] = None,
-    storage_options: Optional[Dict] = {},
+    storage_options: Optional[dict] = {},
     num_workers: int = 4,
 ) -> ParquetDir:
     """Get the appropriate ParquetDir class based on the directory path scheme.

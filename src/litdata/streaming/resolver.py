@@ -20,7 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from time import sleep
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 from urllib import parse
 
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -230,7 +230,7 @@ def _resolve_datasets(dir_path: str) -> Dir:
 
 
 def _assert_dir_is_empty(
-    output_dir: Dir, append: bool = False, overwrite: bool = False, storage_options: Dict[str, Any] = {}
+    output_dir: Dir, append: bool = False, overwrite: bool = False, storage_options: dict[str, Any] = {}
 ) -> None:
     if not isinstance(output_dir, Dir):
         raise ValueError("The provided output_dir isn't a `Dir` Object.")
@@ -260,7 +260,7 @@ def _assert_dir_has_index_file(
     output_dir: Dir,
     mode: Optional[Literal["append", "overwrite"]] = None,
     use_checkpoint: bool = False,
-    storage_options: Dict[str, Any] = {},
+    storage_options: dict[str, Any] = {},
 ) -> None:
     if mode is not None and mode not in ["append", "overwrite"]:
         raise ValueError(f"The provided `mode` should be either `append` or `overwrite`. Found {mode}.")

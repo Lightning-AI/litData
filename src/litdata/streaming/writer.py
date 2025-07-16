@@ -18,7 +18,7 @@ import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
 from time import sleep, time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 
@@ -55,7 +55,7 @@ class BinaryWriter:
         compression: Optional[str] = None,
         encryption: Optional[Encryption] = None,
         follow_tensor_dimension: bool = True,
-        serializers: Optional[Dict[str, Serializer]] = None,
+        serializers: Optional[dict[str, Serializer]] = None,
         chunk_index: Optional[int] = None,
         item_loader: Optional[BaseItemLoader] = None,
         msg_queue: Optional[Queue] = None,
@@ -85,8 +85,8 @@ class BinaryWriter:
         if (chunk_size is None and chunk_bytes is None) or (chunk_size and chunk_bytes):
             raise ValueError("Either one of the `chunk_size` or the `chunk_bytes` need to be provided.")
 
-        self._serializers: Dict[str, Serializer] = _get_serializers(serializers)
-        self._serializers_extra: Dict[str, Serializer] = {}
+        self._serializers: dict[str, Serializer] = _get_serializers(serializers)
+        self._serializers_extra: dict[str, Serializer] = {}
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
@@ -94,7 +94,7 @@ class BinaryWriter:
         self._item_loader = item_loader or PyTreeLoader()
         self.msg_queue = msg_queue
 
-        self._data_format: Optional[List[str]] = None
+        self._data_format: Optional[list[str]] = None
         self._data_spec: Optional[PyTree] = None
 
         if self._compression:
@@ -107,11 +107,11 @@ class BinaryWriter:
                 )
             self._compressor: Compressor = _COMPRESSORS[self._compression]
 
-        self._serialized_items: Dict[int, Item] = {}
+        self._serialized_items: dict[int, Item] = {}
         self._chunk_index = chunk_index or 0
         self._min_index: Optional[int] = None
         self._max_index: Optional[int] = None
-        self._chunks_info: List[Dict[str, Any]] = []
+        self._chunks_info: list[dict[str, Any]] = []
         self._worker_env: Optional[_WorkerEnv] = None
         self._rank: Optional[int] = None
         self._is_done = False
@@ -120,7 +120,7 @@ class BinaryWriter:
 
         self._per_sample_num_bytes = 0
         self._per_sample_num_items = 0
-        self.last_checkpoint_chunk_info: List[Dict[str, Any]] = []
+        self.last_checkpoint_chunk_info: list[dict[str, Any]] = []
 
     @property
     def filled(self) -> bool:
@@ -149,7 +149,7 @@ class BinaryWriter:
                 self._rank = self._distributed_env.global_rank * self._worker_env.world_size + self._worker_env.rank
         return self._rank
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """Returns the config of the writer."""
         return {
             "compression": self._compression,
@@ -161,17 +161,17 @@ class BinaryWriter:
             "item_loader": self._item_loader.__class__.__name__,
         }
 
-    def serialize(self, items: Any) -> Tuple[bytes, Optional[int]]:
+    def serialize(self, items: Any) -> tuple[bytes, Optional[int]]:
         """Serialize a dictionary into its binary format."""
         # Flatten the items provided by the users
         flattened, data_spec = tree_flatten(items)
 
         # Collect the sizes and associated bytes for each item
-        sizes: List[int] = []
-        data: List[bytes] = []
+        sizes: list[int] = []
+        data: list[bytes] = []
 
         if self._data_format is None:
-            data_format: List[str] = []
+            data_format: list[str] = []
             for item in flattened:
                 data_format.append(self._serialize(item, sizes, data))
 
@@ -190,7 +190,7 @@ class BinaryWriter:
 
         return self._item_loader.encode_data(data, sizes, flattened)
 
-    def _serialize(self, item: Any, sizes: List[int], data: List[bytes]) -> str:
+    def _serialize(self, item: Any, sizes: list[int], data: list[bytes]) -> str:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
         for serializer_name, serializer in self._serializers.items():
             if serializer.can_serialize(item):
@@ -204,7 +204,7 @@ class BinaryWriter:
         raise ValueError(f"The provided item isn't serializable. Found {item}")
 
     def _serialize_with_data_format(
-        self, item: Any, sizes: List[int], data: List[bytes], data_format: List[str]
+        self, item: Any, sizes: list[int], data: list[bytes], data_format: list[str]
     ) -> None:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
         assert data_format
@@ -242,7 +242,7 @@ class BinaryWriter:
         # Then, read bytes from `offset_start` to `offset_end` to get the item bytes.
         # Now, item_loader can use these raw bytes to deserialize the item.
 
-        items: List[Item] = []
+        items: list[Item] = []
 
         if on_done:
             indices = sorted(self._serialized_items.keys())
@@ -431,9 +431,9 @@ class BinaryWriter:
             json.dump({"chunks": self._chunks_info, "config": config}, out, sort_keys=True)
         return filepath
 
-    def done(self) -> List[str]:
+    def done(self) -> list[str]:
         """Called when StopIteration is triggered."""
-        filepaths: List[str] = []
+        filepaths: list[str] = []
         if self.filled:
             return filepaths
 
@@ -480,7 +480,7 @@ class BinaryWriter:
 
         self._merge_no_wait(node_rank=node_rank)
 
-    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[Dict[str, Any]] = None) -> None:
+    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[dict[str, Any]] = None) -> None:
         """Once all the workers have written their own index, the merge function is responsible to read and merge them
         into a single index.
 
@@ -525,7 +525,7 @@ class BinaryWriter:
             with open(os.path.join(self._cache_dir, f"{node_rank}-{_INDEX_FILENAME}"), "w") as f:
                 json.dump({"chunks": chunks_info, "config": config}, f, sort_keys=True)
 
-    def _should_raise(self, data_format_1: List[str], data_format_2: List[str]) -> bool:
+    def _should_raise(self, data_format_1: list[str], data_format_2: list[str]) -> bool:
         if len(data_format_1) != len(data_format_2):
             return True
 
@@ -536,7 +536,7 @@ class BinaryWriter:
 
         return any(is_non_valid(f1, f2) for f1, f2 in zip(data_format_1, data_format_2))
 
-    def _pretty_serialized_items(self) -> Dict[int, Item]:
+    def _pretty_serialized_items(self) -> dict[int, Item]:
         out = {}
         for key, value in self._serialized_items.items():
             # drop `data` as it would make logs unreadable.
@@ -574,7 +574,7 @@ class BinaryWriter:
 def index_parquet_dataset(
     pq_dir_url: str,
     cache_dir: Optional[str] = None,
-    storage_options: Optional[Dict] = {},
+    storage_options: Optional[dict] = {},
     num_workers: int = 4,
 ) -> None:
     """Index a Parquet dataset from a specified URL.
@@ -601,7 +601,7 @@ def index_parquet_dataset(
         # in multi-node setup, each node's first process should do the indexing,
         # but only first node's first process should upload the index (if uploading is needed)
         pq_chunks_info = []
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "compression": None,
             "chunk_size": None,
             "chunk_bytes": None,

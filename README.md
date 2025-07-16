@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
 Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
 
-- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+- You can use the `transform` argument in `StreamingDataset` to apply a `transformation function` or `a list of transformation functions` to each sample as it is streamed.
 
 ```python
 # Define a simple transform function
@@ -953,7 +953,7 @@ def transform_fn(x, *args, **kwargs):
     return torch_transform(x)  # Apply the transform to the input image
 
 # Create dataset with appropriate configuration
-dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=[transform_fn])
 ```
 
 Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
