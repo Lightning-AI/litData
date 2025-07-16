@@ -17,6 +17,7 @@ import os
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
@@ -423,7 +424,7 @@ class StreamingRawDataset(Dataset):
 
     def __getitem__(self, index: int) -> Any:
         """Get item by index."""
-        if index >= len(self.files):
+        if index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
         # Initialize preloading only when actually needed
@@ -434,16 +435,10 @@ class StreamingRawDataset(Dataset):
         local_path = self._get_file(index)
         return self.load_sample(local_path, file_path, class_name, index)
 
+    @lru_cache(maxsize=1)
     def __len__(self) -> int:
         """Return dataset size."""
         return len(self.files)
-
-    def get_class_counts(self) -> dict[str, int]:
-        """Get samples per class."""
-        counts = {}
-        for _, class_name in self.files:
-            counts[class_name] = counts.get(class_name, 0) + 1
-        return counts
 
 
 if __name__ == "__main__":
