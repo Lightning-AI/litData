@@ -283,11 +283,7 @@ class StreamingRawDataset(IterableDataset):
         self._cache_hit_count = 0
         self._total_requests = 0
 
-        # # Build index
-        # self._build_index()
-        # if not self.files:
-        #     raise ValueError(f"No files found in {self.input_dir.url}")
-        # Discover files
+        # Discover files and build index
         input_url = self.input_dir.url or str(self.input_dir)
         self.files = self._build_or_load_index(input_url)
         if not self.files:
