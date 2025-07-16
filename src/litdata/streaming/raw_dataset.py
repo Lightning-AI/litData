@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -264,9 +265,9 @@ class CacheManager:
                 )
 
             # Download the file
-            logger.info(f"Downloading {file_path} to {local_path}")
+            # logger.info(f"Downloading {file_path} to {local_path}")
             self._downloader.download_file(file_path, local_path)
-            logger.info(f"Downloaded {file_path} to {local_path}")
+            # logger.info(f"Downloaded {file_path} to {local_path}")
             return local_path
 
         except Exception as e:
@@ -329,7 +330,7 @@ class StreamingRawDataset(Dataset):
         )
 
         # Queue
-        self.request_queue = Queue()
+        self._request_queue = Queue()
         self._loop_thread = None
         self._lock = threading.Lock()
 
@@ -354,7 +355,7 @@ class StreamingRawDataset(Dataset):
 
         # create a pre-request event and send it to the queue wit the index
         event = threading.Event()
-        self.request_queue.put((index, event))
+        self._request_queue.put((index, event))
 
         # Wait for the event to be set by the preloading thread
         if not event.wait(timeout=self.download_timeout):
@@ -384,14 +385,16 @@ class StreamingRawDataset(Dataset):
         event_loop = asyncio.get_event_loop()
         pending_requests = set()
         while True:
+            # print("Waiting for requests...")
             try:
                 index, event = await event_loop.run_in_executor(
-                    None, self.request_queue.get, 0.1
+                    None, self._request_queue.get, 0.1
                 )  # Non-blocking get with timeout
             except Empty:
                 continue
 
             if index is None:
+                print("Received stop signal, exiting request handler")
                 # Stop signal received
                 break
 
@@ -418,15 +421,41 @@ class StreamingRawDataset(Dataset):
             event.set()
             return local_path
         except Exception as e:
-            print("exceptione", e)
             logger.error(f"Error downloading file {remote_path}: {e}")
             raise
 
+    def _cleanup(self):
+        """Internal cleanup method."""
+        try:
+            if self._loop_thread and self._loop_thread.is_alive():
+                # Signal to stop the loop
+                self._request_queue.put((None, None))
+                # Wait for the thread to finish
+                self._loop_thread.join(timeout=2)
+                if self._loop_thread.is_alive():
+                    logger.warning("Thread did not terminate gracefully")
+        except Exception as e:
+            logger.warning(f"Error during cleanup: {e}")
+        finally:
+            self._loop_thread = None
+            self._request_queue = None
+            logger.info("StreamingRawDataset cleaned up successfully.")
+
+    def close(self):
+        """Explicitly close the dataset and clean up resources."""
+        self._cleanup()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
     def __del__(self):
         """Clean up resources."""
-        if self._loop_thread and self._loop_thread.is_alive():
-            self.request_queue.put((None, None))  # Signal to stop the loop
-            self._loop_thread.join(timeout=1)
+        self._cleanup()
 
 
 if __name__ == "__main__":
@@ -436,24 +465,19 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     start = time.perf_counter()
-    dataset = StreamingRawDataset(
+    with StreamingRawDataset(
         # input_dir="s3://imagenet-1m-template/raw/train",
         input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
         cache_dir="cache",
         max_preload_size=20,
-    )
-    print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
-    end = time.perf_counter()
-    print(f"Dataset loaded in {end - start:.2f} seconds")
-    # print("sample files :", dataset.files[:3])
-    print("sample", dataset[0])  # Access the first item to trigger preloading
-
-    # print(f"Dataset: {len(dataset)} samples, {len(dataset.classes)} classes")
-
-    # # Test iteration
-    # for i, sample in enumerate(dataset):
-    #     if i >= 3:
-    #         break
-    #     print(f"Sample {i}: {sample} ({len(sample) if isinstance(sample, bytes) else 'metadata'})")
-
-    # print("✅ Test completed")
+    ) as dataset:
+        print("Dataset initialized")
+        print(f"Dataset size: {len(dataset)}")
+        print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
+        end = time.perf_counter()
+        print(f"Dataset loaded in {end - start:.2f} seconds")
+        # print("sample files :", dataset.files[:3])
+        sample = dataset[0]
+        print("sample", type(sample))  # Access the first item to trigger preloading
+        print("Dataset cleaned up")
+        print("✅ Test completed")
