@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import inspect
 import logging
 import os
 from time import time
@@ -197,11 +197,13 @@ class StreamingDataset(IterableDataset):
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
+        self.transform_fn_accepts_index = {}
         if transform is not None:
             transform = transform if isinstance(transform, list) else [transform]
             for t in transform:
                 if not callable(t):
                     raise ValueError(f"Transform should be a callable. Found {t}")
+                self.transform_fn_accepts_index[id(t)] = has_argument_named_index(t)
             self.transform = transform
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
@@ -444,11 +446,13 @@ class StreamingDataset(IterableDataset):
             )
         )
         if hasattr(self, "transform"):
-            if isinstance(self.transform, list):
-                for transform_fn in self.transform:
-                    item = transform_fn(item)
-            else:
-                item = self.transform(item)
+            transforms = self.transform if isinstance(self.transform, list) else [self.transform]
+            for transform_fn in transforms:
+                key = id(transform_fn)
+                if key not in self.transform_fn_accepts_index:
+                    self.transform_fn_accepts_index[key] = has_argument_named_index(transform_fn)
+
+                item = transform_fn(item, index=index) if self.transform_fn_accepts_index[key] else transform_fn(item)
 
         return item
 
@@ -739,3 +743,9 @@ def _replay_chunks_sampling(
                 break
 
     return chunks_index, indexes
+
+
+def has_argument_named_index(func: Callable) -> bool:
+    """Returns True if the function has an argument named 'index'."""
+    sig = inspect.signature(func)
+    return "index" in sig.parameters

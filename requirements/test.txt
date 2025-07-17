@@ -16,3 +16,4 @@ transformers <4.53.0
 zstd
 s5cmd >=0.2.0
 soundfile >=0.13.0 # required for torchaudio backend
+ultralytics >=8.3.16
