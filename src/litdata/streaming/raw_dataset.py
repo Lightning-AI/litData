@@ -178,7 +178,7 @@ class FileIndexer(BaseIndexer):
             # Filter by depth
             if self.max_depth is not None:
                 rel_depth = len(file_path.relative_to(path).parts)
-                if rel_depth > self.max_depth:
+                if rel_depth > self.max_depth + 1:  # +1 to account for file name in parts
                     continue
 
             if self._should_include_file(str(file_path)):
