@@ -98,6 +98,10 @@ class Downloader(ABC):
             f.seek(offset)
             return f.read(length)
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from remote storage directly to a file-like object."""
+        pass
+
 
 class S3Downloader(Downloader):
     def __init__(
@@ -171,18 +175,14 @@ class S3Downloader(Downloader):
                         )
                     raise RuntimeError(error_message)
             else:
-                from boto3.s3.transfer import TransferConfig
-
                 extra_args: dict[str, Any] = {}
 
                 if not os.path.exists(local_filepath):
-                    # Issue: https://github.com/boto/boto3/issues/3113
                     self._client.client.download_file(
                         obj.netloc,
                         obj.path.lstrip("/"),
                         local_filepath,
                         ExtraArgs=extra_args,
-                        Config=TransferConfig(use_threads=False),
                     )
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
@@ -202,6 +202,25 @@ class S3Downloader(Downloader):
         response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
 
         return response["Body"].read()
+
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from S3 directly to a file-like object."""
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "_client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        self._client.client.download_fileobj(
+            bucket,
+            key,
+            fileobj,
+        )
 
 
 class GCPDownloader(Downloader):
@@ -267,6 +286,24 @@ class GCPDownloader(Downloader):
 
         return blob.download_as_bytes(start=offset, end=end)
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from GCS directly to a file-like object."""
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        blob.download_to_file(fileobj)
+
 
 class AzureDownloader(Downloader):
     def __init__(
@@ -307,6 +344,23 @@ class AzureDownloader(Downloader):
             with open(local_filepath, "wb") as download_file:
                 blob_data = blob_client.download_blob()
                 blob_data.readinto(download_file)
+
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from Azure Blob Storage directly to a file-like object."""
+        from azure.storage.blob import BlobServiceClient
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+
+        service = BlobServiceClient(**self._storage_options)
+        blob_client = service.get_blob_client(container=obj.netloc, blob=obj.path.lstrip("/"))
+
+        blob_data = blob_client.download_blob()
+        blob_data.readinto(fileobj)
 
 
 class LocalDownloader(Downloader):
