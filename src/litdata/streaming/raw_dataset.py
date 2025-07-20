@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -259,7 +260,7 @@ class CacheManager:
             logger.error(f"Error getting local path for {file_path}: {e}")
             raise
 
-    async def download_file(self, file_path: str) -> str:
+    async def download_file(self, file_path: str) -> io.BytesIO | None:
         """Download file to cache and return local path."""
         local_path = self.get_local_path(file_path)
         task = asyncio.current_task()
@@ -268,13 +269,18 @@ class CacheManager:
         if os.path.exists(local_path):
             logger.info(f"pid:{os.getpid()}:{task} File already cached: {file_path} -> {local_path}")
             return local_path
+
+        file_ob = io.BytesIO()  # Use BytesIO to avoid writing to disk first
+        file_ob.name = os.path.basename(file_path)  # Set name for debugging
+
         try:
             # Download the file
-            self._downloader.download_file(file_path, local_path)
+            self._downloader.download_fileobj(file_path, file_ob)
+            file_ob.seek(0)  # Reset pointer to the beginning
             logger.info(
                 f"pid:{os.getpid()}:{task} Downloaded {file_path} to {local_path} and exists: {os.path.exists(local_path)}"
             )
-            return local_path
+            return file_ob
 
         except Exception as e:
             logger.error(f"PID: {os.getpid()}:{task} - Error downloading file {file_path}: {e}")
@@ -355,15 +361,6 @@ class StreamingRawDataset(Dataset):
         """Return dataset size."""
         return len(self.files)
 
-    def _load_file(self, local_path: str) -> Any:
-        """Load file from local cache."""
-        try:
-            with open(local_path, "rb") as f:
-                return f.read()
-        except Exception as e:
-            logger.error(f"Error loading file {local_path}: {e}")
-            raise FileNotFoundError(f"File not found in cache: {local_path}")
-
     def __getitem__(self, index: int) -> Any:
         """Get item by index."""
         if index >= len(self):
@@ -425,6 +422,49 @@ class StreamingRawDataset(Dataset):
         # with open(local_path, "rb") as f:
         #     data = f.read()
         # return data
+
+    def __getitems__(self, indices: list[int]) -> list[Any]:
+        """Get multiple items by indices."""
+        if not isinstance(indices, list):
+            raise TypeError("Indices must be a list of integers")
+
+        print(f"PID: {os.getpid()} - Prefetching indices {indices}")
+
+        # start the background thread + event loop once
+        with self._lock:
+            if self._loop_thread is None:
+                # Start the preloading executor in a separate thread
+                thread_name = f"StreamingRawDataset-PreloadLoop-pid{os.getpid()}"
+                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True, name=thread_name)
+                self._loop_thread.start()
+                logger.info(
+                    f" PID: {os.getpid()}) - Started event loop thread '{self._loop_thread.name}' (Thread ID: {self._loop_thread.ident},"
+                    f" for preloading at dataset indices {indices}."
+                )
+
+        # queue requests for all indices
+        for index in indices:
+            if index >= len(self):
+                raise IndexError(f"Index {index} out of range")
+            event = threading.Event()
+            self._request_queue.put((index, event))
+        logger.info(f"PID: {os.getpid()} - Queued indices {indices} for preloading")
+
+        # wait for the last event to be set
+        if not event.wait(timeout=self.download_timeout):
+            logger.error(f"PID: {os.getpid()} - Timeout waiting for indices {indices} to be preloaded")
+            raise TimeoutError(f"Timeout waiting for files at indices {indices} to be preloaded")
+
+        # Load data for all indices
+        results = []
+        with self._cache_lock:
+            for index in indices:
+                if index in self._memory_cache:
+                    data = self._memory_cache[index]
+                    results.append(data)
+                    self._memory_cache.pop(index, None)
+
+        return results
 
     def _prefetch_ahead(self, start_index: int):
         """Prefetch next files in background."""
@@ -507,17 +547,13 @@ class StreamingRawDataset(Dataset):
         """Download file asynchronously and set event data."""
         task = asyncio.current_task()
         try:
-            local_path = await self.cache_manager.download_file(remote_path)
-            # tsk = asyncio.get_event_loop().run_in_executor(
-            #     self._download_pool, self.cache_manager.download_file, remote_path
-            # )
-            # local_path = await tsk.result()
+            file_obj = await self.cache_manager.download_file(remote_path)
             logger.info(
                 f"[PID:{os.getpid()}][Thread:{threading.current_thread().name}][Task:{task}] "
-                f"Downloaded file for index {index}: {remote_path} -> {local_path} (Dataset id: {id(self)})"
+                f"Downloaded file for index {index}: {remote_path} (Dataset id: {id(self)})"
             )
             with self._cache_lock:
-                self._memory_cache[index] = self._load_file(local_path)
+                self._memory_cache[index] = file_obj.read()  # Store file content in memory cache
             if event:
                 event.set()
             self._prefetch_queued.discard(index)  # Remove from prefetch queue set
@@ -566,22 +602,52 @@ if __name__ == "__main__":
     # Example usage on litserve teamspace
     import time
 
-    logging.basicConfig(level=logging.INFO)
+    # logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        filename="sample.log",
+    )
 
     start = time.perf_counter()
-    with StreamingRawDataset(
-        # input_dir="s3://imagenet-1m-template/raw/train",
+    # with StreamingRawDataset(
+    #     # input_dir="s3://imagenet-1m-template/raw/train",
+    #     input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
+    #     cache_dir="cache",
+    #     max_preload_size=0,
+    # ) as dataset:
+    # print("Dataset initialized")
+    # print(f"Dataset size: {len(dataset)}")
+    # print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
+    # end = time.perf_counter()
+    # print(f"Dataset loaded in {end - start:.2f} seconds")
+    # # print("sample files :", dataset.files[:3])
+    # sample = dataset[0]
+    # print("sample", type(sample))  # Access the first item to trigger preloading
+    # print("Dataset cleaned up")
+    # print("✅ Test completed")
+
+    from torch.utils.data import DataLoader
+
+    dataset = StreamingRawDataset(
         input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-        cache_dir="cache",
-        max_preload_size=0,
-    ) as dataset:
-        print("Dataset initialized")
-        print(f"Dataset size: {len(dataset)}")
-        print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
-        end = time.perf_counter()
-        print(f"Dataset loaded in {end - start:.2f} seconds")
-        # print("sample files :", dataset.files[:3])
-        sample = dataset[0]
-        print("sample", type(sample))  # Access the first item to trigger preloading
-        print("Dataset cleaned up")
-        print("✅ Test completed")
+        cache_dir="debug_cache",
+    )
+
+    dl = DataLoader(
+        dataset,
+        batch_size=4,
+        # shuffle=True,
+        num_workers=4,  # Use main thread for simplicity
+        prefetch_factor=1,  # Prefetch one batch at a time
+    )
+
+    for i, batch in enumerate(dl):
+        logger.info(f"PID: {os.getpid()} - Batch {i} loaded with {len(batch)} items")
+        print(i)
+        if i >= 5:
+            break
+
+    end = time.perf_counter()
+    print(f"Dataset loaded in {end - start:.2f} seconds")
