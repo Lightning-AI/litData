@@ -250,7 +250,13 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         return self._iterator
 
     def __len__(self) -> Optional[int]:
-        return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
+        # ``batch_size`` may be a sequence when per-dataset values were set on
+        # the wrapper.  For length estimation we only need a scalar; we take
+        # the first element if a sequence is provided.
+        from collections.abc import Sequence
+
+        bs_int: int = int(self.batch_size[0]) if isinstance(self.batch_size, Sequence) else int(self.batch_size)
+        return self.get_len(self.num_workers, bs_int if bs_int else 1)
 
     def get_num_samples_yielded(
         self,

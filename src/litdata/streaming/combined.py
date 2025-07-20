@@ -15,7 +15,7 @@ import logging
 import random
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -170,7 +170,7 @@ class _CombinedDatasetIterator(Iterator):
         weights: Sequence[Optional[float]],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
-        batch_size: int,
+        batch_size: Union[int, Sequence[int]],
         batching_method: BatchingMethodType,
         iterate_over_all: bool = False,
     ) -> None:
@@ -183,7 +183,14 @@ class _CombinedDatasetIterator(Iterator):
         self._rng = random.Random(seed)  # noqa: S311
         self._iterate_over_all = iterate_over_all
         self._batching_method = batching_method
+        # Batch size can be an int (applied to all datasets) or a sequence providing
+        # a specific batch size per dataset.
         self._batch_size = batch_size
+        from collections.abc import Sequence as _Sequence
+
+        # Validate when a sequence is provided
+        if isinstance(batch_size, _Sequence) and len(batch_size) != len(datasets):
+            raise ValueError("When providing a sequence of batch sizes, its length must match the number of datasets.")
         self._is_done = False
 
         if num_samples_yielded is not None:
@@ -196,9 +203,10 @@ class _CombinedDatasetIterator(Iterator):
         self._use_streaming_dataloader = use_streaming_dataloader
         self._is_done = False
 
-        # Used to track the number of samples yielded in the current batch
-        # and the current dataset index
-        # This is used only when batching_method is set to "per_stream"
+        # Track the number of samples yielded in the current (DataLoader) batch
+        # and the active dataset index. This is used only when batching_method is
+        # set to "per_stream".  With per-dataset batch sizes we look up the limit
+        # dynamically based on ``self._batch_size`` if it is a sequence.
         self._samples_yielded_in_batch = 0
         self._cur_dataset_index = -1
 
@@ -240,11 +248,35 @@ class _CombinedDatasetIterator(Iterator):
             # For every sample, randomly select a dataset (weighted)
             dataset_idx = self._set_new_dataset_index()
         elif self._batching_method == BatchingMethod.PER_STREAM:
-            # For each batch, pick a dataset and stick with it for the whole batch
-            if self._cur_dataset_index == -1 or self._samples_yielded_in_batch >= self._batch_size:
+            # For each batch, pick a dataset and stick with it until the
+            # desired number of samples for that dataset have been yielded.
+
+            from collections.abc import Sequence as _Sequence
+
+            if self._cur_dataset_index == -1:
+                # Start of iteration or after switching dataset
                 self._cur_dataset_index = self._set_new_dataset_index()
                 self._samples_yielded_in_batch = 0
+
             dataset_idx = self._cur_dataset_index
+
+            # Determine the batch-size limit for the current dataset
+            limit = self._batch_size[dataset_idx] if isinstance(self._batch_size, _Sequence) else self._batch_size
+
+            if self._samples_yielded_in_batch >= limit:
+                # Current dataset reached its quota; pick a *different* dataset if possible
+                candidate_idx = self._cur_dataset_index
+                if len([i for i in self._dataset_indexes if i is not None]) > 1:
+                    while candidate_idx == self._cur_dataset_index:
+                        candidate_idx = self._set_new_dataset_index()
+                # Update tracking
+                self._cur_dataset_index = candidate_idx
+                self._samples_yielded_in_batch = 0
+                dataset_idx = self._cur_dataset_index
+                # Re-compute limit for the new dataset
+                if isinstance(self._batch_size, _Sequence):
+                    limit = self._batch_size[dataset_idx]
+
             self._samples_yielded_in_batch += 1
         else:
             raise ValueError(f"Invalid batching method: {self._batching_method}")
