@@ -1,5 +1,6 @@
 # ruff: noqa: S604
 import contextlib
+import io
 import os
 import sys
 from unittest import mock
@@ -349,3 +350,53 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 
     # Verify that hf_hub_download was not called
     mock_hf_hub_download.assert_not_called()
+
+
+# Test cases for download_fileobj method
+def test_s3_downloader_download_fileobj():
+    """Test S3Downloader.download_fileobj with boto3."""
+    with mock.patch("os.system", return_value=1), mock.patch("litdata.streaming.downloader.S3Client") as S3ClientMock:
+        mock_client = MagicMock()
+        S3ClientMock.return_value.client = mock_client
+
+        downloader = S3Downloader("s3://bucket", "", [])
+        fileobj = io.BytesIO()
+
+        downloader.download_fileobj("s3://bucket/file.txt", fileobj)
+        mock_client.download_fileobj.assert_called_once_with("bucket", "file.txt", fileobj)
+
+
+@mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
+def test_gcp_downloader_download_fileobj(google_mock):
+    """Test GCPDownloader.download_fileobj method."""
+    mock_client = MagicMock()
+    mock_bucket = MagicMock()
+    mock_blob = MagicMock()
+
+    google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
+    mock_client.bucket = MagicMock(return_value=mock_bucket)
+    mock_bucket.blob = MagicMock(return_value=mock_blob)
+
+    downloader = GCPDownloader("gs://bucket", "", [])
+    fileobj = io.BytesIO()
+
+    downloader.download_fileobj("gs://bucket/file.txt", fileobj)
+    mock_blob.download_to_file.assert_called_with(fileobj)
+
+
+@mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)
+def test_azure_downloader_download_fileobj(azure_mock):
+    """Test AzureDownloader.download_fileobj method."""
+    mock_blob = MagicMock()
+    mock_blob_data = MagicMock()
+    mock_blob.download_blob.return_value = mock_blob_data
+    service_mock = MagicMock()
+    service_mock.get_blob_client.return_value = mock_blob
+
+    azure_mock.storage.blob.BlobServiceClient = MagicMock(return_value=service_mock)
+
+    downloader = AzureDownloader("azure://container", "", [])
+    fileobj = io.BytesIO()
+
+    downloader.download_fileobj("azure://container/file.txt", fileobj)
+    mock_blob_data.readinto.assert_called_with(fileobj)
