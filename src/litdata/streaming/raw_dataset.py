@@ -224,7 +224,12 @@ class CacheManager:
         self.cache_dir = self._try_create_cache_dir(self._input_dir_path, cache_dir)
         assert self.cache_dir is not None, "Cache directory must be specified or created"
         self.storage_options = storage_options or {}
-        self._downloader = None
+        self._downloader = get_downloader(
+            remote_dir=self._input_dir_path,
+            cache_dir=self.cache_dir,
+            chunks=[],
+            storage_options=self.storage_options,
+        )
 
     def _try_create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
         """Create cache directory if it doesn't exist."""
@@ -235,43 +240,44 @@ class CacheManager:
         return cache_path
 
     def get_local_path(self, file_path: str) -> str:
-        """Get local cache path maintaining class directory structure."""
+        """Map a remote or local file path to a local cache path by replacing input_dir prefix."""
         try:
-            # Remove the input directory prefix from file_path to preserve relative directory structure in cache
-            file_path = file_path.lstrip(self._input_dir_path)
-            # Ensure cache directory exists
-            os.makedirs(os.path.join(self.cache_dir, os.path.dirname(file_path)), exist_ok=True)
-            return os.path.join(self.cache_dir, file_path)
+            prefix = self._input_dir_path.rstrip("/") + "/"
+            if not file_path.startswith(prefix):
+                raise ValueError(f"file_path '{file_path}' does not start with input_dir '{prefix}'")
+
+            relative_path = file_path[len(prefix) :]  # Remove prefix only once
+
+            # Avoid starting with /
+            relative_path = relative_path.lstrip("/")
+
+            local_path = os.path.join(self.cache_dir, relative_path)
+
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            return local_path
         except Exception as e:
             logger.error(f"Error getting local path for {file_path}: {e}")
             raise
 
-    def download_file(self, file_path: str) -> str:
+    async def download_file(self, file_path: str) -> str:
         """Download file to cache and return local path."""
         local_path = self.get_local_path(file_path)
+        task = asyncio.current_task()
 
         # Return if already cached
         if os.path.exists(local_path):
+            logger.info(f"pid:{os.getpid()}:{task} File already cached: {file_path} -> {local_path}")
             return local_path
         try:
-            # Get downloader instance
-            if self._downloader is None:
-                # Initialize downloader only once
-                self._downloader = get_downloader(
-                    remote_dir=self._input_dir_path,
-                    cache_dir=self.cache_dir,
-                    chunks=[],
-                    storage_options=self.storage_options,
-                )
-
             # Download the file
-            # logger.info(f"Downloading {file_path} to {local_path}")
             self._downloader.download_file(file_path, local_path)
-            # logger.info(f"Downloaded {file_path} to {local_path}")
+            logger.info(
+                f"pid:{os.getpid()}:{task} Downloaded {file_path} to {local_path} and exists: {os.path.exists(local_path)}"
+            )
             return local_path
 
         except Exception as e:
-            logger.exception(f"Error downloading file {file_path}: {e}")
+            logger.error(f"PID: {os.getpid()}:{task} - Error downloading file {file_path}: {e}")
             return None
 
 
@@ -338,6 +344,10 @@ class StreamingRawDataset(Dataset):
         self._memory_cache = {}
         self._cache_lock = threading.RLock()
 
+        # track of prefetch_queued
+        self._prefetch_queued = set()
+        # self._download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)  # 8 threads for downloads
+
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
 
     @lru_cache(maxsize=1)
@@ -359,16 +369,26 @@ class StreamingRawDataset(Dataset):
         if index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
+        logger.info(
+            f"PID: {os.getpid()} - Accessing index {index} in processwith cache keys: {list(self._memory_cache.keys())}"
+        )
+
         # start the background thread + event loop once
         with self._lock:
             if self._loop_thread is None:
                 # Start the preloading executor in a separate thread
-                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True)
+                thread_name = f"StreamingRawDataset-PreloadLoop-pid{os.getpid()}-idx-{index}"
+                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True, name=thread_name)
                 self._loop_thread.start()
+                logger.info(
+                    f" PID: {os.getpid()}) - Started event loop thread '{self._loop_thread.name}' (Thread ID: {self._loop_thread.ident},"
+                    f" for preloading at dataset index {index}."
+                )
 
         # Check memory cache first
         with self._cache_lock:
             if index in self._memory_cache:
+                logger.info(f"PID: {os.getpid()} - Cache hit for index {index} in process {id(self)}")
                 data = self._memory_cache[index]
                 self._last_accessed = index
                 # Trigger prefetch for next items
@@ -378,15 +398,18 @@ class StreamingRawDataset(Dataset):
         # create a pre-request event and send it to the queue wit the index
         event = threading.Event()
         self._request_queue.put((index, event))
+        logger.info(f"PID: {os.getpid()} - Queued and Waiting for index {index} to be preloaded")
 
         # Wait for the event to be set by the preloading thread
         if not event.wait(timeout=self.download_timeout):
+            logger.error(f"PID: {os.getpid()} - Timeout waiting for index {index} to be preloaded")
             raise TimeoutError(f"Timeout waiting for file at index {index} to be preloaded")
 
         # Store in cache
         with self._cache_lock:
             data = self._memory_cache[index]
             self._last_accessed = index
+            self._memory_cache.pop(index, None)  # Remove from cache after access
 
         # Trigger prefetch for next items
         self._prefetch_ahead(index + 1)
@@ -409,7 +432,7 @@ class StreamingRawDataset(Dataset):
             return
 
         # Calculate how many to prefetch
-        prefetch_count = min(self.max_preload_size // 2, len(self) - start_index)
+        prefetch_count = min(self.max_preload_size, len(self) - start_index)
 
         for i in range(prefetch_count):
             idx = start_index + i
@@ -418,25 +441,40 @@ class StreamingRawDataset(Dataset):
 
             # Skip if already in cache or being fetched
             with self._cache_lock:
-                if idx in self._memory_cache:
+                if idx in self._memory_cache or idx in self._prefetch_queued:
                     continue
 
                 # Submit prefetch task
+                logger.info(f"PID: {os.getpid()} - Prefetching index {idx} in process {id(self)}")
                 self._request_queue.put((idx, None))
+                self._prefetch_queued.add(idx)
+        logger.info(
+            f"PID: {os.getpid()} - Prefetch queue size: {self._request_queue.qsize()} (queued: {len(self._prefetch_queued)}), {list(self._prefetch_queued)}"
+        )
 
     def _start_event_loop(self) -> None:
         """Event loop for handling preloading requests."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         # run the event loop until stopped
+        logger.info(
+            f"PID: {os.getpid()} - Starting event loop for preloading requests in thread {threading.current_thread().name}"
+        )
         loop.run_until_complete(self._handle_requests())
 
     async def _handle_requests(self):
         """Handle requests from the queue."""
         event_loop = asyncio.get_event_loop()
         pending_requests = set()
+        logger.info(
+            f"PID: {os.getpid()} - Request handler started in thread {threading.current_thread().name} (PID: {os.getpid()})"
+            f", addr of queue: {id(self._request_queue)}, addr of cache: {id(self._memory_cache)}"
+        )
         while True:
-            # print("Waiting for requests...")
+            logger.info(
+                f"PID: {os.getpid()} - Waiting for requests in thread {threading.current_thread().name} (Queue size: {self._request_queue.qsize()})",
+                extra={"items": list(self._request_queue.queue)},
+            )
             try:
                 index, event = await event_loop.run_in_executor(
                     None, self._request_queue.get, 0.1
@@ -445,18 +483,21 @@ class StreamingRawDataset(Dataset):
                 continue
 
             if index is None:
-                print("Received stop signal, exiting request handler")
+                logger.info(f"PID: {os.getpid()} - Stop signal received in thread {threading.current_thread().name}")
                 # Stop signal received
                 break
 
             if index < 0 or index >= len(self):
-                logger.error(f"Invalid index {index} requested")
+                logger.error(f"PID: {os.getpid()} - Invalid index {index} in thread {threading.current_thread().name}")
                 continue
 
             # Get the remote and local paths
             remote_path = self.files[index].path
             # process incoming request asynchronously to enable concurrent downloads
             task = asyncio.create_task(self._download_file(index, remote_path, event), name=f"download_task_{index}")
+            logger.info(
+                f"PID: {os.getpid()} - Created download task {task} in thread {threading.current_thread().name}"
+            )
 
             # save reference to the task result to prevent it from being garbage collected
             pending_requests.add(task)
@@ -464,15 +505,27 @@ class StreamingRawDataset(Dataset):
 
     async def _download_file(self, index: int, remote_path: str, event: threading.Event) -> str:
         """Download file asynchronously and set event data."""
+        task = asyncio.current_task()
         try:
-            event_loop = asyncio.get_event_loop()
-            local_path = await event_loop.run_in_executor(None, self.cache_manager.download_file, remote_path)
+            local_path = await self.cache_manager.download_file(remote_path)
+            # tsk = asyncio.get_event_loop().run_in_executor(
+            #     self._download_pool, self.cache_manager.download_file, remote_path
+            # )
+            # local_path = await tsk.result()
+            logger.info(
+                f"[PID:{os.getpid()}][Thread:{threading.current_thread().name}][Task:{task}] "
+                f"Downloaded file for index {index}: {remote_path} -> {local_path} (Dataset id: {id(self)})"
+            )
             with self._cache_lock:
                 self._memory_cache[index] = self._load_file(local_path)
             if event:
                 event.set()
+            self._prefetch_queued.discard(index)  # Remove from prefetch queue set
         except Exception as e:
-            logger.error(f"Error downloading file {remote_path}: {e}")
+            logger.error(
+                f"[PID:{os.getpid()}][Thread:{threading.current_thread().name}][Task:{task}] "
+                f"Error downloading file for index {index}: {e} (Dataset id: {id(self)})"
+            )
             raise
 
     def _cleanup(self):
