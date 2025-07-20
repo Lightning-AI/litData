@@ -36,6 +36,7 @@ from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_c
 logger = logging.getLogger(__name__)
 
 INDEX_METADATA_FILE = "index_metadata.json.zstd"
+SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 
 
 @dataclass(slots=True)
@@ -134,7 +135,7 @@ class FileIndexer(BaseIndexer):
         """Discover files using recursive search."""
         parsed_url = urlparse(input_dir)
 
-        if parsed_url.scheme in ("s3", "gs", "gcs"):
+        if parsed_url.scheme in SUPPORTED_PROVIDERS:
             return self._discover_cloud_files(input_dir, storage_options)
         return self._discover_local_files(input_dir)
 
@@ -371,48 +372,3 @@ class StreamingRawDataset(Dataset):
             final_results.append(result)
 
         return final_results
-
-
-if __name__ == "__main__":
-    import logging
-
-    from torch.utils.data import DataLoader
-
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
-
-    # Test the optimized dataset
-    start = time.perf_counter()
-
-    dataset = StreamingRawDataset(
-        input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-        cache_dir="optimized_cache",
-        cache_files=True,
-    )
-
-    print(f"Dataset initialized with {len(dataset)} files")
-
-    # Test single item access
-    print("Testing single item access...")
-    sample = dataset[0]
-    print(f"Single item size: {len(sample)} bytes")
-
-    # Test batch access with DataLoader
-    print("Testing batch access with DataLoader...")
-    dataloader = DataLoader(
-        dataset,
-        batch_size=4,
-        num_workers=4,  # Use main process for simplicity
-    )
-
-    for i, batch in enumerate(dataloader):
-        print(f"Batch {i}: {len(batch)} items, type {type(batch)}")
-        if i >= 10:  # Just test a few batches
-            break
-
-    end = time.perf_counter()
-    print(f"Total time: {end - start:.2f} seconds")
-    print("✅ Optimized test completed successfully!")
