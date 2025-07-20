@@ -2,7 +2,6 @@ import os
 from unittest.mock import Mock, patch
 
 import pytest
-from torch.utils.data import DataLoader
 
 from litdata.streaming.raw_dataset import (
     CacheManager,
