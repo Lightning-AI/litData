@@ -16,13 +16,11 @@ import io
 import json
 import logging
 import os
-import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from queue import Empty, Queue
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -65,7 +63,7 @@ class FileMetadata:
             path=data["path"],
             size=data["size"],
             modified_time=data.get("modified_time"),
-            metadata=(data.get("metadata") or {}).copy(),  # Ensure metadata is a copy to avoid shared references
+            metadata=data.get("metadata", {}),
         )
 
 
@@ -89,18 +87,13 @@ class BaseIndexer(ABC):
         # Check if cached index exists and is fresh
         if os.path.exists(index_path):
             try:
-                logger.info(f"Loading cached index from {index_path}")
-                # Decompress and load
                 with open(index_path, "rb") as f:
                     compressed_data = f.read()
-                json_data = zstd.decompress(compressed_data)
-                cached_data = json.loads(json_data.decode("utf-8"))
+                metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
 
-                # Verify cache key matches current configuration
-                if cached_data.get("cache_key") == self.get_cache_key():
-                    files = [FileMetadata.from_dict(file_data) for file_data in cached_data["files"]]
-                    logger.info(f"Loaded cached index with {len(files)} files from {index_path}")
-                    return files
+                if metadata.get("cache_key") == self.get_cache_key():
+                    logger.info(f"Loaded cached index with {len(metadata['files'])} files from {index_path}")
+                    return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
             except Exception as e:
                 logger.warning(f"Error loading cached index: {e}")
 
@@ -127,12 +120,7 @@ class BaseIndexer(ABC):
 
 
 class FileIndexer(BaseIndexer):
-    """File indexer that discovers files recursively by extension and depth.
-
-    - Supports both local and cloud storage (S3, GCS, etc.)
-    - Filters files by extension if provided.
-    - Uses max_depth for recursion in cloud storage.
-    """
+    """File indexer that discovers files recursively by extension and depth."""
 
     def __init__(
         self,
@@ -182,15 +170,17 @@ class FileIndexer(BaseIndexer):
         """Discover files in local filesystem."""
         path = Path(input_dir)
         all_metadata = []
-        # Use rglob for recursive search, respects max_depth by filtering
+
         for file_path in path.rglob("*"):
             if not file_path.is_file():
                 continue
+
             # Filter by depth
             if self.max_depth is not None:
                 rel_depth = len(file_path.relative_to(path).parts)
                 if rel_depth > self.max_depth:
                     continue
+
             if self._should_include_file(str(file_path)):
                 metadata = FileMetadata(
                     path=str(file_path),
@@ -198,6 +188,7 @@ class FileIndexer(BaseIndexer):
                     modified_time=file_path.stat().st_mtime,
                 )
                 all_metadata.append(metadata)
+
         return all_metadata
 
     def _should_include_file(self, file_path: str) -> bool:
@@ -219,11 +210,14 @@ class CacheManager:
         input_dir: Union[Dir, str],
         cache_dir: Optional[Union[Dir, str]] = None,
         storage_options: Optional[dict] = None,
+        cache_files: bool = False,
     ):
         self.input_dir = _resolve_dir(input_dir)
         self._input_dir_path = self.input_dir.path or self.input_dir.url
-        self.cache_dir = self._try_create_cache_dir(self._input_dir_path, cache_dir)
-        assert self.cache_dir is not None, "Cache directory must be specified or created"
+        self.cache_files = cache_files
+
+        self.cache_dir = self._create_cache_dir(self._input_dir_path, cache_dir)
+
         self.storage_options = storage_options or {}
         self._downloader = get_downloader(
             remote_dir=self._input_dir_path,
@@ -232,7 +226,7 @@ class CacheManager:
             storage_options=self.storage_options,
         )
 
-    def _try_create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
+    def _create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
         """Create cache directory if it doesn't exist."""
         if cache_dir is None:
             cache_dir = get_default_cache_dir()
@@ -241,50 +235,48 @@ class CacheManager:
         return cache_path
 
     def get_local_path(self, file_path: str) -> str:
-        """Map a remote or local file path to a local cache path by replacing input_dir prefix."""
+        """Map a remote file path to a local cache path."""
+        prefix = self._input_dir_path.rstrip("/") + "/"
+        if not file_path.startswith(prefix):
+            raise ValueError(f"File path {file_path} does not start with input dir {prefix}")
+
+        relative_path = file_path[len(prefix) :].lstrip("/")
+        local_path = os.path.join(self.cache_dir, relative_path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        return local_path
+
+    def download_file_sync(self, file_path: str) -> bytes:
+        """Download file synchronously and return content."""
+        if self.cache_files:
+            local_path = self.get_local_path(file_path)
+
+            # Check if already cached
+            if os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    return f.read()
+
+        # Download to BytesIO
+        file_obj = io.BytesIO()
         try:
-            prefix = self._input_dir_path.rstrip("/") + "/"
-            if not file_path.startswith(prefix):
-                raise ValueError(f"file_path '{file_path}' does not start with input_dir '{prefix}'")
+            self._downloader.download_fileobj(file_path, file_obj)
+            file_obj.seek(0)
+            content = file_obj.read()
 
-            relative_path = file_path[len(prefix) :]  # Remove prefix only once
+            # Cache the file only if caching is enabled
+            if self.cache_files:
+                local_path = self.get_local_path(file_path)
+                with open(local_path, "wb") as f:
+                    f.write(content)
 
-            # Avoid starting with /
-            relative_path = relative_path.lstrip("/")
-
-            local_path = os.path.join(self.cache_dir, relative_path)
-
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            return local_path
+            return content
         except Exception as e:
-            logger.error(f"Error getting local path for {file_path}: {e}")
+            logger.error(f"Error downloading file {file_path}: {e}")
             raise
 
-    async def download_file(self, file_path: str) -> io.BytesIO | None:
-        """Download file to cache and return local path."""
-        local_path = self.get_local_path(file_path)
-        task = asyncio.current_task()
-
-        # Return if already cached
-        if os.path.exists(local_path):
-            logger.info(f"pid:{os.getpid()}:{task} File already cached: {file_path} -> {local_path}")
-            return local_path
-
-        file_ob = io.BytesIO()  # Use BytesIO to avoid writing to disk first
-        file_ob.name = os.path.basename(file_path)  # Set name for debugging
-
-        try:
-            # Download the file
-            self._downloader.download_fileobj(file_path, file_ob)
-            file_ob.seek(0)  # Reset pointer to the beginning
-            logger.info(
-                f"pid:{os.getpid()}:{task} Downloaded {file_path} to {local_path} and exists: {os.path.exists(local_path)}"
-            )
-            return file_ob
-
-        except Exception as e:
-            logger.error(f"PID: {os.getpid()}:{task} - Error downloading file {file_path}: {e}")
-            return None
+    async def download_file_async(self, file_path: str) -> bytes:
+        """Download file asynchronously and return content."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.download_file_sync, file_path)
 
 
 class StreamingRawDataset(Dataset):
@@ -293,10 +285,10 @@ class StreamingRawDataset(Dataset):
     Supports any folder structure, automatically indexing individual files.
 
     Features:
-    - Fast multithreaded indexing
-    - Automatic index caching
-    - Preloading for performance
-    - PyTorch DataLoader compatible
+    - Simple synchronous __getitem__ for single items
+    - Efficient async __getitems__ for batch operations
+    - Clean resource management
+    - Minimal memory footprint
     """
 
     def __init__(
@@ -304,10 +296,8 @@ class StreamingRawDataset(Dataset):
         input_dir: Union[str, "Dir"],
         cache_dir: Optional[Union[str, "Dir"]] = None,
         indexer: Optional[BaseIndexer] = None,
-        max_preload_size: int = 64,
         storage_options: Optional[dict] = None,
-        download_timeout: int = 30,
-        **kwargs,
+        cache_files: bool = False,
     ):
         """Initialize StreamingRawDataset.
 
@@ -317,337 +307,112 @@ class StreamingRawDataset(Dataset):
             indexer: Custom file indexer (default: FileIndexer)
             max_preload_size: Maximum number of files to preload (default: 10)
             storage_options: Cloud storage options
-            download_timeout: Timeout for downloading files (default: 30 seconds)
-            **kwargs: Additional arguments
+            cache_files: Whether to cache files locally (default: False)
         """
         # Resolve directories
         self.input_dir = _resolve_dir(input_dir)
-        self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options)
+        self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options, cache_files)
 
         # Configuration
         self.indexer = indexer or FileIndexer()
-        self.max_preload_size = max_preload_size
         self.storage_options = storage_options or {}
-        self.download_timeout = download_timeout
-
-        # Preloading with adaptive performance tracking
-        self._preload_executor = None
-        self._preload_futures = {}
-        self._cache_hit_count = 0
-        self._total_requests = 0
 
         # Discover files and build index
         self.files = self.indexer.build_or_load_index(
-            self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, self.storage_options
+            self.input_dir.path or self.input_dir.url,
+            self.cache_manager.cache_dir,
+            self.storage_options,
         )
 
-        # Queue
-        self._request_queue = Queue()
-        self._loop_thread = None
-        self._lock = threading.Lock()
-
-        # Simple in-memory cache
-        self._memory_cache = {}
-        self._cache_lock = threading.RLock()
-
-        # track of prefetch_queued
-        self._prefetch_queued = set()
-        # self._download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)  # 8 threads for downloads
-
-        logger.info(f"Initialized StreamingRawDataset with {len(self.files)} samples")
+        logger.info(f"Initialized StreamingRawDataset with {len(self.files)} files")
 
     @lru_cache(maxsize=1)
     def __len__(self) -> int:
         """Return dataset size."""
         return len(self.files)
 
-    def __getitem__(self, index: int) -> Any:
-        """Get item by index."""
+    def __getitem__(self, index: int) -> bytes:
+        """Get single item by index - simple synchronous download."""
         if index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
-        logger.info(
-            f"PID: {os.getpid()} - Accessing index {index} in processwith cache keys: {list(self._memory_cache.keys())}"
-        )
+        file_path = self.files[index].path
+        return self.cache_manager.download_file_sync(file_path)
 
-        # start the background thread + event loop once
-        with self._lock:
-            if self._loop_thread is None:
-                # Start the preloading executor in a separate thread
-                thread_name = f"StreamingRawDataset-PreloadLoop-pid{os.getpid()}-idx-{index}"
-                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True, name=thread_name)
-                self._loop_thread.start()
-                logger.info(
-                    f" PID: {os.getpid()}) - Started event loop thread '{self._loop_thread.name}' (Thread ID: {self._loop_thread.ident},"
-                    f" for preloading at dataset index {index}."
-                )
-
-        # Check memory cache first
-        with self._cache_lock:
-            if index in self._memory_cache:
-                logger.info(f"PID: {os.getpid()} - Cache hit for index {index} in process {id(self)}")
-                data = self._memory_cache[index]
-                self._last_accessed = index
-                # Trigger prefetch for next items
-                self._prefetch_ahead(index + 1)
-                self._memory_cache.pop(index, None)  # Remove from cache after access
-                return data
-        # create a pre-request event and send it to the queue wit the index
-        event = threading.Event()
-        self._request_queue.put((index, event))
-        logger.info(f"PID: {os.getpid()} - Queued and Waiting for index {index} to be preloaded")
-
-        # Wait for the event to be set by the preloading thread
-        if not event.wait(timeout=self.download_timeout):
-            logger.error(f"PID: {os.getpid()} - Timeout waiting for index {index} to be preloaded")
-            raise TimeoutError(f"Timeout waiting for file at index {index} to be preloaded")
-
-        # Store in cache
-        with self._cache_lock:
-            data = self._memory_cache[index]
-            self._last_accessed = index
-            self._memory_cache.pop(index, None)  # Remove from cache after access
-
-        # Trigger prefetch for next items
-        self._prefetch_ahead(index + 1)
-
-        return data
-
-        # TODO: cleanup later
-        # file_path = self.files[index].path
-        # local_path = self.cache_manager.get_local_path(file_path)
-        # self.cache_manager.download_file(file_path)
-        # if not os.path.exists(local_path):
-        #     raise FileNotFoundError(f"File not found in cache: {local_path}")
-        # with open(local_path, "rb") as f:
-        #     data = f.read()
-        # return data
-
-    def __getitems__(self, indices: list[int]) -> list[Any]:
-        """Get multiple items by indices."""
+    def __getitems__(self, indices: list[int]) -> list[bytes]:
+        """Get multiple items efficiently using async batch download."""
         if not isinstance(indices, list):
             raise TypeError("Indices must be a list of integers")
 
-        print(f"PID: {os.getpid()} - Prefetching indices {indices}")
-
-        # start the background thread + event loop once
-        with self._lock:
-            if self._loop_thread is None:
-                # Start the preloading executor in a separate thread
-                thread_name = f"StreamingRawDataset-PreloadLoop-pid{os.getpid()}"
-                self._loop_thread = threading.Thread(target=self._start_event_loop, daemon=True, name=thread_name)
-                self._loop_thread.start()
-                logger.info(
-                    f" PID: {os.getpid()}) - Started event loop thread '{self._loop_thread.name}' (Thread ID: {self._loop_thread.ident},"
-                    f" for preloading at dataset indices {indices}."
-                )
-
-        # queue requests for all indices
+        # Validate indices
         for index in indices:
             if index >= len(self):
                 raise IndexError(f"Index {index} out of range")
-            event = threading.Event()
-            self._request_queue.put((index, event))
-        logger.info(f"PID: {os.getpid()} - Queued indices {indices} for preloading")
 
-        # wait for the last event to be set
-        if not event.wait(timeout=self.download_timeout):
-            logger.error(f"PID: {os.getpid()} - Timeout waiting for indices {indices} to be preloaded")
-            raise TimeoutError(f"Timeout waiting for files at indices {indices} to be preloaded")
+        # Run async batch download
+        return asyncio.run(self._download_batch(indices))
 
-        # Load data for all indices
-        results = []
-        with self._cache_lock:
-            for index in indices:
-                if index in self._memory_cache:
-                    data = self._memory_cache[index]
-                    results.append(data)
-                    self._memory_cache.pop(index, None)
+    async def _download_batch(self, indices: list[int]) -> list[bytes]:
+        """Download multiple files concurrently using asyncio.gather."""
+        file_paths = [self.files[index].path for index in indices]
 
-        return results
+        # Create download tasks
+        tasks = [self.cache_manager.download_file_async(file_path) for file_path in file_paths]
 
-    def _prefetch_ahead(self, start_index: int):
-        """Prefetch next files in background."""
-        if start_index >= len(self):
-            return
+        # Execute all downloads concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Calculate how many to prefetch
-        prefetch_count = min(self.max_preload_size, len(self) - start_index)
+        # Handle any exceptions
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to download file at index {indices[i]}: {result}")
+                raise result
+            final_results.append(result)
 
-        for i in range(prefetch_count):
-            idx = start_index + i
-            if idx >= len(self):
-                break
-
-            # Skip if already in cache or being fetched
-            with self._cache_lock:
-                if idx in self._memory_cache or idx in self._prefetch_queued:
-                    continue
-
-                # Submit prefetch task
-                logger.info(f"PID: {os.getpid()} - Prefetching index {idx} in process {id(self)}")
-                self._request_queue.put((idx, None))
-                self._prefetch_queued.add(idx)
-        logger.info(
-            f"PID: {os.getpid()} - Prefetch queue size: {self._request_queue.qsize()} (queued: {len(self._prefetch_queued)}), {list(self._prefetch_queued)}"
-        )
-
-    def _start_event_loop(self) -> None:
-        """Event loop for handling preloading requests."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        # run the event loop until stopped
-        logger.info(
-            f"PID: {os.getpid()} - Starting event loop for preloading requests in thread {threading.current_thread().name}"
-        )
-        loop.run_until_complete(self._handle_requests())
-
-    async def _handle_requests(self):
-        """Handle requests from the queue."""
-        event_loop = asyncio.get_event_loop()
-        pending_requests = set()
-        logger.info(
-            f"PID: {os.getpid()} - Request handler started in thread {threading.current_thread().name} (PID: {os.getpid()})"
-            f", addr of queue: {id(self._request_queue)}, addr of cache: {id(self._memory_cache)}"
-        )
-        while True:
-            logger.info(
-                f"PID: {os.getpid()} - Waiting for requests in thread {threading.current_thread().name} (Queue size: {self._request_queue.qsize()})",
-                extra={"items": list(self._request_queue.queue)},
-            )
-            try:
-                index, event = await event_loop.run_in_executor(
-                    None, self._request_queue.get, 0.1
-                )  # Non-blocking get with timeout
-            except Empty:
-                continue
-
-            if index is None:
-                logger.info(f"PID: {os.getpid()} - Stop signal received in thread {threading.current_thread().name}")
-                # Stop signal received
-                break
-
-            if index < 0 or index >= len(self):
-                logger.error(f"PID: {os.getpid()} - Invalid index {index} in thread {threading.current_thread().name}")
-                continue
-
-            # Get the remote and local paths
-            remote_path = self.files[index].path
-            # process incoming request asynchronously to enable concurrent downloads
-            task = asyncio.create_task(self._download_file(index, remote_path, event), name=f"download_task_{index}")
-            logger.info(
-                f"PID: {os.getpid()} - Created download task {task} in thread {threading.current_thread().name}"
-            )
-
-            # save reference to the task result to prevent it from being garbage collected
-            pending_requests.add(task)
-            task.add_done_callback(pending_requests.discard)
-
-    async def _download_file(self, index: int, remote_path: str, event: threading.Event) -> str:
-        """Download file asynchronously and set event data."""
-        task = asyncio.current_task()
-        try:
-            file_obj = await self.cache_manager.download_file(remote_path)
-            logger.info(
-                f"[PID:{os.getpid()}][Thread:{threading.current_thread().name}][Task:{task}] "
-                f"Downloaded file for index {index}: {remote_path} (Dataset id: {id(self)})"
-            )
-            with self._cache_lock:
-                self._memory_cache[index] = file_obj.read()  # Store file content in memory cache
-            if event:
-                event.set()
-            self._prefetch_queued.discard(index)  # Remove from prefetch queue set
-        except Exception as e:
-            logger.error(
-                f"[PID:{os.getpid()}][Thread:{threading.current_thread().name}][Task:{task}] "
-                f"Error downloading file for index {index}: {e} (Dataset id: {id(self)})"
-            )
-            raise
-
-    def _cleanup(self):
-        """Internal cleanup method."""
-        try:
-            if self._loop_thread and self._loop_thread.is_alive():
-                # Signal to stop the loop
-                self._request_queue.put((None, None))
-                # Wait for the thread to finish
-                self._loop_thread.join(timeout=2)
-                if self._loop_thread.is_alive():
-                    logger.warning("Thread did not terminate gracefully")
-        except Exception as e:
-            logger.warning(f"Error during cleanup: {e}")
-        finally:
-            self._loop_thread = None
-            self._request_queue = None
-            logger.info("StreamingRawDataset cleaned up successfully.")
-
-    def close(self):
-        """Explicitly close the dataset and clean up resources."""
-        self._cleanup()
-
-    def __enter__(self):
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        self.close()
-
-    def __del__(self):
-        """Clean up resources."""
-        self._cleanup()
+        return final_results
 
 
 if __name__ == "__main__":
-    # Example usage on litserve teamspace
-    import time
-
-    # logging.basicConfig(level=logging.INFO)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename="sample.log",
-    )
-
-    start = time.perf_counter()
-    # with StreamingRawDataset(
-    #     # input_dir="s3://imagenet-1m-template/raw/train",
-    #     input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-    #     cache_dir="cache",
-    #     max_preload_size=0,
-    # ) as dataset:
-    # print("Dataset initialized")
-    # print(f"Dataset size: {len(dataset)}")
-    # print(f"Discovered {len(dataset.files)} files", dataset.files[:1])
-    # end = time.perf_counter()
-    # print(f"Dataset loaded in {end - start:.2f} seconds")
-    # # print("sample files :", dataset.files[:3])
-    # sample = dataset[0]
-    # print("sample", type(sample))  # Access the first item to trigger preloading
-    # print("Dataset cleaned up")
-    # print("✅ Test completed")
+    import logging
 
     from torch.utils.data import DataLoader
 
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    # Test the optimized dataset
+    start = time.perf_counter()
+
     dataset = StreamingRawDataset(
         input_dir="s3://grid-cloud-litng-ai-03/projects/01jpacd4y2yza88t23wf049m0t/datasets/caltech101/101_ObjectCategories",
-        cache_dir="debug_cache",
+        cache_dir="optimized_cache",
+        cache_files=True,
     )
 
-    dl = DataLoader(
+    print(f"Dataset initialized with {len(dataset)} files")
+
+    # Test single item access
+    print("Testing single item access...")
+    sample = dataset[0]
+    print(f"Single item size: {len(sample)} bytes")
+
+    # Test batch access with DataLoader
+    print("Testing batch access with DataLoader...")
+    dataloader = DataLoader(
         dataset,
         batch_size=4,
-        # shuffle=True,
-        num_workers=4,  # Use main thread for simplicity
-        prefetch_factor=1,  # Prefetch one batch at a time
+        num_workers=4,  # Use main process for simplicity
     )
 
-    for i, batch in enumerate(dl):
-        logger.info(f"PID: {os.getpid()} - Batch {i} loaded with {len(batch)} items")
-        print(i)
-        if i >= 5:
+    for i, batch in enumerate(dataloader):
+        print(f"Batch {i}: {len(batch)} items, type {type(batch)}")
+        if i >= 10:  # Just test a few batches
             break
 
     end = time.perf_counter()
-    print(f"Dataset loaded in {end - start:.2f} seconds")
+    print(f"Total time: {end - start:.2f} seconds")
+    print("✅ Optimized test completed successfully!")
