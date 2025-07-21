@@ -42,8 +42,7 @@ jobs:
       - name: Install package & dependencies
         run: |
           uv pip install -U lightning-sdk
-          uv pip install torch torchvision torchaudio --index-url $TORCH_URL
-          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
+          uv pip install -e ".[extras]" -r requirements/test.txt -U -q --index-url $TORCH_URL
           uv pip list
 
       - name: Tests
