@@ -15,6 +15,7 @@ import os
 from time import time
 from typing import Any, Optional
 
+import aiobotocore
 import boto3
 import botocore
 from botocore.credentials import InstanceMetadataProvider
@@ -37,6 +38,7 @@ class S3Client:
         self._client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
+        self._async_client: Optional[Any] = None
 
     def _create_client(self) -> None:
         has_shared_credentials_file = (
@@ -64,6 +66,16 @@ class S3Client:
                 config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
             )
 
+    def _create_async_client(self) -> None:
+        session = aiobotocore.get_session()
+        self._async_client = session.create_client(
+            "s3",
+            **{
+                "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+                **self._storage_options,
+            },
+        )
+
     @property
     def client(self) -> Any:
         if self._client is None:
@@ -76,3 +88,9 @@ class S3Client:
             self._last_time = time()
 
         return self._client
+
+    @property
+    def async_client(self) -> Any:
+        if self._async_client is None:
+            self._create_async_client()
+        return self._async_client

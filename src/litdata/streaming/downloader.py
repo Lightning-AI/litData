@@ -22,6 +22,7 @@ from contextlib import suppress
 from typing import Any, Optional
 from urllib import parse
 
+import aiohttp
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
@@ -100,6 +101,10 @@ class Downloader(ABC):
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from remote storage directly to a file-like object."""
+        pass
+
+    async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
 
@@ -222,6 +227,32 @@ class S3Downloader(Downloader):
             fileobj,
         )
 
+    async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from S3 directly to a file-like object asynchronously."""
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "_client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        async with self._client.async_client as client:
+            response = await client.get_object(Bucket=bucket, Key=key)
+            # body = response["Body"]
+            # while True:
+            #     chunk = await body.read(1024 * 1024)
+            #     if not chunk:
+            #         break
+            #     fileobj.write(chunk)
+            # The response body is an async stream
+            async with response["Body"] as stream:
+                content = await stream.read()
+                fileobj.write(content)
+
 
 class GCPDownloader(Downloader):
     def __init__(
@@ -236,6 +267,13 @@ class GCPDownloader(Downloader):
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
 
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    @property
+    def session(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         from google.cloud import storage
@@ -304,6 +342,23 @@ class GCPDownloader(Downloader):
 
         blob.download_to_file(fileobj)
 
+    async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from GCS directly to a file-like object asynchronously."""
+        from gcloud.aio.storage import Storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        async with Storage(session=self.session, **self._storage_options) as client:
+            # The download call is now an awaitable coroutine
+            content = await client.download(bucket_name, key)
+            fileobj.write(content)
+
 
 class AzureDownloader(Downloader):
     def __init__(
@@ -361,6 +416,23 @@ class AzureDownloader(Downloader):
 
         blob_data = blob_client.download_blob()
         blob_data.readinto(fileobj)
+
+    async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
+        from azure.storage.blob.aio import BlobServiceClient
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+
+        async with BlobServiceClient(**self._storage_options) as service:
+            blob_client = service.get_blob_client(container=obj.netloc, blob=obj.path.lstrip("/"))
+
+            downloader = await blob_client.download_blob()
+            await downloader.readinto(fileobj)
 
 
 class LocalDownloader(Downloader):
