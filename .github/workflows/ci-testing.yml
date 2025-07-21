@@ -28,7 +28,7 @@ jobs:
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
     env:
-      TORCH_URL: "https://download.pytorch.org/whl/cpu"
+      UV_TORCH_BACKEND: "cpu"
 
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
       - name: Install package & dependencies
         run: |
           uv pip install -U lightning-sdk
-          uv pip install -e ".[extras]" -r requirements/test.txt -U -q --index-url $TORCH_URL
+          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
           uv pip list
 
       - name: Tests
