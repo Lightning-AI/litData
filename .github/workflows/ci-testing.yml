@@ -32,18 +32,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install uv and setup python
+        uses: astral-sh/setup-uv@v6
         with:
+          activate-environment: true
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          enable-cache: true
 
       - name: Install package & dependencies
         run: |
-          pip --version
-          pip install -U lightning-sdk
-          pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
-          pip list
+          uv pip --version
+          uv pip install -U lightning-sdk
+          uv pip install torch torchvision torchaudio --index-url $TORCH_URL
+          uv pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
+          uv pip list
 
       - name: Tests
         working-directory: tests
