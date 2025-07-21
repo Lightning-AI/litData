@@ -28,7 +28,7 @@ jobs:
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
     env:
-      TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
+      TORCH_URL: "https://download.pytorch.org/whl/cpu"
 
     steps:
       - uses: actions/checkout@v4
