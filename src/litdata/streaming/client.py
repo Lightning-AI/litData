@@ -38,7 +38,7 @@ class S3Client:
         self._client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
-        self._async_client: Optional[Any] = None
+        self._aio_session: Optional[aiobotocore.session.AioSession] = None
 
     def _create_client(self) -> None:
         has_shared_credentials_file = (
@@ -66,16 +66,6 @@ class S3Client:
                 config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
             )
 
-    def _create_async_client(self) -> None:
-        session = aiobotocore.get_session()
-        self._async_client = session.create_client(
-            "s3",
-            **{
-                "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
-                **self._storage_options,
-            },
-        )
-
     @property
     def client(self) -> Any:
         if self._client is None:
@@ -91,6 +81,14 @@ class S3Client:
 
     @property
     def async_client(self) -> Any:
-        if self._async_client is None:
-            self._create_async_client()
-        return self._async_client
+        """Create and return a new async S3 client from the session."""
+        # Lazily initialize the aiobotocore session
+        if self._aio_session is None:
+            self._aio_session = aiobotocore.session.get_session()
+        return self._aio_session.create_client(
+            "s3",
+            **{
+                "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+                **self._storage_options,
+            },
+        )
