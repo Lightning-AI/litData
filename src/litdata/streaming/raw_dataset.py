@@ -226,6 +226,8 @@ class CacheManager:
             chunks=[],
             storage_options=self.storage_options,
         )
+        self._loop = None
+        self._closed = False
 
     def _create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
         """Create cache directory if it doesn't exist."""
@@ -276,8 +278,44 @@ class CacheManager:
 
     async def download_file_async(self, file_path: str) -> bytes:
         """Download file asynchronously and return content."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.download_file_sync, file_path)
+        if self.cache_files:
+            local_path = self.get_local_path(file_path)
+
+            # Check if already cached
+            if os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    return f.read()
+
+        # Download to BytesIO
+        file_obj = io.BytesIO()
+        try:
+            await self._downloader.adownload_fileobj(file_path, file_obj)
+            file_obj.seek(0)
+            content = file_obj.read()
+
+            # Cache the file only if caching is enabled
+            if self.cache_files:
+                local_path = self.get_local_path(file_path)
+                with open(local_path, "wb") as f:
+                    f.write(content)
+
+            return content
+        except Exception as e:
+            logger.error(f"Error downloading file {file_path}: {e}")
+            raise
+
+    def __del__(self) -> None:
+        """Close the event loop when the object is destroyed."""
+        if not self._closed:
+            self.close()
+
+    def close(self) -> None:
+        """Close the downloader and the event loop."""
+        if self._closed:
+            return
+        if self._loop:
+            self._loop.run_until_complete(self._downloader.close())
+        self._closed = True
 
 
 class StreamingRawDataset(Dataset):
@@ -372,3 +410,7 @@ class StreamingRawDataset(Dataset):
             final_results.append(result)
 
         return final_results
+
+    def __del__(self) -> None:
+        """Close the cache manager when the object is destroyed."""
+        self.cache_manager.close()
