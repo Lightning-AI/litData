@@ -376,19 +376,20 @@ class StreamingRawDataset(Dataset):
         for index in indices:
             if index >= len(self):
                 raise IndexError(f"Index {index} out of range")
+        loop = asyncio.get_event_loop()
 
         # Run async batch download
-        return asyncio.run(self._download_batch(indices))
+        return loop.run_until_complete(self._download_batch(indices))
 
     async def _download_batch(self, indices: list[int]) -> list[bytes]:
         """Download multiple files concurrently using asyncio.gather."""
         file_paths = [self.files[index].path for index in indices]
 
         # Create download tasks
-        tasks = [self.cache_manager.download_file_async(file_path) for file_path in file_paths]
+        coros = [self.cache_manager.download_file_async(file_path) for file_path in file_paths]
 
         # Execute all downloads concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*coros, return_exceptions=True)
 
         # Handle any exceptions
         final_results = []
