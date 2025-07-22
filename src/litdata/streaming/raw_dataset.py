@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 import fsspec
@@ -326,6 +326,7 @@ class StreamingRawDataset(Dataset):
         indexer: Optional[BaseIndexer] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
+        transform: Optional[Callable[[Any], Any]] = None,
     ):
         """Initialize StreamingRawDataset.
 
@@ -333,9 +334,9 @@ class StreamingRawDataset(Dataset):
             input_dir: Path to dataset root (e.g. s3://bucket/dataset/)
             cache_dir: Directory for caching files (optional)
             indexer: Custom file indexer (default: FileIndexer)
-            max_preload_size: Maximum number of files to preload (default: 10)
             storage_options: Cloud storage options
             cache_files: Whether to cache files locally (default: False)
+            transform: A function to apply to each downloaded item.
         """
         # Resolve directories
         self.input_dir = _resolve_dir(input_dir)
@@ -344,6 +345,7 @@ class StreamingRawDataset(Dataset):
         # Configuration
         self.indexer = indexer or FileIndexer()
         self.storage_options = storage_options or {}
+        self.transform = transform
 
         # Discover files and build index
         self.files = self.indexer.build_or_load_index(
@@ -359,47 +361,45 @@ class StreamingRawDataset(Dataset):
         """Return dataset size."""
         return len(self.files)
 
-    def __getitem__(self, index: int) -> bytes:
+    def __getitem__(self, index: int) -> Any:
         """Get single item by index - simple synchronous download."""
         if index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
-        return self.cache_manager.download_file_sync(file_path)
+        data = self.cache_manager.download_file_sync(file_path)
+        if self.transform:
+            return self.transform(data)
+        return data
 
-    def __getitems__(self, indices: list[int]) -> list[bytes]:
+    def __getitems__(self, indices: list[int]) -> list[Any]:
         """Get multiple items efficiently using async batch download."""
-        if not isinstance(indices, list):
-            raise TypeError("Indices must be a list of integers")
+        # if not isinstance(indices, list):
+        #     raise TypeError(f"indices must be a list, not {type(indices)}")
 
-        # Validate indices
-        for index in indices:
-            if index >= len(self):
-                raise IndexError(f"Index {index} out of range")
-        loop = asyncio.get_event_loop()
+        # # Validate indices
+        # for index in indices:
+        #     if index >= len(self):
+        #         raise IndexError(f"Index {index} out of range")
 
-        # Run async batch download
-        return loop.run_until_complete(self._download_batch(indices))
+        # Since this is called from a sync context (e.g., DataLoader worker),
+        # we need to run the async code in a new event loop.
+        # loop = asyncio.get_event_loop()
+        # return loop.run_until_complete(self._getitems_async(indices))
+        return asyncio.run(self._getitems_async(indices))
 
-    async def _download_batch(self, indices: list[int]) -> list[bytes]:
-        """Download multiple files concurrently using asyncio.gather."""
+    async def _getitems_async(self, indices: list[int]) -> list[Any]:
+        """Asynchronously download and transform items."""
         file_paths = [self.files[index].path for index in indices]
+        coros = [self._process_item(path) for path in file_paths]
+        return await asyncio.gather(*coros)
 
-        # Create download tasks
-        coros = [self.cache_manager.download_file_async(file_path) for file_path in file_paths]
-
-        # Execute all downloads concurrently
-        results = await asyncio.gather(*coros, return_exceptions=True)
-
-        # Handle any exceptions
-        final_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Failed to download file at index {indices[i]}: {result}")
-                raise result
-            final_results.append(result)
-
-        return final_results
+    async def _process_item(self, file_path: str) -> Any:
+        """Download a single file and apply the transform."""
+        data = await self.cache_manager.download_file_async(file_path)
+        if self.transform:
+            return await asyncio.to_thread(self.transform, data)
+        return data
 
     def __del__(self) -> None:
         """Close the cache manager when the object is destroyed."""
