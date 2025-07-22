@@ -107,6 +107,10 @@ class Downloader(ABC):
         """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
+    async def close(self) -> None:
+        """Close any open resources."""
+        pass
+
 
 class S3Downloader(Downloader):
     def __init__(
@@ -253,6 +257,11 @@ class S3Downloader(Downloader):
                 content = await stream.read()
                 fileobj.write(content)
 
+    async def close(self) -> None:
+        """Close the S3 client."""
+        if hasattr(self, "_client") and self._client._async_client:
+            await self._client._async_client.close()
+
 
 class GCPDownloader(Downloader):
     def __init__(
@@ -355,9 +364,12 @@ class GCPDownloader(Downloader):
         key = obj.path.lstrip("/")
 
         async with Storage(session=self.session, **self._storage_options) as client:
-            # The download call is now an awaitable coroutine
-            content = await client.download(bucket_name, key)
-            fileobj.write(content)
+            await client.download(bucket_name, key, fileobj)
+
+    async def close(self) -> None:
+        """Close the aiohttp session."""
+        if self._session:
+            await self._session.close()
 
 
 class AzureDownloader(Downloader):
