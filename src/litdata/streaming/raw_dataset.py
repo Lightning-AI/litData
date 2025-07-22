@@ -29,7 +29,7 @@ import zstd
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from litdata.streaming.downloader import get_downloader
+from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 
@@ -220,14 +220,21 @@ class CacheManager:
         self.cache_dir = self._create_cache_dir(self._input_dir_path, cache_dir)
 
         self.storage_options = storage_options or {}
-        self._downloader = get_downloader(
-            remote_dir=self._input_dir_path,
-            cache_dir=self.cache_dir,
-            chunks=[],
-            storage_options=self.storage_options,
-        )
+        self._downloader: Optional[Downloader] = None
         self._loop = None
         self._closed = False
+
+    @property
+    def downloader(self) -> Downloader:
+        """Lazily initialize the downloader."""
+        if self._downloader is None:
+            self._downloader = get_downloader(
+                remote_dir=self._input_dir_path,
+                cache_dir=self.cache_dir,
+                chunks=[],
+                storage_options=self.storage_options,
+            )
+        return self._downloader
 
     def _create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
         """Create cache directory if it doesn't exist."""
@@ -252,8 +259,6 @@ class CacheManager:
         """Download file synchronously and return content."""
         if self.cache_files:
             local_path = self.get_local_path(file_path)
-
-            # Check if already cached
             if os.path.exists(local_path):
                 with open(local_path, "rb") as f:
                     return f.read()
@@ -261,27 +266,15 @@ class CacheManager:
         # Download to BytesIO
         file_obj = io.BytesIO()
         try:
-            self._downloader.download_fileobj(file_path, file_obj)
-            file_obj.seek(0)
-            content = file_obj.read()
-
-            # Cache the file only if caching is enabled
-            if self.cache_files:
-                local_path = self.get_local_path(file_path)
-                with open(local_path, "wb") as f:
-                    f.write(content)
-
-            return content
+            self.downloader.download_fileobj(file_path, file_obj)
+            return file_obj.getvalue()
         except Exception as e:
-            logger.error(f"Error downloading file {file_path}: {e}")
-            raise
+            raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
     async def download_file_async(self, file_path: str) -> bytes:
         """Download file asynchronously and return content."""
         if self.cache_files:
             local_path = self.get_local_path(file_path)
-
-            # Check if already cached
             if os.path.exists(local_path):
                 with open(local_path, "rb") as f:
                     return f.read()
@@ -289,20 +282,10 @@ class CacheManager:
         # Download to BytesIO
         file_obj = io.BytesIO()
         try:
-            await self._downloader.adownload_fileobj(file_path, file_obj)
-            file_obj.seek(0)
-            content = file_obj.read()
-
-            # Cache the file only if caching is enabled
-            if self.cache_files:
-                local_path = self.get_local_path(file_path)
-                with open(local_path, "wb") as f:
-                    f.write(content)
-
-            return content
+            await self.downloader.adownload_fileobj(file_path, file_obj)
+            return file_obj.getvalue()
         except Exception as e:
-            logger.error(f"Error downloading file {file_path}: {e}")
-            raise
+            raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
     def __del__(self) -> None:
         """Close the event loop when the object is destroyed."""
@@ -313,8 +296,14 @@ class CacheManager:
         """Close the downloader and the event loop."""
         if self._closed:
             return
+        if self._downloader:
+            if self._loop and self._loop.is_running():
+                self._loop.create_task(self._downloader.close())
+            else:
+                asyncio.run(self._downloader.close())
         if self._loop:
-            self._loop.run_until_complete(self._downloader.close())
+            self._loop.stop()
+            self._loop.close()
         self._closed = True
 
 
