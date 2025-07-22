@@ -384,11 +384,11 @@ class StreamingRawDataset(Dataset):
 
         # Since this is called from a sync context (e.g., DataLoader worker),
         # we need to run the async code in a new event loop.
-        # loop = asyncio.get_event_loop()
-        # return loop.run_until_complete(self._getitems_async(indices))
-        return asyncio.run(self._getitems_async(indices))
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(self._download_batch(indices))
+        # return asyncio.run(self._download_batch(indices))
 
-    async def _getitems_async(self, indices: list[int]) -> list[Any]:
+    async def _download_batch(self, indices: list[int]) -> list[Any]:
         """Asynchronously download and transform items."""
         file_paths = [self.files[index].path for index in indices]
         coros = [self._process_item(path) for path in file_paths]
