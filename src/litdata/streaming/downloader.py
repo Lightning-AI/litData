@@ -244,23 +244,12 @@ class S3Downloader(Downloader):
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
-        async with self._client.async_client as client:
-            response = await client.get_object(Bucket=bucket, Key=key)
-            # body = response["Body"]
-            # while True:
-            #     chunk = await body.read(1024 * 1024)
-            #     if not chunk:
-            #         break
-            #     fileobj.write(chunk)
+        async with self._client.async_client as s3_client:
+            response = await s3_client.get_object(Bucket=bucket, Key=key)
             # The response body is an async stream
             async with response["Body"] as stream:
                 content = await stream.read()
                 fileobj.write(content)
-
-    async def close(self) -> None:
-        """Close the S3 client."""
-        if hasattr(self, "_client") and self._client._async_client:
-            await self._client._async_client.close()
 
 
 class GCPDownloader(Downloader):

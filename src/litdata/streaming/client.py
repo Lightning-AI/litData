@@ -36,8 +36,10 @@ class S3Client:
         self._refetch_interval = refetch_interval
         self._last_time: Optional[float] = None
         self._client: Optional[Any] = None
+        self._async_client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
+        self._session: Optional[boto3.Session] = None
         self._aio_session: Optional[aiobotocore.session.AioSession] = None
 
     def _create_client(self) -> None:
@@ -46,8 +48,8 @@ class S3Client:
         )
 
         if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options or self._session_options:
-            session = boto3.Session(**self._session_options)  # If additional options are provided
-            self._client = session.client(
+            self._session = boto3.Session(**self._session_options)  # If additional options are provided
+            self._client = self._session.client(
                 "s3",
                 **{
                     "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
@@ -57,14 +59,36 @@ class S3Client:
         else:
             provider = InstanceMetadataProvider(iam_role_fetcher=InstanceMetadataFetcher(timeout=3600, num_attempts=5))
             credentials = provider.load()
-            session = boto3.Session()
-            self._client = session.client(
+            self._session = boto3.Session()
+            self._client = self._session.client(
                 "s3",
                 aws_access_key_id=credentials.access_key,
                 aws_secret_access_key=credentials.secret_key,
                 aws_session_token=credentials.token,
                 config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
             )
+
+    def _create_async_client(self) -> None:
+        # Get credentials from the sync client's session
+        credentials = self._session.get_credentials()
+
+        # Lazily initialize the aiobotocore session
+        if self._aio_session is None:
+            self._aio_session = aiobotocore.session.get_session()
+
+        storage_options = self._storage_options.copy()
+        if credentials:
+            storage_options["aws_access_key_id"] = credentials.access_key
+            storage_options["aws_secret_access_key"] = credentials.secret_key
+            storage_options["aws_session_token"] = credentials.token
+
+        self._async_client = self._aio_session.create_client(
+            "s3",
+            **{
+                "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+                **storage_options,
+            },
+        )
 
     @property
     def client(self) -> Any:
@@ -85,6 +109,19 @@ class S3Client:
         # Lazily initialize the aiobotocore session
         if self._aio_session is None:
             self._aio_session = aiobotocore.session.get_session()
+            # Ensure sync client is created and has fresh credentials
+            self.client
+
+            # Always create a fresh async client to avoid coroutine reuse issues
+            # but reuse the session for connection pooling
+            credentials = self._session.get_credentials()
+
+            # storage_options = self._storage_options.copy()
+            if credentials:
+                self._storage_options["aws_access_key_id"] = credentials.access_key
+                self._storage_options["aws_secret_access_key"] = credentials.secret_key
+                self._storage_options["aws_session_token"] = credentials.token
+
         return self._aio_session.create_client(
             "s3",
             **{
