@@ -244,12 +244,8 @@ class S3Downloader(Downloader):
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
-        async with self._client.async_client as s3_client:
-            response = await s3_client.get_object(Bucket=bucket, Key=key)
-            # The response body is an async stream
-            async with response["Body"] as stream:
-                content = await stream.read()
-                fileobj.write(content)
+        async with self._client.async_client as client:
+            await client.download_fileobj(bucket, key, fileobj)
 
 
 class GCPDownloader(Downloader):
@@ -353,7 +349,9 @@ class GCPDownloader(Downloader):
         key = obj.path.lstrip("/")
 
         async with Storage(session=self.session, **self._storage_options) as client:
-            await client.download(bucket_name, key, fileobj)
+            content = await client.download(bucket_name, key)
+            fileobj.write(content)
+
 
     async def close(self) -> None:
         """Close the aiohttp session."""
