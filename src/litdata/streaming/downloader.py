@@ -23,6 +23,7 @@ from typing import Any, Optional
 from urllib import parse
 
 import aiohttp
+import obstore as obs
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
@@ -244,8 +245,18 @@ class S3Downloader(Downloader):
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
-        async with self._client.async_client as client:
-            await client.download_fileobj(bucket, key, fileobj)
+        if not hasattr(self, "_store"):
+            from obstore.auth.boto3 import Boto3CredentialProvider
+            from obstore.store import S3Store
+
+            session = self._client._session
+            credential_provider = Boto3CredentialProvider(session)
+            self._store = S3Store(bucket, credential_provider=credential_provider)
+
+        resp = await obs.get_async(self._store, key)
+        stream = resp.stream(min_chunk_size=2 * 1024 * 1024)  # 5MB chunk size in stream
+        async for buf in stream:
+            fileobj.write(buf)
 
 
 class GCPDownloader(Downloader):
@@ -262,12 +273,6 @@ class GCPDownloader(Downloader):
 
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
         self._session: Optional[aiohttp.ClientSession] = None
-
-    @property
-    def session(self) -> aiohttp.ClientSession:
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-        return self._session
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         from google.cloud import storage
@@ -338,8 +343,6 @@ class GCPDownloader(Downloader):
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from GCS directly to a file-like object asynchronously."""
-        from gcloud.aio.storage import Storage
-
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -348,10 +351,20 @@ class GCPDownloader(Downloader):
         bucket_name = obj.netloc
         key = obj.path.lstrip("/")
 
-        async with Storage(session=self.session, **self._storage_options) as client:
-            content = await client.download(bucket_name, key)
-            fileobj.write(content)
+        if not hasattr(self, "_store"):
+            from google.cloud import storage
+            from obstore.auth.google import GoogleCredentialProvider
+            from obstore.store import GCSStore
 
+            client = storage.Client(**self._storage_options)
+            credentials = client._credentials
+            credential_provider = GoogleCredentialProvider(credentials=credentials)
+            self._store = GCSStore(bucket_name, credential_provider=credential_provider)
+
+        resp = await obs.get_async(self._store, key)
+        stream = resp.stream(min_chunk_size=2 * 1024 * 1024)  # 5MB chunk size in stream
+        async for buf in stream:
+            fileobj.write(buf)
 
     async def close(self) -> None:
         """Close the aiohttp session."""
