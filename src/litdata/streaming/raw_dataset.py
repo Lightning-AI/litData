@@ -250,22 +250,6 @@ class CacheManager:
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         return local_path
 
-    def download_file_sync(self, file_path: str) -> bytes:
-        """Download file synchronously and return content."""
-        if self.cache_files:
-            local_path = self.get_local_path(file_path)
-            if os.path.exists(local_path):
-                with open(local_path, "rb") as f:
-                    return f.read()
-
-        # Download to BytesIO
-        file_obj = io.BytesIO()
-        try:
-            self.downloader.download_fileobj(file_path, file_obj)
-            return file_obj.getvalue()
-        except Exception as e:
-            raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
-
     async def download_file_async(self, file_path: str) -> bytes:
         """Download file asynchronously and return content."""
         if self.cache_files:
@@ -362,26 +346,16 @@ class StreamingRawDataset(Dataset):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
-        data = self.cache_manager.download_file_sync(file_path)
+        loop = asyncio.get_event_loop()
+        data = loop.run_until_complete(self.cache_manager.download_file_async(file_path))
         if self.transform:
             return self.transform(data)
         return data
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
         """Get multiple items efficiently using async batch download."""
-        # if not isinstance(indices, list):
-        #     raise TypeError(f"indices must be a list, not {type(indices)}")
-
-        # # Validate indices
-        # for index in indices:
-        #     if index >= len(self):
-        #         raise IndexError(f"Index {index} out of range")
-
-        # Since this is called from a sync context (e.g., DataLoader worker),
-        # we need to run the async code in a new event loop.
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self._download_batch(indices))
-        # return asyncio.run(self._download_batch(indices))
 
     async def _download_batch(self, indices: list[int]) -> list[Any]:
         """Asynchronously download and transform items."""
