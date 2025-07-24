@@ -25,7 +25,6 @@ from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 from torch.utils.data import Dataset
-from tqdm import tqdm
 
 from litdata.constants import _ASYNCIO_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
 from litdata.streaming.downloader import Downloader, get_downloader
