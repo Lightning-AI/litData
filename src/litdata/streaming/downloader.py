@@ -108,10 +108,6 @@ class Downloader(ABC):
         """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
-    async def close(self) -> None:
-        """Close any open resources."""
-        pass
-
 
 class S3Downloader(Downloader):
     def __init__(

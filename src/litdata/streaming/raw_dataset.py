@@ -284,25 +284,6 @@ class CacheManager:
         except Exception as e:
             raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
-    def __del__(self) -> None:
-        """Close the event loop when the object is destroyed."""
-        if not self._closed:
-            self.close()
-
-    def close(self) -> None:
-        """Close the downloader and the event loop."""
-        if self._closed:
-            return
-        if self._downloader:
-            if self._loop and self._loop.is_running():
-                self._loop.create_task(self._downloader.close())
-            else:
-                asyncio.run(self._downloader.close())
-        if self._loop:
-            self._loop.stop()
-            self._loop.close()
-        self._closed = True
-
 
 class StreamingRawDataset(Dataset):
     """Stream raw files from cloud storage with fast indexing and caching.
@@ -385,7 +366,3 @@ class StreamingRawDataset(Dataset):
         if self.transform:
             return await asyncio.to_thread(self.transform, data)
         return data
-
-    def __del__(self) -> None:
-        """Close the cache manager when the object is destroyed."""
-        self.cache_manager.close()
