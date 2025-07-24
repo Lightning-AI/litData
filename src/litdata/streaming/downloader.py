@@ -223,12 +223,15 @@ class S3Downloader(Downloader):
             from obstore.store import S3Store
 
             session = self._client._session
+            print(f"Using session options: {session}")  # Debugging line
             credential_provider = Boto3CredentialProvider(session)
             self._store = S3Store(bucket, credential_provider=credential_provider)
         return self._store
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from S3 directly to a file-like object."""
+        import obstore as obs
+
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
@@ -236,15 +239,15 @@ class S3Downloader(Downloader):
 
         bucket = obj.netloc
         key = obj.path.lstrip("/")
+
         store = self._get_store(bucket)
-
-        import obstore as obs
-
         resp = obs.get(store, key)
         fileobj.write(resp.bytes())
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from S3 directly to a file-like object asynchronously."""
+        import obstore as obs
+
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
@@ -254,9 +257,6 @@ class S3Downloader(Downloader):
         key = obj.path.lstrip("/")
 
         store = self._get_store(bucket)
-
-        import obstore as obs
-
         resp = await obs.get_async(store, key)
         stream = resp.stream(min_chunk_size=2 * 1024 * 1024)
         async for buf in stream:
@@ -342,6 +342,8 @@ class GCPDownloader(Downloader):
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from GCS directly to a file-like object."""
+        import obstore as obs
+
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -351,14 +353,13 @@ class GCPDownloader(Downloader):
         key = obj.path.lstrip("/")
 
         store = self._get_store(bucket_name)
-
-        import obstore as obs
-
         resp = obs.get(store, key)
         fileobj.write(resp.bytes())
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from GCS directly to a file-like object asynchronously."""
+        import obstore as obs
+
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -368,9 +369,6 @@ class GCPDownloader(Downloader):
         key = obj.path.lstrip("/")
 
         store = self._get_store(bucket_name)
-
-        import obstore as obs
-
         resp = await obs.get_async(store, key)
         stream = resp.stream(min_chunk_size=2 * 1024 * 1024)
         async for buf in stream:
