@@ -18,7 +18,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
@@ -45,16 +45,12 @@ class FileMetadata:
 
     path: str
     size: int
-    modified_time: Optional[float] = None
-    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "path": self.path,
             "size": self.size,
-            "modified_time": self.modified_time,
-            "metadata": self.metadata,
         }
 
     @classmethod
@@ -63,8 +59,6 @@ class FileMetadata:
         return cls(
             path=data["path"],
             size=data["size"],
-            modified_time=data.get("modified_time"),
-            metadata=data.get("metadata", {}),
         )
 
 
@@ -108,6 +102,7 @@ class BaseIndexer(ABC):
         try:
             metadata = {
                 "cache_key": self.get_cache_key(),
+                "source": input_dir,
                 "files": [file.to_dict() for file in files],
                 "created_at": time.time(),
             }
@@ -153,15 +148,11 @@ class FileIndexer(BaseIndexer):
                 continue
 
             file_path = file_info["name"]
-            modified_time = file_info.get("LastModified")
-            modified_time = modified_time.timestamp() if modified_time else None
 
             if self._should_include_file(file_path):
                 metadata = FileMetadata(
                     path=f"{parsed_url.scheme}://{file_path}",
                     size=file_info.get("size", 0),
-                    modified_time=modified_time,
-                    metadata={"etag": file_info.get("ETag")},
                 )
                 all_metadata.append(metadata)
 
@@ -186,7 +177,6 @@ class FileIndexer(BaseIndexer):
                 metadata = FileMetadata(
                     path=str(file_path),
                     size=file_path.stat().st_size,
-                    modified_time=file_path.stat().st_mtime,
                 )
                 all_metadata.append(metadata)
 
