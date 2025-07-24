@@ -234,9 +234,6 @@ class S3Downloader(Downloader):
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        if not hasattr(self, "_client"):
-            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
-
         bucket = obj.netloc
         key = obj.path.lstrip("/")
         store = self._get_store(bucket)
