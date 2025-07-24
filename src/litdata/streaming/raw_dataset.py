@@ -25,7 +25,6 @@ from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 import fsspec
-import zstd
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -77,12 +76,12 @@ class BaseIndexer(ABC):
         self, input_dir: str, cache_dir: str, storage_options: dict[str, Any]
     ) -> list[FileMetadata]:
         """Build or load cached file index using ZSTD compression."""
-        index_path = os.path.join(cache_dir, "index.json.zstd")
         if not _ZSTD_AVAILABLE:
-            raise ModuleNotFoundError(
-                "ZSTD compression is required to use dataset indexing. "
-                "Please install the zstd package by running: pip install zstd"
-            )
+            raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
+
+        import zstd
+
+        index_path = os.path.join(cache_dir, "index.json.zstd")
 
         # Check if cached index exists and is fresh
         if os.path.exists(index_path):
