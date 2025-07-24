@@ -29,13 +29,13 @@ import zstd
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from litdata.constants import _ZSTD_AVAILABLE
 from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 
 logger = logging.getLogger(__name__)
 
-INDEX_METADATA_FILE = "index_metadata.json.zstd"
 SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 
 
@@ -77,7 +77,12 @@ class BaseIndexer(ABC):
         self, input_dir: str, cache_dir: str, storage_options: dict[str, Any]
     ) -> list[FileMetadata]:
         """Build or load cached file index using ZSTD compression."""
-        index_path = os.path.join(cache_dir, INDEX_METADATA_FILE)
+        index_path = os.path.join(cache_dir, "index.json.zstd")
+        if not _ZSTD_AVAILABLE:
+            raise ModuleNotFoundError(
+                "ZSTD compression is required to use dataset indexing. "
+                "Please install the zstd package by running: pip install zstd"
+            )
 
         # Check if cached index exists and is fresh
         if os.path.exists(index_path):
