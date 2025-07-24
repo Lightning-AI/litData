@@ -52,7 +52,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
         return Dir()
 
     if not isinstance(dir_path, (str, Path)):
-        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {dir_path}")
+        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {type(dir_path)}")
 
     if isinstance(dir_path, str):
         cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
@@ -67,6 +67,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     dir_path_absolute = str(Path(dir_path).absolute().resolve())
     dir_path = str(dir_path)  # Convert to string if it was a Path object
 
+    # Handle special teamspace paths
     if dir_path_absolute.startswith("/teamspace/studios/this_studio"):
         return Dir(path=dir_path_absolute, url=None)
 
