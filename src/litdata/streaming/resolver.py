@@ -18,6 +18,7 @@ import shutil
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
@@ -36,6 +37,11 @@ class Dir:
 
     path: Optional[str] = None
     url: Optional[str] = None
+
+
+class CloudProvider(str, Enum):
+    AWS = "aws"
+    GCP = "gcp"
 
 
 def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
@@ -104,6 +110,7 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
     # Get the ids from env variables
     cluster_id = os.getenv("LIGHTNING_CLUSTER_ID", None)
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    provider = os.getenv("LIGHTNING_CLOUD_PROVIDER", CloudProvider.AWS)
 
     if cluster_id is None:
         raise RuntimeError("The `LIGHTNING_CLUSTER_ID` couldn't be found from the environment variables.")
@@ -126,12 +133,19 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
             f"We didn't find a matching cluster associated with the id {target_cloud_space[0].cluster_id}."
         )
 
-    bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+    if provider == CloudProvider.AWS:
+        bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+        scheme = "s3"
+    elif provider == CloudProvider.GCP:
+        bucket_name = target_cluster[0].spec.google_cloud_v1.bucket_name
+        scheme = "gs"
+    else:
+        raise ValueError(f"Unsupported cloud provider: {provider}. Supported providers are AWS and GCP.")
 
     return Dir(
         path=dir_path,
         url=os.path.join(
-            f"s3://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
+            f"{scheme}://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
             *dir_path.split("/")[4:],
         ),
     )
