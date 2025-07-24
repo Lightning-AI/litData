@@ -18,6 +18,7 @@ import shutil
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
@@ -38,6 +39,11 @@ class Dir:
     url: Optional[str] = None
 
 
+class CloudProvider(str, Enum):
+    AWS = "aws"
+    GCP = "gcp"
+
+
 def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if isinstance(dir_path, Dir):
         return Dir(path=str(dir_path.path) if dir_path.path else None, url=str(dir_path.url) if dir_path.url else None)
@@ -46,7 +52,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
         return Dir()
 
     if not isinstance(dir_path, (str, Path)):
-        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {dir_path}")
+        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {type(dir_path)}")
 
     if isinstance(dir_path, str):
         cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
@@ -61,6 +67,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     dir_path_absolute = str(Path(dir_path).absolute().resolve())
     dir_path = str(dir_path)  # Convert to string if it was a Path object
 
+    # Handle special teamspace paths
     if dir_path_absolute.startswith("/teamspace/studios/this_studio"):
         return Dir(path=dir_path_absolute, url=None)
 
@@ -73,8 +80,14 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if dir_path_absolute.startswith("/teamspace/s3_connections") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_s3_connections(dir_path_absolute)
 
+    if dir_path_absolute.startswith("/teamspace/gcs_connections") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_gcs_connections(dir_path_absolute)
+
     if dir_path_absolute.startswith("/teamspace/s3_folders") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_s3_folders(dir_path_absolute)
+
+    if dir_path_absolute.startswith("/teamspace/gcs_folders") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_gcs_folders(dir_path_absolute)
 
     if dir_path_absolute.startswith("/teamspace/datasets") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_datasets(dir_path_absolute)
@@ -104,6 +117,7 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
     # Get the ids from env variables
     cluster_id = os.getenv("LIGHTNING_CLUSTER_ID", None)
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    provider = os.getenv("LIGHTNING_CLOUD_PROVIDER", CloudProvider.AWS)
 
     if cluster_id is None:
         raise RuntimeError("The `LIGHTNING_CLUSTER_ID` couldn't be found from the environment variables.")
@@ -126,12 +140,19 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
             f"We didn't find a matching cluster associated with the id {target_cloud_space[0].cluster_id}."
         )
 
-    bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+    if provider == CloudProvider.AWS:
+        bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+        scheme = "s3"
+    elif provider == CloudProvider.GCP:
+        bucket_name = target_cluster[0].spec.google_cloud_v1.bucket_name
+        scheme = "gs"
+    else:
+        raise ValueError(f"Unsupported cloud provider: {provider}. Supported providers are AWS and GCP.")
 
     return Dir(
         path=dir_path,
         url=os.path.join(
-            f"s3://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
+            f"{scheme}://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
             *dir_path.split("/")[4:],
         ),
     )
@@ -159,6 +180,28 @@ def _resolve_s3_connections(dir_path: str) -> Dir:
     return Dir(path=dir_path, url=os.path.join(data_connection[0].aws.source, *dir_path.split("/")[4:]))
 
 
+def _resolve_gcs_connections(dir_path: str) -> Dir:
+    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+
+    client = LightningClient(max_tries=2)
+
+    # Get the ids from env variables
+    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    if project_id is None:
+        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
+
+    target_name = dir_path.split("/")[3]
+
+    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
+
+    data_connection = [dc for dc in data_connections if dc.name == target_name]
+
+    if not data_connection:
+        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
+
+    return Dir(path=dir_path, url=os.path.join(data_connection[0].gcp.source, *dir_path.split("/")[4:]))
+
+
 def _resolve_s3_folders(dir_path: str) -> Dir:
     from lightning_sdk.lightning_cloud.rest_client import LightningClient
 
@@ -179,6 +222,28 @@ def _resolve_s3_folders(dir_path: str) -> Dir:
         raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
 
     return Dir(path=dir_path, url=os.path.join(data_connection[0].s3_folder.source, *dir_path.split("/")[4:]))
+
+
+def _resolve_gcs_folders(dir_path: str) -> Dir:
+    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+
+    client = LightningClient(max_tries=2)
+
+    # Get the ids from env variables
+    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    if project_id is None:
+        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
+
+    target_name = dir_path.split("/")[3]
+
+    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
+
+    data_connection = [dc for dc in data_connections if dc.name == target_name]
+
+    if not data_connection:
+        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
+
+    return Dir(path=dir_path, url=os.path.join(data_connection[0].gcs_folder.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_datasets(dir_path: str) -> Dir:
