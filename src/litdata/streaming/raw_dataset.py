@@ -160,7 +160,7 @@ class FileIndexer(BaseIndexer):
 
             pbar = _tqdm(
                 desc="Discovering files",
-                unit=" obj",
+                unit=" files",
             )
 
         for file_batch in stream:
