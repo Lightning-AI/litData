@@ -35,7 +35,6 @@ class S3Client:
         self._refetch_interval = refetch_interval
         self._last_time: Optional[float] = None
         self._client: Optional[Any] = None
-        self._async_client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
         self._session: Optional[boto3.Session] = None
