@@ -1,4 +1,4 @@
-name: CI testing
+name: CI Testing
 
 # see: https://help.github.com/en/actions/reference/events-that-trigger-workflows
 on: # Trigger the workflow on push or pull request, but only for the main branch
@@ -28,22 +28,22 @@ jobs:
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
     env:
-      TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
+      UV_TORCH_BACKEND: "cpu"
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install uv and setup python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v6
         with:
+          activate-environment: true
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          enable-cache: true
 
       - name: Install package & dependencies
         run: |
-          pip --version
-          pip install -U lightning-sdk
-          pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
-          pip list
+          uv pip install -U lightning-sdk
+          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
+          uv pip list
 
       - name: Tests
         working-directory: tests
