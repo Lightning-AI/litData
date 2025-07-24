@@ -22,6 +22,7 @@ from contextlib import suppress
 from typing import Any, Optional
 from urllib import parse
 
+import boto3
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
@@ -214,16 +215,13 @@ class S3Downloader(Downloader):
 
     def _get_store(self, bucket: str):
         """Return an obstore S3Store instance for the given bucket, initializing if needed."""
-        if not hasattr(self, "_client"):
-            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
                 raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
             from obstore.auth.boto3 import Boto3CredentialProvider
             from obstore.store import S3Store
 
-            session = self._client._session
-            print(f"Using session options: {session}")  # Debugging line
+            session = boto3.Session(**self._storage_options, **self.session_options)
             credential_provider = Boto3CredentialProvider(session)
             self._store = S3Store(bucket, credential_provider=credential_provider)
         return self._store
