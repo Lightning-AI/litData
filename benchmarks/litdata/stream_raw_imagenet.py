@@ -34,7 +34,7 @@ def deserialize_jpeg(data: bytes) -> torch.Tensor:
     from PIL import Image
 
     img = Image.open(io.BytesIO(data)).convert("RGB")
-    return T.pil_to_tensor(img)
+    return pil_to_tensor(img)
 
 
 class StreamingRawImageDataset(StreamingRawDataset):
