@@ -37,7 +37,6 @@ class S3Client:
         self._client: Optional[Any] = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
-        self._session: Optional[boto3.Session] = None
 
     def _create_client(self) -> None:
         has_shared_credentials_file = (
@@ -45,8 +44,8 @@ class S3Client:
         )
 
         if has_shared_credentials_file or not _IS_IN_STUDIO or self._storage_options or self._session_options:
-            self._session = boto3.Session(**self._session_options)  # If additional options are provided
-            self._client = self._session.client(
+            session = boto3.Session(**self._session_options)  # If additional options are provided
+            self._client = session.client(
                 "s3",
                 **{
                     "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
@@ -56,8 +55,8 @@ class S3Client:
         else:
             provider = InstanceMetadataProvider(iam_role_fetcher=InstanceMetadataFetcher(timeout=3600, num_attempts=5))
             credentials = provider.load()
-            self._session = boto3.Session()
-            self._client = self._session.client(
+            session = boto3.Session()
+            self._client = session.client(
                 "s3",
                 aws_access_key_id=credentials.access_key,
                 aws_secret_access_key=credentials.secret_key,
