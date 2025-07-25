@@ -1604,8 +1604,11 @@ Speed to stream raw Imagenet 1.2M from different cloud storage providers:
 
 | Storage | Images / s (without transform) | Images / s (with transform) |
 |---------|-------------------|----------------|
-|AWS S3      | ~6400 +/- 100     | ~3200 +/- 100  |
-| Google Cloud Storage      | ~5650 +/- 100     | ~3100 +/- 100  |
+| AWS S3  | ~6400 +/- 100     | ~3200 +/- 100  |
+| Google Cloud Storage | ~5650 +/- 100     | ~3100 +/- 100  |
+
+> **Note:**
+> Use `StreamingRawDataset` if you want to stream your data as-is. Use `StreamingDataset` if you want the fastest streaming and are okay with optimizing your data first.
 
 &nbsp;
 
