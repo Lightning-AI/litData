@@ -106,14 +106,13 @@ def main():
         print(f"[INFO] Running in TENSOR mode with dtype={dtype}")
 
     print("[INFO] Indexing dataset...")
-
+    start_idx = time.perf_counter()
     dataset = StreamingRawImageDataset(
         input_dir=args.input_dir,
         cache_dir=args.cache_dir,
         transform=get_transform(dtype) if not args.bytes else None,
     )
 
-    start_idx = time.perf_counter()
     length = len(dataset)
     print(f"[INFO] Indexed {length} samples in {time.perf_counter() - start_idx:.2f}s")
 
