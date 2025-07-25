@@ -167,7 +167,7 @@ class FileIndexer(BaseIndexer):
         if _TQDM_AVAILABLE:
             pbar.close()
 
-        all_metadata = []
+        metadatas = []
         for file_info in files:
             remote_file_path = file_info["path"]
 
@@ -176,13 +176,13 @@ class FileIndexer(BaseIndexer):
                     path=f"{obj.scheme}://{bucket}/{remote_file_path}",
                     size=file_info.get("size", 0),
                 )
-                all_metadata.append(metadata)
-        return all_metadata
+                metadatas.append(metadata)
+        return metadatas
 
     def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
         """Discover files in local filesystem."""
         path = Path(input_dir)
-        all_metadata = []
+        metadatas = []
 
         for file_path in path.rglob("*"):
             if not file_path.is_file():
@@ -193,9 +193,9 @@ class FileIndexer(BaseIndexer):
                     path=str(file_path),
                     size=file_path.stat().st_size,
                 )
-                all_metadata.append(metadata)
+                metadatas.append(metadata)
 
-        return all_metadata
+        return metadatas
 
     def _should_include_file(self, file_path: str) -> bool:
         """Check if file should be included based on extension filters."""
