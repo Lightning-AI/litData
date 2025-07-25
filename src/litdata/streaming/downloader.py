@@ -255,7 +255,7 @@ class S3Downloader(Downloader):
 
         store = self._get_store(bucket)
         resp = await obs.get_async(store, key)
-        return await resp.buffer_async()
+        return await resp.bytes_async()
 
 
 class GCPDownloader(Downloader):
@@ -367,7 +367,7 @@ class GCPDownloader(Downloader):
 
         store = self._get_store(bucket_name)
         resp = await obs.get_async(store, key)
-        return await resp.buffer_async()
+        return await resp.bytes_async()
 
 
 class AzureDownloader(Downloader):
@@ -456,7 +456,7 @@ class AzureDownloader(Downloader):
 
         store = self._get_store(bucket_name)
         resp = await obs.get_async(store, key)
-        return await resp.buffer_async()
+        return await resp.bytes_async()
 
 
 class LocalDownloader(Downloader):
