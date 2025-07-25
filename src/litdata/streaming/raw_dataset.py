@@ -164,7 +164,7 @@ class FileIndexer(BaseIndexer):
             if _TQDM_AVAILABLE:
                 pbar.update(len(file_batch))
 
-        file_metadata_list = []
+        all_metadata = []
         for file_info in files:
             remote_file_path = file_info["path"]
 
@@ -173,8 +173,8 @@ class FileIndexer(BaseIndexer):
                     path=f"{obj.scheme}://{bucket}/{remote_file_path}",
                     size=file_info.get("size", 0),
                 )
-                file_metadata_list.append(metadata)
-        return file_metadata_list
+                all_metadata.append(metadata)
+        return all_metadata
 
     def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
         """Discover files in local filesystem."""
