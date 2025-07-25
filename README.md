@@ -207,6 +207,18 @@ ld.map(
 
 Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
 
+**Prerequisites:**
+
+Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+
+```bash
+# For Amazon S3
+pip install "litdata[extra]" s3fs
+
+# For Google Cloud Storage
+pip install "litdata[extra]" gcsfs
+```
+
 **Usage Example:**
 ```python
 from litdata.streaming.raw_dataset import StreamingRawDataset
