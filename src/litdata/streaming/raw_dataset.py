@@ -79,7 +79,7 @@ class BaseIndexer(ABC):
 
         index_path = os.path.join(cache_dir, "index.json.zstd")
 
-        # Check if cached index exists and is fresh
+        # Try loading cached index if it exists
         if os.path.exists(index_path):
             try:
                 with open(index_path, "rb") as f:
@@ -88,7 +88,7 @@ class BaseIndexer(ABC):
 
                 return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
             except Exception as e:
-                logger.exception(f"Error loading cached index: {e}")
+                logger.warning(f"Error loading cached index: {e}")
 
         # Build fresh index
         logger.info(f"Building index for {input_dir} at {index_path}")
@@ -127,7 +127,13 @@ class FileIndexer(BaseIndexer):
 
         if parsed_url.scheme in SUPPORTED_PROVIDERS:
             return self._discover_cloud_files(input_dir, downloader)
-        return self._discover_local_files(input_dir)
+
+        if not parsed_url.scheme or parsed_url.scheme == "file":
+            return self._discover_local_files(input_dir)
+
+        raise ValueError(
+            f"Unsupported input directory scheme: {parsed_url.scheme}. Supported schemes are: {SUPPORTED_PROVIDERS}"
+        )
 
     def _discover_cloud_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
         """Discover files in cloud storage."""
