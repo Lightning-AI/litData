@@ -91,6 +91,7 @@ class BaseIndexer(ABC):
             raise ValueError(f"No files found in {input_dir}")
 
         # Cache the index with ZSTD compression
+        # TODO: upload the index to cloud storage
         try:
             metadata = {
                 "source": input_dir,
@@ -320,6 +321,7 @@ class StreamingRawDataset(Dataset):
         self.files = self.indexer.build_or_load_index(
             self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, storage_options
         )
+        # TODO: Grouping of files as needed by user, e.g., by image, label, etc.
 
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} files")
 
