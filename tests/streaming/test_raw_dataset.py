@@ -1,7 +1,6 @@
 import os
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-import mock
 import pytest
 from torch.utils.data import DataLoader
 
@@ -190,7 +189,7 @@ def test_get_local_path(tmp_path):
     assert local_path.startswith(manager.cache_dir)
 
 
-@mock.patch("litdata.streaming.raw_dataset.get_downloader")
+@patch("litdata.streaming.raw_dataset.get_downloader")
 def test_download_file_sync(mock_get_downloader, tmp_path):
     """Test synchronous file download without caching."""
     # Setup mock downloader
