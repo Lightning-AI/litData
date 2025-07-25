@@ -97,7 +97,7 @@ class BaseIndexer(ABC):
             }
             with open(os.path.join(index_path), "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
-        except Exception as e:
+        except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
             logger.warning(f"Error caching index: {e}")
 
         logger.info(f"Built index with {len(files)} files from {input_dir} at {index_path}")
