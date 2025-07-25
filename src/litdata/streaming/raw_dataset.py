@@ -98,7 +98,7 @@ class BaseIndexer(ABC):
                 "files": [file.to_dict() for file in files],
                 "created_at": time.time(),
             }
-            with open(os.path.join(index_path), "wb") as f:
+            with open(index_path, "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
         except (OSError, zstd.ZstdError) as e:
             logger.warning(f"Error caching index to {index_path}: {e}")
