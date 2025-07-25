@@ -4,6 +4,7 @@ cryptography==45.0.4
 mosaicml-streaming==0.11.0
 torchaudio >=2.7.0
 pytest ==8.4.*
+pytest-asyncio>=1.0.0
 pytest-cov ==6.1.1
 pytest-timeout ==2.4.0
 pytest-rerunfailures ==14.0
