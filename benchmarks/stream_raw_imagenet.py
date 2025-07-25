@@ -9,8 +9,7 @@ from contextlib import suppress
 import torch
 import torchvision.transforms.v2 as T
 from torch.utils.data import DataLoader
-from torchvision.io import ImageReadMode, decode_jpeg
-from torchvision.transforms.functional import pil_to_tensor
+from torchvision.io import ImageReadMode, decode_image, decode_jpeg
 from tqdm import tqdm
 
 from litdata.streaming.raw_dataset import StreamingRawDataset
@@ -27,14 +26,9 @@ def deserialize_jpeg(data: bytes) -> torch.Tensor:
     """Deserialize JPEG bytes to a tensor."""
     arr = torch.frombuffer(data, dtype=torch.uint8)
     with suppress(RuntimeError):
-        return decode_jpeg(arr, mode=ImageReadMode.RGB)  # RGB
+        return decode_jpeg(arr, mode=ImageReadMode.RGB)
 
-    import io
-
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(data)).convert("RGB")
-    return pil_to_tensor(img)
+    return decode_image(arr, mode=ImageReadMode.RGB)
 
 
 class StreamingRawImageDataset(StreamingRawDataset):
