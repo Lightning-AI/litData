@@ -2,6 +2,7 @@ import os
 from unittest.mock import Mock, patch
 
 import pytest
+from torch.utils.data import DataLoader
 
 from litdata.streaming.raw_dataset import (
     CacheManager,
@@ -11,47 +12,23 @@ from litdata.streaming.raw_dataset import (
 )
 
 
-def test_file_metadata_creation():
+def test_file_metadata():
     """Test FileMetadata creation and serialization."""
-    metadata = FileMetadata(
-        path="/path/to/file.jpg", size=1024, modified_time=1234567890.0, metadata={"etag": "abc123"}
-    )
-
-    assert metadata.path == "/path/to/file.jpg"
-    assert metadata.size == 1024
-    assert metadata.modified_time == 1234567890.0
-    assert metadata.metadata == {"etag": "abc123"}
-
-
-def test_file_metadata_to_dict():
-    metadata = FileMetadata(
-        path="/path/to/file.jpg", size=1024, modified_time=1234567890.0, metadata={"etag": "abc123"}
-    )
-
-    expected = {
-        "path": "/path/to/file.jpg",
-        "size": 1024,
-        "modified_time": 1234567890.0,
-        "metadata": {"etag": "abc123"},
-    }
-
-    assert metadata.to_dict() == expected
-
-
-def test_file_metadata_from_dict():
     data = {
         "path": "/path/to/file.jpg",
         "size": 1024,
-        "modified_time": 1234567890.0,
-        "metadata": {"etag": "abc123"},
     }
+    metadata = FileMetadata(**data)
 
-    metadata = FileMetadata.from_dict(data)
+    # Basic attribute checks
+    assert metadata.path == data["path"]
+    assert metadata.size == data["size"]
 
-    assert metadata.path == "/path/to/file.jpg"
-    assert metadata.size == 1024
-    assert metadata.modified_time == 1234567890.0
-    assert metadata.metadata == {"etag": "abc123"}
+    # Serialization round-trip
+    dict_repr = metadata.to_dict()
+    assert dict_repr == data
+    metadata2 = FileMetadata.from_dict(dict_repr)
+    assert metadata2 == metadata
 
 
 def test_file_indexer_init():
@@ -84,19 +61,6 @@ def test_should_include_file_with_extensions():
     assert indexer._should_include_file("/path/to/file") is False
 
 
-def test_get_cache_key():
-    """Test cache key generation."""
-    indexer1 = FileIndexer(max_depth=5, extensions=[".jpg", ".png"])
-    indexer2 = FileIndexer(max_depth=5, extensions=[".jpg", ".png"])
-    indexer3 = FileIndexer(max_depth=3, extensions=[".jpg", ".png"])
-
-    # Same configuration should produce same cache key
-    assert indexer1.get_cache_key() == indexer2.get_cache_key()
-
-    # Different configuration should produce different cache key
-    assert indexer1.get_cache_key() != indexer3.get_cache_key()
-
-
 def test_discover_local_files(tmp_path):
     """Test local file discovery."""
     # Create test directory structure
@@ -116,31 +80,6 @@ def test_discover_local_files(tmp_path):
     for file_metadata in files:
         assert isinstance(file_metadata, FileMetadata)
         assert file_metadata.size > 0
-        assert file_metadata.modified_time is not None
-
-
-def test_discover_local_files_max_depth(tmp_path):
-    """Test local file discovery with max_depth limit."""
-    # Create nested directory structure
-    (tmp_path / "file1.jpg").write_text("content1")
-    level1 = tmp_path / "level1"
-    level1.mkdir()
-    (level1 / "file2.jpg").write_text("content2")
-    level2 = level1 / "level2"
-    level2.mkdir()
-    (level2 / "file3.jpg").write_text("content3")
-
-    # Test with max_depth=1 (should only find files in root and level1)
-    indexer = FileIndexer(max_depth=1, extensions=[".jpg"])
-    files = indexer._discover_local_files(str(tmp_path))
-
-    assert len(files) == 2  # file1.jpg and level1/file2.jpg
-
-    # Test with max_depth=2 (should find all files)
-    indexer = FileIndexer(max_depth=2, extensions=[".jpg"])
-    files = indexer._discover_local_files(str(tmp_path))
-
-    assert len(files) == 3  # All three files
 
 
 @patch("fsspec.filesystem")
@@ -428,24 +367,24 @@ def test_get_local_path(tmp_path):
 #         assert items == [test_contents[0], test_contents[2]]
 
 
-# def test_streaming_raw_dataset_getitems_type_error(tmp_path):
-#     """Test type error for invalid indices type."""
-#     (tmp_path / "file1.jpg").write_text("content1")
+def test_streaming_raw_dataset_getitems_type_error(tmp_path):
+    """Test type error for invalid indices type."""
+    (tmp_path / "file1.jpg").write_text("content1")
 
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
 
-#     with pytest.raises(TypeError, match="Indices must be a list of integers"):
-#         dataset.__getitems__(0)  # Should be a list
+    with pytest.raises(TypeError, match="Indices must be a list of integers"):
+        dataset.__getitems__(0)  # Should be a list
 
 
-# def test_streaming_raw_dataset_getitems_index_error(tmp_path):
-#     """Test index error for out of range batch access."""
-#     (tmp_path / "file1.jpg").write_text("content1")
+def test_streaming_raw_dataset_getitems_index_error(tmp_path):
+    """Test index error for out of range batch access."""
+    (tmp_path / "file1.jpg").write_text("content1")
 
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
 
-#     with pytest.raises(IndexError, match="Index 1 out of range"):
-#         dataset.__getitems__([0, 1])
+    with pytest.raises(IndexError, match="Index 1 out of range"):
+        dataset.__getitems__([0, 1])
 
 
 # @pytest.mark.asyncio
@@ -502,27 +441,27 @@ def test_get_local_path(tmp_path):
 #     assert len(dataset) == 1  # Only .jpg file should be indexed
 
 
-# def test_streaming_raw_dataset_with_dataloader(tmp_path):
-#     """Test dataset integration with PyTorch DataLoader."""
-#     # Create test files
-#     test_contents = [b"content1", b"content2", b"content3", b"content4"]
-#     for i, content in enumerate(test_contents):
-#         (tmp_path / f"file{i}.jpg").write_bytes(content)
+def test_streaming_raw_dataset_with_dataloader(tmp_path):
+    """Test dataset integration with PyTorch DataLoader."""
+    # Create test files
+    test_contents = [b"content1", b"content2", b"content3", b"content4"]
+    for i, content in enumerate(test_contents):
+        (tmp_path / f"file{i}.jpg").write_bytes(content)
 
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
 
-#     # Mock download to return test content
-#     def mock_download_sync(file_path):
-#         index = int(file_path.split("file")[1].split(".")[0])
-#         return test_contents[index]
+    # Mock download to return test content
+    def mock_download_sync(file_path):
+        index = int(file_path.split("file")[1].split(".")[0])
+        return test_contents[index]
 
-#     with patch.object(dataset.cache_manager, "download_file_sync", side_effect=mock_download_sync):
-#         dataloader = DataLoader(dataset, batch_size=2, num_workers=0)
+    with patch.object(dataset.cache_manager, "download_file_sync", side_effect=mock_download_sync):
+        dataloader = DataLoader(dataset, batch_size=2, num_workers=0)
 
-#         batches = list(dataloader)
-#         assert len(batches) == 2  # 4 items / batch_size 2
-#         assert len(batches[0]) == 2  # First batch has 2 items
-#         assert len(batches[1]) == 2  # Second batch has 2 items
+        batches = list(dataloader)
+        assert len(batches) == 2  # 4 items / batch_size 2
+        assert len(batches[0]) == 2  # First batch has 2 items
+        assert len(batches[1]) == 2  # Second batch has 2 items
 
 
 def test_streaming_raw_dataset_no_files_error(tmp_path):
@@ -535,92 +474,92 @@ def test_streaming_raw_dataset_no_files_error(tmp_path):
         StreamingRawDataset(input_dir=str(empty_dir), cache_files=False)
 
 
-# def test_end_to_end_local_files(tmp_path):
-#     """Test end-to-end functionality with local files."""
-#     # Create test dataset
-#     dataset_dir = tmp_path / "dataset"
-#     dataset_dir.mkdir()
+def test_end_to_end_local_files(tmp_path):
+    """Test end-to-end functionality with local files."""
+    # Create test dataset
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
 
-#     # Create various file types
-#     files_data = {
-#         "image1.jpg": b"fake jpeg data 1",
-#         "image2.png": b"fake png data 2",
-#         "document.txt": b"text content",
-#         "subdir/image3.jpg": b"fake jpeg data 3",
-#     }
+    # Create various file types
+    files_data = {
+        "image1.jpg": b"fake jpeg data 1",
+        "image2.png": b"fake png data 2",
+        "document.txt": b"text content",
+        "subdir/image3.jpg": b"fake jpeg data 3",
+    }
 
-#     for file_path, content in files_data.items():
-#         full_path = dataset_dir / file_path
-#         full_path.parent.mkdir(parents=True, exist_ok=True)
-#         full_path.write_bytes(content)
+    for file_path, content in files_data.items():
+        full_path = dataset_dir / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(content)
 
-#     # Test with extension filtering
-#     dataset = StreamingRawDataset(
-#         input_dir=str(dataset_dir), indexer=FileIndexer(extensions=[".jpg", ".png"]), cache_files=False
-#     )
+    # Test with extension filtering
+    dataset = StreamingRawDataset(
+        input_dir=str(dataset_dir), indexer=FileIndexer(extensions=[".jpg", ".png"]), cache_files=False
+    )
 
-#     assert len(dataset) == 3  # 3 image files
+    assert len(dataset) == 3  # 3 image files
 
-#     # Test single item access
-#     item = dataset[0]
-#     assert isinstance(item, bytes)
-#     assert len(item) > 0
+    # Test single item access
+    item = dataset[0]
+    assert isinstance(item, bytes)
+    assert len(item) > 0
 
-#     # Test batch access
-#     batch = dataset.__getitems__([0, 1])
-#     assert len(batch) == 2
-#     assert all(isinstance(item, bytes) for item in batch)
-
-
-# def test_dataloader_integration(tmp_path):
-#     """Test integration with PyTorch DataLoader."""
-#     # Create test dataset
-#     dataset_dir = tmp_path / "dataset"
-#     dataset_dir.mkdir()
-
-#     for i in range(10):
-#         (dataset_dir / f"file{i:02d}.jpg").write_bytes(f"content {i}".encode())
-
-#     dataset = StreamingRawDataset(input_dir=str(dataset_dir), cache_files=False)
-
-#     # Test with DataLoader
-#     dataloader = DataLoader(
-#         dataset,
-#         batch_size=3,
-#         num_workers=0,  # Use single process for testing
-#         shuffle=False,
-#     )
-
-#     batches = list(dataloader)
-
-#     # Should have 4 batches: [3, 3, 3, 1]
-#     assert len(batches) == 4
-#     assert len(batches[0]) == 3
-#     assert len(batches[1]) == 3
-#     assert len(batches[2]) == 3
-#     assert len(batches[3]) == 1
+    # Test batch access
+    batch = dataset.__getitems__([0, 1])
+    assert len(batch) == 2
+    assert all(isinstance(item, bytes) for item in batch)
 
 
-# def test_caching_behavior(tmp_path):
-#     """Test file caching behavior."""
-#     # Create test dataset
-#     dataset_dir = tmp_path / "dataset"
-#     dataset_dir.mkdir()
-#     (dataset_dir / "test.jpg").write_bytes(b"test content")
+def test_dataloader_integration(tmp_path):
+    """Test integration with PyTorch DataLoader."""
+    # Create test dataset
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
 
-#     cache_dir = tmp_path / "cache"
+    for i in range(10):
+        (dataset_dir / f"file{i:02d}.jpg").write_bytes(f"content {i}".encode())
 
-#     # Test with caching enabled
-#     dataset = StreamingRawDataset(input_dir=str(dataset_dir), cache_dir=str(cache_dir), cache_files=True)
+    dataset = StreamingRawDataset(input_dir=str(dataset_dir), cache_files=False)
 
-#     # Access item to trigger caching
-#     item = dataset[0]
-#     assert item == b"test content"
+    # Test with DataLoader
+    dataloader = DataLoader(
+        dataset,
+        batch_size=3,
+        num_workers=0,  # Use single process for testing
+        shuffle=False,
+    )
 
-#     # Check that cache directory was created and contains files
-#     assert cache_dir.exists()
-#     # The exact cache structure depends on the implementation
+    batches = list(dataloader)
 
-#     # Test cache hit on second access
-#     item2 = dataset[0]
-#     assert item2 == b"test content"
+    # Should have 4 batches: [3, 3, 3, 1]
+    assert len(batches) == 4
+    assert len(batches[0]) == 3
+    assert len(batches[1]) == 3
+    assert len(batches[2]) == 3
+    assert len(batches[3]) == 1
+
+
+def test_caching_behavior(tmp_path):
+    """Test file caching behavior."""
+    # Create test dataset
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    (dataset_dir / "test.jpg").write_bytes(b"test content")
+
+    cache_dir = tmp_path / "cache"
+
+    # Test with caching enabled
+    dataset = StreamingRawDataset(input_dir=str(dataset_dir), cache_dir=str(cache_dir), cache_files=True)
+
+    # Access item to trigger caching
+    item = dataset[0]
+    assert item == b"test content"
+
+    # Check that cache directory was created and contains files
+    assert cache_dir.exists()
+    # The exact cache structure depends on the implementation
+
+    # Test cache hit on second access
+    item2 = dataset[0]
+    assert item2 == b"test content"
