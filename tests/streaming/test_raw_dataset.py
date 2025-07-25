@@ -121,6 +121,7 @@ def test_discover_cloud_files_s3(mock_filesystem):
     assert all(isinstance(f, FileMetadata) for f in files)
     assert all(f.path.startswith("s3://") for f in files)
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_build_or_load_index_creates_new(tmp_path):
     """Test that build_or_load_index creates a new index when none exists."""
@@ -139,6 +140,7 @@ def test_build_or_load_index_creates_new(tmp_path):
     # Check that index file was created
     index_file = cache_dir / "index.json.zstd"
     assert index_file.exists()
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_build_or_load_index_loads_existing(tmp_path):
@@ -174,6 +176,7 @@ def test_cache_manager_init_with_caching(tmp_path):
     assert manager.cache_files is True
     assert manager.cache_dir is not None
     assert os.path.exists(manager.cache_dir)
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_get_local_path(tmp_path):
@@ -211,6 +214,7 @@ def test_download_file_sync(mock_get_downloader, tmp_path):
 
     assert content == b"test content"
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem(tmp_path):
     """Test single item access."""
@@ -223,6 +227,7 @@ def test_streaming_raw_dataset_getitem(tmp_path):
         item = dataset[0]
         assert item == test_content
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem_index_error(tmp_path):
     """Test index error for out of range access."""
@@ -232,6 +237,7 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
 
     with pytest.raises(IndexError, match="Index 1 out of range"):
         dataset[1]
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitems(tmp_path):
@@ -249,6 +255,7 @@ def test_streaming_raw_dataset_getitems(tmp_path):
         items = dataset.__getitems__([0, 2])
         assert items == [test_contents[0], test_contents[2]]
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitems_type_error(tmp_path):
     """Test type error for invalid indices type."""
@@ -259,6 +266,7 @@ def test_streaming_raw_dataset_getitems_type_error(tmp_path):
     with pytest.raises(TypeError):
         dataset.__getitems__(0)  # Should be a list
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitems_index_error(tmp_path):
     """Test index error for out of range batch access."""
@@ -268,6 +276,7 @@ def test_streaming_raw_dataset_getitems_index_error(tmp_path):
 
     with pytest.raises(IndexError, match="list index out of range"):
         dataset.__getitems__([0, 1])
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_with_custom_indexer(tmp_path):
@@ -281,6 +290,7 @@ def test_streaming_raw_dataset_with_custom_indexer(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path), indexer=custom_indexer, cache_files=False)
 
     assert len(dataset) == 1  # Only .jpg file should be indexed
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_transform(tmp_path):
@@ -296,6 +306,7 @@ def test_streaming_raw_dataset_transform(tmp_path):
     with patch.object(dataset.cache_manager, "download_file_sync", return_value=test_content):
         item = dataset[0]
         assert item == "raw_transformed"
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_with_dataloader(tmp_path):
@@ -319,6 +330,7 @@ def test_streaming_raw_dataset_with_dataloader(tmp_path):
         assert len(batches) == 2  # 4 items / batch_size 2
         assert len(batches[0]) == 2  # First batch has 2 items
         assert len(batches[1]) == 2  # Second batch has 2 items
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_no_files_error(tmp_path):
