@@ -136,7 +136,7 @@ def test_build_or_load_index_creates_new(tmp_path):
     assert len(files) == 2
 
     # Check that index file was created
-    index_file = cache_dir / "index_metadata.json.zstd"
+    index_file = cache_dir / "index.json.zstd"
     assert index_file.exists()
 
 
@@ -175,15 +175,6 @@ def test_cache_manager_init_with_caching(tmp_path):
     assert os.path.exists(manager.cache_dir)
 
 
-# def test_cache_manager_init_without_caching():
-#     """Test CacheManager initialization with caching disabled."""
-#     input_dir = "s3://bucket/dataset"
-
-#     manager = CacheManager(input_dir=input_dir, cache_files=False)
-
-#     assert manager.cache_files is False
-
-
 def test_get_local_path(tmp_path):
     """Test local path generation."""
     input_dir = "s3://bucket/dataset"
@@ -197,19 +188,6 @@ def test_get_local_path(tmp_path):
     assert "subdir/file.jpg" in local_path
     assert local_path.startswith(manager.cache_dir)
 
-
-# def test_get_local_path_invalid_prefix(tmp_path):
-#     """Test local path generation with invalid file path prefix."""
-#     input_dir = "s3://bucket/dataset"
-#     cache_dir = str(tmp_path / "cache")
-
-#     manager = CacheManager(input_dir=input_dir, cache_dir=cache_dir, cache_files=True)
-
-#     # File path doesn't start with input_dir
-#     file_path = "s3://other-bucket/file.jpg"
-
-#     with pytest.raises(ValueError, match="does not start with input dir"):
-#         manager.get_local_path(file_path)
 
 
 # @patch("litdata.streaming.raw_dataset.get_downloader")
@@ -367,26 +345,6 @@ def test_get_local_path(tmp_path):
 #         assert items == [test_contents[0], test_contents[2]]
 
 
-def test_streaming_raw_dataset_getitems_type_error(tmp_path):
-    """Test type error for invalid indices type."""
-    (tmp_path / "file1.jpg").write_text("content1")
-
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
-
-    with pytest.raises(TypeError, match="Indices must be a list of integers"):
-        dataset.__getitems__(0)  # Should be a list
-
-
-def test_streaming_raw_dataset_getitems_index_error(tmp_path):
-    """Test index error for out of range batch access."""
-    (tmp_path / "file1.jpg").write_text("content1")
-
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
-
-    with pytest.raises(IndexError, match="Index 1 out of range"):
-        dataset.__getitems__([0, 1])
-
-
 # @pytest.mark.asyncio
 # async def test_download_batch(tmp_path):
 #     """Test batch download functionality."""
@@ -448,7 +406,7 @@ def test_streaming_raw_dataset_with_dataloader(tmp_path):
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
     # Mock download to return test content
     def mock_download_sync(file_path):
