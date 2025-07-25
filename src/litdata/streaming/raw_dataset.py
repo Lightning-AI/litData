@@ -233,16 +233,16 @@ class CacheManager:
         os.makedirs(cache_path, exist_ok=True)
         return cache_path
 
-    def get_local_path(self, file_path: str) -> str:
+    def get_local_path(self, remote_file_path: str) -> str:
         """Convert remote file path to its local cache location."""
-        prefix = self._input_dir_path.rstrip("/") + "/"
-        if not file_path.startswith(prefix):
-            raise ValueError(f"File path {file_path} does not start with input dir {prefix}")
+        remote_base_path = self._input_dir_path.rstrip("/") + "/"
+        if not remote_file_path.startswith(remote_base_path):
+            raise ValueError(f"File path {remote_file_path} does not start with input dir {remote_base_path}")
 
-        relative_path = file_path[len(prefix) :].lstrip("/")
-        local_path = os.path.join(self.cache_dir, relative_path)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        return local_path
+        relative_path = remote_file_path[len(remote_base_path) :]
+        local_path = Path(self.cache_dir) / relative_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        return str(local_path)
 
     async def download_file_async(self, file_path: str) -> bytes:
         """Asynchronously download and return file content."""
