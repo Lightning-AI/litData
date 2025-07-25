@@ -446,7 +446,7 @@ class AzureDownloader(Downloader):
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
-        from azure.storage.blob.aio import BlobServiceClient
+        import obstore as obs
 
         obj = parse.urlparse(remote_filepath)
 
@@ -455,11 +455,14 @@ class AzureDownloader(Downloader):
                 f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
             )
 
-        async with BlobServiceClient(**self._storage_options) as service:
-            blob_client = service.get_blob_client(container=obj.netloc, blob=obj.path.lstrip("/"))
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
 
-            downloader = await blob_client.download_blob()
-            await downloader.readinto(fileobj)
+        store = self._get_store(bucket_name)
+        resp = await obs.get_async(store, key)
+        stream = resp.stream(min_chunk_size=2 * 1024 * 1024)
+        async for buf in stream:
+            fileobj.write(buf)
 
 
 class LocalDownloader(Downloader):
