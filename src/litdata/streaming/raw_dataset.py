@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 
 
-@dataclass(slots=True)
+@dataclass
 class FileMetadata:
     """Metadata for a single file in the dataset."""
 
