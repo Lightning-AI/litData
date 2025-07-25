@@ -1559,8 +1559,8 @@ map(
 # Benchmarks
 In this section we show benchmarks for speed to optimize a dataset and the resulting streaming speed ([Reproduce the benchmark](https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries)).
 
-## Streaming speed
-
+## Streaming speed 
+### LitData Chunks
 Data optimized and streamed with LitData achieves a 20x speed up over non optimized data and 2x speed up over other streaming solutions.
 
 Speed to stream Imagenet 1.2M from AWS S3:
@@ -1596,6 +1596,16 @@ Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
 | ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
 | ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
 | ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
+### Raw Dataset
+
+Speed to stream raw Imagenet 1.2M from different cloud storage providers:
+
+
+| Storage | Images / s (without transform) | Images / s (with transform) |
+|---------|-------------------|----------------|
+|AWS S3      | ~6400 +/- 100     | ~3200 +/- 100  |
+| Google Cloud Storage      | ~5650 +/- 100     | ~3100 +/- 100  |
 
 &nbsp;
 
