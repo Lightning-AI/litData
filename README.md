@@ -205,7 +205,7 @@ ld.map(
   <summary>✅ Stream raw datasets from cloud storage (beta)</summary>
   &nbsp;
 
-Efficiently stream raw files (images, text, etc.) directly from S3, GCS, or other cloud storage—no preprocessing or conversion needed. Perfect for workflows where you need immediate access to original files.
+Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any preprocessing or conversion. Ideal for workflows requiring instant access to original data in its native format.
 
 **Usage Example:**
 ```python
