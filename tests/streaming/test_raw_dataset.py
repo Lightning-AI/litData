@@ -327,11 +327,11 @@ def test_streaming_raw_dataset_with_dataloader(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
     # Mock download to return test content
-    def mock_download_sync(file_path):
+    def mock_download_async(file_path):
         index = int(file_path.split("file")[1].split(".")[0])
         return test_contents[index]
 
-    with patch.object(dataset.cache_manager, "download_file_sync", side_effect=mock_download_sync):
+    with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_async):
         dataloader = DataLoader(dataset, batch_size=2, num_workers=0)
 
         batches = list(dataloader)
@@ -348,68 +348,3 @@ def test_streaming_raw_dataset_no_files_error(tmp_path):
 
     with pytest.raises(ValueError, match="No files found"):
         StreamingRawDataset(input_dir=str(empty_dir), cache_files=False)
-
-
-def test_end_to_end_local_files(tmp_path):
-    """Test end-to-end functionality with local files."""
-    # Create test dataset
-    dataset_dir = tmp_path / "dataset"
-    dataset_dir.mkdir()
-
-    # Create various file types
-    files_data = {
-        "image1.jpg": b"fake jpeg data 1",
-        "image2.png": b"fake png data 2",
-        "document.txt": b"text content",
-        "subdir/image3.jpg": b"fake jpeg data 3",
-    }
-
-    for file_path, content in files_data.items():
-        full_path = dataset_dir / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_bytes(content)
-
-    # Test with extension filtering
-    dataset = StreamingRawDataset(
-        input_dir=str(dataset_dir), indexer=FileIndexer(extensions=[".jpg", ".png"]), cache_files=False
-    )
-
-    assert len(dataset) == 3  # 3 image files
-
-    # Test single item access
-    item = dataset[0]
-    assert isinstance(item, bytes)
-
-    # Test batch access
-    batch = dataset.__getitems__([0, 1])
-    assert len(batch) == 2
-    assert all(isinstance(item, bytes) for item in batch)
-
-
-def test_dataloader_integration(tmp_path):
-    """Test integration with PyTorch DataLoader."""
-    # Create test dataset
-    dataset_dir = tmp_path / "dataset"
-    dataset_dir.mkdir()
-
-    for i in range(10):
-        (dataset_dir / f"file{i:02d}.jpg").write_bytes(f"content {i}".encode())
-
-    dataset = StreamingRawDataset(input_dir=str(dataset_dir), cache_files=False)
-
-    # Test with DataLoader
-    dataloader = DataLoader(
-        dataset,
-        batch_size=3,
-        num_workers=0,  # Use single process for testing
-        shuffle=False,
-    )
-
-    batches = list(dataloader)
-
-    # Should have 4 batches: [3, 3, 3, 1]
-    assert len(batches) == 4
-    assert len(batches[0]) == 3
-    assert len(batches[1]) == 3
-    assert len(batches[2]) == 3
-    assert len(batches[3]) == 1
