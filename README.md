@@ -202,6 +202,28 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
+  <summary>✅ Stream raw datasets from cloud storage (beta)</summary>
+  &nbsp;
+
+Efficiently stream raw files (images, text, etc.) directly from S3, GCS, or other cloud storage—no preprocessing or conversion needed. Perfect for workflows where you need immediate access to original files.
+
+**Usage Example:**
+```python
+from litdata.streaming.raw_dataset import StreamingRawDataset
+from torch.utils.data import DataLoader
+
+dataset = StreamingRawDataset("s3://bucket/files/")
+
+# Use with PyTorch DataLoader
+loader = DataLoader(dataset, batch_size=32)
+for batch in loader:
+    # Each item is raw bytes
+    pass
+```
+
+> Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+</details>
+<details>
   <summary> ✅ Stream large cloud datasets</summary>
 &nbsp;
 
