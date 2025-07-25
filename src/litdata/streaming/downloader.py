@@ -209,6 +209,25 @@ class S3Downloader(Downloader):
 
         return response["Body"].read()
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from S3 directly to a file-like object."""
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "_client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        self._client.client.download_fileobj(
+            bucket,
+            key,
+            fileobj,
+        )
+
     def _get_store(self, bucket: str):
         """Return an obstore S3Store instance for the given bucket, initializing if needed."""
         if not hasattr(self, "_store"):
@@ -221,22 +240,6 @@ class S3Downloader(Downloader):
             credential_provider = Boto3CredentialProvider(session)
             self._store = S3Store(bucket, credential_provider=credential_provider)
         return self._store
-
-    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
-        """Download a file from S3 directly to a file-like object."""
-        import obstore as obs
-
-        obj = parse.urlparse(remote_filepath)
-
-        if obj.scheme != "s3":
-            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
-
-        bucket = obj.netloc
-        key = obj.path.lstrip("/")
-
-        store = self._get_store(bucket)
-        resp = obs.get(store, key)
-        fileobj.write(resp.bytes())
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from S3 directly to a file-like object asynchronously."""
@@ -320,6 +323,24 @@ class GCPDownloader(Downloader):
 
         return blob.download_as_bytes(start=offset, end=end)
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from GCS directly to a file-like object."""
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        blob.download_to_file(fileobj)
+
     def _get_store(self, bucket: str):
         """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
         if not hasattr(self, "_store"):
@@ -333,22 +354,6 @@ class GCPDownloader(Downloader):
             credential_provider = GoogleCredentialProvider(credentials=client._credentials)
             self._store = GCSStore(bucket, credential_provider=credential_provider)
         return self._store
-
-    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
-        """Download a file from GCS directly to a file-like object."""
-        import obstore as obs
-
-        obj = parse.urlparse(remote_filepath)
-
-        if obj.scheme != "gs":
-            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
-
-        bucket_name = obj.netloc
-        key = obj.path.lstrip("/")
-
-        store = self._get_store(bucket_name)
-        resp = obs.get(store, key)
-        fileobj.write(resp.bytes())
 
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from GCS directly to a file-like object asynchronously."""
