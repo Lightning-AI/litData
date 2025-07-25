@@ -212,10 +212,10 @@ Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Az
 Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
 
 ```bash
-# For Amazon S3
+# for aws s3
 pip install "litdata[extra]" s3fs
 
-# For Google Cloud Storage
+# for gcloud storage
 pip install "litdata[extra]" gcsfs
 ```
 
