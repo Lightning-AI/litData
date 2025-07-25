@@ -264,8 +264,7 @@ class CacheManager:
         if self.cache_files:
             local_path = self.get_local_path(file_path)
             if os.path.exists(local_path):
-                with open(local_path, "rb") as f:
-                    return f.read()
+                return await asyncio.to_thread(Path(local_path).read_bytes)
 
         # Download to BytesIO
         file_obj = io.BytesIO()
