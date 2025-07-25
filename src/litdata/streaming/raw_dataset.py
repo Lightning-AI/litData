@@ -164,6 +164,9 @@ class FileIndexer(BaseIndexer):
             if _TQDM_AVAILABLE:
                 pbar.update(len(file_batch))
 
+        if _TQDM_AVAILABLE:
+            pbar.close()
+
         all_metadata = []
         for file_info in files:
             remote_file_path = file_info["path"]
