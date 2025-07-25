@@ -88,7 +88,7 @@ class BaseIndexer(ABC):
 
                 return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
             except Exception as e:
-                logger.warning(f"Error loading cached index: {e}")
+                logger.warning(f"Failed to load cached index from {index_path}: {e}")
 
         # Build fresh index
         logger.info(f"Building index for {input_dir} at {index_path}")
