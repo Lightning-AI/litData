@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from abc import ABC
 from contextlib import suppress
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib import parse
 
 import boto3
@@ -104,7 +104,7 @@ class Downloader(ABC):
         """Download a file from remote storage directly to a file-like object."""
         pass
 
-    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+    async def adownload_fileobj(self, remote_filepath: str) -> Any:
         """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
@@ -228,7 +228,7 @@ class S3Downloader(Downloader):
             fileobj,
         )
 
-    def _get_store(self, bucket: str):
+    def _get_store(self, bucket: str) -> Any:
         """Return an obstore S3Store instance for the given bucket, initializing if needed."""
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
@@ -241,7 +241,7 @@ class S3Downloader(Downloader):
             self._store = S3Store(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+    async def adownload_fileobj(self, remote_filepath: str) -> Any:
         """Download a file from S3 directly to a file-like object asynchronously."""
         import obstore as obs
 
@@ -339,7 +339,7 @@ class GCPDownloader(Downloader):
 
         blob.download_to_file(fileobj)
 
-    def _get_store(self, bucket: str):
+    def _get_store(self, bucket: str) -> Any:
         """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
@@ -427,7 +427,7 @@ class AzureDownloader(Downloader):
         blob_data = blob_client.download_blob()
         blob_data.readinto(fileobj)
 
-    def _get_store(self, bucket: str):
+    def _get_store(self, bucket: str) -> Any:
         """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
@@ -440,7 +440,7 @@ class AzureDownloader(Downloader):
             self._store = AzureStore(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+    async def adownload_fileobj(self, remote_filepath: str) -> Any:
         """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
         import obstore as obs
 
