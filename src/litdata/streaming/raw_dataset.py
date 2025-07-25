@@ -79,7 +79,7 @@ class BaseIndexer(ABC):
                 metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
 
                 return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
-            except Exception as e:
+            except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
                 logger.warning(f"Failed to load cached index from {index_path}: {e}")
 
         # Build fresh index
@@ -97,8 +97,8 @@ class BaseIndexer(ABC):
             }
             with open(os.path.join(index_path), "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
-        except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
-            logger.warning(f"Error caching index: {e}")
+        except (OSError, zstd.ZstdError) as e:
+            logger.warning(f"Error caching index to {index_path}: {e}")
 
         logger.info(f"Built index with {len(files)} files from {input_dir} at {index_path}")
         return files
