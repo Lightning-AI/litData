@@ -39,6 +39,7 @@ else:
 logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = ("s3", "gs")
 
+
 @dataclass(slots=True)
 class FileMetadata:
     """Metadata for a single file in the dataset."""
@@ -69,10 +70,6 @@ class BaseIndexer(ABC):
     def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
         """Discover files and return metadata."""
 
-    @abstractmethod
-    def get_cache_key(self) -> str:
-        """Get a unique cache key for this indexer configuration."""
-
     def build_or_load_index(self, input_dir: str, cache_dir: str, downloader: Downloader) -> list[FileMetadata]:
         """Build or load cached file index using ZSTD compression."""
         if not _ZSTD_AVAILABLE:
@@ -89,11 +86,9 @@ class BaseIndexer(ABC):
                     compressed_data = f.read()
                 metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
 
-                if metadata.get("cache_key") == self.get_cache_key():
-                    logger.info(f"Loaded cached index with {len(metadata['files'])} files from {index_path}")
-                    return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
+                return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
             except Exception as e:
-                logger.warning(f"Error loading cached index: {e}")
+                logger.exception(f"Error loading cached index: {e}")
 
         # Build fresh index
         logger.info(f"Building index for {input_dir} at {index_path}")
@@ -104,7 +99,6 @@ class BaseIndexer(ABC):
         # Cache the index with ZSTD compression
         try:
             metadata = {
-                "cache_key": self.get_cache_key(),
                 "source": input_dir,
                 "files": [file.to_dict() for file in files],
                 "created_at": time.time(),
@@ -204,11 +198,6 @@ class FileIndexer(BaseIndexer):
         """Check if file should be included based on extension filters."""
         file_ext = Path(file_path).suffix.lower()
         return not self.extensions or file_ext in self.extensions
-
-    def get_cache_key(self) -> str:
-        """Get a unique cache key for this indexer configuration."""
-        config_str = f"{self.max_depth}_{'_'.join(self.extensions) if self.extensions else 'all'}"
-        return generate_md5_hash(config_str)
 
 
 class CacheManager:
