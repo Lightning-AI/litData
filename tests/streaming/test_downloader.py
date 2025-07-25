@@ -1,5 +1,6 @@
 # ruff: noqa: S604
 import contextlib
+import io
 import os
 import sys
 from unittest import mock
@@ -349,3 +350,101 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 
     # Verify that hf_hub_download was not called
     mock_hf_hub_download.assert_not_called()
+
+
+# Test cases for download_fileobj method
+def test_s3_downloader_download_fileobj():
+    with mock.patch("os.system", return_value=1), mock.patch("litdata.streaming.downloader.S3Client") as S3ClientMock:
+        mock_client = MagicMock()
+        S3ClientMock.return_value.client = mock_client
+
+        downloader = S3Downloader("s3://bucket", "", [])
+        fileobj = io.BytesIO()
+
+        downloader.download_fileobj("s3://bucket/file.txt", fileobj)
+        mock_client.download_fileobj.assert_called_once_with("bucket", "file.txt", fileobj)
+
+
+@mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
+def test_gcp_downloader_download_fileobj(google_mock):
+    mock_client = MagicMock()
+    mock_bucket = MagicMock()
+    mock_blob = MagicMock()
+
+    google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
+    mock_client.bucket = MagicMock(return_value=mock_bucket)
+    mock_bucket.blob = MagicMock(return_value=mock_blob)
+
+    downloader = GCPDownloader("gs://bucket", "", [])
+    fileobj = io.BytesIO()
+
+    downloader.download_fileobj("gs://bucket/file.txt", fileobj)
+    mock_blob.download_to_file.assert_called_with(fileobj)
+
+
+@mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)
+def test_azure_downloader_download_fileobj(azure_mock):
+    mock_blob = MagicMock()
+    mock_blob_data = MagicMock()
+    mock_blob.download_blob.return_value = mock_blob_data
+    service_mock = MagicMock()
+    service_mock.get_blob_client.return_value = mock_blob
+
+    azure_mock.storage.blob.BlobServiceClient = MagicMock(return_value=service_mock)
+
+    downloader = AzureDownloader("azure://container", "", [])
+    fileobj = io.BytesIO()
+
+    downloader.download_fileobj("azure://container/file.txt", fileobj)
+    mock_blob_data.readinto.assert_called_with(fileobj)
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_s3_downloader_adownload_fileobj(obstore_mock):
+    with mock.patch("litdata.streaming.downloader.S3Downloader._get_store") as get_store_mock:
+        store_mock = MagicMock()
+        get_store_mock.return_value = store_mock
+        resp_mock = MagicMock()
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        stream_mock = [b"chunk1", b"chunk2"]
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        downloader = S3Downloader("s3://bucket", "", [])
+        result = await downloader.adownload_fileobj("s3://bucket/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
+async def test_gcp_downloader_adownload_fileobj(obstore_mock):
+    with mock.patch("litdata.streaming.downloader.GCPDownloader._get_store") as get_store_mock:
+        store_mock = MagicMock()
+        get_store_mock.return_value = store_mock
+        resp_mock = MagicMock()
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        stream_mock = [b"chunk1", b"chunk2"]
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        downloader = GCPDownloader("gs://bucket", "", [])
+        result = await downloader.adownload_fileobj("gs://bucket/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)
+async def test_azure_downloader_adownload_fileobj(obstore_mock):
+    with mock.patch("litdata.streaming.downloader.AzureDownloader._get_store") as get_store_mock:
+        store_mock = MagicMock()
+        get_store_mock.return_value = store_mock
+        resp_mock = MagicMock()
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        stream_mock = [b"chunk1", b"chunk2"]
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        downloader = AzureDownloader("azure://container", "", [])
+        result = await downloader.adownload_fileobj("azure://container/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result

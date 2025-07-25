@@ -6,3 +6,4 @@ numpy
 boto3
 requests
 tifffile
+obstore

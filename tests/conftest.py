@@ -94,6 +94,14 @@ def fsspec_mock(monkeypatch):
 
 
 @pytest.fixture
+def obstore_mock(monkeypatch):
+    obstore = ModuleType("obstore")
+    monkeypatch.setitem(sys.modules, "obstore", obstore)
+    obstore.store = Mock()
+    return obstore
+
+
+@pytest.fixture
 def azure_mock(monkeypatch):
     azure = ModuleType("azure")
     monkeypatch.setitem(sys.modules, "azure", azure)

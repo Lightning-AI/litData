@@ -44,6 +44,8 @@ _POLARS_AVAILABLE = RequirementCache("polars>1.0.0")
 _PIL_AVAILABLE = RequirementCache("PIL")
 _TORCH_VISION_AVAILABLE = RequirementCache("torchvision")
 _AV_AVAILABLE = RequirementCache("av")
+_OBSTORE_AVAILABLE = RequirementCache("obstore")
+_ASYNCIO_AVAILABLE = RequirementCache("asyncio")
 
 _DEBUG = bool(int(os.getenv("DEBUG_LITDATA", "0")))
 _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))

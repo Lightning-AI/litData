@@ -30,6 +30,7 @@ from litdata.constants import (
     _GOOGLE_STORAGE_AVAILABLE,
     _HF_HUB_AVAILABLE,
     _INDEX_FILENAME,
+    _OBSTORE_AVAILABLE,
 )
 from litdata.debugger import _get_log_msg
 from litdata.streaming.client import S3Client
@@ -97,6 +98,14 @@ class Downloader(ABC):
         with open(local_chunkpath, "rb") as f:
             f.seek(offset)
             return f.read(length)
+
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from remote storage directly to a file-like object."""
+        pass
+
+    async def adownload_fileobj(self, remote_filepath: str) -> Any:
+        """Download a file from remote storage directly to a file-like object asynchronously."""
+        pass
 
 
 class S3Downloader(Downloader):
@@ -203,6 +212,56 @@ class S3Downloader(Downloader):
 
         return response["Body"].read()
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from S3 directly to a file-like object."""
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "_client"):
+            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        self._client.client.download_fileobj(
+            bucket,
+            key,
+            fileobj,
+        )
+
+    def _get_store(self, bucket: str) -> Any:
+        """Return an obstore S3Store instance for the given bucket, initializing if needed."""
+        if not hasattr(self, "_store"):
+            if not _OBSTORE_AVAILABLE:
+                raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            import boto3
+            from obstore.auth.boto3 import Boto3CredentialProvider
+            from obstore.store import S3Store
+
+            session = boto3.Session(**self._storage_options, **self.session_options)
+            credential_provider = Boto3CredentialProvider(session)
+            self._store = S3Store(bucket, credential_provider=credential_provider)
+        return self._store
+
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Download a file from S3 directly to a file-like object asynchronously."""
+        import obstore as obs
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        store = self._get_store(bucket)
+        resp = await obs.get_async(store, key)
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+
 
 class GCPDownloader(Downloader):
     def __init__(
@@ -267,6 +326,55 @@ class GCPDownloader(Downloader):
 
         return blob.download_as_bytes(start=offset, end=end)
 
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from GCS directly to a file-like object."""
+        from google.cloud import storage
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        client = storage.Client(**self._storage_options)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(key)
+
+        blob.download_to_file(fileobj)
+
+    def _get_store(self, bucket: str) -> Any:
+        """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
+        if not hasattr(self, "_store"):
+            if not _OBSTORE_AVAILABLE:
+                raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            from google.cloud import storage
+            from obstore.auth.google import GoogleCredentialProvider
+            from obstore.store import GCSStore
+
+            client = storage.Client(**self._storage_options)
+            credential_provider = GoogleCredentialProvider(credentials=client._credentials)
+            self._store = GCSStore(bucket, credential_provider=credential_provider)
+        return self._store
+
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Download a file from GCS directly to a file-like object asynchronously."""
+        import obstore as obs
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        store = self._get_store(bucket_name)
+        resp = await obs.get_async(store, key)
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+
 
 class AzureDownloader(Downloader):
     def __init__(
@@ -307,6 +415,55 @@ class AzureDownloader(Downloader):
             with open(local_filepath, "wb") as download_file:
                 blob_data = blob_client.download_blob()
                 blob_data.readinto(download_file)
+
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from Azure Blob Storage directly to a file-like object."""
+        from azure.storage.blob import BlobServiceClient
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+
+        service = BlobServiceClient(**self._storage_options)
+        blob_client = service.get_blob_client(container=obj.netloc, blob=obj.path.lstrip("/"))
+
+        blob_data = blob_client.download_blob()
+        blob_data.readinto(fileobj)
+
+    def _get_store(self, bucket: str) -> Any:
+        """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
+        if not hasattr(self, "_store"):
+            if not _OBSTORE_AVAILABLE:
+                raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            from obstore.auth.azure import AzureCredentialProvider
+            from obstore.store import AzureStore
+
+            # TODO: Check how to pass storage options to AzureCredentialProvider
+            credential_provider = AzureCredentialProvider()
+            self._store = AzureStore(bucket, credential_provider=credential_provider)
+        return self._store
+
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
+        import obstore as obs
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+
+        bucket_name = obj.netloc
+        key = obj.path.lstrip("/")
+
+        store = self._get_store(bucket_name)
+        resp = await obs.get_async(store, key)
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
 
 
 class LocalDownloader(Downloader):
