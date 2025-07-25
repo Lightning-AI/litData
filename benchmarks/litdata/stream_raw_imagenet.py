@@ -10,6 +10,7 @@ import torch
 import torchvision.transforms.v2 as T
 from torch.utils.data import DataLoader
 from torchvision.io import ImageReadMode, decode_jpeg
+from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
 
 from litdata.streaming.raw_dataset import StreamingRawDataset
