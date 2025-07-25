@@ -1,6 +1,7 @@
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
+import mock
 import pytest
 from torch.utils.data import DataLoader
 
@@ -189,117 +190,26 @@ def test_get_local_path(tmp_path):
     assert local_path.startswith(manager.cache_dir)
 
 
-# @patch("litdata.streaming.raw_dataset.get_downloader")
-# def test_download_file_sync_with_caching(mock_get_downloader, tmp_path):
-#     """Test synchronous file download with caching."""
-#     # Setup mock downloader
-#     mock_downloader = Mock()
-#     mock_get_downloader.return_value = mock_downloader
+@mock.patch("litdata.streaming.raw_dataset.get_downloader")
+def test_download_file_sync(mock_get_downloader, tmp_path):
+    """Test synchronous file download without caching."""
+    # Setup mock downloader
+    mock_downloader = Mock()
+    mock_get_downloader.return_value = mock_downloader
 
-#     def mock_download_fileobj(file_path, file_obj):
-#         file_obj.write(b"test content")
+    def mock_download_fileobj(file_path, file_obj):
+        file_obj.write(b"test content")
 
-#     mock_downloader.download_fileobj.side_effect = mock_download_fileobj
+    mock_downloader.download_fileobj.side_effect = mock_download_fileobj
 
-#     input_dir = "s3://bucket/dataset"
-#     cache_dir = str(tmp_path / "cache")
+    input_dir = "s3://bucket/dataset"
 
-#     manager = CacheManager(input_dir=input_dir, cache_dir=cache_dir, cache_files=True)
+    manager = CacheManager(input_dir=input_dir)
 
-#     file_path = "s3://bucket/dataset/file.jpg"
-#     content = manager.download_file_sync(file_path)
+    file_path = "s3://bucket/dataset/file.jpg"
+    content = manager.download_file_sync(file_path)
 
-#     assert content == b"test content"
-
-#     # Check that file was cached
-#     local_path = manager.get_local_path(file_path)
-#     assert os.path.exists(local_path)
-#     with open(local_path, "rb") as f:
-#         assert f.read() == b"test content"
-
-
-# @patch("litdata.streaming.raw_dataset.get_downloader")
-# def test_download_file_sync_without_caching(mock_get_downloader, tmp_path):
-#     """Test synchronous file download without caching."""
-#     # Setup mock downloader
-#     mock_downloader = Mock()
-#     mock_get_downloader.return_value = mock_downloader
-
-#     def mock_download_fileobj(file_path, file_obj):
-#         file_obj.write(b"test content")
-
-#     mock_downloader.download_fileobj.side_effect = mock_download_fileobj
-
-#     input_dir = "s3://bucket/dataset"
-
-#     manager = CacheManager(input_dir=input_dir, cache_files=False)
-
-#     file_path = "s3://bucket/dataset/file.jpg"
-#     content = manager.download_file_sync(file_path)
-
-#     assert content == b"test content"
-
-
-# @patch("litdata.streaming.raw_dataset.get_downloader")
-# def test_download_file_sync_from_cache(mock_get_downloader, tmp_path):
-#     """Test that cached files are loaded from disk."""
-#     # Setup mock downloader (should not be called)
-#     mock_downloader = Mock()
-#     mock_get_downloader.return_value = mock_downloader
-
-#     input_dir = "s3://bucket/dataset"
-#     cache_dir = str(tmp_path / "cache")
-
-#     manager = CacheManager(input_dir=input_dir, cache_dir=cache_dir, cache_files=True)
-
-#     # Pre-create cached file
-#     file_path = "s3://bucket/dataset/file.jpg"
-#     local_path = manager.get_local_path(file_path)
-#     with open(local_path, "wb") as f:
-#         f.write(b"cached content")
-
-#     content = manager.download_file_sync(file_path)
-
-#     assert content == b"cached content"
-#     # Downloader should not have been called
-#     mock_downloader.download_fileobj.assert_not_called()
-
-
-# def test_streaming_raw_dataset_init(tmp_path):
-#     """Test StreamingRawDataset initialization."""
-#     # Create test files
-#     (tmp_path / "file1.jpg").write_text("content1")
-#     (tmp_path / "file2.jpg").write_text("content2")
-
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
-
-#     assert len(dataset) == 2
-#     assert dataset.cache_manager.cache_files is False
-
-
-# def test_streaming_raw_dataset_init_with_caching(tmp_path):
-#     """Test StreamingRawDataset initialization with caching enabled."""
-#     # Create test files
-#     (tmp_path / "file1.jpg").write_text("content1")
-
-#     cache_dir = tmp_path / "cache"
-
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_dir=str(cache_dir), cache_files=True)
-
-#     assert len(dataset) == 1
-#     assert dataset.cache_manager.cache_files is True
-#     assert os.path.exists(dataset.cache_manager.cache_dir)
-
-
-# def test_streaming_raw_dataset_len(tmp_path):
-#     """Test dataset length."""
-#     # Create test files
-#     for i in range(5):
-#         (tmp_path / f"file{i}.jpg").write_text(f"content{i}")
-
-#     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
-
-#     assert len(dataset) == 5
+    assert content == b"test content"
 
 
 def test_streaming_raw_dataset_getitem(tmp_path):
