@@ -431,6 +431,19 @@ class AzureDownloader(Downloader):
         blob_data = blob_client.download_blob()
         blob_data.readinto(fileobj)
 
+    def _get_store(self, bucket: str):
+        """Return an obstore GCSStore instance for the given bucket, initializing if needed."""
+        if not hasattr(self, "_store"):
+            if not _OBSTORE_AVAILABLE:
+                raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            from obstore.auth.azure import AzureCredentialProvider
+            from obstore.store import AzureStore
+
+            # TODO: Check how to pass storage options to AzureCredentialProvider
+            credential_provider = AzureCredentialProvider()
+            self._store = AzureStore(bucket, credential_provider=credential_provider)
+        return self._store
+
     async def adownload_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
         from azure.storage.blob.aio import BlobServiceClient
