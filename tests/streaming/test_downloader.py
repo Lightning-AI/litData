@@ -408,7 +408,7 @@ async def test_s3_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = S3Downloader("s3://bucket", "", [])
         result = await downloader.adownload_fileobj("s3://bucket/file.txt")
         assert isinstance(result, bytes)
@@ -425,7 +425,7 @@ async def test_gcp_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = GCPDownloader("gs://bucket", "", [])
         result = await downloader.adownload_fileobj("gs://bucket/file.txt")
         assert isinstance(result, bytes)
@@ -442,7 +442,7 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = AzureDownloader("azure://container", "", [])
         result = await downloader.adownload_fileobj("azure://container/file.txt")
         assert isinstance(result, bytes)
