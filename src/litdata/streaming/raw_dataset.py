@@ -59,11 +59,11 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
-        self, input_dir: str, cache_dir: str, storage_options: dict[str, Any] = None
+        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
     ) -> list[FileMetadata]:
         """Build or load a ZSTD-compressed index of file metadata."""
         if not _ZSTD_AVAILABLE:
@@ -118,7 +118,7 @@ class FileIndexer(BaseIndexer):
         self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
 
@@ -132,7 +132,7 @@ class FileIndexer(BaseIndexer):
             f"Unsupported input directory scheme: {parsed_url.scheme}. Supported schemes are: {SUPPORTED_PROVIDERS}"
         )
 
-    def _discover_cloud_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
+    def _discover_cloud_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Recursively list files in a cloud storage bucket."""
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
@@ -197,13 +197,13 @@ class CacheManager:
 
     def __init__(
         self,
-        input_dir: Union[Dir, str],
-        cache_dir: Optional[Union[Dir, str]] = None,
+        input_dir: Union[str, Dir],
+        cache_dir: Optional[str] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
     ):
         self.input_dir = _resolve_dir(input_dir)
-        self._input_dir_path = self.input_dir.path or self.input_dir.url
+        self._input_dir_path = str(self.input_dir.path or self.input_dir.url)
         self.cache_files = cache_files
 
         self.cache_dir = self._create_cache_dir(self._input_dir_path, cache_dir)
@@ -269,7 +269,7 @@ class CacheManager:
                 return await asyncio.to_thread(Path(local_path).read_bytes)
 
         try:
-            return await self.downloader.adownload_fileobj(file_path)
+            return await self.downloader.adownload_fileobj(file_path)  # This will return obstore.Bytes
         except Exception as e:
             raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
@@ -288,8 +288,8 @@ class StreamingRawDataset(Dataset):
 
     def __init__(
         self,
-        input_dir: Union[str, "Dir"],
-        cache_dir: Optional[Union[str, "Dir"]] = None,
+        input_dir: str,
+        cache_dir: Optional[str] = None,
         indexer: Optional[BaseIndexer] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
@@ -316,7 +316,7 @@ class StreamingRawDataset(Dataset):
 
         # Discover files and build index
         self.files = self.indexer.build_or_load_index(
-            self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, storage_options
+            self.cache_manager._input_dir_path, self.cache_manager.cache_dir, storage_options
         )
         # TODO: Grouping of files as needed by user, e.g., by image, label, etc.
 
@@ -341,7 +341,7 @@ class StreamingRawDataset(Dataset):
         """Asynchronously download multiple items by index."""
         return self._run_async(self._download_batch(indices))
 
-    def _run_async(self, coro):
+    def _run_async(self, coro: Any) -> Any:
         """Runs a coroutine, attaching to an existing event loop if one is running."""
         try:
             loop = asyncio.get_event_loop()
