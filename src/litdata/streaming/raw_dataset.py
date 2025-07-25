@@ -185,12 +185,6 @@ class FileIndexer(BaseIndexer):
             if not file_path.is_file():
                 continue
 
-            # Filter by depth
-            if self.max_depth is not None:
-                rel_depth = len(file_path.relative_to(path).parts)
-                if rel_depth > self.max_depth + 1:  # +1 to account for file name in parts
-                    continue
-
             if self._should_include_file(str(file_path)):
                 metadata = FileMetadata(
                     path=str(file_path),
