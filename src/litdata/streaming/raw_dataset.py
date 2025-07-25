@@ -245,11 +245,12 @@ class CacheManager:
 
     def download_file_sync(self, file_path: str) -> bytes:
         """Download file synchronously and return content."""
-        if self.cache_files:
-            local_path = self.get_local_path(file_path)
-            if os.path.exists(local_path):
-                with open(local_path, "rb") as f:
-                    return f.read()
+        # TODO: To add a local cache to avoid redundant downloads if cache_files is True.
+        # if self.cache_files:
+        #     local_path = self.get_local_path(file_path)
+        #     if os.path.exists(local_path):
+        #         with open(local_path, "rb") as f:
+        #             return f.read()
 
         # Download to BytesIO
         file_obj = io.BytesIO()
