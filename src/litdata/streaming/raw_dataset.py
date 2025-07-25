@@ -69,10 +69,10 @@ class BaseIndexer(ABC):
 
         import zstd
 
-        index_path = os.path.join(cache_dir, "index.json.zstd")
+        index_path = Path(cache_dir) / "index.json.zstd"
 
         # Try loading cached index if it exists
-        if os.path.exists(index_path):
+        if index_path.exists():
             try:
                 with open(index_path, "rb") as f:
                     compressed_data = f.read()
