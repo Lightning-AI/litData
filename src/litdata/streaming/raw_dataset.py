@@ -336,6 +336,7 @@ class StreamingRawDataset(Dataset):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
+        # TODO: Use common asynchronous download method
         data = self.cache_manager.download_file_sync(file_path)
         return self.transform(data) if self.transform else data
 
