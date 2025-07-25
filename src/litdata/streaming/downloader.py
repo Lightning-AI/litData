@@ -22,7 +22,6 @@ from contextlib import suppress
 from typing import Any, Optional
 from urllib import parse
 
-import boto3
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
@@ -237,6 +236,7 @@ class S3Downloader(Downloader):
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
                 raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            import boto3
             from obstore.auth.boto3 import Boto3CredentialProvider
             from obstore.store import S3Store
 
