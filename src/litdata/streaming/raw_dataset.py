@@ -37,7 +37,7 @@ else:
     import asyncio
 
 logger = logging.getLogger(__name__)
-SUPPORTED_PROVIDERS = ("s3", "gs")
+SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 
 
 @dataclass(slots=True)
