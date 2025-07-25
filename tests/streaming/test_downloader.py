@@ -408,19 +408,12 @@ async def test_s3_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-        resp_mock.stream.return_value = stream_mock
+        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = S3Downloader("s3://bucket", "", [])
-        fileobj = mock.Mock()
-
-        # Simulate async for
-        async def fake_stream(*args, **kwargs):
-            for buf in stream_mock:
-                yield buf
-
-        resp_mock.stream = fake_stream
-        await downloader.adownload_fileobj("s3://bucket/file.txt", fileobj)
-        # Check that fileobj.write was called for each chunk
-        assert fileobj.write.call_count == len(stream_mock)
+        result = await downloader.adownload_fileobj("s3://bucket/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
 
 
 @pytest.mark.asyncio
@@ -432,16 +425,12 @@ async def test_gcp_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-
-        async def fake_stream(*args, **kwargs):
-            for buf in stream_mock:
-                yield buf
-
-        resp_mock.stream = fake_stream
+        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = GCPDownloader("gs://bucket", "", [])
-        fileobj = mock.Mock()
-        await downloader.adownload_fileobj("gs://bucket/file.txt", fileobj)
-        assert fileobj.write.call_count == len(stream_mock)
+        result = await downloader.adownload_fileobj("gs://bucket/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
 
 
 @pytest.mark.asyncio
@@ -453,13 +442,9 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
         resp_mock = MagicMock()
         obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
         stream_mock = [b"chunk1", b"chunk2"]
-
-        async def fake_stream(*args, **kwargs):
-            for buf in stream_mock:
-                yield buf
-
-        resp_mock.stream = fake_stream
+        resp_mock.buffer_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = AzureDownloader("azure://container", "", [])
-        fileobj = mock.Mock()
-        await downloader.adownload_fileobj("azure://container/file.txt", fileobj)
-        assert fileobj.write.call_count == len(stream_mock)
+        result = await downloader.adownload_fileobj("azure://container/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
