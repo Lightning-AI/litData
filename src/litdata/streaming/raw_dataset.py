@@ -10,8 +10,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-import asyncio
 import io
 import json
 import logging
@@ -31,15 +29,15 @@ from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 
-logger = logging.getLogger(__name__)
-
-SUPPORTED_PROVIDERS = ("s3", "gs")
-
 if not _ASYNCIO_AVAILABLE:
     raise ModuleNotFoundError(
         "The 'asyncio' package is required for streaming datasets. Please install it with `pip install asyncio`."
     )
+else:
+    import asyncio
 
+logger = logging.getLogger(__name__)
+SUPPORTED_PROVIDERS = ("s3", "gs")
 
 @dataclass(slots=True)
 class FileMetadata:
@@ -125,10 +123,8 @@ class FileIndexer(BaseIndexer):
 
     def __init__(
         self,
-        max_depth: int = 5,
         extensions: Optional[list[str]] = None,
     ):
-        self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
     def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
