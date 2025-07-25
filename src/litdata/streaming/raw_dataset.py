@@ -319,14 +319,21 @@ class StreamingRawDataset(Dataset):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
-        loop = asyncio.get_event_loop()
-        data = loop.run_until_complete(self.cache_manager.download_file_async(file_path))
+        data = self._run_async(self.cache_manager.download_file_async(file_path))
         return self.transform(data) if self.transform else data
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
         """Asynchronously download multiple items by index."""
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(self._download_batch(indices))
+        return self._run_async(self._download_batch(indices))
+
+    def _run_async(self, coro):
+        """Runs a coroutine, attaching to an existing event loop if one is running."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # No running loop
+            return asyncio.run(coro)
+
+        return loop.run_until_complete(coro)
 
     async def _download_batch(self, indices: list[int]) -> list[Any]:
         """Asynchronously download and transform items."""
