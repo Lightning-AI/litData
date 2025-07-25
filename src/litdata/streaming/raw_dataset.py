@@ -48,19 +48,11 @@ class FileMetadata:
     size: int
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert metadata to a JSON-serializable dictionary."""
-        return {
-            "path": self.path,
-            "size": self.size,
-        }
+        return {"path": self.path, "size": self.size}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FileMetadata":
-        """Create a FileMetadata object from a dictionary."""
-        return cls(
-            path=data["path"],
-            size=data["size"],
-        )
+        return cls(path=data["path"], size=data["size"])
 
 
 class BaseIndexer(ABC):
