@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 from torch.utils.data import Dataset
 
-from litdata.constants import _ASYNCIO_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
+from litdata.constants import _ASYNCIO_AVAILABLE, _FSSPEC_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
 from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
@@ -59,10 +59,12 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
 
-    def build_or_load_index(self, input_dir: str, cache_dir: str, downloader: Downloader) -> list[FileMetadata]:
+    def build_or_load_index(
+        self, input_dir: str, cache_dir: str, storage_options: dict[str, Any] = None
+    ) -> list[FileMetadata]:
         """Build or load a ZSTD-compressed index of file metadata."""
         if not _ZSTD_AVAILABLE:
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
@@ -84,7 +86,7 @@ class BaseIndexer(ABC):
 
         # Build fresh index
         logger.info(f"Building index for {input_dir} at {index_path}")
-        files = self.discover_files(input_dir, downloader)
+        files = self.discover_files(input_dir, storage_options)
         if not files:
             raise ValueError(f"No files found in {input_dir}")
 
@@ -109,16 +111,18 @@ class FileIndexer(BaseIndexer):
 
     def __init__(
         self,
+        max_depth: int = 5,
         extensions: Optional[list[str]] = None,
     ):
+        self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
 
         if parsed_url.scheme in SUPPORTED_PROVIDERS:
-            return self._discover_cloud_files(input_dir, downloader)
+            return self._discover_cloud_files(input_dir, storage_options)
 
         if not parsed_url.scheme or parsed_url.scheme == "file":
             return self._discover_local_files(input_dir)
@@ -127,45 +131,40 @@ class FileIndexer(BaseIndexer):
             f"Unsupported input directory scheme: {parsed_url.scheme}. Supported schemes are: {SUPPORTED_PROVIDERS}"
         )
 
-    def _discover_cloud_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
+    def _discover_cloud_files(self, input_dir: str, storage_options: dict[str, Any] = None) -> list[FileMetadata]:
         """Recursively list files in a cloud storage bucket."""
+        if not _FSSPEC_AVAILABLE:
+            raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
+        import fsspec
+
         obj = urlparse(input_dir)
 
-        bucket = obj.netloc
-        prefix = obj.path.lstrip("/")
-
-        store = downloader._get_store(bucket)
-
-        import obstore as obs
-
-        stream = obs.list(store, prefix=prefix, chunk_size=1000)
-
-        files = []
+        # TODO: Research on switching to 'obstore' for file listing to potentially improve performance and compatibility.
+        # Currently using 'fsspec' due to some issues with 'obstore' when handling multiple instances.
+        fs = fsspec.filesystem(obj.scheme, **(storage_options or {}))
+        files = fs.find(input_dir, maxdepth=self.max_depth, detail=True, withdirs=False)
 
         if _TQDM_AVAILABLE:
             from tqdm.auto import tqdm
 
-            pbar = tqdm(desc="Discovering files", unit=" files")
-
-        for file_batch in stream:
-            files.extend(file_batch)
-
-            if _TQDM_AVAILABLE:
-                pbar.update(len(file_batch))
-
-        if _TQDM_AVAILABLE:
-            pbar.close()
+            pbar = tqdm(desc="Discovering files", total=len(files))
 
         metadatas = []
-        for file_info in files:
-            remote_file_path = file_info["path"]
+        for _, file_info in files.items():
+            if file_info.get("type") != "file":
+                continue
 
-            if self._should_include_file(remote_file_path):
+            file_path = file_info["name"]
+            if self._should_include_file(file_path):
                 metadata = FileMetadata(
-                    path=f"{obj.scheme}://{bucket}/{remote_file_path}",
+                    path=f"{obj.scheme}://{file_path}",
                     size=file_info.get("size", 0),
                 )
                 metadatas.append(metadata)
+            if _TQDM_AVAILABLE:
+                pbar.update(1)
+        if _TQDM_AVAILABLE:
+            pbar.close()
         return metadatas
 
     def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
@@ -244,6 +243,22 @@ class CacheManager:
         local_path.parent.mkdir(parents=True, exist_ok=True)
         return str(local_path)
 
+    def download_file_sync(self, file_path: str) -> bytes:
+        """Download file synchronously and return content."""
+        if self.cache_files:
+            local_path = self.get_local_path(file_path)
+            if os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    return f.read()
+
+        # Download to BytesIO
+        file_obj = io.BytesIO()
+        try:
+            self.downloader.download_fileobj(file_path, file_obj)
+            return file_obj.getvalue()
+        except Exception as e:
+            raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
+
     async def download_file_async(self, file_path: str) -> bytes:
         """Asynchronously download and return file content."""
         if self.cache_files:
@@ -303,7 +318,7 @@ class StreamingRawDataset(Dataset):
 
         # Discover files and build index
         self.files = self.indexer.build_or_load_index(
-            self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, self.cache_manager.downloader
+            self.input_dir.path or self.input_dir.url, self.cache_manager.cache_dir, storage_options
         )
 
         logger.info(f"Initialized StreamingRawDataset with {len(self.files)} files")
@@ -319,8 +334,7 @@ class StreamingRawDataset(Dataset):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
-        loop = asyncio.get_event_loop()
-        data = loop.run_until_complete(self.cache_manager.download_file_async(file_path))
+        data = self.cache_manager.download_file_sync(file_path)
         return self.transform(data) if self.transform else data
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
