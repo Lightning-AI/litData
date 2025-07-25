@@ -241,7 +241,7 @@ class S3Downloader(Downloader):
             self._store = S3Store(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> Any:
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
         """Download a file from S3 directly to a file-like object asynchronously."""
         import obstore as obs
 
@@ -255,7 +255,8 @@ class S3Downloader(Downloader):
 
         store = self._get_store(bucket)
         resp = await obs.get_async(store, key)
-        return await resp.bytes_async()
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
 
 
 class GCPDownloader(Downloader):
@@ -353,7 +354,7 @@ class GCPDownloader(Downloader):
             self._store = GCSStore(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> Any:
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
         """Download a file from GCS directly to a file-like object asynchronously."""
         import obstore as obs
 
@@ -367,7 +368,8 @@ class GCPDownloader(Downloader):
 
         store = self._get_store(bucket_name)
         resp = await obs.get_async(store, key)
-        return await resp.bytes_async()
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
 
 
 class AzureDownloader(Downloader):
@@ -440,7 +442,7 @@ class AzureDownloader(Downloader):
             self._store = AzureStore(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> Any:
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
         """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
         import obstore as obs
 
@@ -456,7 +458,8 @@ class AzureDownloader(Downloader):
 
         store = self._get_store(bucket_name)
         resp = await obs.get_async(store, key)
-        return await resp.bytes_async()
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
 
 
 class LocalDownloader(Downloader):
