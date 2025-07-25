@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from abc import ABC
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 from urllib import parse
 
 import boto3
@@ -353,7 +353,7 @@ class GCPDownloader(Downloader):
             self._store = GCSStore(bucket, credential_provider=credential_provider)
         return self._store
 
-    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+    async def adownload_fileobj(self, remote_filepath: str) -> Any:
         """Download a file from GCS directly to a file-like object asynchronously."""
         import obstore as obs
 
