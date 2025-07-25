@@ -354,7 +354,6 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 
 # Test cases for download_fileobj method
 def test_s3_downloader_download_fileobj():
-    """Test S3Downloader.download_fileobj with boto3."""
     with mock.patch("os.system", return_value=1), mock.patch("litdata.streaming.downloader.S3Client") as S3ClientMock:
         mock_client = MagicMock()
         S3ClientMock.return_value.client = mock_client
@@ -368,7 +367,6 @@ def test_s3_downloader_download_fileobj():
 
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader_download_fileobj(google_mock):
-    """Test GCPDownloader.download_fileobj method."""
     mock_client = MagicMock()
     mock_bucket = MagicMock()
     mock_blob = MagicMock()
