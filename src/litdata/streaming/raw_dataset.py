@@ -16,6 +16,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -142,22 +143,18 @@ class FileIndexer(BaseIndexer):
 
         files = []
 
+        pbar_manager = nullcontext()
         if _TQDM_AVAILABLE:
-            from tqdm.auto import tqdm as _tqdm
+            from tqdm.auto import tqdm
 
-            pbar = _tqdm(
-                desc="Discovering files",
-                unit=" files",
-            )
+            pbar_manager = tqdm(desc="Discovering files", unit=" files")
 
-        for file_batch in stream:
-            files.extend(file_batch)
+        with pbar_manager as pbar:
+            for file_batch in stream:
+                files.extend(file_batch)
 
-            if _TQDM_AVAILABLE:
-                pbar.update(len(file_batch))
-
-        if _TQDM_AVAILABLE:
-            pbar.close()
+                if pbar:
+                    pbar.update(len(file_batch))
 
         metadatas = []
         for file_info in files:
