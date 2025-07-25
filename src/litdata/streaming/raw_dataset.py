@@ -48,7 +48,7 @@ class FileMetadata:
     size: int
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        """Convert metadata to a JSON-serializable dictionary."""
         return {
             "path": self.path,
             "size": self.size,
@@ -56,7 +56,7 @@ class FileMetadata:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FileMetadata":
-        """Create from dictionary."""
+        """Create a FileMetadata object from a dictionary."""
         return cls(
             path=data["path"],
             size=data["size"],
@@ -68,10 +68,10 @@ class BaseIndexer(ABC):
 
     @abstractmethod
     def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
-        """Discover files and return metadata."""
+        """Discover dataset files and return their metadata."""
 
     def build_or_load_index(self, input_dir: str, cache_dir: str, downloader: Downloader) -> list[FileMetadata]:
-        """Build or load cached file index using ZSTD compression."""
+        """Build or load a ZSTD-compressed index of file metadata."""
         if not _ZSTD_AVAILABLE:
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
 
@@ -113,7 +113,7 @@ class BaseIndexer(ABC):
 
 
 class FileIndexer(BaseIndexer):
-    """File indexer that discovers files recursively by extension and depth."""
+    """Indexes files recursively from cloud or local storage with optional extension filtering."""
 
     def __init__(
         self,
@@ -122,7 +122,7 @@ class FileIndexer(BaseIndexer):
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
     def discover_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
-        """Discover files using recursive search."""
+        """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
 
         if parsed_url.scheme in SUPPORTED_PROVIDERS:
@@ -136,7 +136,7 @@ class FileIndexer(BaseIndexer):
         )
 
     def _discover_cloud_files(self, input_dir: str, downloader: Downloader) -> list[FileMetadata]:
-        """Discover files in cloud storage."""
+        """Recursively list files in a cloud storage bucket."""
         obj = urlparse(input_dir)
 
         bucket = obj.netloc
@@ -180,7 +180,7 @@ class FileIndexer(BaseIndexer):
         return metadatas
 
     def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
-        """Discover files in local filesystem."""
+        """Recursively list files in the local filesystem."""
         path = Path(input_dir)
         metadatas = []
 
@@ -198,13 +198,13 @@ class FileIndexer(BaseIndexer):
         return metadatas
 
     def _should_include_file(self, file_path: str) -> bool:
-        """Check if file should be included based on extension filters."""
+        """Return True if file matches allowed extensions."""
         file_ext = Path(file_path).suffix.lower()
         return not self.extensions or file_ext in self.extensions
 
 
 class CacheManager:
-    """Manages local file caching with directory structure preservation."""
+    """Manages file caching for remote datasets, preserving directory structure."""
 
     def __init__(
         self,
@@ -245,7 +245,7 @@ class CacheManager:
         return cache_path
 
     def get_local_path(self, file_path: str) -> str:
-        """Map a remote file path to a local cache path."""
+        """Convert remote file path to its local cache location."""
         prefix = self._input_dir_path.rstrip("/") + "/"
         if not file_path.startswith(prefix):
             raise ValueError(f"File path {file_path} does not start with input dir {prefix}")
@@ -256,7 +256,7 @@ class CacheManager:
         return local_path
 
     async def download_file_async(self, file_path: str) -> bytes:
-        """Download file asynchronously and return content."""
+        """Asynchronously download and return file content."""
         if self.cache_files:
             local_path = self.get_local_path(file_path)
             if os.path.exists(local_path):
@@ -273,15 +273,15 @@ class CacheManager:
 
 
 class StreamingRawDataset(Dataset):
-    """Stream raw files from cloud storage with fast indexing and caching.
+    """Streaming dataset for raw files with cloud support, fast indexing, and local caching.
 
-    Supports any folder structure, automatically indexing individual files.
+    Supports any folder structure and automatically indexes individual files.
 
     Features:
-    - Simple synchronous __getitem__ for single items
-    - Efficient async __getitems__ for batch operations
-    - Clean resource management
-    - Minimal memory footprint
+    - `__getitem__` for single-item access
+    - `__getitems__` for efficient batch downloads
+    - Automatic local caching with directory structure preservation
+    - Minimal memory usage with lazy loading
     """
 
     def __init__(
@@ -325,7 +325,7 @@ class StreamingRawDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, index: int) -> Any:
-        """Get single item by index - simple synchronous download."""
+        """Get single item by index."""
         if index < 0 or index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
@@ -335,7 +335,7 @@ class StreamingRawDataset(Dataset):
         return self.transform(data) if self.transform else data
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
-        """Get multiple items efficiently using async batch download."""
+        """Asynchronously download multiple items by index."""
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self._download_batch(indices))
 
