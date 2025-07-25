@@ -139,7 +139,7 @@ class FileIndexer(BaseIndexer):
 
         obj = urlparse(input_dir)
 
-        # TODO: Research on switching to 'obstore' for file listing to potentially improve performance and compatibility.
+        # TODO: Research on switching to 'obstore' for file listing to potentially improve performance.
         # Currently using 'fsspec' due to some issues with 'obstore' when handling multiple instances.
         fs = fsspec.filesystem(obj.scheme, **(storage_options or {}))
         files = fs.find(input_dir, maxdepth=self.max_depth, detail=True, withdirs=False)
