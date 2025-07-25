@@ -126,7 +126,7 @@ class S3Downloader(Downloader):
         if not self._s5cmd_available or _DISABLE_S5CMD:
             self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
-     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
+    def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
