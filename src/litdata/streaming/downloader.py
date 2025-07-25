@@ -126,7 +126,7 @@ class S3Downloader(Downloader):
         if not self._s5cmd_available or _DISABLE_S5CMD:
             self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
-    def download_file(self, remote_filepath: str, local_filepath: str) -> None:
+     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
@@ -181,14 +181,18 @@ class S3Downloader(Downloader):
                         )
                     raise RuntimeError(error_message)
             else:
+                from boto3.s3.transfer import TransferConfig
+
                 extra_args: dict[str, Any] = {}
 
                 if not os.path.exists(local_filepath):
+                    # Issue: https://github.com/boto/boto3/issues/3113
                     self._client.client.download_file(
                         obj.netloc,
                         obj.path.lstrip("/"),
                         local_filepath,
                         ExtraArgs=extra_args,
+                        Config=TransferConfig(use_threads=False),
                     )
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
