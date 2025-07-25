@@ -268,11 +268,8 @@ class CacheManager:
             if os.path.exists(local_path):
                 return await asyncio.to_thread(Path(local_path).read_bytes)
 
-        # Download to BytesIO
-        file_obj = io.BytesIO()
         try:
-            await self.downloader.adownload_fileobj(file_path, file_obj)
-            return file_obj.getvalue()
+            return await self.downloader.adownload_fileobj(file_path)
         except Exception as e:
             raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
