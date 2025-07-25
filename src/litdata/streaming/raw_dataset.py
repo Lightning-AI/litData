@@ -326,7 +326,7 @@ class StreamingRawDataset(Dataset):
 
     def __getitem__(self, index: int) -> Any:
         """Get single item by index - simple synchronous download."""
-        if index >= len(self):
+        if index < 0 or index >= len(self):
             raise IndexError(f"Index {index} out of range")
 
         file_path = self.files[index].path
