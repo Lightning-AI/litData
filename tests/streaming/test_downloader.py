@@ -446,15 +446,20 @@ async def test_gcp_downloader_adownload_fileobj(obstore_mock):
 
 @pytest.mark.asyncio
 @mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)
-async def test_azure_downloader_adownload_fileobj(azure_mock):
-    with mock.patch("azure.storage.blob.aio.BlobServiceClient") as BlobServiceClientMock:
-        service_mock = mock.AsyncMock()
-        BlobServiceClientMock.return_value.__aenter__.return_value = service_mock
-        blob_client_mock = mock.AsyncMock()
-        service_mock.get_blob_client.return_value = blob_client_mock
-        downloader_mock = mock.AsyncMock()
-        blob_client_mock.download_blob.return_value = downloader_mock
-        fileobj = mock.Mock()
+async def test_azure_downloader_adownload_fileobj(obstore_mock):
+    with mock.patch("litdata.streaming.downloader.AzureDownloader._get_store") as get_store_mock:
+        store_mock = MagicMock()
+        get_store_mock.return_value = store_mock
+        resp_mock = MagicMock()
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        stream_mock = [b"chunk1", b"chunk2"]
+
+        async def fake_stream(*args, **kwargs):
+            for buf in stream_mock:
+                yield buf
+
+        resp_mock.stream = fake_stream
         downloader = AzureDownloader("azure://container", "", [])
+        fileobj = mock.Mock()
         await downloader.adownload_fileobj("azure://container/file.txt", fileobj)
-        downloader_mock.readinto.assert_awaited_with(fileobj)
+        assert fileobj.write.call_count == len(stream_mock)
