@@ -339,17 +339,8 @@ class StreamingRawDataset(Dataset):
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
         """Asynchronously download multiple items by index."""
-        return self._run_async(self._download_batch(indices))
-
-    def _run_async(self, coro: Any) -> Any:
-        """Runs a coroutine, attaching to an existing event loop if one is running."""
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(coro)
+        # asyncio.run() handles loop creation, execution, and teardown cleanly.
+        return asyncio.run(self._download_batch(indices))
 
     async def _download_batch(self, indices: list[int]) -> list[Any]:
         """Asynchronously download and transform items."""
