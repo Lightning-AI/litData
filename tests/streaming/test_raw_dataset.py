@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -33,6 +35,7 @@ def test_file_metadata():
 
 
 def test_file_indexer_init():
+    """Test FileIndexer initialization."""
     indexer = FileIndexer()
     assert indexer.max_depth == 5
     assert indexer.extensions == []
@@ -206,7 +209,6 @@ def test_download_file_sync(mock_get_downloader, tmp_path):
     mock_downloader.download_fileobj.side_effect = mock_download_fileobj
 
     input_dir = "s3://bucket/dataset"
-
     manager = CacheManager(input_dir=input_dir)
 
     file_path = "s3://bucket/dataset/file.jpg"
@@ -241,19 +243,80 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitems(tmp_path):
-    """Test batch item access."""
+    """Test synchronous batch item access."""
     test_contents = [b"content1", b"content2", b"content3"]
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
 
+    # Mock _download_batch to return test contents
     async def mock_download_batch(indices):
         return [test_contents[i] for i in indices]
 
     with patch.object(dataset, "_download_batch", side_effect=mock_download_batch):
         items = dataset.__getitems__([0, 2])
         assert items == [test_contents[0], test_contents[2]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+async def test_download_batch(tmp_path):
+    """Test asynchronous batch download functionality."""
+    # Create test files with predefined content
+    test_contents = {
+        str(tmp_path / "file0.jpg"): b"content1",
+        str(tmp_path / "file1.jpg"): b"content2",
+        str(tmp_path / "file2.jpg"): b"content3",
+    }
+    for file_path, content in test_contents.items():
+        Path(file_path).write_bytes(content)
+
+    # Initialize the dataset
+    dataset = StreamingRawDataset(input_dir=str(tmp_path))
+
+    # Find indices for specific files
+    file0_path = str(tmp_path / "file0.jpg")
+    file2_path = str(tmp_path / "file2.jpg")
+    indices = [
+        next(i for i, f in enumerate(dataset.files) if f.path == file0_path),
+        next(i for i, f in enumerate(dataset.files) if f.path == file2_path),
+    ]
+
+    # Mock _process_item to return content based on file path
+    async def mock_process_item(file_path):
+        return test_contents[file_path]
+
+    # Patch and test _download_batch
+    with patch.object(dataset, "_process_item", side_effect=mock_process_item):
+        items = await dataset._download_batch(indices)
+        assert items == [test_contents[file0_path], test_contents[file2_path]]
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_thread_safety(tmp_path):
+    """Test thread safety in multi-threaded environments."""
+    test_contents = [b"content1", b"content2", b"content3"]
+    for i, content in enumerate(test_contents):
+        (tmp_path / f"file{i}.jpg").write_bytes(content)
+
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+
+    # Mock _download_batch to return test contents
+    async def mock_download_batch(indices):
+        return [test_contents[i] for i in indices]
+
+    with patch.object(dataset, "_download_batch", side_effect=mock_download_batch):
+
+        def worker():
+            items = dataset.__getitems__([0, 2])
+            assert items == [test_contents[0], test_contents[2]]
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -311,15 +374,14 @@ def test_streaming_raw_dataset_transform(tmp_path):
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_with_dataloader(tmp_path):
     """Test dataset integration with PyTorch DataLoader."""
-    # Create test files
     test_contents = [b"content1", b"content2", b"content3", b"content4"]
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
-    # Mock download to return test content
-    def mock_download_async(file_path):
+    # Mock async download to return test content
+    async def mock_download_async(file_path):
         index = int(file_path.split("file")[1].split(".")[0])
         return test_contents[index]
 
@@ -335,7 +397,6 @@ def test_streaming_raw_dataset_with_dataloader(tmp_path):
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_no_files_error(tmp_path):
     """Test error when no files are found."""
-    # Create empty directory
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
 
