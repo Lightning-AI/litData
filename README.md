@@ -202,6 +202,40 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
+  <summary>✅ Stream raw datasets from cloud storage (beta)</summary>
+  &nbsp;
+
+Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
+
+**Prerequisites:**
+
+Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+
+```bash
+# for aws s3
+pip install "litdata[extra]" s3fs
+
+# for gcloud storage
+pip install "litdata[extra]" gcsfs
+```
+
+**Usage Example:**
+```python
+from litdata.streaming.raw_dataset import StreamingRawDataset
+from torch.utils.data import DataLoader
+
+dataset = StreamingRawDataset("s3://bucket/files/")
+
+# Use with PyTorch DataLoader
+loader = DataLoader(dataset, batch_size=32)
+for batch in loader:
+    # Each item is raw bytes
+    pass
+```
+
+> Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+</details>
+<details>
   <summary> ✅ Stream large cloud datasets</summary>
 &nbsp;
 
@@ -1559,8 +1593,8 @@ map(
 # Benchmarks
 In this section we show benchmarks for speed to optimize a dataset and the resulting streaming speed ([Reproduce the benchmark](https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries)).
 
-## Streaming speed
-
+## Streaming speed 
+### LitData Chunks
 Data optimized and streamed with LitData achieves a 20x speed up over non optimized data and 2x speed up over other streaming solutions.
 
 Speed to stream Imagenet 1.2M from AWS S3:
@@ -1596,6 +1630,19 @@ Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
 | ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
 | ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
 | ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
+### Raw Dataset
+
+Speed to stream raw Imagenet 1.2M from different cloud storage providers:
+
+
+| Storage | Images / s (without transform) | Images / s (with transform) |
+|---------|-------------------|----------------|
+| AWS S3  | ~6400 +/- 100     | ~3200 +/- 100  |
+| Google Cloud Storage | ~5650 +/- 100     | ~3100 +/- 100  |
+
+> **Note:**
+> Use `StreamingRawDataset` if you want to stream your data as-is. Use `StreamingDataset` if you want the fastest streaming and are okay with optimizing your data first.
 
 &nbsp;
 
