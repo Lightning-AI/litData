@@ -129,21 +129,16 @@ class JPEGSerializer(Serializer):
         raise TypeError(f"The provided item should be of type `JpegImageFile`. Found {item}.")
 
     def deserialize(self, data: bytes) -> torch.Tensor:
-        from torchvision.io import decode_jpeg
-        from torchvision.transforms.functional import pil_to_tensor
+        from torchvision.io import ImageReadMode, decode_image, decode_jpeg
 
         array = torch.frombuffer(data, dtype=torch.uint8)
-        # Note: Some datasets like Imagenet contains some PNG images with JPEG extension, so we fallback to PIL
+        # Try decoding as JPEG. Some datasets (e.g., ImageNet) may have PNG images with a JPEG extension,
+        # which will cause decode_jpeg to fail. In that case, fall back to a generic image decoder.
         with suppress(RuntimeError):
-            return decode_jpeg(array)
+            return decode_jpeg(array, mode=ImageReadMode.RGB)
 
-        # Fallback to PIL
-        if not _PIL_AVAILABLE:
-            raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
-        from PIL import Image
-
-        img = Image.open(io.BytesIO(data))
-        return pil_to_tensor(img)
+        # Fallback: decode as a generic image (handles PNG, etc.)
+        return decode_image(array, mode=ImageReadMode.RGB)
 
     def can_serialize(self, item: Any) -> bool:
         if not _PIL_AVAILABLE:
