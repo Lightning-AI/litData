@@ -224,6 +224,33 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
         dataset[1]
 
 
+def test_streaming_raw_dataset_setup(tmp_path):
+    """Test the setup method for default and custom grouping."""
+    # Create test files
+    (tmp_path / "file1.jpg").write_text("content1")
+    (tmp_path / "file2.jpg").write_text("content2")
+    (tmp_path / "file3.jpg").write_text("content3")
+
+    # Default setup: returns flat list
+    dataset = StreamingRawDataset(input_dir=str(tmp_path))
+    assert isinstance(dataset.items, list)
+    assert all(isinstance(item, FileMetadata) for item in dataset.items)
+    assert len(dataset.items) == 3
+
+    # Custom setup: group files in pairs
+    class GroupedDataset(StreamingRawDataset):
+        def setup(self, files):
+            # Group every two files together
+            return [files[i : i + 2] for i in range(0, len(files), 2)]
+
+    grouped_dataset = GroupedDataset(input_dir=str(tmp_path))
+    assert isinstance(grouped_dataset.items, list)
+    assert all(isinstance(item, list) for item in grouped_dataset.items)
+    # Should be 2 groups: [[file1, file2], [file3]]
+    assert len(grouped_dataset.items) == 2
+    assert all(isinstance(f, FileMetadata) for group in grouped_dataset.items for f in group)
+
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitems(tmp_path):
     """Test synchronous batch item access."""
@@ -274,8 +301,10 @@ async def test_download_batch(tmp_path):
         # Return a list of bytes for the group
         return [test_contents[fp] for fp in file_paths]
 
-    with patch.object(dataset, "_download_and_process_item", side_effect=mock_download_and_process_item), \
-         patch.object(dataset, "_download_and_process_group", side_effect=mock_download_and_process_group):
+    with (
+        patch.object(dataset, "_download_and_process_item", side_effect=mock_download_and_process_item),
+        patch.object(dataset, "_download_and_process_group", side_effect=mock_download_and_process_group),
+    ):
         items = await dataset._download_batch(indices)
         # Accept both single and group results
         expected = [test_contents[file0_path], test_contents[file2_path]]
