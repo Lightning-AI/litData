@@ -234,7 +234,34 @@ for batch in loader:
 ```
 
 > Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+
+
+You can also customize how files are grouped by subclassing `StreamingRawDataset` and overriding the `setup` method. This is useful for pairing related files (e.g., image and mask, audio and transcript) or any custom grouping logic.
+
+```python
+from litdata.streaming.raw_dataset import StreamingRawDataset, FileMetadata
+from torch.utils.data import DataLoader
+from typing import Union
+
+class SegmentationRawDataset(StreamingRawDataset):
+  def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
+      # TODO: Implement your custom grouping logic here.
+      # For example, group files by prefix, extension, or any rule you need.
+      # Return a list of groups, where each group is a list of FileMetadata.
+      # Example:
+      #   return [[image, mask], ...]
+      pass
+
+# Initialize the custom dataset
+dataset = SegmentationRawDataset("s3://bucket/files/")
+loader = DataLoader(dataset, batch_size=4)
+for item in loader:
+    # Each item in the batch is a pair: [image_bytes, mask_bytes]
+    pass
+```
+
 </details>
+
 <details>
   <summary> ✅ Stream large cloud datasets</summary>
 &nbsp;
