@@ -224,7 +224,7 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
     with pytest.raises(IndexError, match="Index 1 out of range"):
         dataset[1]
 
-
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_setup(tmp_path):
     """Test the setup method for default and custom grouping."""
     # Create test files
@@ -287,7 +287,6 @@ async def test_download_batch_flat(tmp_path):
     async def mock_download_and_process_item(file_path):
         return test_contents[file_path]
 
-    # Empty indices
     with (
         patch.object(dataset, "_download_and_process_item", side_effect=mock_download_and_process_item),
     ):
@@ -458,7 +457,7 @@ def test_cache_manager_get_local_path_invalid():
         cm.get_local_path("s3://bucket/other/file.jpg")
 
 
-def test_cache_manager_download_file_async_error(monkeypatch):
+def test_cache_manager_download_file_async_error():
     cm = CacheManager(input_dir="s3://bucket/data", cache_dir=None, cache_files=False)
 
     async def fail_download(file_path):
@@ -471,7 +470,7 @@ def test_cache_manager_download_file_async_error(monkeypatch):
     with pytest.raises(RuntimeError, match="Error downloading file"):
         asyncio.run(cm.download_file_async("s3://bucket/data/file.jpg"))
 
-
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_invalid_item_type(tmp_path):
     class BadDataset(StreamingRawDataset):
         def setup(self, files):
@@ -483,7 +482,7 @@ def test_streaming_raw_dataset_invalid_item_type(tmp_path):
     with pytest.raises(TypeError, match="Dataset items must be of type FileMetadata"):
         ds[0]
 
-
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_invalid_setup(tmp_path):
     class BadDataset(StreamingRawDataset):
         def setup(self, files):
@@ -500,7 +499,7 @@ def test_file_indexer_should_include_file_edge():
     idx2 = FileIndexer(extensions=[".jpg"])
     assert idx2._should_include_file("foo.txt") is False
 
-
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
     # Single item, no transform
     (tmp_path / "file1.jpg").write_bytes(b"abc")
