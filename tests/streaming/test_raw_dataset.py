@@ -179,6 +179,7 @@ def test_cache_manager_init_with_caching(tmp_path):
     assert manager.cache_files is True
     assert manager.cache_dir is not None
     assert os.path.exists(manager.cache_dir)
+    assert manager.downloader is not None
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -271,9 +272,8 @@ def test_streaming_raw_dataset_getitems(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
-async def test_download_batch(tmp_path):
-    """Test asynchronous batch download functionality."""
-    # Create test files with predefined content
+async def test_download_batch_flat(tmp_path):
+    """Test async batch download for empty and flat indices (default setup)."""
     test_contents = {
         str(tmp_path / "file0.jpg"): b"content1",
         str(tmp_path / "file1.jpg"): b"content2",
@@ -282,40 +282,57 @@ async def test_download_batch(tmp_path):
     for file_path, content in test_contents.items():
         Path(file_path).write_bytes(content)
 
-    # Initialize the dataset
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
-    # Find indices for specific files
-    file0_path = str(tmp_path / "file0.jpg")
-    file2_path = str(tmp_path / "file2.jpg")
-    indices = [
-        next(i for i, f in enumerate(dataset.files) if f.path == file0_path),
-        next(i for i, f in enumerate(dataset.files) if f.path == file2_path),
-    ]
-
-    # Mock _download_and_process_item and _download_and_process_group to handle both cases
     async def mock_download_and_process_item(file_path):
         return test_contents[file_path]
 
-    async def mock_download_and_process_group(file_paths):
-        # Return a list of bytes for the group
-        return [test_contents[fp] for fp in file_paths]
-
+    # Empty indices
     with (
         patch.object(dataset, "_download_and_process_item", side_effect=mock_download_and_process_item),
-        patch.object(dataset, "_download_and_process_group", side_effect=mock_download_and_process_group),
     ):
+        # Test empty indices
+        items = await dataset._download_batch([])
+        assert items == []
+
+        indices = [0, 2, 1]
         items = await dataset._download_batch(indices)
-        # Accept both single and group results
-        expected = [test_contents[file0_path], test_contents[file2_path]]
-        # If items are lists (grouped), flatten them for comparison
-        flat_items = []
-        for item in items:
-            if isinstance(item, list):
-                flat_items.extend(item)
-            else:
-                flat_items.append(item)
-        assert flat_items == expected
+        file_paths = [f.path for f in dataset.items]
+        expected = [test_contents[file_paths[i]] for i in indices]
+        assert items == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+async def test_download_batch_grouped(tmp_path):
+    """Test async batch download for grouped indices (custom setup)."""
+    test_contents = {
+        str(tmp_path / "file0.jpg"): b"content1",
+        str(tmp_path / "file1.jpg"): b"content2",
+        str(tmp_path / "file2.jpg"): b"content3",
+    }
+    for file_path, content in test_contents.items():
+        Path(file_path).write_bytes(content)
+
+    class GroupedDataset(StreamingRawDataset):
+        def setup(self, files):
+            return [files[i : i + 2] for i in range(0, len(files), 2)]
+
+    grouped_dataset = GroupedDataset(input_dir=str(tmp_path))
+
+    async def mock_download_and_process_group(file_paths):
+        return [test_contents[fp] for fp in file_paths]
+
+    print(grouped_dataset.items)
+
+    with (
+        patch.object(grouped_dataset, "_download_and_process_group", side_effect=mock_download_and_process_group),
+    ):
+        group_indices = list(range(len(grouped_dataset.items)))
+        expected = [[test_contents[f.path] for f in group] for group in grouped_dataset.items]
+
+        items = await grouped_dataset._download_batch(group_indices)
+        assert items == expected
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -431,3 +448,79 @@ def test_streaming_raw_dataset_no_files_error(tmp_path):
 
     with pytest.raises(ValueError, match="No files found"):
         StreamingRawDataset(input_dir=str(empty_dir), cache_files=False)
+
+
+# Additional coverage tests
+def test_cache_manager_get_local_path_invalid():
+    cm = CacheManager(input_dir="s3://bucket/data", cache_dir=None, cache_files=True)
+    # Path that does not start with input_dir
+    with pytest.raises(ValueError, match="does not start with input dir"):
+        cm.get_local_path("s3://bucket/other/file.jpg")
+
+
+def test_cache_manager_download_file_async_error(monkeypatch):
+    cm = CacheManager(input_dir="s3://bucket/data", cache_dir=None, cache_files=False)
+
+    async def fail_download(file_path):
+        raise Exception("fail")
+
+    cm._downloader = type("Downloader", (), {"adownload_fileobj": fail_download})()
+    # Should raise RuntimeError
+    import asyncio
+
+    with pytest.raises(RuntimeError, match="Error downloading file"):
+        asyncio.run(cm.download_file_async("s3://bucket/data/file.jpg"))
+
+
+def test_streaming_raw_dataset_invalid_item_type(tmp_path):
+    class BadDataset(StreamingRawDataset):
+        def setup(self, files):
+            print("files:", files)
+            return [123]  # Invalid type
+
+    (tmp_path / "file1.jpg").write_text("content1")
+    ds = BadDataset(input_dir=str(tmp_path))
+    with pytest.raises(TypeError, match="Dataset items must be of type FileMetadata"):
+        ds[0]
+
+
+def test_streaming_raw_dataset_invalid_setup(tmp_path):
+    class BadDataset(StreamingRawDataset):
+        def setup(self, files):
+            return files[0]
+
+    (tmp_path / "file1.jpg").write_text("content1")
+    with pytest.raises(TypeError, match="The setup method must return a list"):
+        BadDataset(input_dir=str(tmp_path))
+
+
+def test_file_indexer_should_include_file_edge():
+    idx = FileIndexer(extensions=None)
+    assert idx._should_include_file("foo.bar") is True
+    idx2 = FileIndexer(extensions=[".jpg"])
+    assert idx2._should_include_file("foo.txt") is False
+
+
+def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
+    # Single item, no transform
+    (tmp_path / "file1.jpg").write_bytes(b"abc")
+    ds = StreamingRawDataset(input_dir=str(tmp_path))
+
+    # Patch download to return bytes
+    async def mock_download_file_async(file_path):
+        return b"abc"
+
+    ds.cache_manager.download_file_async = mock_download_file_async
+    assert ds[0] == b"abc"
+
+    # Grouped item, with transform
+    class GroupedDS(StreamingRawDataset):
+        def setup(self, files):
+            return [files]  # One group
+
+    def transform(data):
+        return b"-".join(data)
+
+    gds = GroupedDS(input_dir=str(tmp_path), transform=transform)
+    gds.cache_manager.download_file_async = mock_download_file_async
+    assert gds[0] == b"abc"
