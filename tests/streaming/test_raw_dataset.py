@@ -224,6 +224,7 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
     with pytest.raises(IndexError, match="Index 1 out of range"):
         dataset[1]
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_setup(tmp_path):
     """Test the setup method for default and custom grouping."""
@@ -470,6 +471,7 @@ def test_cache_manager_download_file_async_error():
     with pytest.raises(RuntimeError, match="Error downloading file"):
         asyncio.run(cm.download_file_async("s3://bucket/data/file.jpg"))
 
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_invalid_item_type(tmp_path):
     class BadDataset(StreamingRawDataset):
@@ -481,6 +483,7 @@ def test_streaming_raw_dataset_invalid_item_type(tmp_path):
     ds = BadDataset(input_dir=str(tmp_path))
     with pytest.raises(TypeError, match="Dataset items must be of type FileMetadata"):
         ds[0]
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_invalid_setup(tmp_path):
@@ -498,6 +501,7 @@ def test_file_indexer_should_include_file_edge():
     assert idx._should_include_file("foo.bar") is True
     idx2 = FileIndexer(extensions=[".jpg"])
     assert idx2._should_include_file("foo.txt") is False
+
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
