@@ -336,7 +336,12 @@ class StreamingRawDataset(Dataset):
         raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
-        """Asynchronously download a batch of items by index."""
+        """Asynchronously download a batch of items by indices."""
+        # asyncio.run() handles loop creation, execution, and teardown cleanly.
+        return asyncio.run(self._download_batch(indices))
+
+    async def _download_batch(self, indices: list[int]) -> list[Any]:
+        """Asynchronously download and process items."""
         batch_items = [self.items[i] for i in indices]
         coros = []
         for item in batch_items:
@@ -349,7 +354,7 @@ class StreamingRawDataset(Dataset):
                 raise TypeError(
                     f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}"
                 )
-        return asyncio.run(asyncio.gather(*coros))
+        return await asyncio.gather(*coros)
 
     async def _download_and_process_group(self, file_paths: list[str]) -> Any:
         """Download all files in a group, then apply the transform."""
