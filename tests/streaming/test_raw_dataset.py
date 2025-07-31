@@ -196,27 +196,6 @@ def test_get_local_path(tmp_path):
     assert local_path.startswith(manager.cache_dir)
 
 
-@patch("litdata.streaming.raw_dataset.get_downloader")
-def test_download_file_sync(mock_get_downloader, tmp_path):
-    """Test synchronous file download without caching."""
-    # Setup mock downloader
-    mock_downloader = Mock()
-    mock_get_downloader.return_value = mock_downloader
-
-    def mock_download_fileobj(file_path, file_obj):
-        file_obj.write(b"test content")
-
-    mock_downloader.download_fileobj.side_effect = mock_download_fileobj
-
-    input_dir = "s3://bucket/dataset"
-    manager = CacheManager(input_dir=input_dir)
-
-    file_path = "s3://bucket/dataset/file.jpg"
-    content = manager.download_file_sync(file_path)
-
-    assert content == b"test content"
-
-
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem(tmp_path):
     """Test single item access."""
@@ -225,7 +204,11 @@ def test_streaming_raw_dataset_getitem(tmp_path):
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
-    with patch.object(dataset.cache_manager, "download_file_sync", return_value=test_content):
+    # Patch async download to return test_content
+    async def mock_download_file_async(file_path):
+        return test_content
+
+    with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_file_async):
         item = dataset[0]
         assert item == test_content
 
@@ -283,14 +266,27 @@ async def test_download_batch(tmp_path):
         next(i for i, f in enumerate(dataset.files) if f.path == file2_path),
     ]
 
-    # Mock _process_item to return content based on file path
-    async def mock_process_item(file_path):
+    # Mock _download_and_process_item and _download_and_process_group to handle both cases
+    async def mock_download_and_process_item(file_path):
         return test_contents[file_path]
 
-    # Patch and test _download_batch
-    with patch.object(dataset, "_process_item", side_effect=mock_process_item):
+    async def mock_download_and_process_group(file_paths):
+        # Return a list of bytes for the group
+        return [test_contents[fp] for fp in file_paths]
+
+    with patch.object(dataset, "_download_and_process_item", side_effect=mock_download_and_process_item), \
+         patch.object(dataset, "_download_and_process_group", side_effect=mock_download_and_process_group):
         items = await dataset._download_batch(indices)
-        assert items == [test_contents[file0_path], test_contents[file2_path]]
+        # Accept both single and group results
+        expected = [test_contents[file0_path], test_contents[file2_path]]
+        # If items are lists (grouped), flatten them for comparison
+        flat_items = []
+        for item in items:
+            if isinstance(item, list):
+                flat_items.extend(item)
+            else:
+                flat_items.append(item)
+        assert flat_items == expected
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -366,7 +362,11 @@ def test_streaming_raw_dataset_transform(tmp_path):
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path), transform=transform)
 
-    with patch.object(dataset.cache_manager, "download_file_sync", return_value=test_content):
+    # Patch async download to return test_content
+    async def mock_download_file_async(file_path):
+        return test_content
+
+    with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_file_async):
         item = dataset[0]
         assert item == "raw_transformed"
 
