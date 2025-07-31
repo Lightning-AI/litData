@@ -254,7 +254,7 @@ class SegmentationRawDataset(StreamingRawDataset):
 
 # Initialize the custom dataset
 dataset = SegmentationRawDataset("s3://bucket/files/")
-loader = DataLoader(dataset, batch_size=4)
+loader = DataLoader(dataset, batch_size=32)
 for item in loader:
     # Each item in the batch is a pair: [image_bytes, mask_bytes]
     pass
