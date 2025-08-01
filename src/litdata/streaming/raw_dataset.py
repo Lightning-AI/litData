@@ -23,7 +23,12 @@ from urllib.parse import urlparse
 
 from torch.utils.data import Dataset
 
-from litdata.constants import _ASYNCIO_AVAILABLE, _FSSPEC_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
+from litdata.constants import (
+    _ASYNCIO_AVAILABLE,
+    _FSSPEC_AVAILABLE,
+    _TQDM_AVAILABLE,
+    _ZSTD_AVAILABLE,
+)
 from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
@@ -58,13 +63,43 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def discover_files(
+        self, input_dir: str, storage_options: Optional[dict[str, Any]]
+    ) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
-        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
+        self,
+        input_dir: str,
+        cache_dir: str,
+        storage_options: Optional[dict[str, Any]],
+        recompute_index: bool = False,
     ) -> list[FileMetadata]:
-        """Build or load a ZSTD-compressed index of file metadata."""
+        """Loads or builds a ZSTD-compressed index of dataset file metadata.
+
+        This method attempts to load an existing index from cache, or builds a new one if needed.
+        Use `recompute_index=True` to force rebuilding the index from the input directory.
+
+        Args:
+            input_dir: Path to the dataset root directory.
+            cache_dir: Directory for storing the index cache.
+            storage_options: Optional storage backend options.
+            recompute_index: If True, always rebuild the index.
+
+        Returns:
+            List of FileMetadata objects for discovered files.
+
+        Raises:
+            ModuleNotFoundError: If required dependencies are missing.
+            ValueError: If no files are found in the input directory.
+        """
+        # Multi-level caching strategy:
+        # 1. Try to load index from remote cache (cloud storage).
+        # 2. If not found, try local cache.
+        # 3. If neither exists or recompute_index is True, discover files and build a new index.
+        #    - Save new index to local cache.
+        #    - TODO: Optionally upload index to remote cache for future use.
+        # Edge cases: Handles corrupted cache files, missing dependencies, and empty datasets.
         if not _ZSTD_AVAILABLE:
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
 
@@ -79,8 +114,15 @@ class BaseIndexer(ABC):
                     compressed_data = f.read()
                 metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
 
-                return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
-            except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
+                return [
+                    FileMetadata.from_dict(file_data) for file_data in metadata["files"]
+                ]
+            except (
+                FileNotFoundError,
+                json.JSONDecodeError,
+                zstd.ZstdError,
+                KeyError,
+            ) as e:
                 logger.warning(f"Failed to load cached index from {index_path}: {e}")
 
         # Build fresh index
@@ -102,7 +144,9 @@ class BaseIndexer(ABC):
         except (OSError, zstd.ZstdError) as e:
             logger.warning(f"Error caching index to {index_path}: {e}")
 
-        logger.info(f"Built index with {len(files)} files from {input_dir} at {index_path}")
+        logger.info(
+            f"Built index with {len(files)} files from {input_dir} at {index_path}"
+        )
         return files
 
 
@@ -117,7 +161,9 @@ class FileIndexer(BaseIndexer):
         self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def discover_files(
+        self, input_dir: str, storage_options: Optional[dict[str, Any]]
+    ) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
 
@@ -131,7 +177,9 @@ class FileIndexer(BaseIndexer):
             f"Unsupported input directory scheme: {parsed_url.scheme}. Supported schemes are: {SUPPORTED_PROVIDERS}"
         )
 
-    def _discover_cloud_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def _discover_cloud_files(
+        self, input_dir: str, storage_options: Optional[dict[str, Any]]
+    ) -> list[FileMetadata]:
         """Recursively list files in a cloud storage bucket."""
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
@@ -234,7 +282,9 @@ class CacheManager:
         """Convert remote file path to its local cache location."""
         remote_base_path = self._input_dir_path.rstrip("/") + "/"
         if not remote_file_path.startswith(remote_base_path):
-            raise ValueError(f"File path {remote_file_path} does not start with input dir {remote_base_path}")
+            raise ValueError(
+                f"File path {remote_file_path} does not start with input dir {remote_base_path}"
+            )
 
         relative_path = remote_file_path[len(remote_base_path) :]
         local_path = Path(self.cache_dir) / relative_path
@@ -271,6 +321,7 @@ class StreamingRawDataset(Dataset):
         indexer: Optional[BaseIndexer] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
+        recompute_index: bool = False,
         transform: Optional[Callable[[Union[bytes, list[bytes]]], Any]] = None,
     ):
         """Initialize StreamingRawDataset.
@@ -281,28 +332,43 @@ class StreamingRawDataset(Dataset):
             indexer: Custom file indexer (default: FileIndexer).
             storage_options: Cloud storage options.
             cache_files: Whether to cache files locally (default: False).
+            recompute_index: Whether to recompute the index (default: False).
+                If True, forces a re-scan of the input directory and rebuilds the index,
+                ignoring any cached index files. This is useful when the dataset
+                structure or files on the remote storage have changed.
             transform: A function to apply to each item. It will receive `bytes` for single-file
-                       items or `List[bytes]` for grouped items.
+                items or `List[bytes]` for grouped items.
         """
         self.input_dir = _resolve_dir(input_dir)
-        self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options, cache_files)
+        self.cache_manager = CacheManager(
+            self.input_dir, cache_dir, storage_options, cache_files
+        )
         self.indexer = indexer or FileIndexer()
         self.storage_options = storage_options or {}
         self.transform = transform
 
         # Discover all files in the input directory.
         self.files: list[FileMetadata] = self.indexer.build_or_load_index(
-            str(self.input_dir.path or self.input_dir.url), self.cache_manager.cache_dir, storage_options
+            str(self.input_dir.path or self.input_dir.url),
+            self.cache_manager.cache_dir,
+            storage_options,
+            recompute_index,
         )
         logger.info(f"Discovered {len(self.files)} files.")
 
         # Transform the flat list of files into the desired item structure.
-        self.items: Union[list[FileMetadata], list[list[FileMetadata]]] = self.setup(self.files)
+        self.items: Union[list[FileMetadata], list[list[FileMetadata]]] = self.setup(
+            self.files
+        )
         if not isinstance(self.items, list):
-            raise TypeError(f"The setup method must return a list, but returned {type(self.items)}")
+            raise TypeError(
+                f"The setup method must return a list, but returned {type(self.items)}"
+            )
         logger.info(f"Dataset setup with {len(self.items)} items.")
 
-    def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
+    def setup(
+        self, files: list[FileMetadata]
+    ) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
         """Define the structure of the dataset from the list of discovered files.
 
         Override this method in a subclass to group or filter files into final dataset items.
@@ -325,7 +391,9 @@ class StreamingRawDataset(Dataset):
     def __getitem__(self, index: int) -> Any:
         """Get a single item by index."""
         if not (0 <= index < len(self)):
-            raise IndexError(f"Index {index} out of range for dataset with length {len(self)}")
+            raise IndexError(
+                f"Index {index} out of range for dataset with length {len(self)}"
+            )
 
         item = self.items[index]
         if isinstance(item, FileMetadata):
@@ -333,7 +401,9 @@ class StreamingRawDataset(Dataset):
         if isinstance(item, list):
             file_paths = [fm.path for fm in item]
             return asyncio.run(self._download_and_process_group(file_paths))
-        raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
+        raise TypeError(
+            f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}"
+        )
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
         """Asynchronously download a batch of items by indices."""
@@ -358,7 +428,9 @@ class StreamingRawDataset(Dataset):
 
     async def _download_and_process_group(self, file_paths: list[str]) -> Any:
         """Download all files in a group, then apply the transform."""
-        download_coros = [self.cache_manager.download_file_async(path) for path in file_paths]
+        download_coros = [
+            self.cache_manager.download_file_async(path) for path in file_paths
+        ]
         group_data: list[bytes] = await asyncio.gather(*download_coros)
 
         if self.transform:
