@@ -23,7 +23,12 @@ from urllib.parse import urlparse
 
 from torch.utils.data import Dataset
 
-from litdata.constants import _ASYNCIO_AVAILABLE, _FSSPEC_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
+from litdata.constants import (
+    _ASYNCIO_AVAILABLE,
+    _FSSPEC_AVAILABLE,
+    _TQDM_AVAILABLE,
+    _ZSTD_AVAILABLE,
+)
 from litdata.streaming.downloader import Downloader, get_downloader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
@@ -62,9 +67,37 @@ class BaseIndexer(ABC):
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
-        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
+        self,
+        input_dir: str,
+        cache_dir: str,
+        storage_options: Optional[dict[str, Any]],
+        recompute_index: bool = False,
     ) -> list[FileMetadata]:
-        """Build or load a ZSTD-compressed index of file metadata."""
+        """Loads or builds a ZSTD-compressed index of dataset file metadata.
+
+        This method attempts to load an existing index from cache, or builds a new one if needed.
+        Use `recompute_index=True` to force rebuilding the index from the input directory.
+
+        Args:
+            input_dir: Path to the dataset root directory.
+            cache_dir: Directory for storing the index cache.
+            storage_options: Optional storage backend options.
+            recompute_index: If True, always rebuild the index.
+
+        Returns:
+            List of FileMetadata objects for discovered files.
+
+        Raises:
+            ModuleNotFoundError: If required dependencies are missing.
+            ValueError: If no files are found in the input directory.
+        """
+        # Multi-level caching strategy:
+        # 1. Try to load index from remote cache (cloud storage).
+        # 2. If not found, try local cache.
+        # 3. If neither exists or recompute_index is True, discover files and build a new index.
+        #    - Save new index to local cache.
+        #    - TODO: Optionally upload index to remote cache for future use.
+        # Edge cases: Handles corrupted cache files, missing dependencies, and empty datasets.
         if not _ZSTD_AVAILABLE:
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
 
@@ -80,7 +113,12 @@ class BaseIndexer(ABC):
                 metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
 
                 return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
-            except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
+            except (
+                FileNotFoundError,
+                json.JSONDecodeError,
+                zstd.ZstdError,
+                KeyError,
+            ) as e:
                 logger.warning(f"Failed to load cached index from {index_path}: {e}")
 
         # Build fresh index
@@ -271,6 +309,7 @@ class StreamingRawDataset(Dataset):
         indexer: Optional[BaseIndexer] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
+        recompute_index: bool = False,
         transform: Optional[Callable[[Union[bytes, list[bytes]]], Any]] = None,
     ):
         """Initialize StreamingRawDataset.
@@ -281,8 +320,12 @@ class StreamingRawDataset(Dataset):
             indexer: Custom file indexer (default: FileIndexer).
             storage_options: Cloud storage options.
             cache_files: Whether to cache files locally (default: False).
+            recompute_index: Whether to recompute the index (default: False).
+                If True, forces a re-scan of the input directory and rebuilds the index,
+                ignoring any cached index files. This is useful when the dataset
+                structure or files on the remote storage have changed.
             transform: A function to apply to each item. It will receive `bytes` for single-file
-                       items or `List[bytes]` for grouped items.
+                items or `List[bytes]` for grouped items.
         """
         self.input_dir = _resolve_dir(input_dir)
         self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options, cache_files)
@@ -292,7 +335,10 @@ class StreamingRawDataset(Dataset):
 
         # Discover all files in the input directory.
         self.files: list[FileMetadata] = self.indexer.build_or_load_index(
-            str(self.input_dir.path or self.input_dir.url), self.cache_manager.cache_dir, storage_options
+            str(self.input_dir.path or self.input_dir.url),
+            self.cache_manager.cache_dir,
+            storage_options,
+            recompute_index,
         )
         logger.info(f"Discovered {len(self.files)} files.")
 
