@@ -6,4 +6,3 @@ lightning-sdk==2025.8.1 # Must be pinned to ensure compatibility
 google-cloud-storage
 polars
 fsspec
-asyncio
