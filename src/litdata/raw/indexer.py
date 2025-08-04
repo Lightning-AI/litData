@@ -108,10 +108,10 @@ class FileIndexer(BaseIndexer):
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
 
-        if parsed_url.scheme in _SUPPORTED_PROVIDERS:
+        if parsed_url.scheme in _SUPPORTED_PROVIDERS:  # Cloud storage
             return self._discover_cloud_files(input_dir, storage_options)
 
-        if not parsed_url.scheme or parsed_url.scheme == "file":
+        if not parsed_url.scheme:  # Local filesystem
             return self._discover_local_files(input_dir)
 
         raise ValueError(
