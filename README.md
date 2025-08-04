@@ -202,6 +202,67 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
+  <summary>✅ Stream raw datasets from cloud storage (beta)</summary>
+  &nbsp;
+
+Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
+
+**Prerequisites:**
+
+Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+
+```bash
+# for aws s3
+pip install "litdata[extra]" s3fs
+
+# for gcloud storage
+pip install "litdata[extra]" gcsfs
+```
+
+**Usage Example:**
+```python
+from litdata.streaming.raw_dataset import StreamingRawDataset
+from torch.utils.data import DataLoader
+
+dataset = StreamingRawDataset("s3://bucket/files/")
+
+# Use with PyTorch DataLoader
+loader = DataLoader(dataset, batch_size=32)
+for batch in loader:
+    # Each item is raw bytes
+    pass
+```
+
+> Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+
+
+You can also customize how files are grouped by subclassing `StreamingRawDataset` and overriding the `setup` method. This is useful for pairing related files (e.g., image and mask, audio and transcript) or any custom grouping logic.
+
+```python
+from litdata.streaming.raw_dataset import StreamingRawDataset, FileMetadata
+from torch.utils.data import DataLoader
+from typing import Union
+
+class SegmentationRawDataset(StreamingRawDataset):
+  def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
+      # TODO: Implement your custom grouping logic here.
+      # For example, group files by prefix, extension, or any rule you need.
+      # Return a list of groups, where each group is a list of FileMetadata.
+      # Example:
+      #   return [[image, mask], ...]
+      pass
+
+# Initialize the custom dataset
+dataset = SegmentationRawDataset("s3://bucket/files/")
+loader = DataLoader(dataset, batch_size=32)
+for item in loader:
+    # Each item in the batch is a pair: [image_bytes, mask_bytes]
+    pass
+```
+
+</details>
+
+<details>
   <summary> ✅ Stream large cloud datasets</summary>
 &nbsp;
 
@@ -935,7 +996,7 @@ if __name__ == "__main__":
 
 Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
 
-- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+- You can use the `transform` argument in `StreamingDataset` to apply a `transformation function` or `a list of transformation functions` to each sample as it is streamed.
 
 ```python
 # Define a simple transform function
@@ -953,7 +1014,7 @@ def transform_fn(x, *args, **kwargs):
     return torch_transform(x)  # Apply the transform to the input image
 
 # Create dataset with appropriate configuration
-dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=[transform_fn])
 ```
 
 Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
@@ -1559,8 +1620,8 @@ map(
 # Benchmarks
 In this section we show benchmarks for speed to optimize a dataset and the resulting streaming speed ([Reproduce the benchmark](https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries)).
 
-## Streaming speed
-
+## Streaming speed 
+### LitData Chunks
 Data optimized and streamed with LitData achieves a 20x speed up over non optimized data and 2x speed up over other streaming solutions.
 
 Speed to stream Imagenet 1.2M from AWS S3:
@@ -1596,6 +1657,19 @@ Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
 | ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
 | ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
 | ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
+### Raw Dataset
+
+Speed to stream raw Imagenet 1.2M from different cloud storage providers:
+
+
+| Storage | Images / s (without transform) | Images / s (with transform) |
+|---------|-------------------|----------------|
+| AWS S3  | ~6400 +/- 100     | ~3200 +/- 100  |
+| Google Cloud Storage | ~5650 +/- 100     | ~3100 +/- 100  |
+
+> **Note:**
+> Use `StreamingRawDataset` if you want to stream your data as-is. Use `StreamingDataset` if you want the fastest streaming and are okay with optimizing your data first.
 
 &nbsp;
 

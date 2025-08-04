@@ -403,3 +403,65 @@ def test_resolve_time_template():
     assert resolver._resolve_time_template(path_1) == f"/logs/log_{curr_year}-{curr_month:02d}"
     assert resolver._resolve_time_template(path_2) == path_2
     assert resolver._resolve_time_template(path_3) == f"/logs/log_{curr_year}-{curr_month:02d}/important"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_src_resolver_gcs_connections(monkeypatch, lightning_cloud_mock):
+    """Test GCS connections resolver."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    with pytest.raises(
+        RuntimeError, match="`LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables."
+    ):
+        resolver._resolve_dir("/teamspace/gcs_connections/my_dataset")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[V1DataConnection(name="my_dataset", gcp=mock.MagicMock(source="gs://my-gcs-bucket"))],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    assert resolver._resolve_dir("/teamspace/gcs_connections/my_dataset").url == "gs://my-gcs-bucket"
+    assert resolver._resolve_dir("/teamspace/gcs_connections/my_dataset/train").url == "gs://my-gcs-bucket/train"
+
+    # Test missing data connection
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[],
+    )
+
+    with pytest.raises(ValueError, match="name `my_dataset`"):
+        resolver._resolve_dir("/teamspace/gcs_connections/my_dataset")
+
+    auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_src_resolver_gcs_folders(monkeypatch, lightning_cloud_mock):
+    """Test GCS folders resolver."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(name="debug_folder", gcs_folder=mock.MagicMock(source="gs://my-gcs-bucket"))
+        ],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    expected = "gs://my-gcs-bucket"
+    assert resolver._resolve_dir("/teamspace/gcs_folders/debug_folder").url == expected
+    assert resolver._resolve_dir("/teamspace/gcs_folders/debug_folder/a/b/c").url == expected + "/a/b/c"
+
+    auth.clear()

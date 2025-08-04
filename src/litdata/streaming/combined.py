@@ -13,8 +13,9 @@
 
 import logging
 import random
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence
+from typing import Any, Literal, Optional, Union
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -50,7 +51,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         seed: int = 42,
         weights: Optional[Sequence[float]] = None,
         iterate_over_all: bool = True,
@@ -99,7 +100,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 
         self._iterator: Optional[_CombinedDatasetIterator] = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[Dict[int, List[int]]] = None
+        self._num_samples_yielded: Optional[dict[int, list[int]]] = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
@@ -152,8 +153,8 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
         return self._iterator
 
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[List[int]] = None
-    ) -> Dict[str, Any]:
+        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+    ) -> dict[str, Any]:
         if self._iterator is None:
             if num_samples_yielded is None:
                 return {}
@@ -164,40 +165,48 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 class _CombinedDatasetIterator(Iterator):
     def __init__(
         self,
-        datasets: List[StreamingDataset],
+        datasets: list[StreamingDataset],
         seed: int,
         weights: Sequence[Optional[float]],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
-        batch_size: int,
+        batch_size: Union[int, Sequence[int]],
         batching_method: BatchingMethodType,
         iterate_over_all: bool = False,
     ) -> None:
         self._datasets = datasets
         self._dataset_iters = [iter(dataset) for dataset in datasets]
-        self._dataset_indexes: List[Optional[int]] = list(range(len(datasets)))
+        self._dataset_indexes: list[Optional[int]] = list(range(len(datasets)))
         self._num_samples_yielded = num_samples_yielded or [0 for _ in range(len(datasets))]
         self._original_weights = deepcopy(weights)
         self._weights = deepcopy(weights)
         self._rng = random.Random(seed)  # noqa: S311
         self._iterate_over_all = iterate_over_all
         self._batching_method = batching_method
+        # Batch size can be an int (applied to all datasets) or a sequence providing
+        # a specific batch size per dataset.
         self._batch_size = batch_size
+        from collections.abc import Sequence as _Sequence
+
+        # Validate when a sequence is provided
+        if isinstance(batch_size, _Sequence) and len(batch_size) != len(datasets):
+            raise ValueError("When providing a sequence of batch sizes, its length must match the number of datasets.")
         self._is_done = False
 
         if num_samples_yielded is not None:
             self._num_samples_yielded = num_samples_yielded
             for _ in range(sum(num_samples_yielded)):
-                choice_indexes: List[int] = [index for index in self._dataset_indexes if index is not None]
-                choice_weights: List[float] = [w for w in self._weights if w is not None]
+                choice_indexes: list[int] = [index for index in self._dataset_indexes if index is not None]
+                choice_weights: list[float] = [w for w in self._weights if w is not None]
                 self._rng.choices(choice_indexes, weights=choice_weights, k=1)
 
         self._use_streaming_dataloader = use_streaming_dataloader
         self._is_done = False
 
-        # Used to track the number of samples yielded in the current batch
-        # and the current dataset index
-        # This is used only when batching_method is set to "per_stream"
+        # Track the number of samples yielded in the current (DataLoader) batch
+        # and the active dataset index. This is used only when batching_method is
+        # set to "per_stream".  With per-dataset batch sizes we look up the limit
+        # dynamically based on ``self._batch_size`` if it is a sequence.
         self._samples_yielded_in_batch = 0
         self._cur_dataset_index = -1
 
@@ -239,11 +248,35 @@ class _CombinedDatasetIterator(Iterator):
             # For every sample, randomly select a dataset (weighted)
             dataset_idx = self._set_new_dataset_index()
         elif self._batching_method == BatchingMethod.PER_STREAM:
-            # For each batch, pick a dataset and stick with it for the whole batch
-            if self._cur_dataset_index == -1 or self._samples_yielded_in_batch >= self._batch_size:
+            # For each batch, pick a dataset and stick with it until the
+            # desired number of samples for that dataset have been yielded.
+
+            from collections.abc import Sequence as _Sequence
+
+            if self._cur_dataset_index == -1:
+                # Start of iteration or after switching dataset
                 self._cur_dataset_index = self._set_new_dataset_index()
                 self._samples_yielded_in_batch = 0
+
             dataset_idx = self._cur_dataset_index
+
+            # Determine the batch-size limit for the current dataset
+            limit = self._batch_size[dataset_idx] if isinstance(self._batch_size, _Sequence) else self._batch_size
+
+            if self._samples_yielded_in_batch >= limit:
+                # Current dataset reached its quota; pick a *different* dataset if possible
+                candidate_idx = self._cur_dataset_index
+                if len([i for i in self._dataset_indexes if i is not None]) > 1:
+                    while candidate_idx == self._cur_dataset_index:
+                        candidate_idx = self._set_new_dataset_index()
+                # Update tracking
+                self._cur_dataset_index = candidate_idx
+                self._samples_yielded_in_batch = 0
+                dataset_idx = self._cur_dataset_index
+                # Re-compute limit for the new dataset
+                if isinstance(self._batch_size, _Sequence):
+                    limit = self._batch_size[dataset_idx]
+
             self._samples_yielded_in_batch += 1
         else:
             raise ValueError(f"Invalid batching method: {self._batching_method}")
@@ -271,13 +304,13 @@ class _CombinedDatasetIterator(Iterator):
             }
         return sample
 
-    def state_dict(self, num_workers: int = 0, batch_size: int = 1) -> Dict[str, Any]:
+    def state_dict(self, num_workers: int = 0, batch_size: int = 1) -> dict[str, Any]:
         return _state_dict(self._datasets, self._num_samples_yielded, num_workers, batch_size)
 
 
 def _state_dict(
-    datasets: List[StreamingDataset], num_samples_yielded: List[int], num_workers: int = 0, batch_size: int = 1
-) -> Dict[str, Any]:
+    datasets: list[StreamingDataset], num_samples_yielded: list[int], num_workers: int = 0, batch_size: int = 1
+) -> dict[str, Any]:
     return {
         str(dataset_idx): dataset.state_dict(
             num_samples_yielded=num_samples_yielded[dataset_idx], num_workers=num_workers, batch_size=batch_size

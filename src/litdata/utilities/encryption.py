@@ -3,7 +3,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Tuple, Union, get_args
+from typing import Any, Literal, Union, get_args
 
 from litdata.constants import _CRYPTOGRAPHY_AVAILABLE
 
@@ -97,7 +97,7 @@ class FernetEncryption(Encryption):
     def decrypt(self, data: bytes) -> bytes:
         return self.fernet.decrypt(data)
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         return {
             "algorithm": self.algorithm,
             "level": self.level,
@@ -147,7 +147,7 @@ class RSAEncryption(Encryption):
     def algorithm(self) -> str:
         return "rsa"
 
-    def _generate_keys(self) -> Tuple[Any, Any]:
+    def _generate_keys(self) -> tuple[Any, Any]:
         private_key = rsa.generate_private_key(
             public_exponent=65537,
             key_size=2048,
@@ -179,13 +179,13 @@ class RSAEncryption(Encryption):
             ),
         )
 
-    def state_dict(self) -> Dict[str, Union[str, None]]:
+    def state_dict(self) -> dict[str, Union[str, None]]:
         return {
             "algorithm": self.algorithm,
             "level": self.level,
         }
 
-    def __getstate__(self) -> Dict[str, Union[str, None]]:
+    def __getstate__(self) -> dict[str, Union[str, None]]:
         encryption_algorithm = (
             serialization.BestAvailableEncryption(self.password.encode())
             if self.password
@@ -209,7 +209,7 @@ class RSAEncryption(Encryption):
             "level": self.level,
         }
 
-    def __setstate__(self, state: Dict[str, Union[str, None]]) -> None:
+    def __setstate__(self, state: dict[str, Union[str, None]]) -> None:
         # Restore the state from the serialized data
         self.password = state["password"] if state["password"] else ""
         self.level = state["level"]  # type: ignore
