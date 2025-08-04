@@ -12,10 +12,10 @@
 # limitations under the License.
 import warnings
 
-from lightning_utilities.core.imports import RequirementCache
-
 from litdata.__about__ import *  # noqa: F403
+from litdata.constants import _LIGHTNING_SDK_AVAILABLE
 from litdata.processing.functions import map, merge_datasets, optimize, walk
+from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
@@ -32,9 +32,9 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-
 __all__ = [
     "StreamingDataset",
+    "StreamingRawDataset",
     "CombinedStreamingDataset",
     "StreamingDataLoader",
     "TokensLoader",
@@ -48,7 +48,8 @@ __all__ = [
     "index_hf_dataset",
     "breakpoint",
 ]
-if RequirementCache("lightning_sdk"):
+
+if _LIGHTNING_SDK_AVAILABLE:
     from lightning_sdk import Machine  # noqa: F401
 
-    __all__ + ["Machine"]
+    __all__.append("Machine")
