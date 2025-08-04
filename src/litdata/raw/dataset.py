@@ -28,7 +28,6 @@ from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_c
 logger = logging.getLogger(__name__)
 
 
-
 class CacheManager:
     """Manages file caching for remote datasets, preserving directory structure."""
 
