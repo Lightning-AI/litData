@@ -79,10 +79,39 @@ pip install 'litdata[extras]'
 ----
 
 # Speed up model training
+Stream datasets directly from cloud storage without local downloads. Choose the approach that fits your workflow:
+
+## Option 1: Start immediately with existing data ⚡⚡
+Stream raw files directly from cloud storage - no pre-optimization needed.
+
+```python
+from litdata import StreamingRawDataset
+from torch.utils.data import DataLoader
+
+# Point to your existing cloud data
+dataset = StreamingRawDataset("s3://my-bucket/raw-data/")
+dataloader = DataLoader(dataset, batch_size=32)
+
+for batch in dataloader:
+    # Process raw bytes on-the-fly
+    pass
+```
+
+**Key benefits:**
+
+✅ **Instant access:**         Start streaming immediately without preprocessing.    
+✅ **Zero setup time:**        No data conversion or optimization required.    
+✅ **Native format:**          Work with original file formats (images, text, etc.).    
+✅ **Flexible processing:**    Apply transformations on-the-fly during streaming.    
+✅ **Cloud-native:**           Stream directly from S3, GCS, or Azure storage.    
+
+## Option 2: Optimize for maximum performance ⚡⚡⚡  
 Accelerate model training (20x faster) by optimizing datasets for streaming directly from cloud storage. Work with remote data without local downloads with features like loading data subsets, accessing individual samples, and resumable streaming.
 
-**Step 1: Optimize the data**
-This step will format the dataset for fast loading. The data will be written in a chunked binary format.
+**Step 1: Optimize your data (one-time setup)**
+
+Transform raw data into optimized chunks for maximum streaming speed.
+This step formats the dataset for fast loading by writing data in an efficient chunked binary format.
 
 ```python
 import numpy as np
@@ -91,24 +120,24 @@ import litdata as ld
 
 def random_images(index):
     # Replace with your actual image loading here (e.g., .jpg, .png, etc.)
-    # (recommended to pass as compressed formats like JPEG for better storage and optimized streaming speed)
-    # You can also apply resizing or reduce image quality to further increase streaming speed and save space.
+    # Recommended: use compressed formats like JPEG for better storage and optimized streaming speed
+    # You can also apply resizing or reduce image quality to further increase streaming speed and save space
     fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
     fake_labels = np.random.randint(10)
 
     # You can use any key:value pairs. Note that their types must not change between samples, and Python lists must
-    # always contain the same number of elements with the same types.
+    # always contain the same number of elements with the same types
     data = {"index": index, "image": fake_images, "class": fake_labels}
 
     return data
 
 if __name__ == "__main__":
-    # The optimize function writes data in an optimized format.
+    # The optimize function writes data in an optimized format
     ld.optimize(
         fn=random_images,                   # the function applied to each input
         inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
         output_dir="fast_data",             # optimized data is stored here
-        num_workers=4,                      # The number of workers on the same machine
+        num_workers=4,                      # the number of workers on the same machine
         chunk_bytes="64MB"                  # size of each chunk
     )
 ```
@@ -122,14 +151,14 @@ aws s3 cp --recursive fast_data s3://my-bucket/fast_data
 
 **Step 3: Stream the data during training**
 
-Load the data by replacing the PyTorch DataSet and DataLoader with the StreamingDataset and StreamingDataloader
+Load the data by replacing the PyTorch Dataset and DataLoader with the StreamingDataset and StreamingDataLoader.
 
 ```python
 import litdata as ld
 
 dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
 
-# Custom collate function to handle the batch (Optional)
+# Custom collate function to handle the batch (optional)
 def collate_fn(batch):
     return {
         "image": [sample["image"] for sample in batch],
@@ -144,15 +173,15 @@ for sample in dataloader:
 
 **Key benefits:**
 
-✅ Accelerate training:       Optimized datasets load 20x faster.      
-✅ Stream cloud datasets:     Work with cloud data without downloading it.    
-✅ Pytorch-first:             Works with PyTorch libraries like PyTorch Lightning, Lightning Fabric, Hugging Face.    
-✅ Easy collaboration:        Share and access datasets in the cloud, streamlining team projects.     
-✅ Scale across GPUs:         Streamed data automatically scales to all GPUs.      
-✅ Flexible storage:          Use S3, GCS, Azure, or your own cloud account for data storage.    
-✅ Compression:               Reduce your data footprint by using advanced compression algorithms.  
-✅ Run local or cloud:        Run on your own machines or auto-scale to 1000s of cloud GPUs with Lightning Studios.         
-✅ Enterprise security:       Self host or process data on your cloud account with Lightning Studios.  
+✅ **Accelerate training:**       Optimized datasets load 20x faster.      
+✅ **Stream cloud datasets:**     Work with cloud data without downloading it.    
+✅ **PyTorch-first:**             Works with PyTorch libraries like PyTorch Lightning, Lightning Fabric, Hugging Face.    
+✅ **Easy collaboration:**        Share and access datasets in the cloud, streamlining team projects.     
+✅ **Scale across GPUs:**         Streamed data automatically scales to all GPUs.      
+✅ **Flexible storage:**          Use S3, GCS, Azure, or your own cloud account for data storage.    
+✅ **Compression:**               Reduce your data footprint by using advanced compression algorithms.  
+✅ **Run local or cloud:**        Run on your own machines or auto-scale to 1000s of cloud GPUs with Lightning Studios.         
+✅ **Enterprise security:**       Self host or process data on your cloud account with Lightning Studios.  
 
 &nbsp;
 
