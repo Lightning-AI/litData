@@ -50,9 +50,9 @@ jobs:
         run: |
           PYVER="${{ matrix.python-version }}"
           if [ "$RUNNER_OS" = "Windows" ] && [ "$PYVER" != "3.12" ]; then
-            pytest . -v --cov=litdata --durations=100
+            python -m pytest . -v --cov=litdata --durations=100
           else
-            pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile --reruns=2
+            python -m pytest . -v --cov=litdata --durations=100 -n auto --dist=loadfile --reruns=2
           fi
 
       - name: Statistics
