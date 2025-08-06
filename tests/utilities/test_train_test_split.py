@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 import pytest
 
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
@@ -128,10 +126,16 @@ def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
 
     my_streaming_dataset = StreamingDataset(input_dir=str(tmpdir))
 
-    with patch("litdata.utilities.train_test_split.shuffle_lists_together") as mock_shuffle:
-        train_test_split(my_streaming_dataset, splits=[0.75, 0.25])
-        assert mock_shuffle.call_count == 1, "shuffle=True should call shuffle_lists_together"
+    train_shuffled, test_shuffled = train_test_split(my_streaming_dataset, splits=[0.8, 0.2], shuffle=True)
+    train_no_shuffle, test_no_shuffle = train_test_split(my_streaming_dataset, splits=[0.8, 0.2], shuffle=False)
 
-    with patch("litdata.utilities.train_test_split.shuffle_lists_together") as mock_shuffle:
-        train_test_split(my_streaming_dataset, splits=[0.75, 0.25], shuffle=False, seed=42)
-        assert mock_shuffle.call_count == 0, "shuffle=False should not call shuffle_lists_together"
+    assert len(train_shuffled) == 80
+    assert len(train_no_shuffle) == 80
+    assert len(test_shuffled) == 20
+    assert len(test_no_shuffle) == 20
+
+    shuffled_combined = train_shuffled.subsampled_files + test_shuffled.subsampled_files
+    no_shuffle_combined = train_no_shuffle.subsampled_files + test_no_shuffle.subsampled_files
+    assert shuffled_combined != no_shuffle_combined
+
+    assert no_shuffle_combined == my_streaming_dataset.subsampled_files
