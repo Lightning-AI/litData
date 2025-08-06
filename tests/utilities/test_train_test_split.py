@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
@@ -108,3 +110,28 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
             for curr_idx in _dl:
                 assert curr_idx not in visited_indices
                 visited_indices.add(curr_idx)
+
+
+@pytest.mark.parametrize(
+    "compression",
+    [
+        pytest.param(None),
+        pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
+    ],
+)
+def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
+    cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    my_streaming_dataset = StreamingDataset(input_dir=str(tmpdir))
+
+    with patch("litdata.utilities.train_test_split.shuffle_lists_together") as mock_shuffle:
+        train_test_split(my_streaming_dataset, splits=[0.75, 0.25])
+        assert mock_shuffle.call_count == 1, "shuffle=True should call shuffle_lists_together"
+
+    with patch("litdata.utilities.train_test_split.shuffle_lists_together") as mock_shuffle:
+        train_test_split(my_streaming_dataset, splits=[0.75, 0.25], shuffle=False, seed=42)
+        assert mock_shuffle.call_count == 0, "shuffle=False should not call shuffle_lists_together"
