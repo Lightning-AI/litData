@@ -37,7 +37,7 @@ Transform                              Optimize
 
 &nbsp;
 
-<a target="_blank" href="https://lightning.ai/docs/overview/prep-data/optimize-datasets-for-model-training-speed">
+<a target="_blank" href="https://lightning.ai/docs/overview/optimize-data/optimize-datasets">
   <img src="https://pl-bolts-doc-images.s3.us-east-2.amazonaws.com/app-2/get-started-badge.svg" height="36px" alt="Get started"/>
 </a>
 
