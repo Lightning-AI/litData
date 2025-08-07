@@ -47,7 +47,7 @@ jobs:
 
       - name: Tests
         working-directory: tests
-        run: pytest . -v -n 2 --cov=litdata --durations=120
+        run: pytest . -v --cov=litdata --durations=120 -n 2
 
       # - name: Run fast tests in parallel
       #   run: |
