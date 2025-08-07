@@ -37,3 +37,10 @@ jobs:
     uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
     with:
       requirements-file: "requirements/docs.txt"
+
+  check-md-links:
+    uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@main
+    with:
+      config-file: ".github/markdown-links-config.json"
+      base-branch: "main"
+      force-check-all: "yes"
