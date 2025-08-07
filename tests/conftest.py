@@ -2,9 +2,7 @@ import os
 import shutil
 import signal
 import sys
-import tempfile
 import threading
-import uuid
 from collections import OrderedDict
 from types import ModuleType
 from unittest.mock import Mock
@@ -25,19 +23,6 @@ def teardown_process_group():
     yield
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
-
-
-@pytest.fixture(autouse=True)
-def set_env(monkeypatch):
-    # Set environment variable before each test to configure BaseWorker's maximum wait time
-    os.environ["DATA_OPTIMIZER_TIMEOUT"] = "20"
-
-    uuid_str = uuid.uuid4().hex
-    tmp_base = tempfile.gettempdir() if sys.platform == "win32" else "/tmp"  # noqa: S108
-    tmp_path = os.path.join(tmp_base, uuid_str)
-
-    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", tmp_path)
-    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", tmp_path)
 
 
 @pytest.fixture(autouse=True)
