@@ -4,9 +4,6 @@
       "pattern": "^https://github.com/Lightning-AI/litData/pull/"
     },
     {
-      "pattern": "^https://dev.azure.com/Lightning-AI/lightning/_apis/build/status"
-    },
-    {
       "pattern": "^https://codecov.io/gh/Lightning-AI/litData/graph/badge.svg"
     }
   ],
