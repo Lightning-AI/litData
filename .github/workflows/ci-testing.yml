@@ -47,14 +47,14 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          pytest \
-            tests/streaming tests/utilities \
-            tests/test_cli.py tests/test_debugger.py \
-            -n 2 --cov=litdata --cov-append --cov-report= --durations=120
+          pytest . \
+            -n 2 --cov=litdata --durations=120 \
+            --ignore=tests/processing --ignore=tests/raw
 
       - name: Run processing tests sequentially
         run: |
-          pytest tests/processing tests/raw --cov=litdata --cov-append --cov-report= --durations=90
+          # note that the listed test shall match ignored in the previous step
+          pytest tests/processing tests/raw --cov=litdata --cov-append --durations=90
 
       - name: Statistics
         continue-on-error: true
