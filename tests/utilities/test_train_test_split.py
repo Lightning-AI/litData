@@ -108,3 +108,34 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
             for curr_idx in _dl:
                 assert curr_idx not in visited_indices
                 visited_indices.add(curr_idx)
+
+
+@pytest.mark.parametrize(
+    "compression",
+    [
+        pytest.param(None),
+        pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
+    ],
+)
+def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
+    cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    my_streaming_dataset = StreamingDataset(input_dir=str(tmpdir))
+
+    train_shuffled, test_shuffled = train_test_split(my_streaming_dataset, splits=[0.8, 0.2], shuffle=True)
+    train_no_shuffle, test_no_shuffle = train_test_split(my_streaming_dataset, splits=[0.8, 0.2], shuffle=False)
+
+    assert len(train_shuffled) == 80
+    assert len(train_no_shuffle) == 80
+    assert len(test_shuffled) == 20
+    assert len(test_no_shuffle) == 20
+
+    shuffled_combined = train_shuffled.subsampled_files + test_shuffled.subsampled_files
+    no_shuffle_combined = train_no_shuffle.subsampled_files + test_no_shuffle.subsampled_files
+    assert shuffled_combined != no_shuffle_combined
+
+    assert no_shuffle_combined == my_streaming_dataset.subsampled_files
