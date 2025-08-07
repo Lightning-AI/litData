@@ -47,12 +47,10 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          CORES=$(python -c "import os; print(max(1, os.cpu_count() // 2))")
-          echo "Using $CORES cores for pytest"
           pytest \
             tests/streaming tests/utilities tests/raw \
             tests/test_cli.py tests/test_debugger.py \
-            -n $CORES --cov=litdata --cov-append --cov-report= --durations=120
+            -n 2 --cov=litdata --cov-append --cov-report= --durations=120
 
       - name: Run processing tests sequentially
         run: |
