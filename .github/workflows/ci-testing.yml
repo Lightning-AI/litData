@@ -53,7 +53,7 @@ jobs:
 
       - name: Run processing tests sequentially
         run: |
-          # note that the listed test shall match ignored in the previous step
+          # note that the listed test should match ignored in the previous step
           pytest \
             tests/processing tests/raw \
             --cov=litdata --cov-append --durations=90
