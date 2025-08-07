@@ -47,9 +47,9 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          pytest \
-            tests/streaming tests/utilities \
-            tests/test_cli.py tests/test_debugger.py \
+          pytest tests \
+            --ignore=tests/processing \
+            --ignore=tests/raw \
             -n 2 --cov=litdata --cov-append --cov-report= --durations=120
 
       - name: Run processing tests sequentially
