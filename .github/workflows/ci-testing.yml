@@ -47,11 +47,11 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          pytest tests/streaming tests/utilities -n 2 --cov=litdata --cov-append --cov-config=setup.cfg --cov-report= --durations=120
+          pytest tests/streaming tests/utilities -n 2 --cov=litdata --cov-append --cov-report= --durations=120
 
       - name: Run processing tests sequentially
         run: |
-          pytest tests/processing --cov=litdata --cov-append --cov-config=setup.cfg --cov-report= --durations=90
+          pytest tests/processing --cov=litdata --cov-append --cov-report= --durations=90
 
       - name: Statistics
         continue-on-error: true
