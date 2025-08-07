@@ -571,7 +571,7 @@ Stream data during long training, if interrupted, pick up right where you left o
 
 LitData provides a stateful `Streaming DataLoader` e.g. you can `pause` and `resume` your training whenever you want.
 
-Info: The `Streaming DataLoader` was used by [Lit-GPT](https://github.com/Lightning-AI/lit-gpt/blob/main/pretrain/tinyllama.py) to pretrain LLMs. Restarting from an older checkpoint was critical to get to pretrain the full model due to several failures (network, CUDA Errors, etc..).
+Info: The `Streaming DataLoader` was used by [Lit-GPT](https://github.com/Lightning-AI/litgpt/blob/main/tutorials/pretrain_tinyllama.md) to pretrain LLMs. Restarting from an older checkpoint was critical to get to pretrain the full model due to several failures (network, CUDA Errors, etc..).
 
 ```python
 import os
