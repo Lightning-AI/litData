@@ -47,7 +47,7 @@ class StreamingDataset(IterableDataset):
 
     def __init__(
         self,
-        input_dir: Union[str, "Dir"],
+        input_dir: Union[str, "Dir", list[str], list["Dir"]],
         cache_dir: Optional[Union[str, "Dir"]] = None,
         item_loader: Optional[BaseItemLoader] = None,
         shuffle: bool = False,
@@ -93,6 +93,9 @@ class StreamingDataset(IterableDataset):
         """
         _check_version_and_prompt_upgrade(__version__)
 
+        if not isinstance(input_dir, list):
+            input_dir = [input_dir]
+
         super().__init__()
         if not isinstance(shuffle, bool):
             raise ValueError(f"Shuffle should be a boolean. Found {shuffle}")
@@ -101,8 +104,12 @@ class StreamingDataset(IterableDataset):
             raise ValueError("subsample must be a float with value greater than 0.")
 
         fnmatch_pattern = None
-        if isinstance(input_dir, str) and input_dir.endswith(".parquet"):
-            input_dir, fnmatch_pattern = os.path.split(input_dir)
+        if len(input_dir) == 1 and isinstance(input_dir[0], str) and input_dir[0].endswith(".parquet"):
+            input_dir, fnmatch_pattern = os.path.split(input_dir[0])
+
+        if len(input_dir) > 1:
+            raise ValueError("Not implemented")
+        input_dir = input_dir[0]
 
         input_dir = _resolve_dir(input_dir)
         cache_dir = _resolve_dir(cache_dir)
