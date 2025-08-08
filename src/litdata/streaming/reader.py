@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import glob
 import logging
 import os
 import warnings
@@ -150,13 +151,13 @@ class PrepareChunksThread(Thread):
         if _DEBUG:
             print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
-        for lock_extension in [".lock", ".cnt.lock"]:
-            try:
-                locak_chunk_path = chunk_filepath + lock_extension
-                if os.path.exists(locak_chunk_path):
-                    os.remove(locak_chunk_path)
-            except FileNotFoundError:
-                pass
+        base_name = os.path.basename(chunk_filepath)
+        base_prefix = os.path.splitext(base_name)[0]
+        cache_dir = os.path.dirname(chunk_filepath)
+        pattern = os.path.join(cache_dir, f"{base_prefix}*.lock")
+        for lock_path in glob.glob(pattern):
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(lock_path)
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
