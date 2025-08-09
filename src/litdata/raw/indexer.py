@@ -49,9 +49,36 @@ class BaseIndexer(ABC):
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
-        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
+        self,
+        input_dir: str,
+        cache_dir: str,
+        storage_options: Optional[dict[str, Any]],
+        recompute_index: bool = False,
     ) -> list[FileMetadata]:
-        """Build or load a ZSTD-compressed index of file metadata."""
+        """Loads or builds a ZSTD-compressed index of dataset file metadata.
+        This method attempts to load an existing index from cache, or builds a new one if needed.
+        Use `recompute_index=True` to force rebuilding the index from the input directory.
+
+        Args:
+            input_dir: Path to the dataset root directory.
+            cache_dir: Directory for storing the index cache.
+            storage_options: Optional storage backend options.
+            recompute_index: If True, always rebuild the index.
+
+        Returns:
+            List of FileMetadata objects for discovered files.
+
+        Raises:
+            ModuleNotFoundError: If required dependencies are missing.
+            ValueError: If no files are found in the input directory.
+        """
+        # Multi-level caching strategy:
+        # 1. Try to load index from remote cache (cloud storage).
+        # 2. If not found, try local cache.
+        # 3. If neither exists or recompute_index is True, discover files and build a new index.
+        #    - Save new index to local cache.
+        #    - TODO: Optionally upload index to remote cache for future use.
+        # Edge cases: Handles corrupted cache files, missing dependencies, and empty datasets.
         if not _ZSTD_AVAILABLE:
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
 

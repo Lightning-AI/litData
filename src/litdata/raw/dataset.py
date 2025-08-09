@@ -108,6 +108,7 @@ class StreamingRawDataset(Dataset):
         indexer: Optional[BaseIndexer] = None,
         storage_options: Optional[dict] = None,
         cache_files: bool = False,
+        recompute_index: bool = False,
         transform: Optional[Callable[[Union[bytes, list[bytes]]], Any]] = None,
     ):
         """Initialize StreamingRawDataset.
@@ -118,8 +119,12 @@ class StreamingRawDataset(Dataset):
             indexer: Custom file indexer (default: FileIndexer).
             storage_options: Cloud storage options.
             cache_files: Whether to cache files locally (default: False).
+            recompute_index: Whether to recompute the index (default: False).
+                If True, forces a re-scan of the input directory and rebuilds the index,
+                ignoring any cached index files. This is useful when the dataset
+                structure or files on the remote storage have changed.
             transform: A function to apply to each item. It will receive `bytes` for single-file
-                       items or `List[bytes]` for grouped items.
+                items or `List[bytes]` for grouped items.
         """
         self.input_dir = _resolve_dir(input_dir)
         self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options, cache_files)
@@ -129,7 +134,10 @@ class StreamingRawDataset(Dataset):
 
         # Discover all files in the input directory.
         self.files: list[FileMetadata] = self.indexer.build_or_load_index(
-            str(self.input_dir.path or self.input_dir.url), self.cache_manager.cache_dir, storage_options
+            str(self.input_dir.path or self.input_dir.url),
+            self.cache_manager.cache_dir,
+            storage_options,
+            recompute_index,
         )
         logger.info(f"Discovered {len(self.files)} files.")
 
