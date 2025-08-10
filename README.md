@@ -292,7 +292,7 @@ for item in loader:
 
 **Smart Index Caching**
 
-`StreamingRawDataset` automatically caches the file index for lightning-fast startup. First run scans and builds the index, subsequent runs load instantly from cache.
+`StreamingRawDataset` automatically caches the file index for instant startup. Initial scan, builds and caches the index, then subsequent runs load instantly.
 
 **Two-Level Cache:**
 - **Local:** Stored in your cache directory for instant access
