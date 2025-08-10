@@ -82,6 +82,13 @@ class BaseIndexer(ABC):
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
 
+        parsed_url = urlparse(input_dir)
+        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
+            raise ValueError(
+                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
+                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
+            )
+
         if not recompute_index:
             files = self._load_index_from_cache(input_dir, cache_dir, storage_options)
             if files:
@@ -232,12 +239,8 @@ class FileIndexer(BaseIndexer):
         if parsed_url.scheme in _SUPPORTED_PROVIDERS:  # Cloud storage
             return self._discover_cloud_files(input_dir, storage_options)
 
-        if not parsed_url.scheme:  # Local filesystem
-            return self._discover_local_files(input_dir)
-
-        raise ValueError(
-            f"Unsupported input directory scheme: {parsed_url.scheme}. Supported schemes are: {_SUPPORTED_PROVIDERS}"
-        )
+        # Local filesystem
+        return self._discover_local_files(input_dir)
 
     def _discover_cloud_files(
         self, input_dir: str, storage_options: Optional[dict[str, Any]]
