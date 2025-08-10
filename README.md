@@ -290,6 +290,20 @@ for item in loader:
     pass
 ```
 
+**Smart Index Caching**
+
+`StreamingRawDataset` automatically caches the file index for lightning-fast startup. First run scans and builds the index, subsequent runs load instantly from cache.
+
+**Two-Level Cache:**
+- **Local:** Stored in your cache directory for instant access
+- **Remote:** Automatically saved to cloud storage (e.g., `s3://bucket/files/index.json.zstd`) for reuse
+
+**Force Rebuild:**
+```python
+# When dataset files have changed
+dataset = StreamingRawDataset("s3://bucket/files/", recompute_index=True)
+```
+
 </details>
 
 <details>
