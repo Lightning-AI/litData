@@ -291,7 +291,7 @@ def test_recompute_index_flag_with_cache(mock_download, mock_upload, tmp_path):
         mock_download.assert_not_called()  # Should not attempt to load from cache
         mock_upload.assert_called_once()
 
-
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_recompute_index_excludes_index_file(tmp_path):
     """Test that recomputing the index does not include the index file itself if it exists."""
     # Create test files
