@@ -180,3 +180,20 @@ def test_streaming_raw_dataset_with_custom_indexer(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path), indexer=custom_indexer, cache_files=False)
 
     assert len(dataset) == 1  # Only .jpg file should be indexed
+
+
+def test_build_or_load_index_unsupported_scheme(tmp_path):
+    """Test that build_or_load_index raises ValueError for unsupported schemes."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    indexer = FileIndexer()
+    with pytest.raises(ValueError, match="Unsupported input directory scheme: `ftp`"):
+        indexer.build_or_load_index("ftp://unsupported/path", str(cache_dir), {})
+
+
+def test_discover_files_unsupported_scheme():
+    """Test that discover_files raises ValueError for unsupported schemes."""
+    indexer = FileIndexer()
+    with pytest.raises(ValueError, match="Unsupported input directory scheme: `http`"):
+        indexer.discover_files("http://unsupported/path", {})
