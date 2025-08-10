@@ -60,7 +60,7 @@ class BaseIndexer(ABC):
         recompute_index: bool = False,
     ) -> list[FileMetadata]:
         """Loads or builds a ZSTD-compressed index of dataset file metadata.
-        This method attempts to load an existing index from cache, or builds a new one if needed.
+        This method attempts to load an existing index from local or remote cache, or builds a new one if needed.
         Use `recompute_index=True` to force rebuilding the index from the input directory.
 
         Args:
@@ -105,19 +105,19 @@ class BaseIndexer(ABC):
 
         # 2. If not found, try remote cache.
         remote_index_path = os.path.join(input_dir, _INDEX_FILENAME)
-        if remote_index_path:
-            try:
-                self._download_from_cloud(
-                    remote_index_path, str(local_index_path), storage_options
-                )
-                files = self._load_index_file(str(local_index_path))
-                if files:
-                    logger.info(f"Loaded index from remote cache: {remote_index_path}")
-                    return files
-            except FileNotFoundError:
-                logger.debug(f"Remote index not found at {remote_index_path}")
-            except Exception as e:
-                logger.warning(f"Failed to download or load remote index: {e}")
+        try:
+            self._download_from_cloud(
+                remote_index_path, str(local_index_path), storage_options
+            )
+            files = self._load_index_file(str(local_index_path))
+            if files:
+                logger.info(f"Loaded index from remote cache: {remote_index_path}")
+                return files
+        except FileNotFoundError:
+            logger.debug(f"Remote index not found at {remote_index_path}")
+        except Exception as e:
+            logger.warning(f"Failed to download or load remote index: {e}")
+
         return None
 
     def _build_and_cache_index(
