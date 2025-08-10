@@ -294,6 +294,9 @@ class FileIndexer(BaseIndexer):
         return metadatas
 
     def _should_include_file(self, file_path: str) -> bool:
-        """Return True if file matches allowed extensions."""
-        file_ext = Path(file_path).suffix.lower()
+        """Return True if file matches allowed extensions and is not an index file."""
+        path = Path(file_path)
+        if path.name == _INDEX_FILENAME:
+            return False
+        file_ext = path.suffix.lower()
         return not self.extensions or file_ext in self.extensions
