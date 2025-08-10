@@ -47,9 +47,7 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(
-        self, input_dir: str, storage_options: Optional[dict[str, Any]]
-    ) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
@@ -100,7 +98,6 @@ class BaseIndexer(ABC):
         self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
     ) -> Optional[list[FileMetadata]]:
         """Tries to load the index from local or remote cache."""
-
         # 1. Try to load index from local cache.
         local_index_path = Path(cache_dir) / _INDEX_FILENAME
         if local_index_path.exists():
@@ -113,9 +110,7 @@ class BaseIndexer(ABC):
         # 2. If not found, try remote cache.
         remote_index_path = os.path.join(input_dir, _INDEX_FILENAME)
         try:
-            self._download_from_cloud(
-                remote_index_path, str(local_index_path), storage_options
-            )
+            self._download_from_cloud(remote_index_path, str(local_index_path), storage_options)
             files = self._load_index_file(str(local_index_path))
             if files:
                 logger.info(f"Loaded index from remote cache: {remote_index_path}")
@@ -142,16 +137,12 @@ class BaseIndexer(ABC):
         # Upload to remote cache
         remote_index_path = os.path.join(input_dir, _INDEX_FILENAME)
         try:
-            self._upload_to_cloud(
-                str(local_index_path), remote_index_path, storage_options
-            )
+            self._upload_to_cloud(str(local_index_path), remote_index_path, storage_options)
             logger.info(f"Uploaded index to remote cache: {remote_index_path}")
         except Exception as e:
             logger.warning(f"Failed to upload index to remote cache: {e}")
 
-        logger.info(
-            f"Built index with {len(files)} files from {input_dir} at {local_index_path}"
-        )
+        logger.info(f"Built index with {len(files)} files from {input_dir} at {local_index_path}")
         return files
 
     def _load_index_file(self, index_path: str) -> Optional[list[FileMetadata]]:
@@ -162,18 +153,12 @@ class BaseIndexer(ABC):
             with open(index_path, "rb") as f:
                 compressed_data = f.read()
             metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
-            return [
-                FileMetadata.from_dict(file_data) for file_data in metadata["files"]
-            ]
+            return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
         except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
-            logger.warning(
-                f"Failed to load index from local cache at `{index_path}`: {e}. "
-            )
+            logger.warning(f"Failed to load index from local cache at `{index_path}`: {e}. ")
             return None
 
-    def _save_index_file(
-        self, index_path: str, files: list[FileMetadata], source: str
-    ) -> None:
+    def _save_index_file(self, index_path: str, files: list[FileMetadata], source: str) -> None:
         """Encodes and saves an index file."""
         import zstd
 
@@ -230,9 +215,7 @@ class FileIndexer(BaseIndexer):
         self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(
-        self, input_dir: str, storage_options: Optional[dict[str, Any]]
-    ) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
         if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
@@ -247,9 +230,7 @@ class FileIndexer(BaseIndexer):
         # Local filesystem
         return self._discover_local_files(input_dir)
 
-    def _discover_cloud_files(
-        self, input_dir: str, storage_options: Optional[dict[str, Any]]
-    ) -> list[FileMetadata]:
+    def _discover_cloud_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
         """Recursively list files in a cloud storage bucket."""
         import fsspec
 
