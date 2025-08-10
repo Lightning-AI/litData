@@ -235,6 +235,11 @@ class FileIndexer(BaseIndexer):
     ) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
+        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
+            raise ValueError(
+                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
+                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
+            )
 
         if parsed_url.scheme in _SUPPORTED_PROVIDERS:  # Cloud storage
             return self._discover_cloud_files(input_dir, storage_options)
