@@ -201,6 +201,7 @@ def test_discover_files_unsupported_scheme():
 
 @patch("litdata.raw.indexer.BaseIndexer._upload_to_cloud")
 @patch("litdata.raw.indexer.BaseIndexer._download_from_cloud", side_effect=FileNotFoundError)
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_build_and_cache_remote_index(mock_download, mock_upload, tmp_path):
     """Test that a new index is built, cached locally, and uploaded to remote."""
     input_dir = "s3://my-bucket/data"
@@ -228,6 +229,7 @@ def test_build_and_cache_remote_index(mock_download, mock_upload, tmp_path):
 
 @patch("litdata.raw.indexer.BaseIndexer._upload_to_cloud")
 @patch("litdata.raw.indexer.BaseIndexer._download_from_cloud")
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_load_remote_index_from_cache(mock_download, mock_upload, tmp_path):
     """Test loading an index from remote cache when local is empty."""
     input_dir = "s3://my-bucket/data"
@@ -266,6 +268,7 @@ def test_load_remote_index_from_cache(mock_download, mock_upload, tmp_path):
 
 @patch("litdata.raw.indexer.BaseIndexer._upload_to_cloud")
 @patch("litdata.raw.indexer.BaseIndexer._download_from_cloud")
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_recompute_index_flag_with_cache(mock_download, mock_upload, tmp_path):
     """Test that `recompute_index=True` forces a rebuild even if a cache exists."""
     input_dir = "s3://my-bucket/data"
