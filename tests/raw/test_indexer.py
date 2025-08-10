@@ -290,7 +290,7 @@ def test_recompute_index_flag_with_cache(mock_download, mock_upload, tmp_path):
 
 
 def test_recompute_index_excludes_index_file(tmp_path):
-    """Test that recomputing the index does not include the index file itself."""
+    """Test that recomputing the index does not include the index file itself if it exists."""
     # Create test files
     (tmp_path / "file1.jpg").write_text("content1")
     (tmp_path / "file2.jpg").write_text("content2")
