@@ -287,3 +287,23 @@ def test_recompute_index_flag_with_cache(mock_download, mock_upload, tmp_path):
         mock_discover.assert_called_once_with(input_dir, {})
         mock_download.assert_not_called()  # Should not attempt to load from cache
         mock_upload.assert_called_once()
+
+
+def test_recompute_index_excludes_index_file(tmp_path):
+    """Test that recomputing the index does not include the index file itself."""
+    # Create test files
+    (tmp_path / "file1.jpg").write_text("content1")
+    (tmp_path / "file2.jpg").write_text("content2")
+    # Create a dummy index file that should be ignored
+    (tmp_path / _INDEX_FILENAME).write_text("dummy index content")
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    # Include .zstd to ensure we are not just filtering by extension
+    indexer = FileIndexer(extensions=[".jpg", ".zstd"])
+    files = indexer.build_or_load_index(str(tmp_path), str(cache_dir), {}, recompute_index=True)
+
+    assert len(files) == 2
+    for f in files:
+        assert _INDEX_FILENAME not in f.path
