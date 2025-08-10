@@ -126,7 +126,7 @@ pip install -r requirements.txt
 
 ## License
 
-This project is licensed under the APACHE 2.0 License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the [APACHE 2.0 License](https://github.com/Lightning-AI/litData/blob/main/LICENSE).
 
 ______________________________________________________________________
 
