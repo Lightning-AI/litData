@@ -31,7 +31,7 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and setup python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v6
         with:
