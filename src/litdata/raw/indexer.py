@@ -116,7 +116,7 @@ class BaseIndexer(ABC):
                 logger.info(f"Loaded index from remote cache: {remote_index_path}")
                 return files
         except FileNotFoundError:
-            logger.debug(f"Remote index not found at {remote_index_path}")
+            logger.warning(f"Remote index not found at {remote_index_path}")
         except Exception as e:
             logger.error(f"Failed to download or load remote index: {e}")
 
