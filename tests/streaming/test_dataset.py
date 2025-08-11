@@ -100,6 +100,52 @@ def test_streaming_dataset(tmpdir, monkeypatch, compression):
     assert len(dataloader) == 30
 
 
+@pytest.mark.parametrize(
+    "compression",
+    [
+        pytest.param(None),
+        pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
+    ],
+)
+@pytest.mark.timeout(30)
+@pytest.mark.skip(reason="not implemented")
+def test_multi_streaming_dataset(tmpdir, monkeypatch, compression):
+    seed_everything(42)
+
+    with pytest.raises(FileNotFoundError, match="The provided dataset path"):
+        dataset = StreamingDataset(input_dir=[str(tmpdir.join("tmpfolder"))])
+
+    with pytest.raises(ValueError, match="The provided dataset"):
+        dataset = StreamingDataset(input_dir=[str(tmpdir)])
+
+    dir_name = ("dataset1", "dataset2")
+
+    for idx, _dir in enumerate(dir_name):
+        cache = Cache(str(tmpdir.join(_dir)), chunk_size=10, compression=compression)
+        for j in range(60):
+            cache[j] = idx * j
+        cache.done()
+        cache.merge()
+
+    dataset = StreamingDataset(input_dir=[str(tmpdir.join(_dir)) for _dir in dir_name])
+
+    assert len(dataset) == 120
+    for i in range(120):
+        assert dataset[i] == i
+
+    dataset_iter = iter(dataset)
+    assert len(dataset_iter) == 120
+    for i in range(120):
+        assert next(dataset_iter) == i
+
+    dataloader = StreamingDataLoader(dataset, num_workers=0, batch_size=1)
+    assert len(dataloader) == 120
+    dataloader = DataLoader(dataset, num_workers=2, batch_size=1)
+    assert len(dataloader) == 120
+    dataloader = DataLoader(dataset, num_workers=2, batch_size=2)
+    assert len(dataloader) == 60
+
+
 def _simple_optimize_fn(index):
     return index
 

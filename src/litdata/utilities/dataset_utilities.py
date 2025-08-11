@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import numpy as np
 
@@ -17,7 +17,7 @@ from litdata.utilities.subsample import shuffle_lists_together, subsample_filena
 
 
 def subsample_streaming_dataset(
-    input_dir: Dir,
+    input_dir: Union[Dir, list[Dir]],
     cache_dir: Optional[Dir] = None,
     item_loader: Optional[BaseItemLoader] = None,
     subsample: float = 1.0,
@@ -27,7 +27,7 @@ def subsample_streaming_dataset(
     session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
     fnmatch_pattern: Optional[str] = None,
-) -> tuple[list[str], list[tuple[int, int]]]:
+) -> tuple[Union[list[str], list[list[str]]], Union[list[tuple[int, int]]], list[list[tuple[int, int]]]]:
     """Subsample streaming dataset.
 
     But before doing that, we will do some preprocessing:
@@ -38,6 +38,28 @@ def subsample_streaming_dataset(
     - Once chunks are ready, subsample (chunk filenames, region_of_interest).
 
     """
+    if isinstance(input_dir, list):
+        subsampled_files_list = []
+        roi_list = []
+
+        for _dir in input_dir:
+            _subsampled_files, _roi = subsample_streaming_dataset(
+                input_dir=_dir,
+                cache_dir=cache_dir,
+                item_loader=item_loader,
+                subsample=subsample,
+                shuffle=shuffle,
+                seed=seed,
+                storage_options=storage_options,
+                session_options=session_options,
+                index_path=index_path,
+                fnmatch_pattern=fnmatch_pattern,
+            )
+
+            subsampled_files_list.extend(_subsampled_files)
+            roi_list.extend(_roi)
+        return subsampled_files_list, roi_list
+
     subsampled_files: list[str] = []
     roi: list[tuple[int, int]] = []
 
@@ -141,12 +163,15 @@ def _should_replace_path(path: Optional[str]) -> bool:
 
 
 def _read_updated_at(
-    input_dir: Optional[Dir],
+    input_dir: Optional[Union[Dir, list[Dir]]],
     storage_options: Optional[dict] = {},
     session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
-) -> str:
+) -> Union[str, list[str]]:
     """Read last updated timestamp from index.json file."""
+    if isinstance(input_dir, list):
+        return [_read_updated_at(_dir, storage_options, session_options, index_path) for _dir in input_dir]
+
     last_updation_timestamp = "0"
     index_json_content = None
     assert isinstance(input_dir, Dir)
@@ -215,21 +240,26 @@ def get_default_cache_dir() -> str:
 
 
 def _try_create_cache_dir(
-    input_dir: Optional[str],
+    input_dir: Optional[Union[str, list[str]]],
     cache_dir: Optional[str] = None,
     storage_options: Optional[dict] = {},
     session_options: Optional[dict] = {},
     index_path: Optional[str] = None,
 ) -> Optional[str]:
     """Prepare and return the cache directory for a dataset."""
+    input_dir = input_dir if isinstance(input_dir, list) else [input_dir] if input_dir else []
     resolved_input_dir = _resolve_dir(input_dir)
     updated_at = _read_updated_at(resolved_input_dir, storage_options, session_options, index_path)
 
-    # Fallback to a hash of the input_dir if updated_at is "0"
-    if updated_at == "0" and input_dir is not None:
-        updated_at = generate_md5_hash(input_dir)
+    updated_at = [updated_at] if not isinstance(updated_at, list) else updated_at
 
-    dir_url_hash = generate_md5_hash(resolved_input_dir.url or "")
+    for idx, _upd in enumerate(updated_at):
+        # Fallback to a hash of the input_dir if updated_at is "0"
+        if _upd == "0" and input_dir[idx] is not None:
+            updated_at[idx] = generate_md5_hash(resolved_input_dir[idx].path)
+
+    _input_url = "_".join(_dir.url for _dir in resolved_input_dir if _dir.url is not None)
+    dir_url_hash = generate_md5_hash(_input_url)
 
     # Determine the cache directory, preferring user-provided cache_dir if given
     cache_dir = cache_dir if cache_dir is not None else get_default_cache_dir()
