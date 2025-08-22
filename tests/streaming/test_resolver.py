@@ -482,9 +482,7 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
 
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
-        data_connections=[
-            V1DataConnection(name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
-        ],
+        data_connections=[V1DataConnection(name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))],
     )
 
     client_cls_mock = mock.MagicMock()
