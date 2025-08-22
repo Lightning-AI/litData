@@ -89,6 +89,9 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if dir_path_absolute.startswith("/teamspace/gcs_folders") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_gcs_folders(dir_path_absolute)
 
+    if dir_path_absolute.startswith("/teamspace/lightning_storage") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_lightning_storage(dir_path_absolute)
+
     if dir_path_absolute.startswith("/teamspace/datasets") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_datasets(dir_path_absolute)
 
@@ -244,6 +247,28 @@ def _resolve_gcs_folders(dir_path: str) -> Dir:
         raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
 
     return Dir(path=dir_path, url=os.path.join(data_connection[0].gcs_folder.source, *dir_path.split("/")[4:]))
+
+
+def _resolve_lightning_storage(dir_path: str) -> Dir:
+    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+
+    client = LightningClient(max_tries=2)
+
+    # Get the ids from env variables
+    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    if project_id is None:
+        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
+
+    target_name = dir_path.split("/")[3]
+
+    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
+
+    data_connection = [dc for dc in data_connections if dc.name == target_name]
+
+    if not data_connection:
+        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
+
+    return Dir(path=dir_path, url=os.path.join(data_connection[0].r2.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_datasets(dir_path: str) -> Dir:

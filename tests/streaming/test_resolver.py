@@ -465,3 +465,47 @@ def test_src_resolver_gcs_folders(monkeypatch, lightning_cloud_mock):
     assert resolver._resolve_dir("/teamspace/gcs_folders/debug_folder/a/b/c").url == expected + "/a/b/c"
 
     auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
+    """Test lightning_storage resolver with r2 source."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    with pytest.raises(
+        RuntimeError, match="`LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables."
+    ):
+        resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
+        ],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    expected = "r2://my-r2-bucket"
+    assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset").url == expected
+    assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train").url == expected + "/train"
+
+    # Test missing data connection
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    with pytest.raises(ValueError, match="name `my_dataset`"):
+        resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+
+    auth.clear()
