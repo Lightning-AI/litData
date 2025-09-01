@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -15,12 +15,12 @@ from litdata.streaming.item_loader import BaseItemLoader, TokensLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
 
+
 def wait_for_predicate(
     predicate: Callable[[], bool],
     timeout: float,
 ) -> bool:
-    """
-    Wait until the given predicate becomes True or the timeout expires.
+    """Wait until the given predicate becomes True or the timeout expires.
 
     Args:
         predicate: A function returning a boolean condition to check.
@@ -34,6 +34,7 @@ def wait_for_predicate(
         if predicate():
             return True
     return False
+
 
 def subsample_streaming_dataset(
     input_dir: Dir,
@@ -84,7 +85,6 @@ def subsample_streaming_dataset(
         else:
             downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
-
 
     def path_exists(p: os.PathLike):
         return wait_for_predicate(lambda x: os.path.exists(p), timeout=0.5)
