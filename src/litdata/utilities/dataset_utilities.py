@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import numpy as np
 
@@ -15,6 +15,25 @@ from litdata.streaming.item_loader import BaseItemLoader, TokensLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
 
+def wait_for_predicate(
+    predicate: Callable[[], bool],
+    timeout: float,
+) -> bool:
+    """
+    Wait until the given predicate becomes True or the timeout expires.
+
+    Args:
+        predicate: A function returning a boolean condition to check.
+        timeout: Maximum time (in seconds) to wait.
+
+    Returns:
+        True if predicate became True within timeout, else False.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if predicate():
+            return True
+    return False
 
 def subsample_streaming_dataset(
     input_dir: Dir,
@@ -66,9 +85,11 @@ def subsample_streaming_dataset(
             downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
-    time.sleep(0.5)  # Give some time for the file to be available
 
-    if not os.path.exists(input_dir.path):
+    def path_exists(p: os.PathLike):
+        return wait_for_predicate(lambda x: os.path.exists(p), timeout=0.5)
+
+    if not path_exists(input_dir.path):
         raise FileNotFoundError(f"The provided dataset path `{input_dir.path}` does not exist.")
 
     if os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
