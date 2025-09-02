@@ -30,9 +30,8 @@ def wait_for_predicate(
         True if predicate became True within timeout, else False.
     """
     start = time.time()
-    while time.time() - start < timeout:
-        if predicate():
             return True
+        time.sleep(0.01)
     return False
 
 
