@@ -17,7 +17,7 @@ from litdata.utilities.subsample import shuffle_lists_together, subsample_filena
 
 
 def wait_for_predicate(
-    predicate: Callable[[], bool],
+    predicate: Callable[[Any], bool],
     timeout: float,
 ) -> bool:
     """Wait until the given predicate becomes True or the timeout expires.
@@ -86,8 +86,8 @@ def subsample_streaming_dataset(
             downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
-    def path_exists(p: os.PathLike):
-        return wait_for_predicate(lambda x: os.path.exists(p), timeout=0.5)
+    def path_exists(p: str) -> bool:
+        return wait_for_predicate(lambda: os.path.exists(p), timeout=0.5)
 
     if not path_exists(input_dir.path):
         raise FileNotFoundError(f"The provided dataset path `{input_dir.path}` does not exist.")
