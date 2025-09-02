@@ -17,7 +17,7 @@ from litdata.utilities.subsample import shuffle_lists_together, subsample_filena
 
 
 def wait_for_predicate(
-    predicate: Callable[[Any], bool],
+    predicate: Callable[[], bool],
     timeout: float,
 ) -> bool:
     """Wait until the given predicate becomes True or the timeout expires.
