@@ -223,68 +223,70 @@ class S3FsProvider(FsProvider):
 
         return not objects["KeyCount"] > 0
 
+
 class R2FsProvider(FsProvider):
     def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         super().__init__(storage_options=storage_options)
 
         # Get data connection ID from environment variable (set by resolver)
         data_connection_id = os.getenv("LIGHTNING_DATA_CONNECTION_ID")
-        
+
         # Fetch R2 credentials from the Lightning platform and add them to the storage options
         r2_credentials = self.get_r2_bucket_credentials(data_connection_id=data_connection_id)
         storage_options = {**storage_options, **r2_credentials}
-        
+
         self.client = S3Client(storage_options=storage_options)
-    
+
     def get_r2_bucket_credentials(self, data_connection_id: str) -> dict[str, str]:
-        """
-        Fetch temporary R2 credentials for the current lightning storage connection.
-        """
+        """Fetch temporary R2 credentials for the current lightning storage connection."""
         import json
+
         import requests
-        
+
         try:
             # Get Lightning Cloud API token
             cloud_url = os.getenv("LIGHTNING_CLOUD_URL", "https://lightning.ai")
             api_key = os.getenv("LIGHTNING_API_KEY")
             username = os.getenv("LIGHTNING_USERNAME")
             project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID")
-            
+
             if not all([api_key, username, project_id]):
                 raise RuntimeError("Missing required environment variables")
-                
+
             # Login to get token
             payload = {"apiKey": api_key, "username": username}
             login_url = f"{cloud_url}/v1/auth/login"
             response = requests.post(login_url, data=json.dumps(payload))
-            
+
             if "token" not in response.json():
                 raise RuntimeError("Failed to get authentication token")
-                
+
             token = response.json()["token"]
-            
+
             # Get temporary bucket credentials
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            credentials_url = f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
-            
+            credentials_url = (
+                f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
+            )
+
             credentials_response = requests.get(credentials_url, headers=headers)
-            
+
             if credentials_response.status_code != 200:
                 raise RuntimeError(f"Failed to get credentials: {credentials_response.status_code}")
-                
+
             temp_credentials = credentials_response.json()
 
             endpoint_url = f"https://{temp_credentials['accountId']}.r2.cloudflarestorage.com"
-            
+
             # Format credentials for S3Client
             return {
                 "aws_access_key_id": temp_credentials["accessKeyId"],
                 "aws_secret_access_key": temp_credentials["secretAccessKey"],
                 "aws_session_token": temp_credentials["sessionToken"],
                 "endpoint_url": endpoint_url,
-                "region_name": "auto"
+                "region_name": "auto",
             }
-            
+
         except Exception as e:
             # Fallback to hardcoded credentials if API call fails
             print(f"Failed to get R2 credentials from API: {e}. Using fallback credentials.")

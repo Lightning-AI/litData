@@ -5,8 +5,8 @@ import pytest
 from litdata.streaming import fs_provider as fs_provider_module
 from litdata.streaming.fs_provider import (
     GCPFsProvider,
-    S3FsProvider,
     R2FsProvider,
+    S3FsProvider,
     _get_fs_provider,
     get_bucket_and_path,
     not_supported_provider,
