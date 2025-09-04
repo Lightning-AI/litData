@@ -44,7 +44,10 @@ class CloudProvider(str, Enum):
     GCP = "gcp"
 
 
-def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
+def _resolve_dir(dir_path: Optional[Union[str, Path, Dir, list[str], list[Path], list[Dir]]]) -> Dir:
+    if isinstance(dir_path, (list, tuple)):
+        return [_resolve_dir(item) for item in dir_path]
+
     if isinstance(dir_path, Dir):
         return Dir(path=str(dir_path.path) if dir_path.path else None, url=str(dir_path.url) if dir_path.url else None)
 
