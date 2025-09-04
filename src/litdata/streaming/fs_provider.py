@@ -223,6 +223,159 @@ class S3FsProvider(FsProvider):
 
         return not objects["KeyCount"] > 0
 
+class R2FsProvider(FsProvider):
+    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
+        super().__init__(storage_options=storage_options)
+
+        # Get data connection ID from environment variable (set by resolver)
+        data_connection_id = os.getenv("LIGHTNING_DATA_CONNECTION_ID")
+        
+        # Fetch R2 credentials from the Lightning platform and add them to the storage options
+        r2_credentials = self.get_r2_bucket_credentials(data_connection_id=data_connection_id)
+        storage_options = {**storage_options, **r2_credentials}
+        
+        self.client = S3Client(storage_options=storage_options)
+    
+    def get_r2_bucket_credentials(self, data_connection_id: str) -> dict[str, str]:
+        """
+        Fetch temporary R2 credentials for the current lightning storage connection.
+        """
+        import json
+        import requests
+        
+        try:
+            # Get Lightning Cloud API token
+            cloud_url = os.getenv("LIGHTNING_CLOUD_URL", "https://lightning.ai")
+            api_key = os.getenv("LIGHTNING_API_KEY")
+            username = os.getenv("LIGHTNING_USERNAME")
+            project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID")
+            
+            if not all([api_key, username, project_id]):
+                raise RuntimeError("Missing required environment variables")
+                
+            # Login to get token
+            payload = {"apiKey": api_key, "username": username}
+            login_url = f"{cloud_url}/v1/auth/login"
+            response = requests.post(login_url, data=json.dumps(payload))
+            
+            if "token" not in response.json():
+                raise RuntimeError("Failed to get authentication token")
+                
+            token = response.json()["token"]
+            
+            # Get temporary bucket credentials
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            credentials_url = f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
+            
+            credentials_response = requests.get(credentials_url, headers=headers)
+            
+            if credentials_response.status_code != 200:
+                raise RuntimeError(f"Failed to get credentials: {credentials_response.status_code}")
+                
+            temp_credentials = credentials_response.json()
+
+            endpoint_url = f"https://{temp_credentials['accountId']}.r2.cloudflarestorage.com"
+            
+            # Format credentials for S3Client
+            return {
+                "aws_access_key_id": temp_credentials["accessKeyId"],
+                "aws_secret_access_key": temp_credentials["secretAccessKey"],
+                "aws_session_token": temp_credentials["sessionToken"],
+                "endpoint_url": endpoint_url,
+                "region_name": "auto"
+            }
+            
+        except Exception as e:
+            # Fallback to hardcoded credentials if API call fails
+            print(f"Failed to get R2 credentials from API: {e}. Using fallback credentials.")
+            raise RuntimeError(f"Failed to get R2 credentials and no fallback available: {e}")
+
+    def upload_file(self, local_path: str, remote_path: str) -> None:
+        bucket_name, blob_path = get_bucket_and_path(remote_path, "r2")
+        self.client.client.upload_file(local_path, bucket_name, blob_path)
+
+    def download_file(self, remote_path: str, local_path: str) -> None:
+        bucket_name, blob_path = get_bucket_and_path(remote_path, "r2")
+        with open(local_path, "wb") as f:
+            self.client.client.download_fileobj(bucket_name, blob_path, f)
+
+    def download_directory(self, remote_path: str, local_directory_name: str) -> str:
+        """Download all objects under a given S3 prefix (directory) using the existing client."""
+        bucket_name, remote_directory_name = get_bucket_and_path(remote_path, "r2")
+
+        # Ensure local directory exists
+        local_directory_name = os.path.abspath(local_directory_name)
+        os.makedirs(local_directory_name, exist_ok=True)
+
+        saved_file_dir = "."
+
+        # List objects under the given prefix
+        objects = self.client.client.list_objects_v2(Bucket=bucket_name, Prefix=remote_directory_name)
+
+        # Check if objects exist
+        if "Contents" in objects:
+            for obj in objects["Contents"]:
+                local_filename = os.path.join(local_directory_name, obj["Key"])
+
+                # Ensure parent directories exist
+                os.makedirs(os.path.dirname(local_filename), exist_ok=True)
+
+                # Download each file
+                with open(local_filename, "wb") as f:
+                    self.client.client.download_fileobj(bucket_name, obj["Key"], f)
+                    saved_file_dir = os.path.dirname(local_filename)
+
+        return saved_file_dir
+
+    def copy(self, remote_source: str, remote_destination: str) -> None:
+        input_obj = parse.urlparse(remote_source)
+        output_obj = parse.urlparse(remote_destination)
+        self.client.client.copy(
+            {"Bucket": input_obj.netloc, "Key": input_obj.path.lstrip("/")},
+            output_obj.netloc,
+            output_obj.path.lstrip("/"),
+        )
+
+    def list_directory(self, path: str) -> list[str]:
+        raise NotImplementedError
+
+    def delete_file_or_directory(self, path: str) -> None:
+        """Delete the file or the directory."""
+        bucket_name, blob_path = get_bucket_and_path(path, "r2")
+
+        # List objects under the given path
+        objects = self.client.client.list_objects_v2(Bucket=bucket_name, Prefix=blob_path)
+
+        # Check if objects exist
+        if "Contents" in objects:
+            for obj in objects["Contents"]:
+                self.client.client.delete_object(Bucket=bucket_name, Key=obj["Key"])
+
+    def exists(self, path: str) -> bool:
+        import botocore
+
+        bucket_name, blob_path = get_bucket_and_path(path, "r2")
+        try:
+            _ = self.client.client.head_object(Bucket=bucket_name, Key=blob_path)
+            return True
+        except botocore.exceptions.ClientError as e:
+            if "the HeadObject operation: Not Found" in str(e):
+                return False
+            raise e
+        except Exception as e:
+            raise e
+
+    def is_empty(self, path: str) -> bool:
+        obj = parse.urlparse(path)
+
+        objects = self.client.client.list_objects_v2(
+            Bucket=obj.netloc,
+            Delimiter="/",
+            Prefix=obj.path.lstrip("/").rstrip("/") + "/",
+        )
+
+        return not objects["KeyCount"] > 0
+
 
 def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> tuple[str, str]:
     """Parse the remote filepath and return the bucket name and the blob path.
@@ -259,6 +412,8 @@ def _get_fs_provider(remote_filepath: str, storage_options: Optional[dict[str, A
         return GCPFsProvider(storage_options=storage_options)
     if obj.scheme == "s3":
         return S3FsProvider(storage_options=storage_options)
+    if obj.scheme == "r2":
+        return R2FsProvider(storage_options=storage_options)
     raise ValueError(f"Unsupported scheme: {obj.scheme}")
 
 
