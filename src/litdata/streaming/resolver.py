@@ -268,6 +268,9 @@ def _resolve_lightning_storage(dir_path: str) -> Dir:
     if not data_connection:
         raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
 
+    # Store data connection ID in environment variable for R2FsProvider to use
+    os.environ["LIGHTNING_DATA_CONNECTION_ID"] = data_connection[0].id
+
     return Dir(path=dir_path, url=os.path.join(data_connection[0].r2.source, *dir_path.split("/")[4:]))
 
 
