@@ -112,8 +112,8 @@ class R2Client:
             # Login to get token
             payload = {"apiKey": api_key, "username": username}
             login_url = f"{cloud_url}/v1/auth/login"
-            response = requests.post(login_url, data=json.dumps(payload))
-
+            response = requests.post(login_url, data=json.dumps(payload))  # noqa: S113
+            
             if "token" not in response.json():
                 raise RuntimeError("Failed to get authentication token")
 
@@ -125,7 +125,7 @@ class R2Client:
                 f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
             )
 
-            credentials_response = requests.get(credentials_url, headers=headers)
+            credentials_response = requests.get(credentials_url, headers=headers, timeout=10)
 
             if credentials_response.status_code != 200:
                 raise RuntimeError(f"Failed to get credentials: {credentials_response.status_code}")
