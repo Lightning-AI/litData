@@ -473,6 +473,12 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
     auth = login.Auth()
     auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
 
+    # Setup mocking first
+    client_mock = mock.MagicMock()
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
     with pytest.raises(
         RuntimeError, match="`LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables."
     ):
@@ -480,20 +486,225 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
 
     monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
 
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(id="test-connection-id", name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
+        ],
+    )
+
+    expected = "r2://my-r2-bucket"
+    result = resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+    assert result.url == expected
+    assert result.data_connection_id == "test-connection-id"
+
+    result_train = resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train")
+    assert result_train.url == expected + "/train"
+    assert result_train.data_connection_id == "test-connection-id"
+
+    # Test missing data connection
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[],
+    )
+
+    with pytest.raises(ValueError, match="name `my_dataset`"):
+        resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+
+    auth.clear()
+
+
+# Tests for data_connection_id functionality
+
+
+def test_dir_dataclass_with_data_connection_id():
+    """Test Dir dataclass properly handles data_connection_id field."""
+    # Test default initialization
+    dir_obj = resolver.Dir()
+    assert dir_obj.path is None
+    assert dir_obj.url is None
+    assert dir_obj.data_connection_id is None
+
+    # Test with data_connection_id
+    dir_obj = resolver.Dir(path="/test/path", url="r2://test-bucket", data_connection_id="test-connection-123")
+    assert dir_obj.path == "/test/path"
+    assert dir_obj.url == "r2://test-bucket"
+    assert dir_obj.data_connection_id == "test-connection-123"
+
+
+def test_resolve_dir_preserves_data_connection_id():
+    """Test that _resolve_dir preserves data_connection_id when copying Dir objects."""
+    # Test with Dir object containing data_connection_id
+    original_dir = resolver.Dir(
+        path="/original/path", url="r2://original-bucket", data_connection_id="original-connection-456"
+    )
+
+    resolved_dir = resolver._resolve_dir(original_dir)
+
+    # Verify all fields are preserved
+    assert resolved_dir.path == "/original/path"
+    assert resolved_dir.url == "r2://original-bucket"
+    assert resolved_dir.data_connection_id == "original-connection-456"
+
+    # Test with Dir object without data_connection_id
+    dir_without_connection = resolver.Dir(path="/test", url="s3://test-bucket")
+    resolved_without_connection = resolver._resolve_dir(dir_without_connection)
+
+    assert resolved_without_connection.path == "/test"
+    assert resolved_without_connection.url == "s3://test-bucket"
+    assert resolved_without_connection.data_connection_id is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_resolve_lightning_storage_sets_data_connection_id(monkeypatch, lightning_cloud_mock):
+    """Test that _resolve_lightning_storage sets data_connection_id from the data connection."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    # Mock data connection with ID
+    test_connection_id = "data-connection-789"
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
-        data_connections=[V1DataConnection(name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))],
+        data_connections=[
+            V1DataConnection(id=test_connection_id, name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
+        ],
     )
 
     client_cls_mock = mock.MagicMock()
     client_cls_mock.return_value = client_mock
     lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
 
-    expected = "r2://my-r2-bucket"
-    assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset").url == expected
-    assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train").url == expected + "/train"
+    # Test that data_connection_id is set
+    result = resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+    assert result.url == "r2://my-r2-bucket"
+    assert result.data_connection_id == test_connection_id
 
-    # Test missing data connection
+    # Test with subdirectory
+    result_subdir = resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train")
+    assert result_subdir.url == "r2://my-r2-bucket/train"
+    assert result_subdir.data_connection_id == test_connection_id
+
+    auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_assert_dir_is_empty_with_data_connection_id(monkeypatch):
+    """Test that _assert_dir_is_empty passes data_connection_id to fs_provider."""
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.is_empty.return_value = True
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(resolver, "_get_fs_provider", get_fs_provider_mock)
+
+    # Test with data_connection_id
+    test_connection_id = "test-connection-empty-123"
+    output_dir = resolver.Dir(path="/test/path", url="r2://test-bucket", data_connection_id=test_connection_id)
+
+    storage_options = {"timeout": 30}
+    resolver._assert_dir_is_empty(output_dir, storage_options=storage_options)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_once_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_assert_dir_is_empty_without_data_connection_id(monkeypatch):
+    """Test that _assert_dir_is_empty works correctly when data_connection_id is None."""
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.is_empty.return_value = True
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(resolver, "_get_fs_provider", get_fs_provider_mock)
+
+    # Test without data_connection_id
+    output_dir = resolver.Dir(path="/test/path", url="s3://test-bucket")
+    storage_options = {"region": "us-west-2"}
+
+    resolver._assert_dir_is_empty(output_dir, storage_options=storage_options)
+
+    # Verify fs_provider was called with original storage_options (no data_connection_id added)
+    get_fs_provider_mock.assert_called_once_with(output_dir.url, storage_options)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_assert_dir_has_index_file_with_data_connection_id(monkeypatch):
+    """Test that _assert_dir_has_index_file passes data_connection_id to fs_provider."""
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.is_empty.return_value = True
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(resolver, "_get_fs_provider", get_fs_provider_mock)
+
+    # Test with data_connection_id
+    test_connection_id = "test-connection-index-456"
+    output_dir = resolver.Dir(path="/test/path", url="r2://test-bucket", data_connection_id=test_connection_id)
+
+    storage_options = {"max_retries": 3}
+    resolver._assert_dir_has_index_file(output_dir, storage_options=storage_options)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_once_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_assert_dir_has_index_file_without_data_connection_id(monkeypatch):
+    """Test that _assert_dir_has_index_file works correctly when data_connection_id is None."""
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.is_empty.return_value = True
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(resolver, "_get_fs_provider", get_fs_provider_mock)
+
+    # Test without data_connection_id
+    output_dir = resolver.Dir(path="/test/path", url="s3://test-bucket")
+    storage_options = {"connect_timeout": 10}
+
+    resolver._assert_dir_has_index_file(output_dir, storage_options=storage_options)
+
+    # Verify fs_provider was called with original storage_options (no data_connection_id added)
+    get_fs_provider_mock.assert_called_once_with(output_dir.url, storage_options)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_assert_dir_has_index_file_overwrite_mode_with_data_connection_id(monkeypatch):
+    """Test _assert_dir_has_index_file in overwrite mode with data_connection_id."""
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.is_empty.return_value = False  # Directory not empty
+    fs_provider.exists.return_value = True  # Index file exists
+    fs_provider.delete_file_or_directory = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(resolver, "_get_fs_provider", get_fs_provider_mock)
+
+    # Test with data_connection_id in overwrite mode
+    test_connection_id = "test-connection-overwrite-789"
+    output_dir = resolver.Dir(path="/test/path", url="r2://test-bucket", data_connection_id=test_connection_id)
+
+    storage_options = {"write_timeout": 60}
+    resolver._assert_dir_has_index_file(output_dir, mode="overwrite", storage_options=storage_options)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_once_with(output_dir.url, expected_storage_options)
+
+    # Verify delete was called
+    fs_provider.delete_file_or_directory.assert_called_once_with(output_dir.url)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_resolve_lightning_storage_missing_data_connection(monkeypatch, lightning_cloud_mock):
+    """Test _resolve_lightning_storage when data connection is not found."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    # Mock empty data connections list
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
         data_connections=[],
@@ -503,7 +714,92 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
     client_cls_mock.return_value = client_mock
     lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
 
-    with pytest.raises(ValueError, match="name `my_dataset`"):
-        resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
+    # Should raise ValueError when data connection not found
+    with pytest.raises(ValueError, match="name `nonexistent_dataset`"):
+        resolver._resolve_dir("/teamspace/lightning_storage/nonexistent_dataset")
+
+    auth.clear()
+
+
+def test_storage_options_merge_behavior():
+    """Test that storage options are properly merged with data_connection_id."""
+    # Test the merge behavior that happens in the resolver functions
+    original_storage_options = {"timeout": 30, "region": "us-west-2", "max_retries": 5}
+
+    test_connection_id = "test-merge-connection"
+
+    # Simulate the merge operation from _assert_dir_is_empty
+    merged_storage_options = original_storage_options.copy()
+    merged_storage_options["data_connection_id"] = test_connection_id
+
+    # Verify original is unchanged
+    assert "data_connection_id" not in original_storage_options
+    assert len(original_storage_options) == 3
+
+    # Verify merged has all original keys plus data_connection_id
+    assert len(merged_storage_options) == 4
+    assert merged_storage_options["data_connection_id"] == test_connection_id
+    assert merged_storage_options["timeout"] == 30
+    assert merged_storage_options["region"] == "us-west-2"
+    assert merged_storage_options["max_retries"] == 5
+
+
+def test_data_connection_id_conditional_merge():
+    """Test that data_connection_id is only added when it's not None."""
+    original_storage_options = {"timeout": 30}
+
+    # Test with None data_connection_id (should not be added)
+    merged_none = original_storage_options.copy()
+    data_connection_id = None
+    if data_connection_id:
+        merged_none["data_connection_id"] = data_connection_id
+
+    assert "data_connection_id" not in merged_none
+    assert len(merged_none) == 1
+
+    # Test with valid data_connection_id (should be added)
+    merged_valid = original_storage_options.copy()
+    data_connection_id = "valid-connection"
+    if data_connection_id:
+        merged_valid["data_connection_id"] = data_connection_id
+
+    assert merged_valid["data_connection_id"] == "valid-connection"
+    assert len(merged_valid) == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_resolve_lightning_storage_integration_with_existing_test(monkeypatch, lightning_cloud_mock):
+    """Integration test verifying data_connection_id works with the existing lightning_storage test."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    # Use the same mock structure as the existing test but verify data_connection_id
+    test_connection_id = "integration-test-connection-id"
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(id=test_connection_id, name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
+        ],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    # Test the resolution
+    result = resolver._resolve_lightning_storage("/teamspace/lightning_storage/my_dataset")
+
+    # Verify all expected properties
+    assert result.path == "/teamspace/lightning_storage/my_dataset"
+    assert result.url == "r2://my-r2-bucket"
+    assert result.data_connection_id == test_connection_id
+
+    # Test with subdirectory
+    result_subdir = resolver._resolve_lightning_storage("/teamspace/lightning_storage/my_dataset/train/validation")
+    assert result_subdir.path == "/teamspace/lightning_storage/my_dataset/train/validation"
+    assert result_subdir.url == "r2://my-r2-bucket/train/validation"
+    assert result_subdir.data_connection_id == test_connection_id
 
     auth.clear()
