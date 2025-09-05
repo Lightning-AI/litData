@@ -309,7 +309,7 @@ def _assert_dir_is_empty(
     # Add data connection ID to storage_options for R2 connections
     merged_storage_options = storage_options.copy()
     if output_dir.data_connection_id:
-        merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
+        merged_storage_options["data_connection_id"] = output_dir.data_connection_id
 
     fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
@@ -378,7 +378,7 @@ def _assert_dir_has_index_file(
     # Add data connection ID to storage_options for R2 connections
     merged_storage_options = storage_options.copy()
     if output_dir.data_connection_id:
-        merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
+        merged_storage_options["data_connection_id"] = output_dir.data_connection_id
 
     fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
