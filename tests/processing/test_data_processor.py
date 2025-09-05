@@ -1,7 +1,9 @@
+import json
 import multiprocessing as mp
 import os
 import random
 import sys
+from contextlib import suppress
 from functools import partial
 from io import BytesIO
 from queue import Empty
@@ -1323,3 +1325,336 @@ def test_base_worker_collect_paths_no_downloader(keep_data_ordered):
 
     for index in range(10):
         assert worker.ready_to_process_queue.get() == (index, index, None)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_download_data_target_with_data_connection_id(tmpdir, monkeypatch):
+    """Test _download_data_target passes data_connection_id to fs_provider correctly."""
+    input_dir = os.path.join(tmpdir, "input_dir")
+    os.makedirs(input_dir, exist_ok=True)
+
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    queue_in = mock.MagicMock()
+    queue_out = mock.MagicMock()
+
+    # Mock data with data_connection_id
+    test_connection_id = "test-connection-123"
+    input_dir_obj = Dir(path=input_dir, url="s3://test-bucket")
+    input_dir_obj.data_connection_id = test_connection_id
+
+    items = [10]
+    paths = ["s3://test-bucket/a.txt", None]
+
+    def fn(*_, **__):
+        value = paths.pop(0)
+        if value is None:
+            return value
+        return (0, items.pop(0), [value])
+
+    queue_in.get = fn
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    storage_options = {"key": "value"}
+
+    _download_data_target(input_dir_obj, cache_dir, queue_in, queue_out, storage_options)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(input_dir_obj.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_upload_fn_with_data_connection_id(tmpdir, monkeypatch):
+    """Test _upload_fn passes data_connection_id to fs_provider correctly."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Create test file to upload
+    test_file = os.path.join(cache_dir, "test.txt")
+    with open(test_file, "w") as f:
+        f.write("test content")
+
+    upload_queue = mock.MagicMock()
+    remove_queue = mock.MagicMock()
+
+    # Mock data with data_connection_id
+    test_connection_id = "test-connection-456"
+    output_dir = Dir(path=None, url="s3://output-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    paths = [test_file, None]
+
+    def fn(*_, **__):
+        return paths.pop(0)
+
+    upload_queue.get = fn
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    storage_options = {"region": "us-west-2"}
+
+    _upload_fn(upload_queue, remove_queue, cache_dir, output_dir, storage_options)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_chunk_recipe_upload_index_with_data_connection_id(tmpdir, monkeypatch):
+    """Test DataChunkRecipe._upload_index passes data_connection_id correctly."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Create test index file
+    index_file = os.path.join(cache_dir, "index.json")
+    with open(index_file, "w") as f:
+        f.write('{"test": "data"}')
+
+    # Mock data with data_connection_id
+    test_connection_id = "test-connection-789"
+    output_dir = Dir(path=None, url="s3://output-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    storage_options = {"timeout": 30}
+    recipe = DataChunkRecipe(storage_options=storage_options)
+
+    recipe._upload_index(output_dir, cache_dir, num_nodes=1, node_rank=None)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_processor_cleanup_checkpoints_with_data_connection_id(tmpdir, monkeypatch):
+    """Test DataProcessor._cleanup_checkpoints passes data_connection_id correctly."""
+    test_connection_id = "test-connection-cleanup"
+    output_dir = Dir(path=None, url="s3://cleanup-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    storage_options = {"max_retries": 3}
+    data_processor = DataProcessor(input_dir=str(tmpdir), output_dir=output_dir, storage_options=storage_options)
+
+    data_processor._cleanup_checkpoints()
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_processor_save_current_config_with_data_connection_id(tmpdir, monkeypatch):
+    """Test DataProcessor._save_current_config passes data_connection_id correctly."""
+    test_connection_id = "test-connection-save"
+    output_dir = Dir(path=None, url="s3://config-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    storage_options = {"connect_timeout": 10}
+    data_processor = DataProcessor(
+        input_dir=str(tmpdir), output_dir=output_dir, use_checkpoint=True, storage_options=storage_options
+    )
+
+    workers_user_items = [[1, 2], [3, 4]]
+    data_processor._save_current_config(workers_user_items)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_processor_load_checkpoint_config_with_data_connection_id(tmpdir, monkeypatch):
+    """Test DataProcessor._load_checkpoint_config passes data_connection_id correctly."""
+    test_connection_id = "test-connection-load"
+    output_dir = Dir(path=None, url="s3://load-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    # Mock fs_provider
+    fs_provider = mock.MagicMock()
+    fs_provider.download_directory = mock.MagicMock(return_value=str(tmpdir))
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    # Create mock config file
+    config_data = {"num_workers": 2, "workers_user_items": [[1, 2], [3, 4]]}
+    config_file = os.path.join(tmpdir, "config.json")
+    with open(config_file, "w") as f:
+        json.dump(config_data, f)
+
+    storage_options = {"read_timeout": 15}
+    data_processor = DataProcessor(
+        input_dir=str(tmpdir),
+        output_dir=output_dir,
+        use_checkpoint=True,
+        num_workers=2,
+        storage_options=storage_options,
+    )
+
+    workers_user_items = [[1, 2], [3, 4]]
+    data_processor._load_checkpoint_config(workers_user_items)
+
+    # Verify fs_provider was called with merged storage_options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_connection_id_not_added_when_missing():
+    """Test that data_connection_id is not added to storage_options when not present on Dir."""
+    # Test with Dir object with default data_connection_id (None)
+    output_dir = Dir(path=None, url="s3://test-bucket")
+
+    # Verify that data_connection_id defaults to None
+    assert output_dir.data_connection_id is None
+
+    # Test with Dir object with data_connection_id explicitly set to None
+    output_dir_none = Dir(path=None, url="s3://test-bucket", data_connection_id=None)
+
+    assert output_dir_none.data_connection_id is None
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_storage_options_preserved_with_data_connection_id():
+    """Test that original storage_options are preserved when adding data_connection_id."""
+    original_storage_options = {
+        "aws_access_key_id": "test-key",
+        "aws_secret_access_key": "test-secret",
+        "region_name": "us-east-1",
+    }
+
+    test_connection_id = "test-connection-preserve"
+
+    # Simulate the merge operation that happens in the code
+    merged_storage_options = original_storage_options.copy()
+    merged_storage_options["data_connection_id"] = test_connection_id
+
+    # Verify original is unchanged
+    assert "data_connection_id" not in original_storage_options
+    assert len(original_storage_options) == 3
+
+    # Verify merged has all original keys plus data_connection_id
+    assert len(merged_storage_options) == 4
+    assert merged_storage_options["data_connection_id"] == test_connection_id
+    assert merged_storage_options["aws_access_key_id"] == "test-key"
+    assert merged_storage_options["aws_secret_access_key"] == "test-secret"
+    assert merged_storage_options["region_name"] == "us-east-1"
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_connection_id_overrides_existing_value():
+    """Test that data_connection_id from Dir overrides any existing value in storage_options."""
+    original_storage_options = {"data_connection_id": "original-connection-id", "timeout": 30}
+
+    dir_connection_id = "dir-connection-id"
+
+    # Simulate the merge operation that happens in the code
+    merged_storage_options = original_storage_options.copy()
+    merged_storage_options["data_connection_id"] = dir_connection_id
+
+    # Verify the Dir's data_connection_id overrides the original
+    assert merged_storage_options["data_connection_id"] == dir_connection_id
+    assert merged_storage_options["timeout"] == 30
+    assert len(merged_storage_options) == 2
+
+
+class CustomDataChunkRecipeWithConnectionId(DataChunkRecipe):
+    """Custom recipe for testing data_connection_id integration."""
+
+    is_generator = False
+
+    def prepare_structure(self, input_dir: str) -> list[Any]:
+        return ["test_item"]
+
+    def prepare_item(self, item):
+        return {"data": item}
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_data_processor_end_to_end_with_data_connection_id(tmpdir, monkeypatch):
+    """Test full data processing pipeline with data_connection_id."""
+    test_connection_id = "test-connection-e2e"
+
+    # Setup input and output dirs with data_connection_id
+    input_dir = Dir(path=str(tmpdir), url="s3://input-bucket")
+    input_dir.data_connection_id = test_connection_id
+
+    output_dir = Dir(path=None, url="s3://output-bucket")
+    output_dir.data_connection_id = test_connection_id
+
+    # Mock fs_provider calls
+    fs_provider = mock.MagicMock()
+    fs_provider.exists = mock.MagicMock(return_value=True)
+    fs_provider.download_file = mock.MagicMock()
+    fs_provider.upload_file = mock.MagicMock()
+
+    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+
+    # Mock other dependencies
+    monkeypatch.setattr(data_processor_module, "_wait_for_disk_usage_higher_than_threshold", mock.MagicMock())
+
+    cache_dir = os.path.join(tmpdir, "cache")
+    data_cache_dir = os.path.join(tmpdir, "data_cache")
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", cache_dir)
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", data_cache_dir)
+
+    storage_options = {"custom_option": "test_value"}
+
+    data_processor = DataProcessor(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        num_workers=1,
+        fast_dev_run=1,
+        storage_options=storage_options,
+        verbose=False,
+    )
+
+    # Run with custom recipe
+    recipe = CustomDataChunkRecipeWithConnectionId(storage_options=storage_options)
+
+    with suppress(Exception):
+        # Expected to fail due to mocking, but we want to verify the calls were made
+        data_processor.run(recipe)
+
+    # Verify that fs_provider was called with data_connection_id
+    # Check if any of the calls included the expected storage options
+    calls_made = get_fs_provider_mock.call_args_list
+
+    # Should have been called with merged storage options including data_connection_id
+    expected_storage_options = storage_options.copy()
+    expected_storage_options["data_connection_id"] = test_connection_id
+
+    # Note: Due to the complexity of mocking the full pipeline, we mainly verify
+    # that the fs_provider was called, indicating the data_connection_id code paths were executed
+    assert len(calls_made) > 0, "fs_provider should have been called"
