@@ -170,7 +170,7 @@ def _download_data_target(
                     if fs_provider is None:
                         # Add data connection ID to storage_options for R2 connections
                         merged_storage_options = storage_options.copy()
-                        if hasattr(input_dir, 'data_connection_id') and input_dir.data_connection_id:
+                        if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
                             merged_storage_options["lightning_data_connection_id"] = input_dir.data_connection_id
                         fs_provider = _get_fs_provider(input_dir.url, merged_storage_options)
                     fs_provider.download_file(path, local_path)
@@ -239,7 +239,7 @@ def _upload_fn(
     if obj.scheme in _SUPPORTED_PROVIDERS:
         # Add data connection ID to storage_options for R2 connections
         merged_storage_options = storage_options.copy()
-        if hasattr(output_dir, 'data_connection_id') and output_dir.data_connection_id:
+        if hasattr(output_dir, "data_connection_id") and output_dir.data_connection_id:
             merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
         fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
@@ -1032,9 +1032,9 @@ class DataChunkRecipe(DataRecipe):
         if obj.scheme in _SUPPORTED_PROVIDERS:
             # Add data connection ID to storage_options for R2 connections
             merged_storage_options = self.storage_options.copy()
-            if hasattr(output_dir, 'data_connection_id') and output_dir.data_connection_id:
+            if hasattr(output_dir, "data_connection_id") and output_dir.data_connection_id:
                 merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
-            
+
             fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
             fs_provider.upload_file(
                 local_filepath,
@@ -1059,9 +1059,9 @@ class DataChunkRecipe(DataRecipe):
                 if obj.scheme in _SUPPORTED_PROVIDERS:
                     # Add data connection ID to storage_options for R2 connections
                     merged_storage_options = self.storage_options.copy()
-                    if hasattr(output_dir, 'data_connection_id') and output_dir.data_connection_id:
+                    if hasattr(output_dir, "data_connection_id") and output_dir.data_connection_id:
                         merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
-                    
+
                     _wait_for_file_to_exist(remote_filepath, storage_options=merged_storage_options)
                     fs_provider = _get_fs_provider(remote_filepath, merged_storage_options)
                     fs_provider.download_file(remote_filepath, node_index_filepath)
@@ -1520,9 +1520,9 @@ class DataProcessor:
 
         # Add data connection ID to storage_options for R2 connections
         merged_storage_options = self.storage_options.copy()
-        if hasattr(self.output_dir, 'data_connection_id') and self.output_dir.data_connection_id:
+        if hasattr(self.output_dir, "data_connection_id") and self.output_dir.data_connection_id:
             merged_storage_options["lightning_data_connection_id"] = self.output_dir.data_connection_id
-        
+
         fs_provider = _get_fs_provider(self.output_dir.url, merged_storage_options)
         fs_provider.delete_file_or_directory(checkpoint_prefix)
 
@@ -1555,9 +1555,9 @@ class DataProcessor:
 
             # Add data connection ID to storage_options for R2 connections
             merged_storage_options = self.storage_options.copy()
-            if hasattr(self.output_dir, 'data_connection_id') and self.output_dir.data_connection_id:
+            if hasattr(self.output_dir, "data_connection_id") and self.output_dir.data_connection_id:
                 merged_storage_options["lightning_data_connection_id"] = self.output_dir.data_connection_id
-            
+
             fs_provider = _get_fs_provider(self.output_dir.url, merged_storage_options)
 
             prefix = self.output_dir.url.rstrip("/") + "/" + ".checkpoints/"
@@ -1631,9 +1631,9 @@ class DataProcessor:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Add data connection ID to storage_options for R2 connections
             merged_storage_options = self.storage_options.copy()
-            if hasattr(self.output_dir, 'data_connection_id') and self.output_dir.data_connection_id:
+            if hasattr(self.output_dir, "data_connection_id") and self.output_dir.data_connection_id:
                 merged_storage_options["lightning_data_connection_id"] = self.output_dir.data_connection_id
-            
+
             fs_provider = _get_fs_provider(self.output_dir.url, merged_storage_options)
             saved_file_dir = fs_provider.download_directory(prefix, temp_dir)
 
