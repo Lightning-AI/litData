@@ -5,6 +5,7 @@ import pytest
 from litdata.streaming import fs_provider as fs_provider_module
 from litdata.streaming.fs_provider import (
     GCPFsProvider,
+    R2FsProvider,
     S3FsProvider,
     _get_fs_provider,
     get_bucket_and_path,
@@ -25,6 +26,10 @@ def test_get_bucket_and_path():
     assert bucket == "bucket"
     assert path == "path/to/file.txt"
 
+    bucket, path = get_bucket_and_path("r2://bucket/path/to/file.txt", "r2")
+    assert bucket == "bucket"
+    assert path == "path/to/file.txt"
+
 
 def test_get_fs_provider(monkeypatch, google_mock):
     google_mock.cloud.storage.Client = Mock()
@@ -36,6 +41,9 @@ def test_get_fs_provider(monkeypatch, google_mock):
 
     fs_provider = _get_fs_provider("gs://bucket/path/to/file.txt")
     assert isinstance(fs_provider, GCPFsProvider)
+
+    fs_provider = _get_fs_provider("r2://bucket/path/to/file.txt")
+    assert isinstance(fs_provider, R2FsProvider)
 
     with pytest.raises(ValueError, match="Unsupported scheme"):
         _get_fs_provider("http://bucket/path/to/file.txt")
