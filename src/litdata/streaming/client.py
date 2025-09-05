@@ -150,16 +150,16 @@ class R2Client:
     def _create_client(self) -> None:
         """Create a new R2 client with fresh credentials."""
         # Get data connection ID from storage options
-        data_connection_id = self._base_storage_options.get("lightning_data_connection_id")
+        data_connection_id = self._base_storage_options.get("data_connection_id")
         if not data_connection_id:
-            raise RuntimeError("lightning_data_connection_id is required in storage_options for R2 client")
+            raise RuntimeError("data_connection_id is required in storage_options for R2 client")
 
         # Get fresh R2 credentials
         r2_credentials = self.get_r2_bucket_credentials(data_connection_id)
 
         # Filter out metadata keys that shouldn't be passed to boto3
         filtered_storage_options = {
-            k: v for k, v in self._base_storage_options.items() if k not in ["lightning_data_connection_id"]
+            k: v for k, v in self._base_storage_options.items() if k not in ["data_connection_id"]
         }
 
         # Combine filtered storage options with fresh credentials
