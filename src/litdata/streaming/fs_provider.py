@@ -16,7 +16,7 @@ from typing import Any, Optional
 from urllib import parse
 
 from litdata.constants import _GOOGLE_STORAGE_AVAILABLE, _SUPPORTED_PROVIDERS
-from litdata.streaming.client import S3Client, R2Client
+from litdata.streaming.client import R2Client, S3Client
 
 
 class FsProvider(ABC):
@@ -223,10 +223,11 @@ class S3FsProvider(FsProvider):
 
         return not objects["KeyCount"] > 0
 
+
 class R2FsProvider(S3FsProvider):
     def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         super().__init__(storage_options=storage_options)
-        
+
         # Create R2Client with refreshable credentials
         self.client = R2Client(storage_options=storage_options)
 

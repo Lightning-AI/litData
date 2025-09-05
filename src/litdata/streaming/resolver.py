@@ -50,9 +50,9 @@ class CloudProvider(str, Enum):
 def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if isinstance(dir_path, Dir):
         return Dir(
-            path=str(dir_path.path) if dir_path.path else None, 
+            path=str(dir_path.path) if dir_path.path else None,
             url=str(dir_path.url) if dir_path.url else None,
-            data_connection_id=dir_path.data_connection_id
+            data_connection_id=dir_path.data_connection_id,
         )
 
     if dir_path is None:
@@ -310,7 +310,7 @@ def _assert_dir_is_empty(
     merged_storage_options = storage_options.copy()
     if output_dir.data_connection_id:
         merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
-    
+
     fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
     is_empty = fs_provider.is_empty(output_dir.url)
@@ -379,7 +379,7 @@ def _assert_dir_has_index_file(
     merged_storage_options = storage_options.copy()
     if output_dir.data_connection_id:
         merged_storage_options["lightning_data_connection_id"] = output_dir.data_connection_id
-    
+
     fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
     prefix = output_dir.url.rstrip("/") + "/"
