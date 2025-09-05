@@ -22,6 +22,50 @@ from litdata.streaming import resolver
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_resolve_data_connection(monkeypatch, lightning_cloud_mock):
+    """Test the _resolve_data_connection helper function with caching."""
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    with pytest.raises(RuntimeError, match="`LIGHTNING_CLOUD_PROJECT_ID` couldn't be found"):
+        resolver._resolve_data_connection("/teamspace/s3_connections/test_dataset")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[V1DataConnection(name="test_dataset", aws=V1AwsDataConnection(source="s3://test-bucket"))],
+    )
+
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    # Test successful resolution
+    data_connection = resolver._resolve_data_connection("/teamspace/s3_connections/test_dataset")
+    assert data_connection.name == "test_dataset"
+    assert data_connection.aws.source == "s3://test-bucket"
+
+    # Test caching - second call should use cached result
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[],  # Empty list should not affect cached result
+    )
+
+    cached_connection = resolver._resolve_data_connection("/teamspace/s3_connections/test_dataset")
+    assert cached_connection.name == "test_dataset"  # Should still return cached result
+
+    # Test different path (not cached)
+    with pytest.raises(ValueError, match="name `other_dataset`"):
+        resolver._resolve_data_connection("/teamspace/s3_connections/other_dataset")
+
+    # Test invalid path format
+    with pytest.raises(ValueError, match="Invalid dir_path format"):
+        resolver._resolve_data_connection("invalid/path")
+
+    auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
 def test_src_resolver_s3_connections(monkeypatch, lightning_cloud_mock):
     auth = login.Auth()
     auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
@@ -45,6 +89,8 @@ def test_src_resolver_s3_connections(monkeypatch, lightning_cloud_mock):
     assert resolver._resolve_dir("/teamspace/s3_connections/imagenet").url == "s3://imagenet-bucket"
     assert resolver._resolve_dir("/teamspace/s3_connections/imagenet/train").url == "s3://imagenet-bucket/train"
 
+    # Test missing data connection
+    resolver._resolve_data_connection.cache_clear()
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
         data_connections=[],
@@ -431,6 +477,7 @@ def test_src_resolver_gcs_connections(monkeypatch, lightning_cloud_mock):
     assert resolver._resolve_dir("/teamspace/gcs_connections/my_dataset/train").url == "gs://my-gcs-bucket/train"
 
     # Test missing data connection
+    resolver._resolve_data_connection.cache_clear()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
         data_connections=[],
     )
@@ -494,6 +541,7 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
     assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train").url == expected + "/train"
 
     # Test missing data connection
+    resolver._resolve_data_connection.cache_clear()
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
         data_connections=[],
