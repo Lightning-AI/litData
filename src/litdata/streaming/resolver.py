@@ -19,6 +19,7 @@ import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
@@ -29,6 +30,7 @@ from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provid
 
 if TYPE_CHECKING:
     from lightning_sdk import Machine
+    from lightning_sdk.lightning_cloud.openapi import V1DataConnection
 
 
 @dataclass
@@ -161,17 +163,41 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
     )
 
 
-def _resolve_s3_connections(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+@lru_cache(maxsize=5)
+def _resolve_data_connection(dir_path: str) -> "V1DataConnection":
+    """Resolve data connection from teamspace path with caching.
 
-    client = LightningClient(max_tries=2)
+    Extracts connection name from paths like '/teamspace/s3_connections/my_dataset'
+    and fetches the corresponding data connection from Lightning Cloud.
+
+    Args:
+        dir_path: Teamspace path containing the connection name
+
+    Returns:
+        V1DataConnection: The resolved data connection object
+
+    Raises:
+        ValueError: If path format is invalid or connection not found
+        RuntimeError: If required environment variables are missing
+    """
+    # Validate dir_path format - must start with /teamspace/ and have expected structure
+    if not dir_path.startswith("/teamspace/"):
+        raise ValueError(f"Invalid dir_path format: {dir_path}. Expected path starting with '/teamspace/'.")
+
+    path_parts = dir_path.split("/")
+    if len(path_parts) < 4:
+        raise ValueError(f"Invalid teamspace path: {dir_path}. Expected at least 4 path components.")
 
     # Get the ids from env variables
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
     if project_id is None:
         raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
 
-    target_name = dir_path.split("/")[3]
+    target_name = path_parts[3]
+
+    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+
+    client = LightningClient(max_tries=2)
 
     data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
 
@@ -180,95 +206,37 @@ def _resolve_s3_connections(dir_path: str) -> Dir:
     if not data_connection:
         raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
 
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].aws.source, *dir_path.split("/")[4:]))
+    return data_connection[0]
+
+
+def _resolve_s3_connections(dir_path: str) -> Dir:
+    data_connection = _resolve_data_connection(dir_path)
+
+    return Dir(path=dir_path, url=os.path.join(data_connection.aws.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_gcs_connections(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+    data_connection = _resolve_data_connection(dir_path)
 
-    client = LightningClient(max_tries=2)
-
-    # Get the ids from env variables
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    if project_id is None:
-        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
-
-    target_name = dir_path.split("/")[3]
-
-    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
-
-    data_connection = [dc for dc in data_connections if dc.name == target_name]
-
-    if not data_connection:
-        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
-
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].gcp.source, *dir_path.split("/")[4:]))
+    return Dir(path=dir_path, url=os.path.join(data_connection.gcp.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_s3_folders(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+    data_connection = _resolve_data_connection(dir_path)
 
-    client = LightningClient(max_tries=2)
-
-    # Get the ids from env variables
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    if project_id is None:
-        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
-
-    target_name = dir_path.split("/")[3]
-
-    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
-
-    data_connection = [dc for dc in data_connections if dc.name == target_name]
-
-    if not data_connection:
-        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
-
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].s3_folder.source, *dir_path.split("/")[4:]))
+    return Dir(path=dir_path, url=os.path.join(data_connection.s3_folder.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_gcs_folders(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+    data_connection = _resolve_data_connection(dir_path)
 
-    client = LightningClient(max_tries=2)
-
-    # Get the ids from env variables
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    if project_id is None:
-        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
-
-    target_name = dir_path.split("/")[3]
-
-    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
-
-    data_connection = [dc for dc in data_connections if dc.name == target_name]
-
-    if not data_connection:
-        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
-
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].gcs_folder.source, *dir_path.split("/")[4:]))
+    return Dir(path=dir_path, url=os.path.join(data_connection.gcs_folder.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_lightning_storage(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+    data_connection = _resolve_data_connection(dir_path)
 
-    client = LightningClient(max_tries=2)
-
-    # Get the ids from env variables
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    if project_id is None:
-        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
-
-    target_name = dir_path.split("/")[3]
-
-    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
-
-    data_connection = [dc for dc in data_connections if dc.name == target_name]
-
-    if not data_connection:
-        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
-
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].r2.source, *dir_path.split("/")[4:]))
+    return Dir(path=dir_path, url=os.path.join(data_connection.r2.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_datasets(dir_path: str) -> Dir:
