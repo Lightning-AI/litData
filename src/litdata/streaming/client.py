@@ -113,7 +113,7 @@ class R2Client:
             payload = {"apiKey": api_key, "username": username}
             login_url = f"{cloud_url}/v1/auth/login"
             response = requests.post(login_url, data=json.dumps(payload))  # noqa: S113
-            
+
             if "token" not in response.json():
                 raise RuntimeError("Failed to get authentication token")
 
