@@ -26,8 +26,12 @@ from urllib3.util.retry import Retry
 
 from litdata.constants import _IS_IN_STUDIO
 
+# Constants for the retry adapter. Docs: https://urllib3.readthedocs.io/en/stable/reference/urllib3.util.html
+# Maximum number of total connection retry attempts (e.g., 2880 retries = 24 hours with 30s timeout per request)
 _CONNECTION_RETRY_TOTAL = 2880
+# Backoff factor for connection retries (wait time increases by this factor after each failure)
 _CONNECTION_RETRY_BACKOFF_FACTOR = 0.5
+# Default timeout for each HTTP request in seconds
 _DEFAULT_REQUEST_TIMEOUT = 30  # seconds
 
 

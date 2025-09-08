@@ -127,8 +127,6 @@ class ChunksConfig:
         self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
-        from time import time
-
         assert self._chunks is not None
         chunk_filename = self._chunks[chunk_index]["filename"]
 
@@ -136,7 +134,6 @@ class ChunksConfig:
 
         if os.path.exists(local_chunkpath):
             self.try_decompress(local_chunkpath)
-            from time import time
 
             if self._downloader is not None and not skip_lock:
                 # We don't want to redownload the base, but we should mark
@@ -154,10 +151,6 @@ class ChunksConfig:
         self._downloader.download_chunk_from_index(chunk_index)
 
         self.try_decompress(local_chunkpath)
-
-        from time import time
-
-        print("HERE 2", time())
 
     def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
         assert self._chunks is not None
