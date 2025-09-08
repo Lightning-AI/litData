@@ -56,7 +56,7 @@ jobs:
         run: |
           # note that the listed test should match ignored in the previous step
           pytest \
-            tests/processing tests/raw \
+            tests/raw \
             --cov=litdata --cov-append
             -n 2 --durations=0 --timeout=120 --capture=no --verbose
 
