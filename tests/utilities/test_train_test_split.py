@@ -112,12 +112,16 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
                 visited_indices.add(curr_idx)
 
 
-@pytest.mark.skipif(condition=sys.platform == "win32", reason="slow on windows")
 @pytest.mark.parametrize(
     "compression",
     [
-        pytest.param(None),
-        pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
+        pytest.param(None, marks=pytest.mark.skipif(sys.platform == "win32", reason="slow on windows")),
+        pytest.param(
+            "zstd",
+            marks=pytest.mark.skipif(
+                condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd']"
+            ),
+        ),
     ],
 )
 def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
