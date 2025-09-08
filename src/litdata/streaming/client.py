@@ -11,16 +11,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from time import time
 from typing import Any, Optional
 
 import boto3
 import botocore
+import requests
 from botocore.credentials import InstanceMetadataProvider
 from botocore.utils import InstanceMetadataFetcher
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from litdata.constants import _IS_IN_STUDIO
+
+_CONNECTION_RETRY_TOTAL = 2880
+_CONNECTION_RETRY_BACKOFF_FACTOR = 0.5
+_DEFAULT_REQUEST_TIMEOUT = 30  # seconds
+
+
+class _CustomRetryAdapter(HTTPAdapter):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.timeout = kwargs.pop("timeout", _DEFAULT_REQUEST_TIMEOUT)
+        super().__init__(*args, **kwargs)
+
+    def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs["timeout"] = kwargs.get("timeout", self.timeout)
+        return super().send(request, **kwargs)
 
 
 class S3Client:
@@ -95,9 +113,23 @@ class R2Client:
 
     def get_r2_bucket_credentials(self, data_connection_id: str) -> dict[str, str]:
         """Fetch temporary R2 credentials for the current lightning storage connection."""
-        import json
-
-        import requests
+        # Create session with retry logic
+        retry_strategy = Retry(
+            total=_CONNECTION_RETRY_TOTAL,
+            backoff_factor=_CONNECTION_RETRY_BACKOFF_FACTOR,
+            status_forcelist=[
+                408,  # Request Timeout
+                429,  # Too Many Requests
+                500,  # Internal Server Error
+                502,  # Bad Gateway
+                503,  # Service Unavailable
+                504,  # Gateway Timeout
+            ],
+        )
+        adapter = _CustomRetryAdapter(max_retries=retry_strategy, timeout=_DEFAULT_REQUEST_TIMEOUT)
+        session = requests.Session()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
         try:
             # Get Lightning Cloud API token
@@ -112,7 +144,7 @@ class R2Client:
             # Login to get token
             payload = {"apiKey": api_key, "username": username}
             login_url = f"{cloud_url}/v1/auth/login"
-            response = requests.post(login_url, data=json.dumps(payload))  # noqa: S113
+            response = session.post(login_url, data=json.dumps(payload))
 
             if "token" not in response.json():
                 raise RuntimeError("Failed to get authentication token")
@@ -125,7 +157,7 @@ class R2Client:
                 f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
             )
 
-            credentials_response = requests.get(credentials_url, headers=headers, timeout=10)
+            credentials_response = session.get(credentials_url, headers=headers, timeout=10)
 
             if credentials_response.status_code != 200:
                 raise RuntimeError(f"Failed to get credentials: {credentials_response.status_code}")
