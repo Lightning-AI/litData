@@ -241,7 +241,11 @@ def _resolve_gcs_folders(dir_path: str) -> Dir:
 def _resolve_lightning_storage(dir_path: str) -> Dir:
     data_connection = _resolve_data_connection(dir_path)
 
-    return Dir(path=dir_path, url=os.path.join(data_connection.r2.source, *dir_path.split("/")[4:]), data_connection_id=data_connection[0].id)
+    return Dir(
+        path=dir_path,
+        url=os.path.join(data_connection.r2.source, *dir_path.split("/")[4:]),
+        data_connection_id=data_connection[0].id,
+    )
 
 
 def _resolve_datasets(dir_path: str) -> Dir:
