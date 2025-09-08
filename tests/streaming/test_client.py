@@ -153,8 +153,7 @@ def test_r2_client_get_r2_bucket_credentials_success(monkeypatch):
 
     # Mock requests
     requests_mock = mock.MagicMock()
-    monkeypatch.setattr("requests.post", requests_mock)
-    monkeypatch.setattr("requests.get", requests_mock)
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
 
     # Mock login response
     login_response = mock.MagicMock()
@@ -176,7 +175,9 @@ def test_r2_client_get_r2_bucket_credentials_success(monkeypatch):
             return login_response
         return credentials_response
 
-    requests_mock.side_effect = mock_request
+    requests_mock.post = mock_request
+    requests_mock.get = mock_request
+
     monkeypatch.setattr("requests.get", lambda *args, **kwargs: credentials_response)
 
     r2_client = client.R2Client()
@@ -218,7 +219,7 @@ def test_r2_client_get_r2_bucket_credentials_login_failure(monkeypatch):
     login_response.json.return_value = {"error": "Invalid credentials"}
 
     requests_mock = mock.MagicMock(return_value=login_response)
-    monkeypatch.setattr("requests.post", requests_mock)
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
 
     r2_client = client.R2Client()
 
