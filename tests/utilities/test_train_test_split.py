@@ -125,6 +125,9 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
     ],
 )
 def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
+    if sys.platform == "win32":
+        pytest.skip("slow on windows")
+
     cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
     for i in range(100):
         cache[i] = i
