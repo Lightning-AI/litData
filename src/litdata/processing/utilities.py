@@ -272,3 +272,10 @@ def remove_uuid_from_filename(filepath: str) -> str:
 
     # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
     return filepath[:-38] + ".json"
+
+
+def construct_storage_options(storage_options: dict[str, Any], input_dir: Dir) -> dict[str, Any]:
+    merged_storage_options = storage_options.copy()
+    if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
+        merged_storage_options["data_connection_id"] = input_dir.data_connection_id
+    return merged_storage_options
