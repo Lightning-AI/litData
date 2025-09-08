@@ -529,7 +529,9 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
 
     client_mock = mock.MagicMock()
     client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
-        data_connections=[V1DataConnection(name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))],
+        data_connections=[
+            V1DataConnection(id="data_connection_id", name="my_dataset", r2=mock.MagicMock(source="r2://my-r2-bucket"))
+        ],
     )
 
     client_cls_mock = mock.MagicMock()
@@ -537,6 +539,7 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
     lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
 
     expected = "r2://my-r2-bucket"
+    assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset").data_connection_id == "data_connection_id"
     assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset").url == expected
     assert resolver._resolve_dir("/teamspace/lightning_storage/my_dataset/train").url == expected + "/train"
 
