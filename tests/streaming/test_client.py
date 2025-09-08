@@ -243,8 +243,11 @@ def test_r2_client_get_r2_bucket_credentials_api_failure(monkeypatch):
     credentials_response = mock.MagicMock()
     credentials_response.status_code = 403
 
-    monkeypatch.setattr("requests.post", mock.MagicMock(return_value=login_response))
-    monkeypatch.setattr("requests.get", mock.MagicMock(return_value=credentials_response))
+    # Mock requests
+    requests_mock = mock.MagicMock()
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
+    requests_mock.post = mock.MagicMock(return_value=login_response)
+    requests_mock.get = mock.MagicMock(return_value=credentials_response)
 
     r2_client = client.R2Client()
 
