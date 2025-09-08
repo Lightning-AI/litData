@@ -357,12 +357,12 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
 @pytest.mark.parametrize(
     "compression",
     [
-        # pytest.param(None),
+        pytest.param(None),
         pytest.param(
             "zstd",
-            # marks=pytest.mark.skipif(
-            #     condition=not _ZSTD_AVAILABLE or sys.platform == "darwin", reason="Requires: ['zstd']"
-            # ),
+            marks=pytest.mark.skipif(
+                condition=not _ZSTD_AVAILABLE or sys.platform == "darwin", reason="Requires: ['zstd']"
+            ),
         ),
     ],
 )
