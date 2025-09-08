@@ -244,7 +244,7 @@ def _resolve_lightning_storage(dir_path: str) -> Dir:
     return Dir(
         path=dir_path,
         url=os.path.join(data_connection.r2.source, *dir_path.split("/")[4:]),
-        data_connection_id=data_connection[0].id,
+        data_connection_id=data_connection.id,
     )
 
 
