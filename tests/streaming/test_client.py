@@ -456,8 +456,10 @@ def test_r2_client_api_call_format(monkeypatch):
     }
     mock_get.return_value = credentials_response
 
-    monkeypatch.setattr("requests.post", mock_post)
-    monkeypatch.setattr("requests.get", mock_get)
+    requests_mock = mock.MagicMock()
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
+    requests_mock.post = mock_post
+    requests_mock.get = mock_get
 
     r2_client = client.R2Client()
     r2_client.get_r2_bucket_credentials("conn-abc123")
