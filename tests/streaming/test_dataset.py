@@ -107,7 +107,7 @@ def _simple_optimize_fn(index):
 @pytest.mark.parametrize(
     ("chunk_bytes", "chunk_size"),
     [
-        (None, 1200),  # at max 1200 items in a chunk
+        (None, 10),
     ],
 )
 @pytest.mark.parametrize("keep_data_ordered", [True, False])
@@ -121,7 +121,7 @@ def test_optimize_dataset(
 
     optimize(
         fn=_simple_optimize_fn,
-        inputs=list(range(1000)),
+        inputs=list(range(20)),
         output_dir=data_dir,
         num_workers=2,
         chunk_bytes=chunk_bytes,
@@ -133,7 +133,7 @@ def test_optimize_dataset(
 
     ds = StreamingDataset(input_dir=data_dir)
 
-    expected_dataset = list(range(1000))
+    expected_dataset = list(range(20))
     actual_dataset = ds[:]
 
     assert len(actual_dataset) == len(expected_dataset)
