@@ -52,7 +52,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
         return Dir(
             path=str(dir_path.path) if dir_path.path else None,
             url=str(dir_path.url) if dir_path.url else None,
-            data_connection_id=dir_path.data_connection_id,
+            data_connection_id=dir_path.data_connection_id if dir_path.data_connection_id else None,
         )
 
     if dir_path is None:
