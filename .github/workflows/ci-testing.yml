@@ -50,14 +50,14 @@ jobs:
           pytest tests \
             --ignore=tests/processing \
             --ignore=tests/raw \
-            -n 2 --cov=litdata --durations=120
+            -n 2 --cov=litdata --durations=120 --timeout=120
 
       - name: Run processing tests sequentially
         run: |
           # note that the listed test should match ignored in the previous step
           pytest \
             tests/processing tests/raw \
-            --cov=litdata --cov-append --durations=90
+            --cov=litdata --cov-append --durations=90 --timeout=120
 
       - name: Statistics
         continue-on-error: true
