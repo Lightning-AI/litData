@@ -455,6 +455,7 @@ class BinaryReader:
                 try:
                     self._prepare_thread.join(timeout=_LONG_DEFAULT_TIMEOUT)
                 except Timeout:
+                    breakpoint()
                     logger.warning(
                         "The prepare chunks thread didn't exit properly. "
                         "This can happen if the chunk files are too large."

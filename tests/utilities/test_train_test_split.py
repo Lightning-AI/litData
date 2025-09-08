@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
@@ -117,10 +119,12 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
         pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
     ],
 )
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="slow on windows")
 def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
     cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
     for i in range(100):
         cache[i] = i
+
     cache.done()
     cache.merge()
 
