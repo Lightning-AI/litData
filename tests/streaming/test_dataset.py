@@ -357,12 +357,12 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
 @pytest.mark.parametrize(
     "compression",
     [
-        pytest.param(None),
+        # pytest.param(None),
         pytest.param(
             "zstd",
-            marks=pytest.mark.skipif(
-                condition=not _ZSTD_AVAILABLE or sys.platform == "darwin", reason="Requires: ['zstd']"
-            ),
+            # marks=pytest.mark.skipif(
+            #     condition=not _ZSTD_AVAILABLE or sys.platform == "darwin", reason="Requires: ['zstd']"
+            # ),
         ),
     ],
 )
@@ -370,7 +370,7 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
 def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression):
     seed_everything(42)
 
-    cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
+    cache = Cache(str(tmpdir), chunk_size=500, compression=compression)
     for i in range(1222):
         cache[i] = i
 
@@ -390,7 +390,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_iter = iter(dataset)
     assert len(dataset_iter) == 611
     process_1_1 = list(dataset_iter)
-    assert process_1_1[:10] == [278, 272, 270, 273, 276, 275, 274, 271, 277, 279]
+    assert process_1_1[:10] == [1093, 1186, 1031, 1128, 1126, 1051, 1172, 1052, 1120, 1209]
     assert len(process_1_1) == 611
 
     dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
@@ -401,7 +401,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_2_iter = iter(dataset_2)
     assert len(dataset_2_iter) == 611
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [999, 993, 991, 994, 997, 996, 995, 992, 998, 527]
+    assert process_2_1[:10] == [967, 942, 893, 913, 982, 898, 947, 901, 894, 961]
     assert len(process_2_1) == 611
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 

@@ -57,8 +57,7 @@ jobs:
           # note that the listed test should match ignored in the previous step
           pytest \
             tests/processing tests/raw \
-            --cov=litdata --cov-append
-            -n 2 --durations=0 --timeout=120 --capture=no --verbose
+            --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Statistics
         continue-on-error: true
