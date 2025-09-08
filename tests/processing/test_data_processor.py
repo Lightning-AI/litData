@@ -1359,6 +1359,7 @@ def test_download_data_target_with_data_connection_id(tmpdir, monkeypatch):
     fs_provider = mock.MagicMock()
     get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
     monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+    monkeypatch.setattr(data_processor_module, "_wait_for_disk_usage_higher_than_threshold", mock.MagicMock())
 
     storage_options = {"key": "value"}
 
