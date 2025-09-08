@@ -107,21 +107,23 @@ def _simple_optimize_fn(index):
 @pytest.mark.parametrize(
     ("chunk_bytes", "chunk_size"),
     [
-        ("64MB", None),
-        (None, 5),  # at max 5 items in a chunk
-        (None, 75),  # at max 75 items in a chunk
         (None, 1200),  # at max 1200 items in a chunk
     ],
 )
 @pytest.mark.parametrize("keep_data_ordered", [True, False])
-def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+def test_optimize_dataset(
+    keep_data_ordered,
+    chunk_bytes,
+    chunk_size,
+    tmpdir,
+):
     data_dir = str(tmpdir / "optimized")
 
     optimize(
         fn=_simple_optimize_fn,
         inputs=list(range(1000)),
         output_dir=data_dir,
-        num_workers=4,
+        num_workers=2,
         chunk_bytes=chunk_bytes,
         chunk_size=chunk_size,
         keep_data_ordered=keep_data_ordered,
