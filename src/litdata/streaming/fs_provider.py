@@ -224,7 +224,7 @@ class S3FsProvider(FsProvider):
         return not objects["KeyCount"] > 0
 
 
-class R2FsProvider(FsProvider):
+class R2FsProvider(S3FsProvider):
     def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
         super().__init__(storage_options=storage_options)
 
@@ -268,18 +268,6 @@ class R2FsProvider(FsProvider):
 
         return saved_file_dir
 
-    def copy(self, remote_source: str, remote_destination: str) -> None:
-        input_obj = parse.urlparse(remote_source)
-        output_obj = parse.urlparse(remote_destination)
-        self.client.client.copy(
-            {"Bucket": input_obj.netloc, "Key": input_obj.path.lstrip("/")},
-            output_obj.netloc,
-            output_obj.path.lstrip("/"),
-        )
-
-    def list_directory(self, path: str) -> list[str]:
-        raise NotImplementedError
-
     def delete_file_or_directory(self, path: str) -> None:
         """Delete the file or the directory."""
         bucket_name, blob_path = get_bucket_and_path(path, "r2")
@@ -305,17 +293,6 @@ class R2FsProvider(FsProvider):
             raise e
         except Exception as e:
             raise e
-
-    def is_empty(self, path: str) -> bool:
-        obj = parse.urlparse(path)
-
-        objects = self.client.client.list_objects_v2(
-            Bucket=obj.netloc,
-            Delimiter="/",
-            Prefix=obj.path.lstrip("/").rstrip("/") + "/",
-        )
-
-        return not objects["KeyCount"] > 0
 
 
 def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> tuple[str, str]:

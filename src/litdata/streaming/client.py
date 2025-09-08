@@ -96,7 +96,7 @@ class S3Client:
         return self._client
 
 
-class R2Client:
+class R2Client(S3Client):
     """R2 client with refreshable credentials for Cloudflare R2 storage."""
 
     def __init__(
@@ -105,11 +105,15 @@ class R2Client:
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
     ) -> None:
-        self._refetch_interval = refetch_interval
-        self._last_time: Optional[float] = None
-        self._client: Optional[Any] = None
+        # Store R2-specific options before calling super()
         self._base_storage_options: dict = storage_options or {}
-        self._session_options: dict = session_options or {}
+
+        # Call parent constructor with R2-specific refetch interval
+        super().__init__(
+            refetch_interval=refetch_interval,
+            storage_options={},  # storage options handled in _create_client
+            session_options=session_options,
+        )
 
     def get_r2_bucket_credentials(self, data_connection_id: str) -> dict[str, str]:
         """Fetch temporary R2 credentials for the current lightning storage connection."""
@@ -195,7 +199,10 @@ class R2Client:
         }
 
         # Combine filtered storage options with fresh credentials
-        storage_options = {**filtered_storage_options, **r2_credentials}
+        combined_storage_options = {**filtered_storage_options, **r2_credentials}
+
+        # Update the inherited storage options with R2 credentials
+        self._storage_options = combined_storage_options
 
         # Create session and client
         session = boto3.Session(**self._session_options)
@@ -203,20 +210,6 @@ class R2Client:
             "s3",
             **{
                 "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
-                **storage_options,
+                **combined_storage_options,
             },
         )
-
-    @property
-    def client(self) -> Any:
-        """Get the R2 client, refreshing credentials if necessary."""
-        if self._client is None:
-            self._create_client()
-            self._last_time = time()
-
-        # Re-generate credentials when they expire
-        if self._last_time is None or (time() - self._last_time) > self._refetch_interval:
-            self._create_client()
-            self._last_time = time()
-
-        return self._client
