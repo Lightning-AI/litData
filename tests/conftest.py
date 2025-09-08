@@ -157,6 +157,8 @@ def _thread_police():
         elif thread.name == "QueueFeederThread":
             thread.join(timeout=20)
         else:
+            if thread.name.startswith("pytest_timeout"):
+                continue
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 
