@@ -1,3 +1,4 @@
+import platform
 import sys
 
 import pytest
@@ -5,6 +6,8 @@ import pytest
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
 from litdata.constants import _ZSTD_AVAILABLE
 from litdata.streaming.cache import Cache
+
+IS_WINDOWS = sys.platform.startswith("win") or platform.system() == "Windows"
 
 
 @pytest.mark.parametrize(
@@ -115,19 +118,14 @@ def test_train_test_split_with_streaming_dataloader(tmpdir, compression):
 @pytest.mark.parametrize(
     "compression",
     [
-        pytest.param(None, marks=pytest.mark.skipif(sys.platform == "win32", reason="slow on windows")),
+        pytest.param(None, marks=pytest.mark.skipif(IS_WINDOWS, reason="slow on windows")),
         pytest.param(
             "zstd",
-            marks=pytest.mark.skipif(
-                condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd']"
-            ),
+            marks=pytest.mark.skipif(not _ZSTD_AVAILABLE or IS_WINDOWS, reason="Requires: ['zstd']"),
         ),
     ],
 )
 def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
-    if sys.platform == "win32":
-        pytest.skip("slow on windows")
-
     cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
     for i in range(100):
         cache[i] = i
