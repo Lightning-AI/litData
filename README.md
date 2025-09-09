@@ -1620,7 +1620,7 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Direct uploads to Lightning AI data connections</summary>
+  <summary> ✅ Lightning AI Data Connections - Direct download and upload </summary>
 
 &nbsp;
 
