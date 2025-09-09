@@ -1645,6 +1645,21 @@ if __name__ == "__main__":
     )
 ```
 
+
+Similarly, data will be downloaded directly from the `my-data-1` s3 bucket in this example code.
+
+```
+from litdata import StreamingRawDataset
+
+if __name__ == "__main__":
+    data_dir = "/teamspace/s3_connections/my-bucket-1/data"
+
+    raw_dataset = StreamingRawDataset(data_dir)
+
+    data = list(raw_dataset)
+    print(data)
+```
+
 References to any of the following directories will work similarly:
 1. `/teamspace/lightning_storage/...`
 2. `/teamspace/s3_connections/...`
