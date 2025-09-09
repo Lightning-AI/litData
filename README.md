@@ -1628,7 +1628,7 @@ if __name__ == "__main__":
 
 For example, output artifacts from this code will be directly uploaded to the `my-data-1` s3 bucket.
 
-```
+```python
 from litdata import optimize
 
 def should_keep(data):
@@ -1648,7 +1648,7 @@ if __name__ == "__main__":
 
 Similarly, data will be downloaded directly from the `my-data-1` s3 bucket in this example code.
 
-```
+```python
 from litdata import StreamingRawDataset
 
 if __name__ == "__main__":
