@@ -15,6 +15,7 @@ from litdata.streaming.downloader import (
     GCPDownloader,
     HFDownloader,
     LocalDownloaderWithCache,
+    R2Downloader,
     S3Downloader,
     get_downloader,
     register_downloader,
@@ -247,6 +248,172 @@ def test_s3_downloader_s5cmd_error_handling(popen_mock, system_mock, tmpdir):
     process_mock.stderr.read.assert_called_once()
 
 
+def test_r2_downloader_fast(tmpdir, monkeypatch):
+    monkeypatch.setattr(os, "system", MagicMock(return_value=0))
+    popen_mock = MagicMock()
+    popen_mock.wait.return_value = 0  # Simulate a successful download
+    monkeypatch.setattr(subprocess, "Popen", MagicMock(return_value=popen_mock))
+    downloader = R2Downloader(tmpdir, tmpdir, [])
+    downloader.download_file("r2://random_bucket/a.txt", os.path.join(tmpdir, "a.txt"))
+    popen_mock.wait.assert_called()
+
+
+@patch("os.system")
+@patch("subprocess.Popen")
+def test_r2_downloader_with_s5cmd_no_storage_options(popen_mock, system_mock, tmpdir):
+    system_mock.return_value = 0  # Simulates s5cmd being available
+    process_mock = MagicMock()
+    process_mock.wait.return_value = 0  # Simulate a successful download
+    popen_mock.return_value = process_mock
+
+    # Initialize the R2Downloader without storage options
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
+
+    # Action: Call the download_file method
+    remote_filepath = "r2://random_bucket/sample_file.txt"
+    local_filepath = os.path.join(tmpdir, "sample_file.txt")
+    downloader.download_file(remote_filepath, local_filepath)
+
+    # Assertion: Verify subprocess.Popen was called with correct arguments and no env variables
+    popen_mock.assert_called_once_with(
+        f"s5cmd cp {remote_filepath} {local_filepath}",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=None,
+    )
+    process_mock.wait.assert_called_once()
+
+
+@patch("os.system")
+@patch("subprocess.Popen")
+@mock.patch("litdata.streaming.downloader._DISABLE_S5CMD", True)
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_downloader_s5cmd_available_but_disabled(r2_client_mock, popen_mock, system_mock, tmpdir):
+    system_mock.return_value = 0  # Simulates s5cmd being available
+    process_mock = MagicMock()
+    popen_mock.return_value = process_mock
+
+    # Mock the R2Client
+    r2_client_instance = MagicMock()
+    r2_client_mock.return_value = r2_client_instance
+
+    # Mock the download_file method to avoid credential errors
+    r2_client_instance.client.download_file = MagicMock()
+
+    # Initialize the R2Downloader
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
+
+    # Action: Call the download_file method
+    remote_filepath = "r2://random_bucket/sample_file.txt"
+    local_filepath = os.path.join(tmpdir, "sample_file.txt")
+    downloader.download_file(remote_filepath, local_filepath)
+
+    # Assertion: Verify subprocess.Popen was not called
+    popen_mock.assert_not_called()
+
+    # Assertion: Verify R2Client download_file was called
+    r2_client_instance.client.download_file.assert_called_once()
+
+
+@patch("os.system")
+@patch("subprocess.Popen")
+def test_r2_downloader_with_s5cmd_with_storage_options(popen_mock, system_mock, tmpdir):
+    system_mock.return_value = 0  # Simulates s5cmd being available
+    process_mock = MagicMock()
+    process_mock.wait.return_value = 0  # Simulate a successful download
+    popen_mock.return_value = process_mock
+
+    storage_options = {"AWS_ACCESS_KEY_ID": "dummy_key", "AWS_SECRET_ACCESS_KEY": "dummy_secret"}
+
+    # Initialize the R2Downloader with storage options
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [], storage_options)
+
+    # Action: Call the download_file method
+    remote_filepath = "r2://random_bucket/sample_file.txt"
+    local_filepath = os.path.join(tmpdir, "sample_file.txt")
+    downloader.download_file(remote_filepath, local_filepath)
+
+    # Create expected environment variables by merging the current env with storage_options
+    expected_env = os.environ.copy()
+    expected_env.update(storage_options)
+
+    # Assertion: Verify subprocess.Popen was called with the correct arguments and environment variables
+    popen_mock.assert_called_once_with(
+        f"s5cmd cp {remote_filepath} {local_filepath}",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=expected_env,
+    )
+    process_mock.wait.assert_called_once()
+
+
+@patch("os.system")
+@patch("subprocess.Popen")
+def test_r2_downloader_with_s5cmd_with_storage_options_unsigned(popen_mock, system_mock, tmpdir):
+    system_mock.return_value = 0  # Simulates s5cmd being available
+    process_mock = MagicMock()
+    process_mock.wait.return_value = 0  # Simulate a successful download
+    popen_mock.return_value = process_mock
+
+    storage_options = {"AWS_NO_SIGN_REQUEST": "Yes"}
+
+    # Initialize the R2Downloader with storage options
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [], storage_options)
+
+    # Action: Call the download_file method
+    remote_filepath = "r2://random_bucket/sample_file.txt"
+    local_filepath = os.path.join(tmpdir, "sample_file.txt")
+    downloader.download_file(remote_filepath, local_filepath)
+
+    # Create expected environment variables by merging the current env with storage_options
+    expected_env = os.environ.copy()
+    expected_env.update(storage_options)
+
+    # Assertion: Verify subprocess.Popen was called with the correct arguments and environment variables
+    popen_mock.assert_called_once_with(
+        f"s5cmd --no-sign-request cp {remote_filepath} {local_filepath}",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=expected_env,
+    )
+    process_mock.wait.assert_called_once()
+
+
+@patch("os.system")
+@patch("subprocess.Popen")
+def test_r2_downloader_s5cmd_error_handling(popen_mock, system_mock, tmpdir):
+    system_mock.return_value = 0  # Simulates s5cmd being available
+    process_mock = MagicMock()
+    process_mock.wait.return_value = 1  # Simulate a non-zero return code
+    process_mock.stderr.read.return_value = b"Simulated R2 error message"
+    popen_mock.return_value = process_mock
+
+    # Initialize the R2Downloader without storage options
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
+
+    # Action: Call the download_file method and expect a RuntimeError
+    remote_filepath = "r2://random_bucket/sample_file.txt"
+    local_filepath = os.path.join(tmpdir, "sample_file.txt")
+
+    with pytest.raises(RuntimeError, match="Failed to execute command"):
+        downloader.download_file(remote_filepath, local_filepath)
+
+    # Assertion: Verify subprocess.Popen was called with the correct arguments
+    popen_mock.assert_called_once_with(
+        f"s5cmd cp {remote_filepath} {local_filepath}",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=None,
+    )
+
+    # Assertion: Verify the error message includes the simulated stderr output
+    process_mock.stderr.read.assert_called_once()
+
+
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     # Create mock objects
@@ -365,6 +532,18 @@ def test_s3_downloader_download_fileobj():
         mock_client.download_fileobj.assert_called_once_with("bucket", "file.txt", fileobj)
 
 
+def test_r2_downloader_download_fileobj():
+    with mock.patch("os.system", return_value=1), mock.patch("litdata.streaming.downloader.R2Client") as R2ClientMock:
+        mock_client = MagicMock()
+        R2ClientMock.return_value.client = mock_client
+
+        downloader = R2Downloader("r2://bucket", "", [])
+        fileobj = io.BytesIO()
+
+        downloader.download_fileobj("r2://bucket/file.txt", fileobj)
+        mock_client.download_fileobj.assert_called_once_with("bucket", "file.txt", fileobj)
+
+
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader_download_fileobj(google_mock):
     mock_client = MagicMock()
@@ -411,6 +590,23 @@ async def test_s3_downloader_adownload_fileobj(obstore_mock):
         resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
         downloader = S3Downloader("s3://bucket", "", [])
         result = await downloader.adownload_fileobj("s3://bucket/file.txt")
+        assert isinstance(result, bytes)
+        for chunk in stream_mock:
+            assert chunk in result
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_r2_downloader_adownload_fileobj(obstore_mock):
+    with mock.patch("litdata.streaming.downloader.R2Downloader._get_store") as get_store_mock:
+        store_mock = MagicMock()
+        get_store_mock.return_value = store_mock
+        resp_mock = MagicMock()
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        stream_mock = [b"chunk1", b"chunk2"]
+        resp_mock.bytes_async = mock.AsyncMock(return_value=b"".join(stream_mock))
+        downloader = R2Downloader("r2://bucket", "", [])
+        result = await downloader.adownload_fileobj("r2://bucket/file.txt")
         assert isinstance(result, bytes)
         for chunk in stream_mock:
             assert chunk in result

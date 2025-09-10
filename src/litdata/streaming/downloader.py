@@ -33,7 +33,7 @@ from litdata.constants import (
     _OBSTORE_AVAILABLE,
 )
 from litdata.debugger import _get_log_msg
-from litdata.streaming.client import S3Client
+from litdata.streaming.client import R2Client, S3Client
 
 logger = logging.getLogger("litdata.streaming.downloader")
 
@@ -253,6 +253,161 @@ class S3Downloader(Downloader):
 
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        store = self._get_store(bucket)
+        resp = await obs.get_async(store, key)
+        bytes_object = await resp.bytes_async()
+        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+
+
+class R2Downloader(Downloader):
+    def __init__(
+        self,
+        remote_dir: str,
+        cache_dir: str,
+        chunks: list[dict[str, Any]],
+        storage_options: Optional[dict] = {},
+        **kwargs: Any,
+    ):
+        super().__init__(remote_dir, cache_dir, chunks, storage_options)
+        self._s5cmd_available = os.system("s5cmd > /dev/null 2>&1") == 0
+        # check if kwargs contains session_options
+        self.session_options = kwargs.get("session_options", {})
+
+        if not self._s5cmd_available or _DISABLE_S5CMD:
+            self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
+
+    def download_file(self, remote_filepath: str, local_filepath: str) -> None:
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if os.path.exists(local_filepath):
+            return
+
+        with (
+            suppress(Timeout, FileNotFoundError),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
+        ):
+            if self._s5cmd_available and not _DISABLE_S5CMD:
+                env = None
+                if self._storage_options:
+                    env = os.environ.copy()
+                    env.update(self._storage_options)
+
+                aws_no_sign_request = self._storage_options.get("AWS_NO_SIGN_REQUEST", "no").lower() == "yes"
+                # prepare the s5cmd command
+                no_signed_option = "--no-sign-request" if aws_no_sign_request else None
+                cmd_parts = ["s5cmd", no_signed_option, "cp", remote_filepath, local_filepath]
+                cmd = " ".join(part for part in cmd_parts if part)
+
+                proc = subprocess.Popen(
+                    cmd,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                return_code = proc.wait()
+
+                if return_code != 0:
+                    stderr_output = proc.stderr.read().decode().strip() if proc.stderr else ""
+                    error_message = (
+                        f"Failed to execute command `{cmd}` (exit code: {return_code}). "
+                        "This might be due to an incorrect file path, insufficient permissions, or network issues. "
+                        "To resolve this issue, you can either:\n"
+                        "- Pass `storage_options` with the necessary credentials and endpoint. \n"
+                        "- Example:\n"
+                        "  storage_options = {\n"
+                        '      "AWS_ACCESS_KEY_ID": "your-key",\n'
+                        '      "AWS_SECRET_ACCESS_KEY": "your-secret",\n'
+                        '      "S3_ENDPOINT_URL": "https://s3.example.com" (Optional if using AWS)\n'
+                        "  }\n"
+                        "- or disable `s5cmd` by setting `DISABLE_S5CMD=1` if `storage_options` do not work.\n"
+                    )
+                    if stderr_output:
+                        error_message += (
+                            f"For further debugging, please check the command output below:\n{stderr_output}"
+                        )
+                    raise RuntimeError(error_message)
+            else:
+                from boto3.s3.transfer import TransferConfig
+
+                extra_args: dict[str, Any] = {}
+
+                if not os.path.exists(local_filepath):
+                    # Issue: https://github.com/boto/boto3/issues/3113
+                    self._client.client.download_file(
+                        obj.netloc,
+                        obj.path.lstrip("/"),
+                        local_filepath,
+                        ExtraArgs=extra_args,
+                        Config=TransferConfig(use_threads=False),
+                    )
+
+    def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "client"):
+            self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        byte_range = f"bytes={offset}-{offset + length - 1}"
+
+        response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
+
+        return response["Body"].read()
+
+    def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
+        """Download a file from R2 directly to a file-like object."""
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        if not hasattr(self, "_client"):
+            self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+
+        self._client.client.download_fileobj(
+            bucket,
+            key,
+            fileobj,
+        )
+
+    def _get_store(self, bucket: str) -> Any:
+        """Return an obstore S3Store instance for the given bucket, initializing if needed."""
+        if not hasattr(self, "_store"):
+            if not _OBSTORE_AVAILABLE:
+                raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
+            import boto3
+            from obstore.auth.boto3 import Boto3CredentialProvider
+            from obstore.store import S3Store
+
+            session = boto3.Session(**self._storage_options, **self.session_options)
+            credential_provider = Boto3CredentialProvider(session)
+            self._store = S3Store(bucket, credential_provider=credential_provider)
+        return self._store
+
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Download a file from R2 directly to a file-like object asynchronously."""
+        import obstore as obs
+
+        obj = parse.urlparse(remote_filepath)
+
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
         bucket = obj.netloc
         key = obj.path.lstrip("/")
@@ -550,6 +705,7 @@ _DOWNLOADERS: dict[str, type[Downloader]] = {
     "azure://": AzureDownloader,
     "hf://": HFDownloader,
     "local:": LocalDownloaderWithCache,
+    "r2://": R2Downloader,
 }
 
 
