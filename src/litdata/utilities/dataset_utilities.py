@@ -84,7 +84,12 @@ def subsample_streaming_dataset(
         if index_path is not None:
             copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
         else:
-            downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
+            # Merge data_connection_id from resolved directory into storage_options for R2 connections
+            merged_storage_options = storage_options.copy()
+            if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
+                merged_storage_options["data_connection_id"] = input_dir.data_connection_id
+
+            downloader = get_downloader(input_dir.url, input_dir.path, [], merged_storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
     def path_exists(p: str) -> bool:
@@ -159,6 +164,7 @@ def _should_replace_path(path: Optional[str]) -> bool:
         or path.startswith("/teamspace/s3_folders/")
         or path.startswith("/teamspace/gcs_folders/")
         or path.startswith("/teamspace/gcs_connections/")
+        or path.startswith("/teamspace/lightning_storage/")
     )
 
 

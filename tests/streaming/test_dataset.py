@@ -867,6 +867,25 @@ def test_s3_streaming_dataset(monkeypatch):
     )  # it won't be None, and a cache dir will be created
 
 
+def test_r2_streaming_dataset(monkeypatch, tmpdir):
+    """Test that data_connection_id is properly merged into storage_options."""
+    downloader = mock.MagicMock()
+
+    def fn(remote_chunkpath: str, local_chunkpath: str):
+        with open(local_chunkpath, "w") as f:
+            json.dump({"chunks": [{"chunk_size": 2, "filename": "0.bin"}]}, f)
+
+    downloader.download_file = fn
+
+    monkeypatch.setattr(dataset_utilities_module, "get_downloader", mock.MagicMock(return_value=downloader))
+
+    dataset = StreamingDataset(input_dir="r2://random_bucket/optimized_tiny_imagenet")
+    assert dataset.input_dir.url == "r2://random_bucket/optimized_tiny_imagenet"
+    assert dataset.input_dir.path.endswith(
+        "chunks/9537e9e392ad87a4d38d05dfe28c329a/9537e9e392ad87a4d38d05dfe28c329a"
+    )  # it won't be None, and a cache dir will be created
+
+
 class EmulateS3StreamingDataset(StreamingDataset):
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
         cache_dir = os.path.join(self.input_dir.path)

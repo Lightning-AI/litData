@@ -217,6 +217,7 @@ def keep_path(path: str) -> bool:
         "s3_connections",
         "s3_folders",
         "snowflake_connections",
+        "lightning_storage",
     ]
     return all(p not in path for p in paths)
 

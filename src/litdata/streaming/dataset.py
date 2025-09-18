@@ -194,6 +194,12 @@ class StreamingDataset(IterableDataset):
         self.num_workers: int = 1
         self.batch_size: int = 1
         self._encryption = encryption
+        # Ensure data_connection_id is included in storage_options if available from input_dir
+        if input_dir.data_connection_id and storage_options is not None:
+            storage_options = storage_options.copy()
+            storage_options["data_connection_id"] = input_dir.data_connection_id
+        elif input_dir.data_connection_id and storage_options is None:
+            storage_options = {"data_connection_id": input_dir.data_connection_id}
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download

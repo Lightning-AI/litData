@@ -27,6 +27,7 @@ def test_should_replace_path():
     assert _should_replace_path("/teamspace/s3_folders/...")
     assert _should_replace_path("/teamspace/gcs_folders/...")
     assert _should_replace_path("/teamspace/gcs_connections/...")
+    assert _should_replace_path("/teamspace/lightning_storage/...")
     assert not _should_replace_path("something_else")
 
 

@@ -62,7 +62,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
         raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {type(dir_path)}")
 
     if isinstance(dir_path, str):
-        cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
+        cloud_prefixes = ("s3://", "gs://", "r2://", "azure://", "hf://")
         if dir_path.startswith(cloud_prefixes):
             return Dir(path=None, url=dir_path)
 
