@@ -867,6 +867,7 @@ def test_s3_streaming_dataset(monkeypatch):
     )  # it won't be None, and a cache dir will be created
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 def test_r2_streaming_dataset(monkeypatch, tmpdir):
     """Test that data_connection_id is properly merged into storage_options."""
     downloader = mock.MagicMock()
@@ -881,9 +882,7 @@ def test_r2_streaming_dataset(monkeypatch, tmpdir):
 
     dataset = StreamingDataset(input_dir="r2://random_bucket/optimized_tiny_imagenet")
     assert dataset.input_dir.url == "r2://random_bucket/optimized_tiny_imagenet"
-    assert dataset.input_dir.path.endswith(
-        "chunks/9537e9e392ad87a4d38d05dfe28c329a/9537e9e392ad87a4d38d05dfe28c329a"
-    )  # it won't be None, and a cache dir will be created
+    assert dataset.input_dir.path.endswith("chunks/9537e9e392ad87a4d38d05dfe28c329a/9537e9e392ad87a4d38d05dfe28c329a")
 
 
 class EmulateS3StreamingDataset(StreamingDataset):
