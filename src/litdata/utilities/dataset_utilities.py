@@ -85,7 +85,7 @@ def subsample_streaming_dataset(
             copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
         else:
             # Merge data_connection_id from resolved directory into storage_options for R2 connections
-            merged_storage_options = storage_options.copy()
+            merged_storage_options = storage_options.copy() if storage_options is not None else {}
             if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
                 merged_storage_options["data_connection_id"] = input_dir.data_connection_id
 
