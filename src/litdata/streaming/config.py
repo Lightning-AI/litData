@@ -13,11 +13,14 @@
 
 import logging
 import os
-import time
+from time import time, sleep
 from collections import defaultdict
 from typing import Any, Optional
 
-from litdata.constants import _INDEX_FILENAME
+from litdata.constants import (
+    _INDEX_FILENAME,
+    _MAX_WAIT_TIME
+)
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
@@ -184,17 +187,23 @@ class ChunksConfig:
         if os.path.exists(target_local_chunkpath):
             return
 
-        # Retry for 60s (60 attempts x 1s wait) (TODO: make this configurable?)
-        max_attempts = 60
-        for _ in range(1, max_attempts + 1):
-            try:
-                with open(local_chunkpath, "rb") as f:
-                    data = f.read()
-                    break  # success, exit loop
-            except FileNotFoundError:
-                time.sleep(1)  # wait before retrying
-            except Exception as e:
-                break  # exit on unexpected errors        
+        # Ensure that the compressed file exists and is fully downloaded
+        start_time = time()
+        assert self._chunks is not None
+
+        filename = os.path.basename(local_chunkpath)
+        chunk_index = self._get_chunk_index_from_filename(filename)
+        chunk_bytes = self._chunks[chunk_index]["chunk_size"]
+        exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
+        while not exists:
+            sleep(0.1)
+            exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
+
+            if (time() - start_time) > _MAX_WAIT_TIME:
+                raise FileNotFoundError(f"The {local_chunkpath} hasn't been found.")
+        
+        with open(local_chunkpath, "rb") as f:
+            data = f.read()
 
         # delete the files only if they were downloaded
         if self._downloader is not None:
