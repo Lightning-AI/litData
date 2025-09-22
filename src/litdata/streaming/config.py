@@ -13,14 +13,11 @@
 
 import logging
 import os
-from time import time, sleep
 from collections import defaultdict
+from time import sleep, time
 from typing import Any, Optional
 
-from litdata.constants import (
-    _INDEX_FILENAME,
-    _MAX_WAIT_TIME
-)
+from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
@@ -201,7 +198,7 @@ class ChunksConfig:
 
             if (time() - start_time) > _MAX_WAIT_TIME:
                 raise FileNotFoundError(f"The {local_chunkpath} hasn't been found.")
-        
+
         with open(local_chunkpath, "rb") as f:
             data = f.read()
 
