@@ -315,8 +315,8 @@ def load_index_file(input_dir: str) -> dict[str, Any]:
     except json.decoder.JSONDecodeError:
         with open(index_filepath) as f:
             raw_data = f.read()
-            raw_data += "}" # close the json content it has been truncated by a character
-            data = json.loads(raw_data) # load json from string
+            raw_data += "}"  # close the json content it has been truncated by a character
+            data = json.loads(raw_data)  # load json from string
         if "chunks" not in data and "shards" in data:
             # load mds shard-based index file and adapt to chunks format
             return adapt_mds_shards_to_chunks(data)
