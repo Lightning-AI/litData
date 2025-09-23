@@ -130,17 +130,18 @@ class PrepareChunksThread(Thread):
             return curr_count
         return 0
 
-    def _apply_delete(self, chunk_index: int) -> None:
+    def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
         # TODO: Fix the can_delete method
         can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
-        remaining_locks = self._remaining_locks(chunk_filepath)
-        if remaining_locks > 0:  # Can't delete this, something has it
-            if _DEBUG:
-                print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
-            return
+        if not skip_lock:
+            remaining_locks = self._remaining_locks(chunk_filepath)
+            if remaining_locks > 0:  # Can't delete this, something has it
+                if _DEBUG:
+                    print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
+                return
 
         if _DEBUG:
             with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
@@ -203,6 +204,8 @@ class PrepareChunksThread(Thread):
     def _force_download(self) -> None:
         chunk_index = _get_from_queue(self._force_download_queue)
         if chunk_index is not None:
+            # force apply deletion before redownload
+            self._apply_delete(chunk_index, skip_lock=True)
             if _DEBUG:
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
                 print(f"Requested force download for {chunk_filepath} by {self._rank}")
