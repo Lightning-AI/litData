@@ -312,6 +312,16 @@ def load_index_file(input_dir: str) -> dict[str, Any]:
         return data
     except FileNotFoundError:
         raise FileNotFoundError(f"Index file not found at {index_filepath}.")
+    except json.decoder.JSONDecodeError:
+        with open(index_filepath) as f:
+            raw_data = f.read()
+            raw_data += "}" # close the json content it has been truncated by a character
+            data = json.loads(raw_data) # load json from string
+        if "chunks" not in data and "shards" in data:
+            # load mds shard-based index file and adapt to chunks format
+            return adapt_mds_shards_to_chunks(data)
+
+        return data
 
 
 def adapt_mds_shards_to_chunks(data: dict[str, Any]) -> dict[str, Any]:
