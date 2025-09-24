@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import subprocess
 import sys
 from unittest import mock
 from unittest.mock import MagicMock, patch
@@ -20,7 +21,6 @@ from litdata.streaming.downloader import (
     get_downloader,
     register_downloader,
     shutil,
-    subprocess,
     unregister_downloader,
 )
 
