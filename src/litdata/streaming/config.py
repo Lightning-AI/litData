@@ -194,6 +194,10 @@ class ChunksConfig:
         exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
         while not exists:
             sleep(0.1)
+            # Return if the actual file exists
+            if os.path.exists(target_local_chunkpath):
+                return
+            # find the local compressed file
             exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
 
             if (time() - start_time) > _MAX_WAIT_TIME:
