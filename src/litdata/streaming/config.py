@@ -18,7 +18,6 @@ from time import sleep, time
 from typing import Any, Optional
 
 from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
-from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -139,7 +138,9 @@ class ChunksConfig:
             if self._downloader is not None and not skip_lock:
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
-                self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index)
+                self._downloader._increment_local_lock(
+                    local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
+                )
                 pass
             return
 
@@ -147,7 +148,9 @@ class ChunksConfig:
             return
 
         if not skip_lock:
-            self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index)
+            self._downloader._increment_local_lock(
+                local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
+            )
 
         self._downloader.download_chunk_from_index(chunk_index)
 

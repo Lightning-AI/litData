@@ -16,10 +16,10 @@ import logging
 import os
 import warnings
 from contextlib import suppress
+from datetime import datetime
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Optional, Union
-from datetime import datetime
 
 import numpy as np
 from filelock import FileLock, Timeout
@@ -213,7 +213,9 @@ class PrepareChunksThread(Thread):
             self._apply_delete(chunk_index, skip_lock=True)
             if _DEBUG:
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                print(f"[Reader] Requested force download for {chunk_filepath} by {self._rank} at {datetime.now().isoformat()}")
+                print(
+                    f"[Reader] Requested force download for {chunk_filepath} by {self._rank} at {datetime.now().isoformat()}"
+                )
 
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
 
@@ -445,22 +447,15 @@ class BinaryReader:
                 # 2. Log the "End" event for the previous chunk.
                 print(f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}")
                 logger.debug(
-                    _get_log_msg({
-                        "name": f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}",
-                        "ph": "E"
-                    })
+                    _get_log_msg(
+                        {"name": f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}", "ph": "E"}
+                    )
                 )
 
             print(f"read_chunk_{index.chunk_index}_size_{index.chunk_size}")
 
             # 2. Log the "Begin" event for the NEW chunk.
-            logger.debug(
-                _get_log_msg({
-                    "name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}",
-                    "ph": "B"
-                })
-            )
-
+            logger.debug(_get_log_msg({"name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}", "ph": "B"}))
 
             # Close the memory-mapped file for the last chunk index
             if isinstance(self._item_loader, (TokensLoader, ParquetLoader)) and self._last_chunk_index is not None:

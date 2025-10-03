@@ -14,6 +14,7 @@
 import io
 import os
 import pickle
+import struct
 import tempfile
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -21,7 +22,7 @@ from contextlib import suppress
 from copy import deepcopy
 from itertools import chain
 from typing import Any, Optional
-import struct
+
 import numpy as np
 import tifffile
 import torch
@@ -243,9 +244,9 @@ class TensorSerializer(Serializer):
     def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
         if item.device.type != "cpu":
             item = item.cpu()
-        
-        dtype_indice = self._dtype_to_indices[item.dtype] 
-        
+
+        dtype_indice = self._dtype_to_indices[item.dtype]
+
         numpy_item = item.numpy(force=True)
         rank = len(numpy_item.shape)
         shape_format = f">{rank}I"
@@ -253,7 +254,7 @@ class TensorSerializer(Serializer):
         shape_bytes = struct.pack(shape_format, *numpy_item.shape)
         data_bytes = numpy_item.tobytes()
         return b"".join([header_bytes, shape_bytes, data_bytes]), None
-    
+
     # ... (rest of the class remains the same) ...
     def deserialize(self, data: bytes) -> torch.Tensor:
         buffer_view = memoryview(data)

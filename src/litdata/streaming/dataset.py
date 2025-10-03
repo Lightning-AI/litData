@@ -21,7 +21,6 @@ from torch.utils.data import IterableDataset
 
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
-from litdata.debugger import _get_log_msg
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader
@@ -493,7 +492,10 @@ class StreamingDataset(IterableDataset):
         chunk_indexes = None if self.has_triggered_download else self.worker_chunks[self.worker_next_chunk_index - 1 :]
         is_last_index = (self.worker_next_chunk_index) == self.num_chunks and len(self.upcoming_indexes) == 0
         chunk_index = self.worker_chunks[self.worker_next_chunk_index - 1]
-        chunk_size = self.worker_intervals[self.worker_next_chunk_index - 1][2] - self.worker_intervals[self.worker_next_chunk_index - 1][1]
+        chunk_size = (
+            self.worker_intervals[self.worker_next_chunk_index - 1][2]
+            - self.worker_intervals[self.worker_next_chunk_index - 1][1]
+        )
 
         # Call the `__getitem__` method.
         data = self.__getitem__(
@@ -503,7 +505,7 @@ class StreamingDataset(IterableDataset):
                 # We provide the chunks indexes only one the first
                 chunk_indexes=chunk_indexes,
                 is_last_index=is_last_index,
-                chunk_size=chunk_size
+                chunk_size=chunk_size,
             )
         )
 
