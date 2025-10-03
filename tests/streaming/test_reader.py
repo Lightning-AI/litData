@@ -169,8 +169,13 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     assert len(os.listdir(cache_dir)) == 14
 
     thread = PrepareChunksThread(
-        cache._reader.config, item_loader=PyTreeLoader(), distributed_env=_DistributedEnv(1, 1, 1), max_cache_size=10000
+        cache._reader.config,
+        item_loader=PyTreeLoader(),
+        distributed_env=_DistributedEnv(1, 1, 1),
+        max_pre_download=2,
+        max_cache_size=10000,
     )
+
     assert not thread._delete_chunks_when_processed
 
     thread = PrepareChunksThread(
