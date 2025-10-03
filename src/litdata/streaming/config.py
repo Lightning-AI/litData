@@ -139,7 +139,7 @@ class ChunksConfig:
             if self._downloader is not None and not skip_lock:
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
-                self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""))
+                self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index)
                 pass
             return
 
@@ -147,7 +147,7 @@ class ChunksConfig:
             return
 
         if not skip_lock:
-            self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""))
+            self._downloader._increment_local_lock(local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index)
 
         self._downloader.download_chunk_from_index(chunk_index)
 
@@ -208,7 +208,10 @@ class ChunksConfig:
 
         # delete the files only if they were downloaded
         if self._downloader is not None:
-            os.remove(local_chunkpath)
+            try:
+                os.remove(local_chunkpath)
+            except FileNotFoundError:
+                pass
 
         data = self._compressor.decompress(data)
 
@@ -283,15 +286,6 @@ class ChunksConfig:
 
     def __getitem__(self, index: ChunkedIndex) -> tuple[str, int, int]:
         """Find the associated chunk metadata."""
-        logger.debug(
-            _get_log_msg(
-                {
-                    "name": f"get_item_for_chunk_index_{index.chunk_index}_and_index_{index.index}",
-                    "ph": "B",
-                    "cname": ChromeTraceColors.LIGHT_GREEN,
-                }
-            )
-        )
         assert self._chunks is not None
         chunk = self._chunks[index.chunk_index]
 
@@ -303,16 +297,6 @@ class ChunksConfig:
         begin = self._intervals[index.chunk_index][0]
 
         filesize_bytes = chunk["chunk_bytes"]
-
-        logger.debug(
-            _get_log_msg(
-                {
-                    "name": f"get_item_for_chunk_index_{index.chunk_index}_and_index_{index.index}",
-                    "ph": "E",
-                    "cname": ChromeTraceColors.LIGHT_GREEN,
-                }
-            )
-        )
 
         return local_chunkpath, begin, filesize_bytes
 

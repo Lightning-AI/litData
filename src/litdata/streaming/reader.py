@@ -19,6 +19,7 @@ from contextlib import suppress
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Optional, Union
+from datetime import datetime
 
 import numpy as np
 from filelock import FileLock, Timeout
@@ -55,7 +56,7 @@ class PrepareChunksThread(Thread):
         item_loader: BaseItemLoader,
         distributed_env: _DistributedEnv,
         max_cache_size: Optional[int] = None,
-        max_pre_download: int = 2,
+        max_pre_download: int = 5,
         rank: Optional[int] = None,
     ) -> None:
         super().__init__(daemon=True)
@@ -64,6 +65,7 @@ class PrepareChunksThread(Thread):
         self._max_pre_download = max_pre_download
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
+        self._worker_env = _WorkerEnv.detect()
 
         self._chunks_index_to_be_deleted: list[int] = []
         self._max_cache_size = max_cache_size
@@ -80,6 +82,9 @@ class PrepareChunksThread(Thread):
         # Check whether a dataset slice fits on the node
         num_bytes_per_nodes = self._config.num_bytes // self._distributed_env.num_nodes
         self._delete_chunks_when_processed = num_bytes_per_nodes > max_cache_size if max_cache_size else False
+        if self._worker_env.rank == 0:
+            print(f"Delete chunks when processed: {self._delete_chunks_when_processed}")
+
         self._has_exited = False
 
     def download(self, chunk_indexes: list[int]) -> None:
@@ -111,7 +116,6 @@ class PrepareChunksThread(Thread):
             if not os.path.exists(countpath):
                 return 0
             with open(countpath) as count_f:
-                logger.debug(_get_log_msg({"name": f"decrement_local_lock_for_ {chunk_filepath}", "ph": "B"}))
                 try:
                     curr_count = int(count_f.read().strip())
                 except Exception:
@@ -125,8 +129,9 @@ class PrepareChunksThread(Thread):
                     os.remove(countpath + ".lock")
             else:
                 with open(countpath, "w+") as count_f:
+                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
                     count_f.write(str(curr_count))
-            logger.debug(_get_log_msg({"name": f"decrement_local_lock_for_ {chunk_filepath}", "ph": "E"}))
+                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
             return curr_count
         return 0
 
@@ -149,8 +154,8 @@ class PrepareChunksThread(Thread):
 
         self._item_loader.delete(chunk_index, chunk_filepath)
 
-        if _DEBUG:
-            print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+        # if _DEBUG:
+        #     print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
         base_name = os.path.basename(chunk_filepath)
         base_prefix = os.path.splitext(base_name)[0]
@@ -208,7 +213,7 @@ class PrepareChunksThread(Thread):
             self._apply_delete(chunk_index, skip_lock=True)
             if _DEBUG:
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                print(f"Requested force download for {chunk_filepath} by {self._rank}")
+                print(f"[Reader] Requested force download for {chunk_filepath} by {self._rank} at {datetime.now().isoformat()}")
 
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
 
@@ -313,6 +318,7 @@ class BinaryReader:
         self._prepare_thread: Optional[PrepareChunksThread] = None
         self._item_loader = item_loader or PyTreeLoader()
         self._last_chunk_index: Optional[int] = None
+        self._last_chunk_size: Optional[int] = None
         self._chunks_queued_for_download = False
         self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
         self._storage_options = storage_options
@@ -367,9 +373,6 @@ class BinaryReader:
                 assert self._prepare_thread
                 self._prepare_thread.download([index.chunk_index])
 
-            if self._last_chunk_index is None:
-                self._last_chunk_index = index.chunk_index
-
     @property
     def config(self) -> ChunksConfig:
         if self._config is None:
@@ -392,9 +395,6 @@ class BinaryReader:
         Prefetching should reduce the wait time to be the batch available.
 
         """
-        logger.debug(
-            _get_log_msg({"name": f"reader_reading_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "B"})
-        )
         if not isinstance(index, ChunkedIndex):
             raise ValueError("The Reader.read(...) method expects a chunked Index.")
 
@@ -434,20 +434,41 @@ class BinaryReader:
             and (self._config._remote_dir or self._config._compressor)
             and index.chunk_index != self._last_chunk_index
             and self._prepare_thread is not None
+            and self._last_chunk_index is not None
         ):
-            assert self._last_chunk_index is not None
-
             # inform the chunk has been completely consumed
             self._prepare_thread._decrement_local_lock(self._last_chunk_index)
             self._prepare_thread.delete([self._last_chunk_index])
 
         if index.chunk_index != self._last_chunk_index:
+            if self._last_chunk_index is not None:
+                # 2. Log the "End" event for the previous chunk.
+                print(f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}")
+                logger.debug(
+                    _get_log_msg({
+                        "name": f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}",
+                        "ph": "E"
+                    })
+                )
+
+            print(f"read_chunk_{index.chunk_index}_size_{index.chunk_size}")
+
+            # 2. Log the "Begin" event for the NEW chunk.
+            logger.debug(
+                _get_log_msg({
+                    "name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}",
+                    "ph": "B"
+                })
+            )
+
+
             # Close the memory-mapped file for the last chunk index
             if isinstance(self._item_loader, (TokensLoader, ParquetLoader)) and self._last_chunk_index is not None:
                 self._item_loader.close(self._last_chunk_index)
 
             # track the new chunk index as the latest one
             self._last_chunk_index = index.chunk_index
+            self._last_chunk_size = index.chunk_size
 
         if index.is_last_index and self._prepare_thread:
             # inform the thread it is time to stop
@@ -465,11 +486,9 @@ class BinaryReader:
             self._prepare_thread = None
             self._item_loader.close(self._last_chunk_index)
             self._last_chunk_index = None
+            self._last_chunk_size = None
             self._chunks_queued_for_download = False
 
-        logger.debug(
-            _get_log_msg({"name": f"reader_reading_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"})
-        )
         return item
 
     def read_item_bytes(self, index: ChunkedIndex, begin: int) -> bytes:

@@ -21,7 +21,7 @@ from contextlib import suppress
 from copy import deepcopy
 from itertools import chain
 from typing import Any, Optional
-
+import struct
 import numpy as np
 import tifffile
 import torch
@@ -232,42 +232,52 @@ class BytesSerializer(Serializer):
 
 
 class TensorSerializer(Serializer):
-    """The TensorSerializer serialize and deserialize tensor to and from bytes."""
+    """An optimized TensorSerializer that is compatible with deepcopy/pickle."""
 
     def __init__(self) -> None:
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _TORCH_DTYPES_MAPPING.items()}
+        self._header_struct_format = ">II"
+        self._header_struct = struct.Struct(self._header_struct_format)
 
     def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
-        dtype_indice = self._dtype_to_indices[item.dtype]
-        data = [np.uint32(dtype_indice).tobytes()]
-        data.append(np.uint32(len(item.shape)).tobytes())
-        for dim in item.shape:
-            data.append(np.uint32(dim).tobytes())
-        data.append(item.numpy().tobytes(order="C"))
-        return b"".join(data), None
-
+        if item.device.type != "cpu":
+            item = item.cpu()
+        
+        dtype_indice = self._dtype_to_indices[item.dtype] 
+        
+        numpy_item = item.numpy(force=True)
+        rank = len(numpy_item.shape)
+        shape_format = f">{rank}I"
+        header_bytes = self._header_struct.pack(dtype_indice, rank)
+        shape_bytes = struct.pack(shape_format, *numpy_item.shape)
+        data_bytes = numpy_item.tobytes()
+        return b"".join([header_bytes, shape_bytes, data_bytes]), None
+    
+    # ... (rest of the class remains the same) ...
     def deserialize(self, data: bytes) -> torch.Tensor:
-        dtype_indice = np.frombuffer(data[0:4], np.uint32).item()
+        buffer_view = memoryview(data)
+        dtype_indice, rank = self._header_struct.unpack_from(buffer_view, 0)
         dtype = _TORCH_DTYPES_MAPPING[dtype_indice]
-        shape_size = np.frombuffer(data[4:8], np.uint32).item()
-        shape = []
-        for shape_idx in range(shape_size):
-            shape.append(np.frombuffer(data[8 + 4 * shape_idx : 8 + 4 * (shape_idx + 1)], np.uint32).item())
-        idx_start = 8 + 4 * shape_size
-        idx_end = len(data)
-        if idx_end > idx_start:
-            tensor = torch.frombuffer(data[idx_start:idx_end], dtype=dtype)
-        else:
-            assert idx_start == idx_end, "The starting index should never be greater than end ending index."
-            tensor = torch.empty(shape, dtype=dtype)
-        shape = torch.Size(shape)
-        if tensor.shape == shape:
-            return tensor
-        return torch.reshape(tensor, shape)
+        header_size = self._header_struct.size
+        shape = struct.unpack_from(f">{rank}I", buffer_view, header_size)
+        data_start_offset = header_size + (rank * 4)
+        if data_start_offset < len(buffer_view):
+            tensor_1d = torch.frombuffer(buffer_view[data_start_offset:], dtype=dtype)
+            return tensor_1d.reshape(shape)
+        return torch.empty(shape, dtype=dtype)
 
-    def can_serialize(self, item: torch.Tensor) -> bool:
+    def can_serialize(self, item: any) -> bool:
         return isinstance(item, torch.Tensor) and len(item.shape) != 1
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        del state["_header_struct"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._header_struct = struct.Struct(self._header_struct_format)
 
 
 class NoHeaderTensorSerializer(Serializer):

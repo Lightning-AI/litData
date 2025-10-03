@@ -45,6 +45,7 @@ class ChunkedIndex:
 
     index: int
     chunk_index: int
+    chunk_size: Optional[int] = None
     chunk_indexes: Optional[list[int]] = None
     is_last_index: bool = False
 

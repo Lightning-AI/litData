@@ -362,7 +362,7 @@ def _wrapper(fetcher: Any, func: Callable, tracer: Any, profile: int, profile_di
             if os.path.exists(output_file):
                 os.remove(output_file)
 
-            tracer = VizTracer(output_file=output_file, verbose=0)
+            tracer = VizTracer(output_file=output_file, verbose=0, tracer_entries=100000000)
             tracer.start()
 
         result = func(*args, **kwargs)

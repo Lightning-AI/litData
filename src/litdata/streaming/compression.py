@@ -62,9 +62,9 @@ class ZSTDCompressor(Compressor):
     def decompress(self, data: bytes) -> bytes:
         import zstd
 
-        logger.debug(_get_log_msg({"name": "Decompressing data", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
+        logger.debug(_get_log_msg({"name": "decompress", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
         decompressed_data = zstd.decompress(data)
-        logger.debug(_get_log_msg({"name": "Decompressed data", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
+        logger.debug(_get_log_msg({"name": "decompress", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
         return decompressed_data
 
     @classmethod

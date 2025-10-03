@@ -15,13 +15,12 @@ import contextlib
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from abc import ABC
 from contextlib import suppress
 from typing import Any, Optional
 from urllib import parse
-
+from time import time
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
@@ -52,8 +51,7 @@ class Downloader(ABC):
         self._chunks = chunks
         self._storage_options = storage_options or {}
 
-    def _increment_local_lock(self, chunkpath: str) -> None:
-        logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "B"}))
+    def _increment_local_lock(self, chunkpath: str, chunk_index: int) -> None:
         countpath = chunkpath + ".cnt"
         with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=1):
             try:
@@ -63,11 +61,12 @@ class Downloader(ABC):
                 curr_count = 0
             curr_count += 1
             with open(countpath, "w+") as count_f:
+                logger.debug(_get_log_msg({"name": f"increment_lock_chunk_{chunk_index}_to_{curr_count}", "ph": "B"}))
                 count_f.write(str(curr_count))
-        logger.debug(_get_log_msg({"name": f"increment_local_lock_for_{chunkpath}", "ph": "E"}))
+                logger.debug(_get_log_msg({"name": f"increment_lock_chunk_{chunk_index}_to_{curr_count}", "ph": "E"}))
 
     def download_chunk_from_index(self, chunk_index: int) -> None:
-        logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "B"}))
+        logger.debug(_get_log_msg({"name": f"download_chunk_{chunk_index}", "ph": "B"}))
 
         chunk_filename = self._chunks[chunk_index]["filename"]
         local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
@@ -75,7 +74,7 @@ class Downloader(ABC):
 
         self.download_file(remote_chunkpath, local_chunkpath)
 
-        logger.debug(_get_log_msg({"name": f"download_chunk_from_index_{chunk_index}", "ph": "E"}))
+        logger.debug(_get_log_msg({"name": f"download_chunk_{chunk_index}", "ph": "E"}))
 
     def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
         chunk_filename = self._chunks[chunk_index]["filename"]
@@ -118,12 +117,9 @@ class S3Downloader(Downloader):
         **kwargs: Any,
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
-        self._s5cmd_available = os.system("s5cmd > /dev/null 2>&1") == 0
         # check if kwargs contains session_options
         self.session_options = kwargs.get("session_options", {})
-
-        if not self._s5cmd_available or _DISABLE_S5CMD:
-            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
+        self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -138,61 +134,19 @@ class S3Downloader(Downloader):
             suppress(Timeout, FileNotFoundError),
             FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
-            if self._s5cmd_available and not _DISABLE_S5CMD:
-                env = None
-                if self._storage_options:
-                    env = os.environ.copy()
-                    env.update(self._storage_options)
+            from boto3.s3.transfer import TransferConfig
 
-                aws_no_sign_request = self._storage_options.get("AWS_NO_SIGN_REQUEST", "no").lower() == "yes"
-                # prepare the s5cmd command
-                no_signed_option = "--no-sign-request" if aws_no_sign_request else None
-                cmd_parts = ["s5cmd", no_signed_option, "cp", remote_filepath, local_filepath]
-                cmd = " ".join(part for part in cmd_parts if part)
+            extra_args: dict[str, Any] = {}
 
-                proc = subprocess.Popen(
-                    cmd,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
+            if not os.path.exists(local_filepath):
+                # Issue: https://github.com/boto/boto3/issues/3113
+                self._client.client.download_file(
+                    obj.netloc,
+                    obj.path.lstrip("/"),
+                    local_filepath,
+                    ExtraArgs=extra_args,
+                    Config=TransferConfig(use_threads=False),
                 )
-                return_code = proc.wait()
-
-                if return_code != 0:
-                    stderr_output = proc.stderr.read().decode().strip() if proc.stderr else ""
-                    error_message = (
-                        f"Failed to execute command `{cmd}` (exit code: {return_code}). "
-                        "This might be due to an incorrect file path, insufficient permissions, or network issues. "
-                        "To resolve this issue, you can either:\n"
-                        "- Pass `storage_options` with the necessary credentials and endpoint. \n"
-                        "- Example:\n"
-                        "  storage_options = {\n"
-                        '      "AWS_ACCESS_KEY_ID": "your-key",\n'
-                        '      "AWS_SECRET_ACCESS_KEY": "your-secret",\n'
-                        '      "S3_ENDPOINT_URL": "https://s3.example.com" (Optional if using AWS)\n'
-                        "  }\n"
-                        "- or disable `s5cmd` by setting `DISABLE_S5CMD=1` if `storage_options` do not work.\n"
-                    )
-                    if stderr_output:
-                        error_message += (
-                            f"For further debugging, please check the command output below:\n{stderr_output}"
-                        )
-                    raise RuntimeError(error_message)
-            else:
-                from boto3.s3.transfer import TransferConfig
-
-                extra_args: dict[str, Any] = {}
-
-                if not os.path.exists(local_filepath):
-                    # Issue: https://github.com/boto/boto3/issues/3113
-                    self._client.client.download_file(
-                        obj.netloc,
-                        obj.path.lstrip("/"),
-                        local_filepath,
-                        ExtraArgs=extra_args,
-                        Config=TransferConfig(use_threads=False),
-                    )
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)
@@ -296,6 +250,7 @@ class R2Downloader(Downloader):
 
             if not os.path.exists(local_filepath):
                 # Issue: https://github.com/boto/boto3/issues/3113
+                t0 = time()
                 self._client.client.download_file(
                     obj.netloc,
                     obj.path.lstrip("/"),
@@ -303,6 +258,7 @@ class R2Downloader(Downloader):
                     ExtraArgs=extra_args,
                     Config=TransferConfig(use_threads=False),
                 )
+                print("DOWNLOAD TIME", time() - t0)
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)

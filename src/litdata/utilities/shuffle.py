@@ -12,12 +12,12 @@
 # limitations under the License.
 
 import copy
-from typing import Any
+from typing import Any, List, Tuple
 
 import numpy as np
 
 from litdata.streaming.item_loader import Interval
-from litdata.utilities.env import _DistributedEnv
+from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 
 
 def _intra_node_chunk_shuffle(
@@ -64,82 +64,120 @@ def _group_chunks_by_nodes(
 
 def _associate_chunks_and_intervals_to_workers(
     distributed_env: _DistributedEnv,
-    indexes: Any,
-    chunk_intervals: list[Interval],
+    indexes: List[int],
+    chunk_intervals: List[Interval],
     drop_last: bool = False,
     num_workers: int = 1,
     batch_size: int = 1,
-) -> tuple[list[list[int]], list[Any]]:
+    only_multiple_of_batch_size: bool = True,
+) -> Tuple[List[List[int]], List[List[Interval]]]:
+    """
+    Associates chunks and their intervals to workers in a distributed environment.
+    """
+    
+    if only_multiple_of_batch_size:
+        filtered_indexes = []
+        filtered_chunk_intervals = []
+        for index, interval in zip(indexes, chunk_intervals):
+            num_items_in_chunk = interval[2] - interval[1]
+            if num_items_in_chunk > 0 and num_items_in_chunk % batch_size == 0:
+                filtered_indexes.append(index)
+                filtered_chunk_intervals.append(interval)
+        indexes = filtered_indexes
+        chunk_intervals = filtered_chunk_intervals
+
     num_items = sum([(interval[2] - interval[1]) for interval in chunk_intervals])
+    
+    if batch_size == 0:
+        raise ValueError("batch_size cannot be zero.")
+        
     max_batches = num_items // batch_size
     global_num_workers = distributed_env.world_size * num_workers
+    
+    if global_num_workers == 0:
+        raise ValueError("Cannot associate chunks with zero workers.")
 
-    num_items_per_workers: Any = []
+    # --- FIX 1: Correctly and simply calculate items per worker ---
+    # 1. Distribute total batches evenly among all workers globally.
+    num_batches_per_worker = [0] * global_num_workers
+    if max_batches > 0:
+        base_batches_per_worker = max_batches // global_num_workers
+        rem_batches = max_batches % global_num_workers
+        for i in range(global_num_workers):
+            num_batches_per_worker[i] = base_batches_per_worker + (1 if i < rem_batches else 0)
 
-    for rank in range(distributed_env.world_size):
-        tmp_arr = [0 for _ in range(num_workers)]
+    # 2. Convert batch counts to item counts for each worker in one step.
+    num_items_per_workers = [n * batch_size for n in num_batches_per_worker]
 
-        num_batches_per_rank = int(max_batches // distributed_env.world_size)
-        base_batches = num_batches_per_rank // num_workers
-        rem_batches = num_batches_per_rank % num_workers
-        tmp_arr = [base_batches + (1 if i < rem_batches else 0) for i in range(num_workers)]
+    # 3. Add remaining items to the last worker if not dropping the last batch.
+    rem_items = num_items % batch_size
+    if not drop_last and rem_items > 0:
+        # Assign remainder to the last worker that has items, or the very last worker
+        # This prevents assigning remainders to a worker that was supposed to get 0 items.
+        target_worker = -1
+        for i in range(global_num_workers - 1, -1, -1):
+            if num_items_per_workers[i] > 0:
+                target_worker = i
+                break
+        num_items_per_workers[target_worker] += rem_items
 
-        if rank == distributed_env.world_size - 1:
-            # Find how batches were associated
-            num_assigned_items = batch_size * (sum(num_items_per_workers) + sum(tmp_arr))
-
-            # Multiply with the batch_size to get the number of items
-            if batch_size > 1:
-                tmp_arr = [x * batch_size for x in tmp_arr]
-                num_items_per_workers = [x * batch_size for x in num_items_per_workers]
-
-            # If there are items left to assign, let's give it the last worker
-            left_items = num_items - num_assigned_items
-            if not drop_last and left_items > 0:
-                tmp_arr[rem_batches % num_workers] += left_items
-
-            num_items_per_workers.extend(tmp_arr)
-        else:
-            num_items_per_workers.extend(tmp_arr)
-
-    chunks_per_workers: list[list[int]] = [[] for _ in range(global_num_workers)]
-    intervals_per_workers: list[list[list[int]]] = [[] for _ in range(global_num_workers)]
-
-    # 4. Assign the chunk & intervals to each rank
+    chunks_per_workers: List[List[int]] = [[] for _ in range(global_num_workers)]
+    intervals_per_workers: List[List[Interval]] = [[] for _ in range(global_num_workers)]
+    
+    # --- FIX 2: Use a single, persistent worker index ---
+    worker_idx = 0 
+    
+    # 4. Assign the chunk & intervals to each worker sequentially.
     for chunk_index, chunk_interval in zip(indexes, chunk_intervals):
-        rank = 0
+        current_chunk_interval = chunk_interval
 
+        # Loop until the current chunk is fully assigned
         while True:
-            if rank == len(num_items_per_workers):
+            # Check if all workers have been filled
+            if worker_idx >= global_num_workers:
                 break
+            
+            items_needed_by_worker = num_items_per_workers[worker_idx]
 
-            items_left_to_assign = num_items_per_workers[rank]
-
-            if items_left_to_assign == 0:
-                rank += 1
+            if items_needed_by_worker == 0:
+                worker_idx += 1
                 continue
-
-            items_in_chunk = chunk_interval[2] - chunk_interval[1]
-
+            
+            items_in_chunk = current_chunk_interval[2] - current_chunk_interval[1]
+            
             if items_in_chunk == 0:
-                break
+                break # Move to the next chunk
 
-            if items_in_chunk > items_left_to_assign:
-                chunks_per_workers[rank].append(chunk_index)
-
-                chunk_start, chunk_roi_start, chunk_roi_end, chunk_end = chunk_interval
-
-                intervals_per_workers[rank].append(
-                    [chunk_start, chunk_roi_start, chunk_roi_start + items_left_to_assign, chunk_end]
+            if items_in_chunk > items_needed_by_worker:
+                # The worker needs only a part of the current chunk
+                chunks_per_workers[worker_idx].append(chunk_index)
+                
+                chunk_start, chunk_roi_start, chunk_roi_end, chunk_end = current_chunk_interval
+                split_point = chunk_roi_start + items_needed_by_worker
+                
+                intervals_per_workers[worker_idx].append(
+                    (chunk_start, chunk_roi_start, split_point, chunk_end)
                 )
-                chunk_interval = Interval(chunk_start, chunk_roi_start + items_left_to_assign, chunk_roi_end, chunk_end)
-                num_items_per_workers[rank] = 0
-                rank += 1
+                
+                # Update the chunk interval to represent the remaining part
+                current_chunk_interval = (chunk_start, split_point, chunk_roi_end, chunk_end)
+                
+                num_items_per_workers[worker_idx] = 0
+                worker_idx += 1
             else:
-                chunks_per_workers[rank].append(chunk_index)
-                intervals_per_workers[rank].append(list(chunk_interval))
-                num_items_per_workers[rank] -= items_in_chunk
-                break
+                # The worker takes the whole (remaining) chunk and may need more
+                chunks_per_workers[worker_idx].append(chunk_index)
+                intervals_per_workers[worker_idx].append(current_chunk_interval)
+                num_items_per_workers[worker_idx] -= items_in_chunk
+                break # Move to the next chunk
+
+    worker_env = _WorkerEnv.detect()
+
+    if worker_env.rank == 0:
+        print("HERE num_items_per_workers", num_items_per_workers)
+        for idx, internal in enumerate(intervals_per_workers):
+            total_items = sum(x[2] - x[1] for x in internal)
+            print(f"Worker {idx}: Batch Size={batch_size}, Items={total_items}, Chunks={internal}")
 
     return chunks_per_workers, intervals_per_workers
 

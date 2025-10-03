@@ -20,6 +20,7 @@ from io import BytesIO, FileIO
 from multiprocessing import Queue
 from time import sleep, time
 from typing import Any, Optional, Union
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -31,6 +32,7 @@ from litdata.constants import (
     _POLARS_AVAILABLE,
     _PYARROW_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
+    _DEBUG,
 )
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.serializers import Serializer
@@ -197,9 +199,6 @@ class PyTreeLoader(BaseItemLoader):
         #       => 3 * 4 = 12          # each takes 4 bytes
         #       => offset = 12
         #
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "B"})
-        )
         offset = (1 + (index - begin) if index >= begin else index + 1) * 4
 
         if chunk_filepath != self._chunk_filepath:
@@ -212,11 +211,16 @@ class PyTreeLoader(BaseItemLoader):
                 exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
 
                 if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
+                    if _DEBUG:
+                        print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
                     self.force_download(chunk_index)
                     requested_force_download = True
 
                 if (time() - start_time) > _MAX_WAIT_TIME:
                     raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
+
+            if time() - start_time > 5:
+                print("WAIT TIME", time() - start_time)
 
             self._chunk_filepath = chunk_filepath
 
@@ -237,10 +241,6 @@ class PyTreeLoader(BaseItemLoader):
             item_data = self.mds_deserialize(data, chunk_index)
         else:
             item_data = self.deserialize(data)
-
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "E"})
-        )
 
         return item_data
 
@@ -330,18 +330,19 @@ class PyTreeLoader(BaseItemLoader):
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "B",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
             )
         )
         if os.path.exists(chunk_filepath):
+            print(f"delete_chunk_{chunk_index}")
             os.remove(chunk_filepath)
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "E",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
@@ -492,10 +493,6 @@ class TokensLoader(BaseItemLoader):
         if chunk_filepath in self._chunk_filepaths and not os.path.isfile(chunk_filepath):
             del self._chunk_filepaths[chunk_filepath]
 
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "B"})
-        )
-
         if chunk_filepath not in self._chunk_filepaths:
             exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size > filesize_bytes
 
@@ -536,16 +533,13 @@ class TokensLoader(BaseItemLoader):
             # count: number of tokens to read from buffer => `self._block_size`
             data = np.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset)  # type: ignore
 
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "E"})
-        )
         return data
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "B",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
@@ -563,7 +557,7 @@ class TokensLoader(BaseItemLoader):
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "E",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
@@ -682,9 +676,6 @@ class ParquetLoader(BaseItemLoader):
         if chunk_filepath in self._chunk_filepaths and not os.path.isfile(chunk_filepath):
             del self._chunk_filepaths[chunk_filepath]
 
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "B"})
-        )
         if chunk_filepath not in self._chunk_filepaths:
             exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
 
@@ -701,9 +692,6 @@ class ParquetLoader(BaseItemLoader):
         else:
             item_data = self._get_item(chunk_index, chunk_filepath, relative_index)
 
-        logger.debug(
-            _get_log_msg({"name": f"load_item_from_chunk_for_chunk_index_{chunk_index}_and_index_{index}", "ph": "E"})
-        )
         return item_data
 
     def _get_item_with_low_memory(self, chunk_index: int, chunk_filepath: str, row_index: int) -> Any:
@@ -792,7 +780,7 @@ class ParquetLoader(BaseItemLoader):
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "B",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
@@ -810,7 +798,7 @@ class ParquetLoader(BaseItemLoader):
         logger.debug(
             _get_log_msg(
                 {
-                    "name": f"delete_chunk_for_chunk_index_{chunk_index}",
+                    "name": f"delete_chunk_{chunk_index}",
                     "ph": "E",
                     "cname": ChromeTraceColors.BRIGHT_RED,
                 }
