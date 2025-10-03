@@ -168,6 +168,7 @@ exclude = [
   "src/litdata/imports.py",
   "src/litdata/imports.py",
   "src/litdata/processing/data_processor.py",
+  "src/litdata/debugger.py",
 ]
 install_types = "True"
 non_interactive = "True"
