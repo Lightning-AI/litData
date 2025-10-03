@@ -25,6 +25,7 @@ line-length = 120
 exclude = [
   ".git",
   "docs",
+  "src/litdata/debugger.py",
   "src/litdata/utilities/_pytree.py",
 ]
 # Enable Pyflakes `E` and `F` codes by default.
