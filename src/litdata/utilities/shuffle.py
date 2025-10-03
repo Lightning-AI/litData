@@ -72,7 +72,6 @@ def _associate_chunks_and_intervals_to_workers(
     multiple_of_batch_size_only: bool = False,
 ) -> Tuple[List[List[int]], List[List[Interval]]]:
     """Associates chunks and their intervals to workers in a distributed environment."""
-
     if multiple_of_batch_size_only:
         filtered_indexes = []
         filtered_chunk_intervals = []
@@ -128,11 +127,9 @@ def _associate_chunks_and_intervals_to_workers(
                 chunks_per_workers[worker_idx].append(chunk_index)
                 chunk_start, chunk_roi_start, chunk_roi_end, chunk_end = current_chunk_interval
                 split_point = chunk_roi_start + items_needed_by_worker
-                
+
                 # FIX: Ensure we always append an Interval object
-                intervals_per_workers[worker_idx].append(
-                    Interval(chunk_start, chunk_roi_start, split_point, chunk_end)
-                )
+                intervals_per_workers[worker_idx].append(Interval(chunk_start, chunk_roi_start, split_point, chunk_end))
                 # FIX: Ensure the updated interval is also an Interval object
                 current_chunk_interval = Interval(chunk_start, split_point, chunk_roi_end, chunk_end)
                 num_items_per_workers[worker_idx] = 0
