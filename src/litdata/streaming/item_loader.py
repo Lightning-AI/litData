@@ -16,23 +16,23 @@ import os
 from abc import ABC, abstractmethod
 from collections import defaultdict, namedtuple
 from copy import deepcopy
+from datetime import datetime
 from io import BytesIO, FileIO
 from multiprocessing import Queue
 from time import sleep, time
 from typing import Any, Optional, Union
-from datetime import datetime
 
 import numpy as np
 import torch
 
 from litdata.constants import (
+    _DEBUG,
     _FORCE_DOWNLOAD_TIME,
     _MAX_WAIT_TIME,
     _NUMPY_DTYPES_MAPPING,
     _POLARS_AVAILABLE,
     _PYARROW_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
-    _DEBUG,
 )
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.serializers import Serializer
@@ -212,7 +212,9 @@ class PyTreeLoader(BaseItemLoader):
 
                 if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
                     if _DEBUG:
-                        print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
+                        print(
+                            f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}"
+                        )
                     self.force_download(chunk_index)
                     requested_force_download = True
 

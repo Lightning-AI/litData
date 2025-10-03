@@ -18,14 +18,14 @@ import shutil
 import tempfile
 from abc import ABC
 from contextlib import suppress
+from time import time
 from typing import Any, Optional
 from urllib import parse
-from time import time
+
 from filelock import FileLock, Timeout
 
 from litdata.constants import (
     _AZURE_STORAGE_AVAILABLE,
-    _DISABLE_S5CMD,
     _GOOGLE_STORAGE_AVAILABLE,
     _HF_HUB_AVAILABLE,
     _INDEX_FILENAME,

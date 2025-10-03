@@ -12,16 +12,19 @@
 # limitations under the License.
 
 import logging
+import os
 import re
 import threading
 import time
-from litdata.utilities.env import _DistributedEnv, _WorkerEnv, _is_in_dataloader_worker
 from functools import lru_cache
-import os
+
+from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
+
 
 class TimedFlushFileHandler(logging.FileHandler):
     """FileHandler that flushes every N seconds in a background thread."""
-    def __init__(self, filename, mode='a', flush_interval=2):
+
+    def __init__(self, filename, mode="a", flush_interval=2):
         super().__init__(filename, mode)
         self.flush_interval = flush_interval
         self._stop_event = threading.Event()
@@ -38,8 +41,10 @@ class TimedFlushFileHandler(logging.FileHandler):
         self.flush()
         super().close()
 
+
 class EnvConfigFilter(logging.Filter):
     """A logging filter that reads its configuration from environment variables."""
+
     def __init__(self):
         super().__init__()
         self.name_re = re.compile(r"name:\s*([^;]+);")
@@ -66,11 +71,13 @@ class EnvConfigFilter(logging.Filter):
 
         return True
 
+
 def get_logger_level(level: str) -> int:
     level = level.upper()
     if level in logging._nameToLevel:
         return logging._nameToLevel[level]
     raise ValueError(f"Invalid log level: {level}")
+
 
 class LitDataLogger:
     _instance = None
@@ -85,7 +92,7 @@ class LitDataLogger:
 
     def __init__(self, name="litdata", flush_interval=2):
         if hasattr(self, "logger"):
-            return # Already initialized
+            return  # Already initialized
 
         self.logger = logging.getLogger(name)
         self.logger.propagate = False
@@ -103,10 +110,7 @@ class LitDataLogger:
         if self.logger.handlers:
             return
         self.logger.setLevel(self.log_level)
-        formatter = logging.Formatter(
-            "ts:%(created)s;"
-            "PID:%(process)d; TID:%(thread)d; %(message)s"
-        )
+        formatter = logging.Formatter("ts:%(created)s;PID:%(process)d; TID:%(thread)d; %(message)s")
         handler = TimedFlushFileHandler(self.log_file, flush_interval=self.flush_interval)
         handler.setFormatter(formatter)
         handler.setLevel(self.log_level)
@@ -118,9 +122,11 @@ class LitDataLogger:
     def get_logger(self):
         return self.logger
 
-def enable_tracer(flush_interval: int = 5, item_loader=True, iterating_dataset=True, getitem_dataset_for_chunk_index=True) -> logging.Logger:
-    """
-    Convenience function to enable and configure litdata logging.
+
+def enable_tracer(
+    flush_interval: int = 5, item_loader=True, iterating_dataset=True, getitem_dataset_for_chunk_index=True
+) -> logging.Logger:
+    """Convenience function to enable and configure litdata logging.
     This function SETS the environment variables that control the logging behavior.
     """
     os.environ["LITDATA_LOG_FILE"] = "litdata_debug.log"
@@ -131,6 +137,7 @@ def enable_tracer(flush_interval: int = 5, item_loader=True, iterating_dataset=T
     master_logger = LitDataLogger(flush_interval=flush_interval).get_logger()
     return master_logger
 
+
 def _get_log_msg(data: dict) -> str:
     log_msg = ""
     if "name" not in data or "ph" not in data:
@@ -140,6 +147,7 @@ def _get_log_msg(data: dict) -> str:
     for key, value in data.items():
         log_msg += f"{key}: {value};"
     return log_msg
+
 
 def env_info() -> dict:
     if _is_in_dataloader_worker():
@@ -155,6 +163,7 @@ def env_info() -> dict:
         "worker_rank": worker_env.rank,
     }
 
+
 @lru_cache(maxsize=1)
 def _cached_env_info() -> dict:
     dist_env = _DistributedEnv.detect()
@@ -166,6 +175,7 @@ def _cached_env_info() -> dict:
         "worker_world_size": worker_env.world_size,
         "worker_rank": worker_env.rank,
     }
+
 
 # Chrome trace colors
 class ChromeTraceColors:

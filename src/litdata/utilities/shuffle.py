@@ -71,10 +71,7 @@ def _associate_chunks_and_intervals_to_workers(
     batch_size: int = 1,
     only_multiple_of_batch_size: bool = True,
 ) -> Tuple[List[List[int]], List[List[Interval]]]:
-    """
-    Associates chunks and their intervals to workers in a distributed environment.
-    """
-    
+    """Associates chunks and their intervals to workers in a distributed environment."""
     if only_multiple_of_batch_size:
         filtered_indexes = []
         filtered_chunk_intervals = []
@@ -87,13 +84,13 @@ def _associate_chunks_and_intervals_to_workers(
         chunk_intervals = filtered_chunk_intervals
 
     num_items = sum([(interval[2] - interval[1]) for interval in chunk_intervals])
-    
+
     if batch_size == 0:
         raise ValueError("batch_size cannot be zero.")
-        
+
     max_batches = num_items // batch_size
     global_num_workers = distributed_env.world_size * num_workers
-    
+
     if global_num_workers == 0:
         raise ValueError("Cannot associate chunks with zero workers.")
 
@@ -123,10 +120,10 @@ def _associate_chunks_and_intervals_to_workers(
 
     chunks_per_workers: List[List[int]] = [[] for _ in range(global_num_workers)]
     intervals_per_workers: List[List[Interval]] = [[] for _ in range(global_num_workers)]
-    
+
     # --- FIX 2: Use a single, persistent worker index ---
-    worker_idx = 0 
-    
+    worker_idx = 0
+
     # 4. Assign the chunk & intervals to each worker sequentially.
     for chunk_index, chunk_interval in zip(indexes, chunk_intervals):
         current_chunk_interval = chunk_interval
@@ -136,32 +133,30 @@ def _associate_chunks_and_intervals_to_workers(
             # Check if all workers have been filled
             if worker_idx >= global_num_workers:
                 break
-            
+
             items_needed_by_worker = num_items_per_workers[worker_idx]
 
             if items_needed_by_worker == 0:
                 worker_idx += 1
                 continue
-            
+
             items_in_chunk = current_chunk_interval[2] - current_chunk_interval[1]
-            
+
             if items_in_chunk == 0:
-                break # Move to the next chunk
+                break  # Move to the next chunk
 
             if items_in_chunk > items_needed_by_worker:
                 # The worker needs only a part of the current chunk
                 chunks_per_workers[worker_idx].append(chunk_index)
-                
+
                 chunk_start, chunk_roi_start, chunk_roi_end, chunk_end = current_chunk_interval
                 split_point = chunk_roi_start + items_needed_by_worker
-                
-                intervals_per_workers[worker_idx].append(
-                    (chunk_start, chunk_roi_start, split_point, chunk_end)
-                )
-                
+
+                intervals_per_workers[worker_idx].append((chunk_start, chunk_roi_start, split_point, chunk_end))
+
                 # Update the chunk interval to represent the remaining part
                 current_chunk_interval = (chunk_start, split_point, chunk_roi_end, chunk_end)
-                
+
                 num_items_per_workers[worker_idx] = 0
                 worker_idx += 1
             else:
@@ -169,7 +164,7 @@ def _associate_chunks_and_intervals_to_workers(
                 chunks_per_workers[worker_idx].append(chunk_index)
                 intervals_per_workers[worker_idx].append(current_chunk_interval)
                 num_items_per_workers[worker_idx] -= items_in_chunk
-                break # Move to the next chunk
+                break  # Move to the next chunk
 
     worker_env = _WorkerEnv.detect()
 
