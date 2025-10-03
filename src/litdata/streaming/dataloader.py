@@ -33,6 +33,7 @@ from torch.utils.data.dataloader import (
 )
 from torch.utils.data.sampler import BatchSampler, Sampler
 
+from litdata._core import LitDataLoaderCore
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
 from litdata.debugger import _get_log_msg
 from litdata.streaming import Cache
@@ -835,3 +836,40 @@ class StreamingDataLoader(DataLoader):
             return _SingleProcessDataLoaderIter(self)
         self.check_worker_number_rationality()
         return _StreamingMultiProcessingDataLoaderIter(self)
+
+
+class LitDataLoader:
+    def __init__(
+        self,
+        dataset: StreamingDataset,
+        batch_size: int = 1,
+        shuffle: bool = False,
+        num_workers: int = 0,
+        seed: int = 17,
+    ) -> None:
+        assert isinstance(dataset, StreamingDataset)
+        assert batch_size > 0, "batch_size should be a positive integer"
+        assert num_workers >= 0, "num_workers should be a non-negative integer"
+
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.dataset.shuffle = shuffle
+
+        self.num_workers = num_workers
+        self.seed = seed
+        worker_chunks, worker_intervals = self.dataset.get_worker_chunks_and_intervals()
+        print(f"Worker chunks: {worker_chunks}")
+        print(f"Worker intervals: {worker_intervals}")
+        self.lit_data_loader = LitDataLoaderCore(
+            worker_chunks=worker_chunks,
+            worker_intervals=worker_intervals,
+            batch_size=batch_size,
+            pre_download=1,
+            prefetch_workers=1,
+            prefetch_factor=1,
+        )
+
+    def __iter__(self) -> Any:
+        for batch in self.lit_data_loader:
+            yield {"data": batch}

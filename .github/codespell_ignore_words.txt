@@ -1,0 +1,3 @@
+# this file is used to ignore words in the codespell check (pre-commit)
+
+crate

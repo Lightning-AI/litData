@@ -13,6 +13,7 @@
 import warnings
 
 from litdata.__about__ import *  # noqa: F403
+from litdata._core import hello_from_bin
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
 from litdata.processing.functions import map, merge_datasets, optimize, walk
 from litdata.raw.dataset import StreamingRawDataset
@@ -47,6 +48,7 @@ __all__ = [
     "index_parquet_dataset",
     "index_hf_dataset",
     "breakpoint",
+    "hello_from_bin",
 ]
 
 if _LIGHTNING_SDK_AVAILABLE:
