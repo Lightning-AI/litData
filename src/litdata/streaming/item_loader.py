@@ -213,7 +213,8 @@ class PyTreeLoader(BaseItemLoader):
                 if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
                     if _DEBUG:
                         print(
-                            f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}"
+                            f"[ItemLoader] Requested force download for {chunk_filepath} "
+                            f"at {datetime.now().isoformat()}"
                         )
                     self.force_download(chunk_index)
                     requested_force_download = True

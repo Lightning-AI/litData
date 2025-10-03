@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import os
 from collections import defaultdict
@@ -211,10 +212,8 @@ class ChunksConfig:
 
         # delete the files only if they were downloaded
         if self._downloader is not None:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(local_chunkpath)
-            except FileNotFoundError:
-                pass
 
         data = self._compressor.decompress(data)
 
