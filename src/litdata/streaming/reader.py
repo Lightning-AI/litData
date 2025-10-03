@@ -155,9 +155,6 @@ class PrepareChunksThread(Thread):
 
         self._item_loader.delete(chunk_index, chunk_filepath)
 
-        # if _DEBUG:
-        #     print(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
-
         base_name = os.path.basename(chunk_filepath)
         base_prefix = os.path.splitext(base_name)[0]
         cache_dir = os.path.dirname(chunk_filepath)
