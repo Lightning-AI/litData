@@ -268,7 +268,7 @@ class TensorSerializer(Serializer):
             return tensor_1d.reshape(shape)
         return torch.empty(shape, dtype=dtype)
 
-    def can_serialize(self, item: any) -> bool:
+    def can_serialize(self, item: Any) -> bool:
         return isinstance(item, torch.Tensor) and len(item.shape) != 1
 
     def __getstate__(self) -> dict:
