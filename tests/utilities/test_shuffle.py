@@ -95,193 +95,149 @@ def test_group_chunks_by_nodes():
 
 
 def test_associate_chunks_and_intervals_to_workers():
-    indexes = [0, 1, 2, 3, 4, 5, 6, 7]
-    chunk_intervals = [
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 50, 50),
-    ]
+    indexes = list(range(8))
 
+    # Test Case 1: Even distribution
+    # 400 items / 4 global workers = 100 items/worker.
+    chunk_intervals = [Interval(0, 0, 50, 50)] * 8
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(4, 1, 2),
-        indexes,
-        chunk_intervals,
-        drop_last=True,
+        _DistributedEnv(4, 1, 2), indexes, chunk_intervals, drop_last=True, num_workers=1
     )
-
     assert workers_chunks == [[0, 1], [2, 3], [4, 5], [6, 7]]
     assert workers_intervals == [
-        [[0, 0, 50, 50], [0, 0, 50, 50]],
-        [[0, 0, 50, 50], [0, 0, 50, 50]],
-        [[0, 0, 50, 50], [0, 0, 50, 50]],
-        [[0, 0, 50, 50], [0, 0, 50, 50]],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 50, 50)],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 50, 50)],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 50, 50)],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 50, 50)],
     ]
 
+    # Test Case 2: Uneven distribution
+    # Total items = 422. With drop_last=True, 422 batches (size 1) / 4 workers = 105 batches/worker, remainder 2.
+    # So, workers get item counts of [106, 106, 105, 105].
     chunk_intervals = [
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 150, 150),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 12, 12),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 27, 27),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 33, 33),
+        Interval(0, 0, 50, 50), Interval(0, 0, 150, 150), Interval(0, 0, 50, 50), Interval(0, 0, 12, 12),
+        Interval(0, 0, 50, 50), Interval(0, 0, 27, 27), Interval(0, 0, 50, 50), Interval(0, 0, 33, 33),
     ]
-
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(4, 1, 2),
-        indexes,
-        chunk_intervals,
-        drop_last=True,
+        _DistributedEnv(4, 1, 2), indexes, chunk_intervals, drop_last=True, num_workers=1
     )
-
     assert workers_chunks == [[0, 1], [1, 2], [2, 3, 4, 5], [5, 6, 7]]
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[0]]) == 105
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[1]]) == 105
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[2]]) == 105
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[3]]) == 105
-
+    assert sum(i.roi_end_idx - i.roi_start_idx for i in workers_intervals[0]) == 106
+    assert sum(i.roi_end_idx - i.roi_start_idx for i in workers_intervals[1]) == 106
+    assert sum(i.roi_end_idx - i.roi_start_idx for i in workers_intervals[2]) == 105
+    assert sum(i.roi_end_idx - i.roi_start_idx for i in workers_intervals[3]) == 105
     assert workers_intervals == [
-        [[0, 0, 50, 50], [0, 0, 55, 150]],
-        [[0, 55, 150, 150], [0, 0, 10, 50]],
-        [[0, 10, 50, 50], [0, 0, 12, 12], [0, 0, 50, 50], [0, 0, 3, 27]],
-        [[0, 3, 27, 27], [0, 0, 50, 50], [0, 0, 31, 33]],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 56, 150)],
+        [Interval(0, 56, 150, 150), Interval(0, 0, 12, 50)],
+        [Interval(0, 12, 50, 50), Interval(0, 0, 12, 12), Interval(0, 0, 50, 50), Interval(0, 0, 5, 27)],
+        [Interval(0, 5, 27, 27), Interval(0, 0, 50, 50), Interval(0, 0, 33, 33)],
     ]
 
+    # Test Case 3: Another uneven distribution
+    # Total items = 256. 256 / 4 workers = 64 items/worker. No remainder.
     chunk_intervals = [
-        Interval(0, 0, 5, 5),
-        Interval(0, 0, 150, 150),
-        Interval(0, 0, 7, 7),
-        Interval(0, 0, 12, 12),
-        Interval(0, 0, 4, 4),
-        Interval(0, 0, 27, 27),
-        Interval(0, 0, 50, 50),
-        Interval(0, 0, 1, 1),
+        Interval(0, 0, 5, 5), Interval(0, 0, 150, 150), Interval(0, 0, 7, 7), Interval(0, 0, 12, 12),
+        Interval(0, 0, 4, 4), Interval(0, 0, 27, 27), Interval(0, 0, 50, 50), Interval(0, 0, 1, 1),
     ]
-
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(4, 1, 2),
-        indexes,
-        chunk_intervals,
-        drop_last=True,
+        _DistributedEnv(4, 1, 2), indexes, chunk_intervals, drop_last=True, num_workers=1
     )
-
     assert workers_chunks == [[0, 1], [1], [1, 2, 3, 4, 5], [5, 6, 7]]
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[0]]) == 64
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[1]]) == 64
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[2]]) == 64
-    assert sum([interval[2] - interval[1] for interval in workers_intervals[3]]) == 64
+    assert all(sum(i.roi_end_idx - i.roi_start_idx for i in w_intervals) == 64 for w_intervals in workers_intervals)
     assert workers_intervals == [
-        [[0, 0, 5, 5], [0, 0, 59, 150]],
-        [[0, 59, 123, 150]],
-        [[0, 123, 150, 150], [0, 0, 7, 7], [0, 0, 12, 12], [0, 0, 4, 4], [0, 0, 14, 27]],
-        [[0, 14, 27, 27], [0, 0, 50, 50], [0, 0, 1, 1]],
+        [Interval(0, 0, 5, 5), Interval(0, 0, 59, 150)],
+        [Interval(0, 59, 123, 150)],
+        [Interval(0, 123, 150, 150), Interval(0, 0, 7, 7), Interval(0, 0, 12, 12), Interval(0, 0, 4, 4), Interval(0, 0, 14, 27)],
+        [Interval(0, 14, 27, 27), Interval(0, 0, 50, 50), Interval(0, 0, 1, 1)],
     ]
 
-    chunk_intervals = [
-        Interval(0, 0, 6, 6),
-        Interval(0, 0, 6, 6),
-        Interval(0, 0, 6, 6),
-        Interval(0, 0, 6, 6),
-    ]
-
+    # Test Case 4: Many workers, small data
+    # 24 items, batch_size 6 -> 4 batches. 4 batches / 8 global workers.
+    # First 4 workers get 1 batch (6 items) each.
+    chunk_intervals = [Interval(0, 0, 6, 6)] * 4
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(1, 0, 1), range(0, 4), chunk_intervals, False, 8, 6
+        _DistributedEnv(1, 0, 1), range(4), chunk_intervals, drop_last=False, num_workers=8, batch_size=6
     )
-
-    assert workers_intervals == [[[0, 0, 6, 6]], [[0, 0, 6, 6]], [[0, 0, 6, 6]], [[0, 0, 6, 6]], [], [], [], []]
     assert workers_chunks == [[0], [1], [2], [3], [], [], [], []]
-
-    workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(2, 0, 1), range(0, 4), chunk_intervals, False, 8, 6
-    )
-
-    assert workers_chunks == [[0], [1], [], [], [], [], [], [], [2], [3], [], [], [], [], [], []]
     assert workers_intervals == [
-        [[0, 0, 6, 6]],
-        [[0, 0, 6, 6]],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [[0, 0, 6, 6]],
-        [[0, 0, 6, 6]],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
+        [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)],
+        [], [], [], []
     ]
 
+    # Test Case 5: Multi-node
+    # 24 items, batch_size 6 -> 4 batches. 4 batches / 16 global workers.
+    # First 4 workers get 1 batch (6 items) each.
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(1, 0, 1), range(0, 4), chunk_intervals, False, 2, 8
+        _DistributedEnv(2, 0, 1), range(4), chunk_intervals, drop_last=False, num_workers=8, batch_size=6
+    )
+    assert workers_chunks == [[0], [1], [2], [3]] + [[]] * 12
+    assert workers_intervals == [
+        [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)], [Interval(0, 0, 6, 6)]
+    ] + [[]] * 12
+
+    # Test Case 6: Small workers, large batch
+    # 24 items, batch_size 8 -> 3 batches. 3 batches / 2 global workers.
+    # Worker 0 gets 2 batches (16 items), worker 1 gets 1 batch (8 items).
+    workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
+        _DistributedEnv(1, 0, 1), range(4), chunk_intervals, drop_last=False, num_workers=2, batch_size=8
     )
     assert workers_chunks == [[0, 1, 2], [2, 3]]
-    assert workers_intervals == [[[0, 0, 6, 6], [0, 0, 6, 6], [0, 0, 4, 6]], [[0, 4, 6, 6], [0, 0, 6, 6]]]
+    assert workers_intervals == [
+        [Interval(0, 0, 6, 6), Interval(0, 0, 6, 6), Interval(0, 0, 4, 6)],
+        [Interval(0, 4, 6, 6), Interval(0, 0, 6, 6)],
+    ]
 
+    # Test Case 7: Uneven chunks with remainder (drop_last=False)
+    # Total items 26, batch_size 6 -> 4 batches, 2 remainder items. 4 batches / 16 workers.
+    # First 4 workers get 1 batch (6 items). Last of these (worker 3) gets the 2 remainder items.
+    # Item counts: [6, 6, 6, 8, 0, ...].
+    chunk_intervals = [Interval(0, 0, 6, 6), Interval(0, 0, 7, 7), Interval(0, 0, 6, 6), Interval(0, 0, 7, 8)]
+    workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
+        _DistributedEnv(2, 0, 1), range(4), chunk_intervals, drop_last=False, num_workers=8, batch_size=6
+    )
+    assert sum(i.roi_end_idx - i.roi_start_idx for w in workers_intervals for i in w) == 26
+    assert workers_chunks == [[0], [1], [1, 2], [2, 3]] + [[]] * 12
+    assert workers_intervals == [
+        [Interval(0, 0, 6, 6)],
+        [Interval(0, 0, 6, 7)],
+        [Interval(0, 6, 7, 7), Interval(0, 0, 5, 6)],
+        [Interval(0, 5, 6, 6), Interval(0, 0, 7, 8)],
+    ] + [[]] * 12
+
+    # Test Case 8: Uneven chunks with remainder (drop_last=True)
+    # Total items 26, batch_size 6 -> 4 batches. Remainder is dropped.
+    # First 4 workers get 1 batch (6 items) each. Item counts: [6, 6, 6, 6, 0, ...].
+    workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
+        _DistributedEnv(2, 0, 1), range(4), chunk_intervals, drop_last=True, num_workers=8, batch_size=6
+    )
+    assert sum(i.roi_end_idx - i.roi_start_idx for w in workers_intervals for i in w) == 24
+    assert workers_chunks == [[0], [1], [1, 2], [2, 3]] + [[]] * 12
+    assert workers_intervals == [
+        [Interval(0, 0, 6, 6)],
+        [Interval(0, 0, 6, 7)],
+        [Interval(0, 6, 7, 7), Interval(0, 0, 5, 6)],
+        [Interval(0, 5, 6, 6), Interval(0, 0, 5, 8)],
+    ] + [[]] * 12
+
+    # Test Case 9: NEW - multiple_of_batch_size_only=True
+    # Chunks with sizes [50, 23, 40, 10, 7, 100]. batch_size=10.
+    # Keep chunks with sizes [50, 40, 10, 100]. Total items = 200.
+    # 200 items / 2 workers = 100 items/worker.
+    indexes = list(range(6))
     chunk_intervals = [
-        Interval(0, 0, 6, 6),
-        Interval(0, 0, 7, 7),
-        Interval(0, 0, 6, 6),
-        Interval(0, 0, 7, 8),
+        Interval(0, 0, 50, 50), Interval(0, 0, 23, 23), Interval(0, 0, 40, 40),
+        Interval(0, 0, 10, 10), Interval(0, 0, 7, 7), Interval(0, 0, 100, 100),
     ]
-
     workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(2, 0, 1), range(0, 4), chunk_intervals, False, 8, 6
+        _DistributedEnv(2, 0, 1), indexes, chunk_intervals, num_workers=1, batch_size=10,
+        multiple_of_batch_size_only=True
     )
-
-    assert sum([y[2] - y[1] for x in workers_intervals for y in x]) == 26
-    assert workers_chunks == [[0], [1], [], [], [], [], [], [], [1, 2], [2, 3], [3], [], [], [], [], []]
+    # Worker 0 gets 50+40+10 = 100 items. Worker 1 gets 100 items.
+    assert workers_chunks == [[0, 2, 3], [5]]
+    assert all(sum(i.roi_end_idx - i.roi_start_idx for i in w_intervals) == 100 for w_intervals in workers_intervals)
     assert workers_intervals == [
-        [[0, 0, 6, 6]],
-        [[0, 0, 6, 7]],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [[0, 6, 7, 7], [0, 0, 5, 6]],
-        [[0, 5, 6, 6], [0, 0, 5, 8]],
-        [[0, 5, 7, 8]],
-        [],
-        [],
-        [],
-        [],
-        [],
-    ]
-
-    workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-        _DistributedEnv(2, 0, 1), range(0, 4), chunk_intervals, True, 8, 6
-    )
-
-    assert sum([y[2] - y[1] for x in workers_intervals for y in x]) == 24
-    assert workers_chunks == [[0], [1], [], [], [], [], [], [], [1, 2], [2, 3], [], [], [], [], [], []]
-    assert workers_intervals == [
-        [[0, 0, 6, 6]],
-        [[0, 0, 6, 7]],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [[0, 6, 7, 7], [0, 0, 5, 6]],
-        [[0, 5, 6, 6], [0, 0, 5, 8]],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
+        [Interval(0, 0, 50, 50), Interval(0, 0, 40, 40), Interval(0, 0, 10, 10)],
+        [Interval(0, 0, 100, 100)],
     ]
 
 
