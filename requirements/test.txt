@@ -14,6 +14,6 @@ pandas
 pyarrow >=20.0.0
 polars >1.0.0
 lightning
-transformers <4.53.0
+transformers <4.57.0
 zstd
 soundfile >=0.13.0 # required for torchaudio backend
