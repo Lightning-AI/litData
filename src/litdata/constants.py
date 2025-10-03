@@ -55,7 +55,6 @@ _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
-_DISABLE_S5CMD = bool(int(os.getenv("DISABLE_S5CMD", "0")))
 
 # DON'T CHANGE ORDER
 _TORCH_DTYPES_MAPPING = {

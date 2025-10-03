@@ -341,20 +341,10 @@ storage_options = {
 
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
 
-# s5cmd compatible storage options for a custom S3-compatible endpoint
-# Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
-storage_options = {
-    "AWS_ACCESS_KEY_ID": "your_access_key_id",
-    "AWS_SECRET_ACCESS_KEY": "your_secret_access_key",
-    "S3_ENDPOINT_URL": "your_endpoint_url",  # Required only for custom endpoints
-}
 
 
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
 ```
-
-Alternative: Using `s5cmd` for S3 Operations
-
 
 Also, you can specify a custom cache directory when initializing your dataset. This is useful when you want to store the cache in a specific location.
 ```python
@@ -543,9 +533,6 @@ aws_storage_options={
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
-
-# Read data from AWS S3 using s5cmd
-# Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
 aws_storage_options={
     "AWS_ACCESS_KEY_ID": os.environ['AWS_ACCESS_KEY_ID'],
     "AWS_SECRET_ACCESS_KEY": os.environ['AWS_SECRET_ACCESS_KEY'],
@@ -553,11 +540,6 @@ aws_storage_options={
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
-# Read Data from AWS S3 with Unsigned Request using s5cmd
-aws_storage_options={
-  "AWS_NO_SIGN_REQUEST": "Yes" # Required for unsigned requests
-  "S3_ENDPOINT_URL": os.environ['AWS_ENDPOINT_URL'],  # Required only for custom endpoints
-}
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
 
