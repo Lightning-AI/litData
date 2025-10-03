@@ -82,8 +82,9 @@ class PrepareChunksThread(Thread):
         # Check whether a dataset slice fits on the node
         num_bytes_per_nodes = self._config.num_bytes // self._distributed_env.num_nodes
         self._delete_chunks_when_processed = num_bytes_per_nodes > max_cache_size if max_cache_size else False
-        if self._worker_env.rank == 0:
-            print(f"Delete chunks when processed: {self._delete_chunks_when_processed}")
+
+        if distributed_env.global_rank == 0 and self._worker_env.rank == 0:
+            print(f"Delete chunks when used: {self._delete_chunks_when_processed}")
 
         self._has_exited = False
 
@@ -214,7 +215,8 @@ class PrepareChunksThread(Thread):
             if _DEBUG:
                 chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
                 print(
-                    f"[Reader] Requested force download for {chunk_filepath} by {self._rank} at {datetime.now().isoformat()}"
+                    f"[Reader] Requested force download for {chunk_filepath} "
+                    f"by {self._rank} at {datetime.now().isoformat()}"
                 )
 
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
@@ -445,14 +447,11 @@ class BinaryReader:
         if index.chunk_index != self._last_chunk_index:
             if self._last_chunk_index is not None:
                 # 2. Log the "End" event for the previous chunk.
-                print(f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}")
                 logger.debug(
                     _get_log_msg(
                         {"name": f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}", "ph": "E"}
                     )
                 )
-
-            print(f"read_chunk_{index.chunk_index}_size_{index.chunk_size}")
 
             # 2. Log the "Begin" event for the NEW chunk.
             logger.debug(_get_log_msg({"name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}", "ph": "B"}))
