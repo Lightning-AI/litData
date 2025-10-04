@@ -11,9 +11,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import atexit
 import logging
 import os
 import sys
+import threading
 from functools import lru_cache
 
 from litdata.constants import _PRINT_DEBUG_LOGS
@@ -34,17 +36,27 @@ def get_logger_level(level: str) -> int:
 class LitDataLogger:
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
-        self.log_file, self.log_level = self.get_log_file_and_level()
+        self.log_file, self.log_level, self.flush_every = self.get_log_file_and_level()
         self.setup_logger()
 
     @staticmethod
-    def get_log_file_and_level() -> tuple[str, int]:
+    def get_log_file_and_level() -> tuple[str, int, int]:
         log_file = os.getenv("LITDATA_LOG_FILE", "litdata_debug.log")
         log_lvl = os.getenv("LITDATA_LOG_LEVEL", "DEBUG")
+        flush_every = os.getenv("LITDATA_LOG_FLUSH_EVERY", "1000")
+        try:
+            flush_every = int(flush_every)
+            if flush_every <= 0:
+                raise RuntimeError(f"Flush every must be a positive integer. Received: {flush_every}")
+        except ValueError:
+            import warnings
+
+            warnings.warn(f"Flush every must be a positive integer. Received: {flush_every}. Using default 1000.")
+            flush_every = 1000
 
         log_lvl = get_logger_level(log_lvl)
 
-        return log_file, log_lvl
+        return log_file, log_lvl, flush_every
 
     def setup_logger(self) -> None:
         """Configures logging by adding handlers and formatting."""
@@ -57,21 +69,20 @@ class LitDataLogger:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(self.log_level)
 
-        # File handler
-        file_handler = logging.FileHandler(self.log_file)
-        file_handler.setLevel(self.log_level)
-
         # Log format
         formatter = logging.Formatter(
             "ts:%(created)s; logger_name:%(name)s; level:%(levelname)s; PID:%(process)d; TID:%(thread)d; %(message)s"
         )
         # ENV - f"{WORLD_SIZE, GLOBAL_RANK, NNODES, LOCAL_RANK, NODE_RANK}"
         console_handler.setFormatter(formatter)
-        file_handler.setFormatter(formatter)
 
         # Attach handlers
         if _PRINT_DEBUG_LOGS:
             self.logger.addHandler(console_handler)
+
+        file_handler = BufferedFileHandler(self.log_file, flush_every=self.flush_every)
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(self.log_level)
         self.logger.addHandler(file_handler)
 
 
@@ -143,3 +154,33 @@ class ChromeTraceColors:
     MUSTARD_YELLOW = "cq_build_attempt_running"
     NEON_GREEN = "cq_build_attempt_passed"
     DARK_RED = "cq_build_attempt_failed"
+
+
+class BufferedFileHandler(logging.FileHandler):
+    def __init__(self, filename, mode="a", flush_every=1000, **kwargs):
+        super().__init__(filename, mode, **kwargs)
+        self.flush_every = flush_every
+        self._counter = 0
+        self._buffer = []
+        self._lock = threading.Lock()
+        atexit.register(self.flush)
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            with self._lock:
+                self._buffer.append(msg)
+                self._counter += 1
+                if self._counter >= self.flush_every:
+                    self.flush()
+                    self._counter = 0
+        except Exception:
+            self.handleError(record)
+
+    def flush(self):
+        with self._lock:
+            if not self._buffer:
+                return
+            self.stream.write("\n".join(self._buffer) + "\n")
+            self.stream.flush()
+            self._buffer.clear()
