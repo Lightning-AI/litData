@@ -1,12 +1,11 @@
 <div align="center">
+<h1>
+  Speed up model training by fixing data loading
+</h1>  
 <img src="https://pl-flash-data.s3.amazonaws.com/lit_data_logo.webp" alt="LitData" width="800px"/>
 
 &nbsp;
 &nbsp;
-
-**Transform datasets at scale.    
-Optimize data for fast AI model training.**
-
 
 <pre>
 Transform                              Optimize
@@ -45,10 +44,21 @@ Transform                              Optimize
 
 &nbsp;
 
-# Transform data at scale. Optimize for fast model training.
-LitData scales [data processing tasks](#transform-datasets) (data scraping, image resizing, distributed inference, embedding creation) on local or cloud machines. It also enables [optimizing datasets](#speed-up-model-training) to accelerate AI model training and work with large remote datasets without local loading.
+# Why LitData?
+Speeding up model training involves more than kernel tuning. Data loading frequently slows down training, because datasets are too large to fit on disk, consist of millions of small files, or stream slowly from the cloud. 
+
+LitData provides tools to preprocess and optimize datasets into a format that streams efficiently from any cloud or local source. It also includes a map operator for distributed data processing before optimization. This makes data pipelines faster, cloud-agnostic, and can improve training throughput by up to 20×.
 
 &nbsp;
+
+# Looking for GPUs?
+Over 340,000 developers use [Lightning Cloud](https://lightning.ai/?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) - purpose-built for PyTorch and PyTorch Lightning. 
+- [GPUs](https://lightning.ai/pricing?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) from $0.19.   
+- [Clusters](https://lightning.ai/clusters?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): frontier-grade training/inference clusters.   
+- [AI Studio (vibe train)](https://lightning.ai/studios?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): workspaces where AI helps you debug, tune and vibe train.
+- [AI Studio (vibe deploy)](https://lightning.ai/studios?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): workspaces where AI helps you optimize, and deploy models.     
+- [Notebooks](https://lightning.ai/notebooks?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): Persistent GPU workspaces where AI helps you code and analyze.
+- [Inference](https://lightning.ai/deploy?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): Deploy models as inference APIs.
 
 # Quick start
 First, install LitData:
