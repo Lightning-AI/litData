@@ -8,11 +8,10 @@ from contextlib import suppress
 
 import torch
 import torchvision.transforms.v2 as T
+from litdata.streaming.raw_dataset import StreamingRawDataset
 from torch.utils.data import DataLoader
 from torchvision.io import ImageReadMode, decode_image, decode_jpeg
 from tqdm import tqdm
-
-from litdata.streaming.raw_dataset import StreamingRawDataset
 
 
 def clear_cache_dir(cache_dir: str) -> None:
