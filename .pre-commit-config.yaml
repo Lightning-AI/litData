@@ -44,6 +44,7 @@ repos:
     hooks:
       - id: codespell
         additional_dependencies: [tomli]
+        args: ["--ignore-words=.github/codespell_ignore_words.txt"]
         exclude: >
           (?x)^(
               .*\.ipynb

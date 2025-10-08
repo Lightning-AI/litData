@@ -299,6 +299,21 @@ class StreamingDataset(IterableDataset):
             self.shuffler = self._create_shuffler(cache)
         return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
 
+    def get_worker_chunks_and_intervals(self) -> tuple[list[int], list[list[int]]]:
+        if self.worker_env is None:
+            self.worker_env = _WorkerEnv.detect()
+        if self.cache is None:
+            self.cache = self._create_cache(worker_env=self.worker_env)
+        if self.shuffler is None:
+            self.shuffler = self._create_shuffler(self.cache)
+
+        workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
+            self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
+        )
+
+        worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
+        return workers_chunks[worker_rank], workers_intervals[worker_rank]
+
     def __iter__(self) -> "StreamingDataset":
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):

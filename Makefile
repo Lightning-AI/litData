@@ -8,6 +8,7 @@ export SPHINX_MOCK_REQUIREMENTS=0
 setup: install-dependencies install-pre-commit
 	@echo "==================== Setup Finished ===================="
 	@echo "All set! Ready to go!"
+	uv pip install -U pyopenssl
 
 test: clean
 	uv pip install -q -r requirements.txt
