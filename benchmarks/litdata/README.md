@@ -32,6 +32,6 @@ python stream_imagenet.py \
 
 - Use `--use_pil` if you optimized with raw PIL images.
 
----
+______________________________________________________________________
 
 These scripts are easy to use and work with both local and cloud datasets. For more details, see the script docstrings or run with `--help`.

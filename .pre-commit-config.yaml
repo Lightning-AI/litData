@@ -37,6 +37,10 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
         args: ["--maxkb=350", "--enforce-all"]
+        exclude: |
+          (?x)^(
+              src/litdata/CHANGELOG.md
+          )$
       - id: detect-private-key
 
   - repo: https://github.com/codespell-project/codespell
@@ -66,7 +70,11 @@ repos:
           #- mdformat-black
           - mdformat_frontmatter
         args: ["--number"]
-        exclude: README.md
+        exclude: |
+          (?x)^(
+              src/litdata/CHANGELOG.md |
+              README.md
+          )$
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v3.1.0

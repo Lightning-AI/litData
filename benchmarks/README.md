@@ -15,10 +15,11 @@ You can compare both approaches for your own datasets and training pipelines.
 ## Why benchmarks?
 
 Benchmarks help you:
+
 - Measure data loading speed and efficiency
 - Compare different formats and pipelines
 - Choose the best setup for your training
 
----
+______________________________________________________________________
 
 For more details, check the README in each subfolder.

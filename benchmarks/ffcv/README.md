@@ -1,4 +1,4 @@
-# FFCV Benchmarks  
+# FFCV Benchmarks
 
 This folder contains scripts to convert, write, and stream datasets using FFCV for benchmarking.
 
@@ -68,7 +68,7 @@ python stream_imagenet.py \
     --cfg.epochs=2
 ```
 
----
+______________________________________________________________________
 
 These scripts are easy to use and work with both local and cloud datasets. For more details, see the script docstrings or run with `--help`.
 
@@ -92,4 +92,5 @@ To extract the real S3 path for a dataset in your teamspace, use:
 ```sh
 python3 -c "from litdata.streaming.resolver import _resolve_dir; path=_resolve_dir('/teamspace/datasets/imagenet-1m-litdata/'); print(path.url)"
 ```
+
 You can also prepare the datasets yourself using the earlier steps if you prefer.
