@@ -2,20 +2,34 @@
 
 # Installation Guide:
 
-````bash
+```bash
 sudo apt install libpoppler-cpp-dev
 pip install python-poppler
 sudo apt install libpoppler-cpp-dev poppler-utils
 pip install fpdf python-poppler pdf2image names
+```
 
 # Attention:
 
-Please note that the provided data and scripts are intended solely for trying out the code and demonstrating the workflow. The synthetic data used in this example is simplified and may not fully represent the complexity and variability of real-world customer emails and documents. For a proper evaluation and effective training of the model, it is crucial to use larger datasets with more diversity and noise. Real-world data often contains various imperfections, such as OCR errors, different document formats, and varied writing styles, which need to be accounted for to develop a robust and reliable model.
+Please note that the provided data and scripts are intended solely for trying out the code and demonstrating the workflow.
+
+The synthetic data used in this example is simplified and may not fully represent the complexity and variability of real-world customer emails and documents.
+
+For a proper evaluation and effective training of the model, it is crucial to use larger datasets with more diversity and noise.
+
+Real-world data often contains various imperfections, such as OCR errors, different document formats, and varied writing styles, which need to be accounted for to develop a robust and reliable model.
 
 # Document Classification for Customer Emails
 
-Document classification in an insurance company offers several practical benefits. It helps in efficiently sorting incoming documents, directing them to the appropriate departments promptly. This can reduce processing times and minimize the risk of documents being misrouted. Additionally, by categorizing documents based on their content, it can help ensure that each document type is handled by the appropriate specialists, potentially reducing errors. Moreover, it can aid in better resource allocation, distributing workloads more evenly among departments. Overall, document classification can contribute to improved efficiency and organization within the company.
-This project demonstrates a simple example of classifying customer documents into three categories: cancellations, IBAN changes, and damage reports. The classification leverages both computer vision and natural language processing (NLP) techniques. Specifically, it combines the power of a BERT model for text analysis and a ResNet18 model for image recognition. For demonstration purposes, we are only selecting three classes, though there are more classes available in the complete process.
+Document classification in an insurance company offers several practical benefits. It helps in efficiently sorting incoming documents, directing them to the appropriate departments promptly.
+
+This can reduce processing times and minimize the risk of documents being misrouted. Additionally, by categorizing documents based on their content, it can help ensure that each document type is handled by the appropriate specialists, potentially reducing errors.
+
+Moreover, it can aid in better resource allocation, distributing workloads more evenly among departments. Overall, document classification can contribute to improved efficiency and organization within the company.
+
+This project demonstrates a simple example of classifying customer documents into three categories: cancellations, IBAN changes, and damage reports. The classification leverages both computer vision and natural language processing (NLP) techniques. Specifically, it combines the power of a BERT model for text analysis and a ResNet18 model for image recognition.
+
+For demonstration purposes, we are only selecting three classes, though there are more classes available in the complete process.
 
 ## Table of Contents
 
@@ -86,15 +100,15 @@ To use this code, follow these steps:
 
    ```python
    python examples/multi_modal/generate.py
-````
+   ```
 
-1. **Prepare Data:**
+2. **Prepare Data:**
 
    ```python
    python examples/multi_modal/convert.py
    ```
 
-1. **Train Model:**
+3. **Train Model:**
 
    ```python
    python examples/multi_modal/train.py

@@ -2,7 +2,7 @@ pillow
 viztracer
 pyarrow
 tqdm
-lightning-sdk==2025.8.1 # Must be pinned to ensure compatibility
+lightning-sdk==2025.9.30 # Must be pinned to ensure compatibility
 google-cloud-storage
 polars
 fsspec
