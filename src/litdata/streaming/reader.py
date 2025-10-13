@@ -83,7 +83,7 @@ class PrepareChunksThread(Thread):
         num_bytes_per_nodes = self._config.num_bytes // self._distributed_env.num_nodes
         self._delete_chunks_when_processed = num_bytes_per_nodes > max_cache_size if max_cache_size else False
 
-        if distributed_env.global_rank == 0 and self._worker_env.rank == 0:
+        if _DEBUG and distributed_env.global_rank == 0 and self._worker_env.rank == 0:
             print(f"Delete chunks when used: {self._delete_chunks_when_processed}")
 
         self._has_exited = False
