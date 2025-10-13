@@ -26,6 +26,7 @@ from filelock import FileLock, Timeout
 
 from litdata.constants import (
     _AZURE_STORAGE_AVAILABLE,
+    _DEBUG,
     _GOOGLE_STORAGE_AVAILABLE,
     _HF_HUB_AVAILABLE,
     _INDEX_FILENAME,
@@ -258,7 +259,8 @@ class R2Downloader(Downloader):
                     ExtraArgs=extra_args,
                     Config=TransferConfig(use_threads=False),
                 )
-                print("DOWNLOAD TIME", time() - t0)
+                if _DEBUG:
+                    print("DOWNLOAD TIME", time() - t0)
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)

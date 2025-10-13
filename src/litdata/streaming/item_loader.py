@@ -222,7 +222,7 @@ class PyTreeLoader(BaseItemLoader):
                 if (time() - start_time) > _MAX_WAIT_TIME:
                     raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
 
-            if time() - start_time > 5:
+            if _DEBUG and time() - start_time > 5:
                 print("WAIT TIME", time() - start_time)
 
             self._chunk_filepath = chunk_filepath
@@ -340,7 +340,8 @@ class PyTreeLoader(BaseItemLoader):
             )
         )
         if os.path.exists(chunk_filepath):
-            print(f"delete_chunk_{chunk_index}")
+            if _DEBUG:
+                print(f"delete_chunk_{chunk_index}")
             os.remove(chunk_filepath)
         logger.debug(
             _get_log_msg(
