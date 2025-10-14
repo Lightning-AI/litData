@@ -55,8 +55,6 @@ def _check_version_and_prompt_upgrade(curr_version: str) -> None:
     If not, warn the user to upgrade ``litdata``.
 
     """
-    if _LITDATA_DISABLE_VERSION_CHECK == 1:
-        return
     new_version = _get_newer_version(curr_version)
     if new_version:
         warning_cache.warn(
