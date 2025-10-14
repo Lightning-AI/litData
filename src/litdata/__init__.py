@@ -25,6 +25,9 @@ from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.train_test_split import train_test_split
+from litdata.debugger import configure_logging
+
+configure_logging()
 
 warnings.filterwarnings(
     "ignore",
