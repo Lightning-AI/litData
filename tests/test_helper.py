@@ -55,7 +55,7 @@ def test_check_version_default_behavior_warning(mock_get_newer, set_env_var):
     """Test default behavior: calls _get_newer_version and warns if newer version exists."""
     _get_newer_version.cache_clear()
     os.environ.pop("LITDATA_DISABLE_VERSION_CHECK", None)
-    
+
     mock_get_newer.return_value = "0.2.58"
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")

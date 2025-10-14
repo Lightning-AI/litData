@@ -1,14 +1,11 @@
 import functools
-import os
 import warnings
 from typing import Any, Optional
 
 import requests
 from packaging import version as packaging_version
 
-from litdata.constants import (
-    _LITDATA_DISABLE_VERSION_CHECK
-)
+from litdata.constants import _LITDATA_DISABLE_VERSION_CHECK
 
 
 class WarningCache(set):
