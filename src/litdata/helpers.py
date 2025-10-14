@@ -1,3 +1,4 @@
+import os
 import functools
 import warnings
 from typing import Any, Optional
@@ -21,6 +22,11 @@ warning_cache = WarningCache()
 __package_name__ = "litdata"
 
 
+def _is_version_check_disabled() -> bool:
+    """Check if external version checks are disabled via environment variable."""
+    return os.environ.get("LITDATA_DISABLE_VERSION_CHECK") == "1"
+
+
 @functools.lru_cache(maxsize=1)
 def _get_newer_version(curr_version: str) -> Optional[str]:
     """Check PyPI for newer versions of ``litdata``.
@@ -28,6 +34,8 @@ def _get_newer_version(curr_version: str) -> Optional[str]:
     Returning the newest version if different from the current or ``None`` otherwise.
 
     """
+    if _is_version_check_disabled():
+        return None
     if packaging_version.parse(curr_version).is_prerelease:
         return None
     try:
@@ -51,6 +59,8 @@ def _check_version_and_prompt_upgrade(curr_version: str) -> None:
     If not, warn the user to upgrade ``litdata``.
 
     """
+    if _is_version_check_disabled():
+        return    
     new_version = _get_newer_version(curr_version)
     if new_version:
         warning_cache.warn(
