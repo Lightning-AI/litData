@@ -1,5 +1,5 @@
-import os
 import functools
+import os
 import warnings
 from typing import Any, Optional
 
@@ -60,7 +60,7 @@ def _check_version_and_prompt_upgrade(curr_version: str) -> None:
 
     """
     if _is_version_check_disabled():
-        return    
+        return
     new_version = _get_newer_version(curr_version)
     if new_version:
         warning_cache.warn(

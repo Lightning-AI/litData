@@ -80,17 +80,17 @@ def test_get_newer_version_default_behavior_enabled(mock_get, set_env_var):
     """Test default behavior (env var unset): makes request and handles response."""
     # Clear the LRU cache to ensure fresh execution
     _get_newer_version.cache_clear()
-    
+
     # Ensure environment variable is not set
     if "LITDATA_DISABLE_VERSION_CHECK" in os.environ:
         del os.environ["LITDATA_DISABLE_VERSION_CHECK"]
-    
+
     # Simulate a successful response with a newer version
     current_version = "0.2.50"
     newer_version = "0.2.58"  # Newer version from PyPI
     mock_response = {
         "releases": {current_version: [], newer_version: []},
-        "info": {"version": newer_version, "yanked": False}
+        "info": {"version": newer_version, "yanked": False},
     }
     mock_get.return_value.json.return_value = mock_response
     result = _get_newer_version(current_version)
