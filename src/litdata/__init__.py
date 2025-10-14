@@ -14,6 +14,7 @@ import warnings
 
 from litdata.__about__ import *  # noqa: F403
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
+from litdata.debugger import configure_logging
 from litdata.processing.functions import map, merge_datasets, optimize, walk
 from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
@@ -25,7 +26,6 @@ from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.train_test_split import train_test_split
-from litdata.debugger import configure_logging
 
 configure_logging()
 

@@ -1,13 +1,16 @@
 import io
 import logging
+from unittest import mock
+
 import pytest
 
-from unittest import mock
 from litdata.debugger import configure_logging
+
 
 @pytest.fixture
 def log_stream():
     return io.StringIO()
+
 
 def test_get_logger_level():
     from litdata.debugger import get_logger_level
