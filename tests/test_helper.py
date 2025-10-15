@@ -8,14 +8,14 @@ from litdata.helpers import _check_version_and_prompt_upgrade, _get_newer_versio
 
 
 @pytest.fixture
-def set_env_var():
+def set_env_var(monkeypatch):
     """Fixture to set and reset the env var."""
     original_value = os.environ.get("LITDATA_DISABLE_VERSION_CHECK")
     yield
     if original_value is None:
-        os.environ.pop("LITDATA_DISABLE_VERSION_CHECK", None)
+        monkeypatch.delenv("LITDATA_DISABLE_VERSION_CHECK", raising=False)
     else:
-        os.environ["LITDATA_DISABLE_VERSION_CHECK"] = original_value
+        monkeypatch.setenv("LITDATA_DISABLE_VERSION_CHECK", original_value)
 
 
 @patch("litdata.helpers._LITDATA_DISABLE_VERSION_CHECK", new=1)
