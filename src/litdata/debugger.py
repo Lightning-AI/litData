@@ -14,12 +14,17 @@
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from functools import lru_cache
+from typing import TYPE_CHECKING, Any, TextIO, Union
 
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
 
+_DEFAULT_LOG_FORMAT = (
+    "%(asctime)s - %(processName)s[%(process)d] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+)
 
 class TimedFlushFileHandler(logging.FileHandler):
     """FileHandler that flushes every N seconds in a background thread."""
@@ -77,6 +82,57 @@ def get_logger_level(level: str) -> int:
     if level in logging._nameToLevel:
         return logging._nameToLevel[level]
     raise ValueError(f"Invalid log level: {level}")
+
+
+def _get_default_handler(stream, format):
+    handler = logging.StreamHandler(stream)
+    formatter = logging.Formatter(format)
+    handler.setFormatter(formatter)
+    return handler
+
+
+def configure_logging(
+    level: Union[str, int] = logging.INFO,
+    format: str = _DEFAULT_LOG_FORMAT,
+    stream: TextIO = sys.stdout,
+    use_rich: bool = False,
+):
+    """Configure logging for the entire library with sensible defaults.
+
+    Args:
+        level (int): Logging level (default: logging.INFO)
+        format (str): Log message format string
+        stream (file-like): Output stream for logs
+        use_rich (bool): Makes the logs more readable by using rich, useful for debugging. Defaults to False.
+
+    """
+    if isinstance(level, str):
+        level = level.upper()
+        level = getattr(logging, level)
+
+    # Clear any existing handlers to prevent duplicates
+    library_logger = logging.getLogger("litdata")
+    for handler in library_logger.handlers[:]:
+        library_logger.removeHandler(handler)
+
+    if use_rich:
+        try:
+            from rich.logging import RichHandler
+            from rich.traceback import install
+
+            install(show_locals=True)
+            handler = RichHandler(rich_tracebacks=True, show_time=True, show_path=True)
+        except ImportError:
+            logging.warning("Rich is not installed, using default logging")
+            handler = _get_default_handler(stream, format)
+    else:
+        handler = _get_default_handler(stream, format)
+
+    # Configure library logger
+    library_logger.setLevel(level)
+    library_logger.addHandler(handler)
+    library_logger.propagate = False
+    pass
 
 
 class LitDataLogger:

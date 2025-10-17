@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Introduced `CHANGELOG.md` to track changes across releases ([#733](https://github.com/lightning-ai/litdata/pull/733))
+- Added `configure_logging` to `src/litdata/debugger.py` ([#685](https://github.com/Lightning-AI/litData/issues/685))
+- Added necessary test for `configure_logging` at `tests/test_debugger.py` ([#685](https://github.com/Lightning-AI/litData/issues/685))
+- Added `configure_logging` import to `src/litdata/__init__.py` ([#685](https://github.com/Lightning-AI/litData/issues/685))
 
 ### Changed
 
