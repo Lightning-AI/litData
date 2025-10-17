@@ -5,6 +5,8 @@ from typing import Any, Optional
 import requests
 from packaging import version as packaging_version
 
+from litdata.constants import _LITDATA_DISABLE_VERSION_CHECK
+
 
 class WarningCache(set):
     """Cache for warnings."""
@@ -28,7 +30,7 @@ def _get_newer_version(curr_version: str) -> Optional[str]:
     Returning the newest version if different from the current or ``None`` otherwise.
 
     """
-    if packaging_version.parse(curr_version).is_prerelease:
+    if _LITDATA_DISABLE_VERSION_CHECK == 1 or packaging_version.parse(curr_version).is_prerelease:
         return None
     try:
         response = requests.get(f"https://pypi.org/pypi/{__package_name__}/json", timeout=30)
