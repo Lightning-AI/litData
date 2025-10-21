@@ -1142,7 +1142,9 @@ def create_synthetic_audio_bytes(index) -> dict:
     return {"content": data}
 
 
-@pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")
+@pytest.mark.skipif(
+    condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd'] or Windows not supported"
+)
 @pytest.mark.parametrize("compression", [None, "zstd"])
 def test_load_audio_bytes_optimize_and_stream(tmpdir, compression):
     seed_everything(42)
@@ -1180,7 +1182,9 @@ def create_synthetic_audio_file(filepath) -> dict:
     return filepath
 
 
-@pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")
+@pytest.mark.skipif(
+    condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd'] or Windows not supported"
+)
 @pytest.mark.parametrize("compression", [None])
 def test_load_audio_file_optimize_and_stream(tmpdir, compression):
     seed_everything(42)
