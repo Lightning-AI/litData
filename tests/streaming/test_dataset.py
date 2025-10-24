@@ -1813,3 +1813,114 @@ def test_dataset_transform_inheritance(tmpdir, shuffle):
     # Verify that the transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+def test_dataset_multisample(tmpdir):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define simple transform functions
+    def transform_fn_sq(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    def transform_fn_add(x):
+        """A simple transform function that adds 3 to the input."""
+        return x + 3
+
+    def transform_fn_identity(x):
+        """A simple transform function that returns the input as is."""
+        return x
+
+    dataset = StreamingDataset(
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=False,
+        transform=[transform_fn_sq, transform_fn_add, transform_fn_identity],
+        is_multisample=True,
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == 300
+
+    # ASSERT
+    # Verify that the transform functions are applied correctly
+    for i, item in enumerate(dataset):
+        assert item is not None
+        if i % 3 == 0:
+            assert item == (i // len(dataset.transform)) * 2, (
+                f"Expected {(i // len(dataset.transform)) * 2}, got {item}"
+            )
+        elif i % 3 == 1:
+            assert item == (i // len(dataset.transform)) + 3, (
+                f"Expected {(i // len(dataset.transform)) + 3}, got {item}"
+            )
+        else:
+            assert item == (i // len(dataset.transform)), f"Expected {(i // len(dataset.transform))}, got {item}"
+
+
+def test_dataset_multisample_single_transform(tmpdir):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define simple transform functions
+    def transform_fn_sq(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    dataset = StreamingDataset(
+        data_dir, cache_dir=str(cache_dir), shuffle=False, transform=transform_fn_sq, is_multisample=True
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ASSERT
+    # Verify that the transform function is applied correctly
+    for i, item in enumerate(dataset):
+        assert item is not None
+        assert item == (i * 2), f"Expected {(i * 2)}, got {item}"
+
+
+def test_dataset_multisample_nonlist_transform_error(tmpdir):
+    """Test if the dataset raises an error when is_multisample is True but transform is not a list."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # ASSERT
+    # Verify that ValueError is raised when transform is not given
+    with pytest.raises(ValueError, match="When using `is_multisample=True`, `transform` must be a list of callables."):
+        StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, is_multisample=True)
