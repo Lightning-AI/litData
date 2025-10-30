@@ -241,7 +241,9 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary>✅ Stream raw datasets from cloud storage (beta)</summary>
+  <summary id="stream-raw-dataset">✅ Stream raw datasets from cloud storage (beta)
+  <a href="#stream-raw-dataset" class="permalink">#</a>
+  </summary>
   &nbsp;
 
 Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
