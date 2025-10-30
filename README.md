@@ -241,8 +241,7 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary id="stream-raw-dataset">✅ Stream raw datasets from cloud storage (beta)
-  <a href="#stream-raw-dataset" class="permalink">#</a>
+  <summary>✅ Stream raw datasets from cloud storage (beta) <a href="#stream-raw-dataset" title="Stream raw datasets from cloud storage (beta)">🔗</a>
   </summary>
   &nbsp;
 
