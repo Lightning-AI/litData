@@ -240,9 +240,9 @@ ld.map(
 
 ## Features for optimizing and streaming datasets for model training
 
+#### ✅ Stream raw datasets from cloud storage (beta) 
 <details>
-  <summary>✅ Stream raw datasets from cloud storage (beta) <a href="#stream-raw-dataset" title="Stream raw datasets from cloud storage (beta)" style="text-decoration:none;color:inherit;">🔗</a>
-  </summary>
+  <summary></summary>
   &nbsp;
 
 Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
@@ -317,8 +317,9 @@ dataset = StreamingRawDataset("s3://bucket/files/", recompute_index=True)
 
 </details>
 
+#### ✅ Stream large cloud datasets
 <details>
-  <summary> ✅ Stream large cloud datasets</summary>
+  <summary> Click to Expand</summary>
 &nbsp;
 
 Use data stored on the cloud without needing to download it all to your computer, saving time and space.
