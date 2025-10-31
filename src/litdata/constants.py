@@ -35,7 +35,6 @@ _TORCH_GREATER_EQUAL_2_1_0 = RequirementCache("torch>=2.1.0")
 _VIZ_TRACKER_AVAILABLE = RequirementCache("viztracer")
 _BOTO3_AVAILABLE = RequirementCache("boto3")
 _FSSPEC_AVAILABLE = RequirementCache("fsspec")
-_TORCH_AUDIO_AVAILABLE = RequirementCache("torchaudio")
 _ZSTD_AVAILABLE = RequirementCache("zstd")
 _CRYPTOGRAPHY_AVAILABLE = RequirementCache("cryptography")
 _GOOGLE_STORAGE_AVAILABLE = RequirementCache("google.cloud.storage")
@@ -55,6 +54,7 @@ _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
+_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0"))
 
 # DON'T CHANGE ORDER
 _TORCH_DTYPES_MAPPING = {
