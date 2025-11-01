@@ -241,7 +241,7 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary> ✅ Stream raw datasets from cloud storage (beta) <a id="stream" href="#stream">🔗</a> </summary>
+  <summary> ✅ Stream raw datasets from cloud storage (beta) <a id="stream-raw" href="#stream-raw">🔗</a> </summary>
   &nbsp;
 
 Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
@@ -317,7 +317,7 @@ dataset = StreamingRawDataset("s3://bucket/files/", recompute_index=True)
 </details>
 
 <details>
-  <summary> ✅ Stream large cloud datasets <a id="large" href="#large">🔗</a> </summary>
+  <summary> ✅ Stream large cloud datasets <a id="stream-large" href="#stream-large">🔗</a> </summary>
 &nbsp;
 
 Use data stored on the cloud without needing to download it all to your computer, saving time and space.
@@ -367,7 +367,7 @@ dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache")
 </details>
 
 <details>
-  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="hf" href="#hf">🔗</a> </summary>
+  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
 
 &nbsp;
 
@@ -480,7 +480,7 @@ Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that *
 </details>
 
 <details>
-  <summary> ✅ Streams on multi-GPU, multi-node <a id="multi" href="#multi">🔗</a> </summary>
+  <summary> ✅ Streams on multi-GPU, multi-node <a id="multi-gpu" href="#multi-gpu">🔗</a> </summary>
 
 &nbsp;
 
@@ -512,7 +512,7 @@ for batch in val_dataloader:
 </details>
 
 <details>
-  <summary> ✅ Stream from multiple cloud providers <a id="cloud" href="#cloud">🔗</a> </summary>
+  <summary> ✅ Stream from multiple cloud providers <a id="cloud-providers" href="#cloud-providers">🔗</a> </summary>
 
 &nbsp;
 
@@ -570,7 +570,7 @@ dataset = ld.StreamingDataset("azure://my-bucket/my-data", storage_options=azure
 </details>  
 
 <details>
-  <summary> ✅ Pause, resume data streaming <a id="pause" href="#pause">🔗</a> </summary>
+  <summary> ✅ Pause, resume data streaming <a id="pause-resume" href="#pause-resume">🔗</a> </summary>
 &nbsp;
 
 Stream data during long training, if interrupted, pick up right where you left off without any issues.
@@ -604,7 +604,7 @@ for batch_idx, batch in enumerate(dataloader):
 
 
 <details>
-  <summary> ✅ Use shared queue for Optimizing <a id="queue" href="#queue">🔗</a> </summary>
+  <summary> ✅ Use shared queue for Optimizing <a id="shared-queue" href="#shared-queue">🔗</a> </summary>
 &nbsp;
 
 If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
@@ -661,7 +661,7 @@ if __name__ == "__main__":
 
 
 <details>
-  <summary> ✅ Use a <code>Queue</code> as input for optimizing data <a id="input" href="#input">🔗</a> </summary>
+  <summary> ✅ Use a <code>Queue</code> as input for optimizing data <a id="queue-input" href="#queue-input">🔗</a> </summary>
 &nbsp;
 
 Sometimes you don’t have a static list of inputs to optimize — instead, you have a stream of data coming in over time. In such cases, you can use a multiprocessing.Queue to feed data into the optimize() function.
@@ -718,7 +718,7 @@ if __name__ == "__main__":
 
 
 <details>
-  <summary> ✅ LLM Pre-training <a id="llm" href="#llm">🔗</a> </summary>
+  <summary> ✅ LLM Pre-training <a id="llm-training" href="#llm-training">🔗</a> </summary>
 &nbsp;
 
 LitData is highly optimized for LLM pre-training. First, we need to tokenize the entire dataset and then we can consume it.
@@ -781,7 +781,7 @@ for batch in tqdm(train_dataloader):
 </details>
 
 <details>
-  <summary> ✅ Filter illegal data <a id="filter" href="#filter">🔗</a> </summary>
+  <summary> ✅ Filter illegal data <a id="filter-data" href="#filter-data">🔗</a> </summary>
 &nbsp;
 
 Sometimes, you have bad data that you don't want to include in the optimized dataset. With LitData, yield only the good data sample to include. 
@@ -843,7 +843,7 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Combine datasets <a id="combine" href="#combine">🔗</a> </summary>
+  <summary> ✅ Combine datasets <a id="combine-datasets" href="#combine-datasets">🔗</a> </summary>
 &nbsp;
 
 Mix and match different sets of data to experiment and create better models.
@@ -915,7 +915,7 @@ combined_dataset = CombinedStreamingDataset(
 </details>
 
 <details>
-  <summary> ✅ Parallel streaming <a id="parallel" href="#parallel">🔗</a> </summary>
+  <summary> ✅ Parallel streaming <a id="parallel-streaming" href="#parallel-streaming">🔗</a> </summary>
 &nbsp;
 
 While `CombinedDataset` allows to fetch a sample from one of the datasets it wraps at each iteration, `ParallelStreamingDataset` can be used to fetch a sample from all the wrapped datasets at each iteration:
@@ -965,7 +965,7 @@ parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transfor
 </details>
 
 <details>
-  <summary> ✅ Cycle datasets <a id="cycle" href="#cycle">🔗</a> </summary>
+  <summary> ✅ Cycle datasets <a id="cycle-datasets" href="#cycle-datasets">🔗</a> </summary>
 &nbsp;
 
 `ParallelStreamingDataset` can also be used to cycle a `StreamingDataset`. This allows to dissociate the epoch length from the number of samples in the dataset.
@@ -992,7 +992,7 @@ You can even set `length` to `float("inf")` for an infinite dataset!
 </details>
 
 <details>
-  <summary> ✅ Merge datasets <a id="merge" href="#merge">🔗</a> </summary>
+  <summary> ✅ Merge datasets <a id="merge-datasets" href="#merge-datasets">🔗</a> </summary>
 &nbsp;
 
 Merge multiple optimized datasets into one.
@@ -1027,7 +1027,7 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Transform datasets while Streaming <a id="transform" href="#transform">🔗</a> </summary>
+  <summary> ✅ Transform datasets while Streaming <a id="transform-streaming" href="#transform-streaming">🔗</a> </summary>
 &nbsp;
 
 Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
@@ -1083,7 +1083,7 @@ dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuf
 </details>
 
 <details>
-  <summary> ✅ Split datasets for train, val, test <a id="split" href="#split">🔗</a> </summary>
+  <summary> ✅ Split datasets for train, val, test <a id="split-datasets" href="#split-datasets">🔗</a> </summary>
 
 &nbsp;
 
@@ -1112,7 +1112,7 @@ print(test_dataset)
 </details>
 
 <details>
-  <summary> ✅ Load a subset of the remote dataset <a id="subset" href="#subset">🔗</a> </summary>
+  <summary> ✅ Load a subset of the remote dataset <a id="load-subset" href="#load-subset">🔗</a> </summary>
 
 &nbsp;
 Work on a smaller, manageable portion of your data to save time and resources.
@@ -1130,7 +1130,7 @@ print(len(dataset)) # display the length of your data
 </details>
 
 <details>
-  <summary> ✅ Upsample from your source datasets <a id="upsample" href="#upsample">🔗</a> </summary>
+  <summary> ✅ Upsample from your source datasets <a id="upsample-datasets" href="#upsample-datasets">🔗</a> </summary>
 
 &nbsp;
 Use to control the size of one iteration of a StreamingDataset using repeats. Contains `floor(N)` possibly shuffled copies of the source data, then a subsampling of the remainder.
@@ -1148,7 +1148,7 @@ print(len(dataset)) # display the length of your data
 </details>
 
 <details>
-  <summary> ✅ Easily modify optimized cloud datasets <a id="modify" href="#modify">🔗</a> </summary>
+  <summary> ✅ Easily modify optimized cloud datasets <a id="modify-datasets" href="#modify-datasets">🔗</a> </summary>
 &nbsp;
 
 Add new data to an existing dataset or start fresh if needed, providing flexibility in data management.
@@ -1189,7 +1189,7 @@ The `overwrite` mode will delete the existing data and start from fresh.
 </details>
 
 <details>
-  <summary> ✅ Stream parquet datasets <a id="parquet" href="#parquet">🔗</a> </summary>
+  <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
 Stream Parquet datasets directly with LitData—no need to convert them into LitData’s optimized binary format! If your dataset is already in Parquet format, you can efficiently index and stream it using `StreamingDataset` and `StreamingDataLoader`.
@@ -1281,7 +1281,7 @@ Using [zstd](https://github.com/facebook/zstd), you can achieve high compression
 </details>
 
 <details>
-  <summary> ✅ Access samples without full data download <a id="access" href="#access">🔗</a> </summary>
+  <summary> ✅ Access samples without full data download <a id="access-samples" href="#access-samples">🔗</a> </summary>
 &nbsp;
 
 Look at specific parts of a large dataset without downloading the whole thing or loading it on a local machine.
@@ -1299,7 +1299,7 @@ print(dataset[42]) # show the 42th element of the dataset
 </details>
 
 <details>
-  <summary> ✅ Use any data transforms <a id="transforms" href="#transforms">🔗</a> </summary>
+  <summary> ✅ Use any data transforms <a id="data-transforms" href="#data-transforms">🔗</a> </summary>
 &nbsp;
 
 Customize how your data is processed to better fit your needs.
@@ -1327,7 +1327,7 @@ for batch in dataloader:
 </details>
 
 <details>
-  <summary> ✅ Profile data loading speed <a id="profile" href="#profile">🔗</a> </summary>
+  <summary> ✅ Profile data loading speed <a id="profile-loading" href="#profile-loading">🔗</a> </summary>
 &nbsp;
 
 Measure and optimize how fast your data is being loaded, improving efficiency.
@@ -1345,7 +1345,7 @@ This generates a Chrome trace called `result.json`. Then, visualize this trace b
 </details>
 
 <details>
-  <summary> ✅ Reduce memory use for large files <a id="memory" href="#memory">🔗</a> </summary>
+  <summary> ✅ Reduce memory use for large files <a id="reduce-memory" href="#reduce-memory">🔗</a> </summary>
 &nbsp;
 
 Handle large data files efficiently without using too much of your computer's memory.
@@ -1383,7 +1383,7 @@ outputs = optimize(
 </details>
 
 <details>
-  <summary> ✅ Limit local cache space <a id="cache" href="#cache">🔗</a> </summary>
+  <summary> ✅ Limit local cache space <a id="limit-cache" href="#limit-cache">🔗</a> </summary>
 &nbsp;
 
 Limit the amount of disk space used by temporary files, preventing storage issues.
@@ -1399,7 +1399,7 @@ dataset = StreamingDataset(..., max_cache_size="10GB")
 </details>
 
 <details>
-  <summary> ✅ Change cache directory path <a id="directory" href="#directory">🔗</a> </summary>
+  <summary> ✅ Change cache directory path <a id="cache-directory" href="#cache-directory">🔗</a> </summary>
 &nbsp;
 
 Specify the directory where cached files should be stored, ensuring efficient data retrieval and management. This is particularly useful for organizing your data storage and improving access times.
@@ -1417,7 +1417,7 @@ dataset = StreamingDataset(input_dir=Dir(path=cache_dir, url=data_dir))
 </details>
 
 <details>
-  <summary> ✅ Optimize loading on networked drives <a id="network" href="#network">🔗</a> </summary>
+  <summary> ✅ Optimize loading on networked drives <a id="networked-drives" href="#networked-drives">🔗</a> </summary>
 &nbsp;
 
 Optimize data handling for computers on a local network to improve performance for on-site setups.
@@ -1433,7 +1433,7 @@ dataset = StreamingDataset(input_dir="local:/data/shared-drive/some-data")
 </details>
 
 <details>
-  <summary> ✅ Optimize dataset in distributed environment <a id="distributed" href="#distributed">🔗</a> </summary>
+  <summary> ✅ Optimize dataset in distributed environment <a id="distributed-optimization" href="#distributed-optimization">🔗</a> </summary>
 &nbsp;
 
 Lightning can distribute large workloads across hundreds of machines in parallel. This can reduce the time to complete a data processing task from weeks to minutes by scaling to enough machines.
@@ -1475,7 +1475,7 @@ print(dataset[:])
 </details>
 
 <details>
-  <summary> ✅ Encrypt, decrypt data at chunk/sample level <a id="encrypt" href="#encrypt">🔗</a> </summary>
+  <summary> ✅ Encrypt, decrypt data at chunk/sample level <a id="encrypt-decrypt" href="#encrypt-decrypt">🔗</a> </summary>
 &nbsp;
 
 Secure data by applying encryption to individual samples or chunks, ensuring sensitive information is protected during storage.
@@ -1544,7 +1544,7 @@ This allows the data to remain secure while maintaining flexibility in the encry
 </details>
 
 <details>
-  <summary> ✅ Debug & Profile LitData with logs & Litracer <a id="debug" href="#debug">🔗</a> </summary>
+  <summary> ✅ Debug & Profile LitData with logs & Litracer <a id="debug-profile" href="#debug-profile">🔗</a> </summary>
 
 &nbsp;
 
@@ -1612,7 +1612,7 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Lightning AI Data Connections - Direct download and upload <a id="lightning" href="#lightning">🔗</a> </summary>
+  <summary> ✅ Lightning AI Data Connections - Direct download and upload <a id="lightning-connections" href="#lightning-connections">🔗</a> </summary>
 
 &nbsp;
 
