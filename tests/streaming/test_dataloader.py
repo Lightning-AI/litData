@@ -545,6 +545,22 @@ def test_dataloader_dataset_transform_multisample(tmpdir):
             assert item == (i // 3) * 2, f"Expected {i * 2}, got {item}"
 
 
+# Define simple transform functions
+def transform_fn_sq(x, sample_idx):
+    """A simple transform function that doubles the input."""
+    return x * sample_idx
+
+
+def transform_fn_add(x, sample_idx):
+    """A simple transform function that adds the sample_idx to the input."""
+    return x + sample_idx
+
+
+def transform_fn_no_sample_idx(x):
+    """A simple transform function that doubles the input."""
+    return x
+
+
 def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
     """Test if the dataset's transform is applied correctly with dataloader."""
     # Create a simple dataset
@@ -553,19 +569,6 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
     data_dir = os.path.join(tmpdir, "data_dir")
     os.makedirs(cache_dir)
     os.makedirs(data_dir)
-
-    # Define simple transform functions
-    def transform_fn_sq(x, sample_idx):
-        """A simple transform function that doubles the input."""
-        return x * sample_idx
-
-    def transform_fn_add(x, sample_idx):
-        """A simple transform function that adds the sample_idx to the input."""
-        return x + sample_idx
-
-    def transform_fn_no_sample_idx(x):
-        """A simple transform function that doubles the input."""
-        return x
 
     # Create a dataset with 100 items, 20 items per chunk
     cache = Cache(str(data_dir), chunk_size=20)
