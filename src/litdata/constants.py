@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +36,9 @@ _TORCH_GREATER_EQUAL_2_1_0 = RequirementCache("torch>=2.1.0")
 _VIZ_TRACKER_AVAILABLE = RequirementCache("viztracer")
 _BOTO3_AVAILABLE = RequirementCache("boto3")
 _FSSPEC_AVAILABLE = RequirementCache("fsspec")
-_ZSTD_AVAILABLE = RequirementCache("zstd")
+# zstd is built into Python 3.14+, otherwise require the zstd package
+_PYTHON_GREATER_EQUAL_3_14 = sys.version_info >= (3, 14)
+_ZSTD_AVAILABLE = _PYTHON_GREATER_EQUAL_3_14 or RequirementCache("zstd")
 _CRYPTOGRAPHY_AVAILABLE = RequirementCache("cryptography")
 _GOOGLE_STORAGE_AVAILABLE = RequirementCache("google.cloud.storage")
 _AZURE_STORAGE_AVAILABLE = RequirementCache("azure.storage.blob")

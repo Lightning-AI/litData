@@ -98,7 +98,8 @@ class ChunksConfig:
         if self._compressor_name:
             if len(_COMPRESSORS) == 0:
                 raise ValueError(
-                    "No compression algorithms are installed. To use zstd compression,  run `pip install zstd`."
+                    "No compression algorithms are installed. To use zstd compression, run `pip install zstd` "
+                    "(not needed for Python 3.14+)."
                 )
             if self._compressor_name not in _COMPRESSORS:
                 raise ValueError(

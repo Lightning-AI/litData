@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from litdata.constants import _FSSPEC_AVAILABLE, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
+from litdata.constants import _FSSPEC_AVAILABLE, _PYTHON_GREATER_EQUAL_3_14, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
 
 logger = logging.getLogger(__name__)
 _SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
@@ -147,7 +147,10 @@ class BaseIndexer(ABC):
 
     def _load_index_file(self, index_path: str) -> Optional[list[FileMetadata]]:
         """Loads and decodes an index file."""
-        import zstd
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression import zstd
+        else:
+            import zstd
 
         try:
             with open(index_path, "rb") as f:
@@ -160,7 +163,10 @@ class BaseIndexer(ABC):
 
     def _save_index_file(self, index_path: str, files: list[FileMetadata], source: str) -> None:
         """Encodes and saves an index file."""
-        import zstd
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression import zstd
+        else:
+            import zstd
 
         try:
             metadata = {

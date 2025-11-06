@@ -14,5 +14,5 @@ pyarrow >=20.0.0
 polars >1.0.0
 lightning
 transformers >=4.51.0
-zstd
+zstd; python_version < "3.14"
 soundfile >=0.13.0
