@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from litdata import StreamingRawDataset
+from litdata.constants import _PYTHON_GREATER_EQUAL_3_14
 from litdata.raw.indexer import _INDEX_FILENAME, FileIndexer, FileMetadata
 
 
@@ -244,7 +245,10 @@ def test_load_remote_index_from_cache(mock_download, mock_upload, tmp_path):
     def fake_download(remote_path, local_path, storage_options):
         import json
 
-        import zstd
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression import zstd
+        else:
+            import zstd
 
         metadata = {
             "source": input_dir,

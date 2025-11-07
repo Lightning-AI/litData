@@ -1,6 +1,9 @@
 {
   "ignorePatterns": [
     {
+      "pattern": "^#"
+    },
+    {
       "pattern": "^https://github.com/Lightning-AI/litData/pull/"
     },
     {

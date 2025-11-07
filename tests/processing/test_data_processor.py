@@ -3,6 +3,7 @@ import multiprocessing as mp
 import os
 import random
 import sys
+import tempfile
 from contextlib import suppress
 from functools import partial
 from io import BytesIO
@@ -16,7 +17,7 @@ import pytest
 import torch
 from lightning_utilities.core.imports import RequirementCache
 
-from litdata.constants import _TORCH_AUDIO_AVAILABLE, _ZSTD_AVAILABLE
+from litdata.constants import _ZSTD_AVAILABLE
 from litdata.processing import data_processor as data_processor_module
 from litdata.processing import functions
 from litdata.processing.data_processor import (
@@ -1127,29 +1128,28 @@ def test_empty_optimize(tmpdir, inputs):
 
 
 def create_synthetic_audio_bytes(index) -> dict:
-    from io import BytesIO
-
-    import torchaudio
+    import soundfile as sf
 
     # load dummy audio as bytes
-    data = torch.randn((1, 16000))
+    data = torch.randn((1, 16000)).numpy().squeeze()  # shape (16000,)
 
-    # convert tensor to bytes
-    with BytesIO() as f:
-        torchaudio.save(f, data, 16000, format="wav")
-        data = f.getvalue()
+    # convert array to bytes
+    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+        sf.write(tmp.name, data, 16000, format="WAV")
+        with open(tmp.name, "rb") as f:
+            data = f.read()
 
     return {"content": data}
 
 
-@pytest.mark.skipif(condition=not _TORCH_AUDIO_AVAILABLE or not _ZSTD_AVAILABLE, reason="Requires: ['torchaudio']")
+@pytest.mark.skipif(
+    condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd'] or Windows not supported"
+)
 @pytest.mark.parametrize("compression", [None, "zstd"])
-def test_load_torch_audio(tmpdir, compression):
+def test_load_audio_bytes_optimize_and_stream(tmpdir, compression):
     seed_everything(42)
 
-    import torchaudio
-
-    torchaudio.set_audio_backend("soundfile")
+    import soundfile as sf
 
     optimize(
         fn=create_synthetic_audio_bytes,
@@ -1164,30 +1164,32 @@ def test_load_torch_audio(tmpdir, compression):
     sample = dataset[0]
     buffer = BytesIO(sample["content"])
     buffer.seek(0)
-    tensor, sample_rate = torchaudio.load(buffer, format="wav")
+    data, sample_rate = sf.read(buffer)
+    tensor = torch.from_numpy(data).unsqueeze(0)
     assert tensor.shape == torch.Size([1, 16000])
     assert sample_rate == 16000
 
 
 def create_synthetic_audio_file(filepath) -> dict:
-    import torchaudio
+    import soundfile as sf
 
     # load dummy audio as bytes
-    data = torch.randn((1, 16000))
+    data = torch.randn((1, 16000)).numpy().squeeze()
 
-    # convert tensor to bytes
-    with open(filepath, "wb") as f:
-        torchaudio.save(f, data, 16000, format="wav")
+    # convert array to bytes
+    sf.write(filepath, data, 16000, format="WAV")
 
     return filepath
 
 
-@pytest.mark.skipif(condition=not _TORCH_AUDIO_AVAILABLE or not _ZSTD_AVAILABLE, reason="Requires: ['torchaudio']")
+@pytest.mark.skipif(
+    condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd'] or Windows not supported"
+)
 @pytest.mark.parametrize("compression", [None])
-def test_load_torch_audio_from_wav_file(tmpdir, compression):
+def test_load_audio_file_optimize_and_stream(tmpdir, compression):
     seed_everything(42)
 
-    import torchaudio
+    import soundfile as sf
 
     optimize(
         fn=create_synthetic_audio_file,
@@ -1200,9 +1202,10 @@ def test_load_torch_audio_from_wav_file(tmpdir, compression):
 
     dataset = StreamingDataset(input_dir=str(tmpdir))
     sample = dataset[0]
-    tensor = torchaudio.load(sample)
-    assert tensor[0].shape == torch.Size([1, 16000])
-    assert tensor[1] == 16000
+    data, sample_rate = sf.read(sample)
+    tensor = torch.from_numpy(data).unsqueeze(0)
+    assert tensor.shape == torch.Size([1, 16000])
+    assert sample_rate == 16000
 
 
 def test_is_path_valid_in_studio(monkeypatch, tmpdir):

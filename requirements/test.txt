@@ -2,18 +2,17 @@ av >=14.0.0
 coverage ==7.10.*
 cryptography==45.0.7
 mosaicml-streaming==0.11.0
-torchaudio>=2.7.0,<2.9
 pytest ==8.4.*
 pytest-asyncio>=1.0.0
 pytest-cov ==7.0.0
 pytest-timeout ==2.4.0
-pytest-rerunfailures ==15.1
+pytest-rerunfailures ==16.0.1
 pytest-random-order ==1.2.0
 pytest-xdist >=3.8.0
 pandas
 pyarrow >=20.0.0
 polars >1.0.0
 lightning
-transformers <4.57.0
-zstd
-soundfile >=0.13.0 # required for torchaudio backend
+transformers >=4.51.0
+zstd; python_version < "3.14"
+soundfile >=0.13.0

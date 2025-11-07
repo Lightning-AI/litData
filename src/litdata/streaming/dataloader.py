@@ -624,7 +624,7 @@ class StreamingDataLoader(DataLoader):
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
         self.rng_state: Optional[Any] = None
-        self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
+        self._worker_idx: Optional[Any] = None  # Lazily initialized in __iter__
         self._worker_idx_iter: Optional[Any] = None
         self._latest_worker_idx = 0
         self.restore = False
@@ -767,6 +767,9 @@ class StreamingDataLoader(DataLoader):
 
         # Used to restart on the next DataLoader worker from the previous run.
         self._latest_worker_idx = obj["latest_worker_idx"] + 1
+        # Initialize _worker_idx if not already set (e.g., when loading state before first iteration)
+        if self._worker_idx is None:
+            self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
         self._worker_idx_iter = iter(self._worker_idx)
         for _ in range(self._latest_worker_idx):
             next(self._worker_idx_iter)
