@@ -71,7 +71,7 @@ setup(
     include_package_data=True,
     zip_safe=False,
     keywords=["deep learning", "pytorch", "AI", "streaming", "cloud", "data processing"],
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     setup_requires=["wheel"],
     install_requires=_load_requirements(),
     extras_require=_prepare_extras(),
@@ -95,7 +95,6 @@ setup(
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
