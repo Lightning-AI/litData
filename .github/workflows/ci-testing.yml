@@ -18,11 +18,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "macos-14", "windows-2022"]
+        os: ["ubuntu-22.04", "macos-14", "windows-2022", "ubuntu-latest"]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
         exclude:
           - { os: "windows-2022", python-version: "3.13" }
           - { os: "windows-2022", python-version: "3.14" }
+          # Python 3.14 on ubuntu-latest has NumPy import issues
+          - { os: "ubuntu-latest", python-version: "3.14" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
@@ -46,7 +48,7 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          pytest tests \
+          uv run pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
               -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
@@ -54,7 +56,7 @@ jobs:
       - name: Run processing tests sequentially
         run: |
           # note that the listed test should match ignored in the previous step
-          pytest \
+          uv run pytest \
             tests/processing tests/raw \
             --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
 
