@@ -37,6 +37,7 @@ jobs:
     uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
     with:
       requirements-file: "requirements/docs.txt"
+      python-version: "3.10"
 
   check-md-links:
     uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@main
