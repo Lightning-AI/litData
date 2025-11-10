@@ -45,8 +45,10 @@ lint.extend-select = [
   "SIM",    # see: https://pypi.org/project/flake8-simplify
 ]
 lint.ignore = [
-  "E731", # Do not assign a lambda expression, use a def
-  "S101", # todo: Use of `assert` detected
+  "E731",  # Do not assign a lambda expression, use a def
+  "S101",  # todo: Use of `assert` detected
+  "UP007", # todo: non-pep604-annotation-union
+  "UP045", # todo: non-pep604-annotation-optional
 ]
 lint.per-file-ignores."examples/**" = [
   "D100",
