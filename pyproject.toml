@@ -13,10 +13,18 @@
 # limitations under the License.
 
 [build-system]
+build-backend = "maturin"
+
 requires = [
+  "maturin>=1,<2",
   "setuptools",
   "wheel",
 ]
+
+[tool.maturin]
+module-name = "litdata._core"
+python-packages = [ "litdata" ]
+python-source = "src"
 
 [tool.ruff]
 target-version = "py39"

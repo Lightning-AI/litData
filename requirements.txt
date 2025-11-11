@@ -7,3 +7,4 @@ boto3
 requests
 tifffile
 obstore
+maturin
