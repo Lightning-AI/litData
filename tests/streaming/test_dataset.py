@@ -1813,3 +1813,106 @@ def test_dataset_transform_inheritance(tmpdir, shuffle):
     # Verify that the transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+def test_dataset_transform_multisample(tmpdir):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define simple transform functions
+    def transform_fn_sq(x, sample_idx):
+        """A simple transform function that doubles the input."""
+        return x * sample_idx
+
+    sample_count = 3
+    dataset = StreamingDataset(
+        data_dir, cache_dir=str(cache_dir), shuffle=False, transform=transform_fn_sq, sample_count=sample_count
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == 300
+
+    # ASSERT
+    # Verify that the transform functions are applied correctly
+    for i, item in enumerate(dataset):
+        assert item is not None
+        if i % sample_count == 0:
+            assert item == (i // sample_count) * 0, f"Expected {(i // sample_count) * 0}, got {item}"
+        elif i % sample_count == 1:
+            assert item == (i // sample_count) * 1, f"Expected {(i // sample_count) * 1}, got {item}"
+        else:
+            assert item == (i // sample_count) * 2, f"Expected {(i // sample_count) * 2}, got {item}"
+
+
+def test_dataset_transform_multisample_invalid_config(tmpdir, caplog):
+    """Test if the dataset raises an error when is_multisample is True but transform is not a list."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Define simple transform functions
+    def transform_fn_sq(x, sample_idx):
+        """A simple transform function that doubles the input."""
+        return x * sample_idx
+
+    def transform_fn_add(x, sample_idx):
+        """A simple transform function that adds the sample_idx to the input."""
+        return x + sample_idx
+
+    def transform_fn_no_sample_idx(x):
+        """A simple transform function that misses the sample_idx parameter."""
+        return x
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # ASSERT
+    # Verify that logger warning happens when transform is not given
+    with caplog.at_level(logging.WARNING):
+        dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
+
+    assert "Invalid transform configuration detected." in caplog.text
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # Verify that logger warning happens when multiple transforms are given
+    with caplog.at_level(logging.WARNING):
+        dataset = StreamingDataset(
+            data_dir,
+            cache_dir=str(cache_dir),
+            shuffle=False,
+            sample_count=4,
+            transform=[transform_fn_sq, transform_fn_add],
+        )
+
+    assert "Invalid transform configuration detected." in caplog.text
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # Verify that logger warning happens when sample_idx parameter is missing
+    with caplog.at_level(logging.WARNING):
+        dataset = StreamingDataset(
+            data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4, transform=transform_fn_no_sample_idx
+        )
+
+    assert "Invalid transform configuration detected." in caplog.text
+    dataset_length = len(dataset)
+    assert dataset_length == 100
