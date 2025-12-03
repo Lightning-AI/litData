@@ -175,6 +175,10 @@ html_theme_options = {
     "logo_only": False,
 }
 
+html_context = {
+    "style": "pytorch",
+}
+
 html_favicon = "_static/images/icon.svg"
 
 # Add any paths that contain custom static files (such as style sheets) here,
