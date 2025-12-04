@@ -315,3 +315,26 @@ def test_recompute_index_excludes_index_file(tmp_path):
     assert len(files) == 2
     for f in files:
         assert _INDEX_FILENAME not in f.path
+
+
+def test_load_index_file_handles_corrupted_zstd(tmp_path):
+    """Test that _load_index_file catches ZstdError for corrupted data."""
+    if _PYTHON_GREATER_EQUAL_3_14:
+        import compression.zstd as zstd
+        from compression.zstd import ZstdError
+    else:
+        import zstd
+        from zstd import Error as ZstdError
+
+    index_path = tmp_path / _INDEX_FILENAME
+
+    with open(index_path, "wb") as f:
+        f.write(b"dummy data")
+
+    # Verify corrupted data raises ZstdError
+    with pytest.raises(ZstdError):
+        zstd.decompress(b"dummy data")
+
+    # Verify the indexer catches this and returns None
+    indexer = FileIndexer()
+    assert indexer._load_index_file(str(index_path)) is None
