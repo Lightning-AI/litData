@@ -299,24 +299,49 @@ def _upload_fn(
             remove_queue.put([local_filepath])
 
 
-def _map_items_to_workers_sequentially(num_workers: int, user_items: list[Any]) -> list[list[Any]]:
+def _map_items_to_workers_sequentially(
+    num_workers: int, user_items: list[Any], align_chunking: Optional[int] = None
+) -> list[list[Any]]:
     """Map the items to the workers sequentially.
+        align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first.
+        Each worker will receive chunks of this size, except possibly the last worker which may receive a smaller chunk.
 
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
     >>> assert workers_user_items == [[0, 1], [2, 3, 4]]
     """
+    assert isinstance(align_chunking, (int, type(None))), "align_chunking must be an integer or None"
+
     num_nodes = _get_num_nodes()
     world_size = num_nodes * num_workers
-    num_items_per_worker = len(user_items) // world_size
 
-    num_items_per_worker: list[int] = [num_items_per_worker for _ in range(world_size)]
-    reminder = len(user_items) % world_size
+    if align_chunking is not None:
+        if num_nodes > 1:
+            raise RuntimeError(
+                "align_chunking is currently limited to single-node execution. "
+                "If you need multi-node support, feel free to open an issue on GitHub."
+            )
 
-    for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
-        if reminder == 0:
-            break
-        num_items_per_worker[worker_idx] += 1
-        reminder -= 1
+        assert isinstance(align_chunking, int), "align_chunking must be an integer"
+        assert align_chunking > 0, "align_chunking must be a positive integer"
+
+        # minimum num of chunks expected per worker
+        min_chunks_per_worker = len(user_items) // (align_chunking * world_size)
+        last_worker_num_chunks = len(user_items) - (min_chunks_per_worker * align_chunking * (world_size - 1))
+        # so each worker will get at least these many chunks
+        num_items_per_worker = [align_chunking * min_chunks_per_worker for _ in range(world_size - 1)] + [
+            last_worker_num_chunks
+        ]
+    else:
+        num_items_per_worker = len(user_items) // world_size
+
+        num_items_per_worker: list[int] = [num_items_per_worker for _ in range(world_size)]
+        reminder = len(user_items) % world_size
+
+        for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
+            if reminder == 0:
+                break
+            num_items_per_worker[worker_idx] += 1
+            reminder -= 1
 
     num_items_cumsum_per_worker = np.cumsum([0] + num_items_per_worker)
 
@@ -1080,6 +1105,7 @@ class DataProcessor:
         input_dir: Union[str, Dir],
         output_dir: Optional[Union[str, Dir]] = None,
         num_workers: Optional[int] = None,
+        align_chunking: bool = False,
         num_downloaders: Optional[int] = None,
         num_uploaders: Optional[int] = None,
         delete_cached_files: bool = True,
@@ -1102,6 +1128,8 @@ class DataProcessor:
             input_dir: The path to where the input data are stored.
             output_dir: The path to where the output data are stored.
             num_workers: The number of worker threads to use.
+            align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first
+                and placing all remaining items in the final worker.
             num_downloaders: The number of file downloaders to use.
             num_uploaders: The number of file uploaders to use.
             delete_cached_files: Whether to delete the cached files.
@@ -1140,6 +1168,7 @@ class DataProcessor:
         self.output_dir = _resolve_dir(output_dir)
 
         self.num_workers = num_workers or (1 if fast_dev_run else (os.cpu_count() or 1) * 4)
+        self.align_chunking = align_chunking
         self.num_downloaders = num_downloaders or 2
         self.num_uploaders = num_uploaders or 1
         self.delete_cached_files = delete_cached_files
@@ -1232,7 +1261,11 @@ class DataProcessor:
                 )
             else:
                 workers_user_items = _map_items_to_workers_sequentially(
-                    num_workers=self.num_workers, user_items=user_items
+                    num_workers=self.num_workers,
+                    user_items=user_items,
+                    align_chunking=data_recipe.chunk_size
+                    if self.align_chunking and data_recipe.chunk_size is not None
+                    else None,
                 )
         else:
             assert isinstance(user_items, multiprocessing.queues.Queue)

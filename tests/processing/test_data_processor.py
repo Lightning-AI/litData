@@ -373,6 +373,20 @@ def test_map_items_to_workers_sequentially(monkeypatch):
     assert workers_user_items == [[24, 25], [26, 27], [28, 29], [30, 31]]
 
 
+def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), align_chunking=2)
+    assert workers_user_items == [list(range(5))]
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
+    assert workers_user_items == [[0, 1], [2, 3, 4]]
+
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(6)), align_chunking=2)
+    assert workers_user_items == [[0, 1], [2, 3, 4, 5]]
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    with pytest.raises(RuntimeError, match="open an issue on GitHub"):
+        _map_items_to_workers_sequentially(1, list(range(32)), align_chunking=2)
+
+
 def test_fake_queue():
     q = FakeQueue()
     index = [1, 2]

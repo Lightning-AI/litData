@@ -393,6 +393,7 @@ def optimize(
     weights: Optional[list[int]] = None,
     chunk_size: Optional[int] = None,
     chunk_bytes: Optional[Union[int, str]] = None,
+    align_chunking: Optional[bool] = False,
     compression: Optional[str] = None,
     encryption: Optional[Encryption] = None,
     num_workers: Optional[int] = None,
@@ -428,6 +429,9 @@ def optimize(
         weights: Provide an associated weight to each input. This is used to balance work among workers.
         chunk_size: The maximum number of elements to hold within a chunk.
         chunk_bytes: The maximum number of bytes to hold within a chunk.
+        align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first
+            and placing all remaining items in the final worker. Each worker will receive chunks of this size,
+            except possibly the last worker which may receive a smaller chunk.
         compression: The compression algorithm to use over the chunks.
         encryption: The encryption algorithm to use over the chunks.
         num_workers: The number of workers to use during processing
@@ -555,6 +559,7 @@ def optimize(
             input_dir=resolved_dir,
             output_dir=_output_dir,
             num_workers=num_workers or _get_default_num_workers(),
+            align_chunking=align_chunking,
             fast_dev_run=fast_dev_run,
             num_downloaders=num_downloaders,
             num_uploaders=num_uploaders,
