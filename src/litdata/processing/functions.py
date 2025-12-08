@@ -393,7 +393,7 @@ def optimize(
     weights: Optional[list[int]] = None,
     chunk_size: Optional[int] = None,
     chunk_bytes: Optional[Union[int, str]] = None,
-    align_chunking: Optional[bool] = False,
+    align_chunking: bool = False,
     compression: Optional[str] = None,
     encryption: Optional[Encryption] = None,
     num_workers: Optional[int] = None,
