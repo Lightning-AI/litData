@@ -303,8 +303,12 @@ def _map_items_to_workers_sequentially(
     num_workers: int, user_items: list[Any], align_chunking: Optional[int] = None
 ) -> list[list[Any]]:
     """Map the items to the workers sequentially.
+
+    Args:
+        num_workers: The number of workers to assign items to.
+        user_items: The list of items to be distributed among workers.
         align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first.
-        Each worker will receive chunks of this size, except possibly the last worker which may receive a smaller chunk.
+            Each worker will receive chunks of this size, except possibly the last worker which may receive a smaller chunk.
 
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
     >>> assert workers_user_items == [[0, 1], [2, 3, 4]]
