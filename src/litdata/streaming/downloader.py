@@ -597,7 +597,7 @@ class HFDownloader(Downloader):
             downloaded_path = hf_hub_download(
                 repo_id,
                 path,
-                revision=splits[1] if len(splits)==2 else None,
+                revision=splits[1] if len(splits) == 2 else None,
                 cache_dir=tmpdir,
                 repo_type="dataset",
                 **self._storage_options,
