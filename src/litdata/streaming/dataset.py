@@ -441,10 +441,12 @@ class StreamingDataset(IterableDataset):
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
                     item = transform_fn(item)
+                    if item is None:
+                        break
             else:
                 item = self.transform(item)
 
-        return item
+        return item if item else self.__next__()
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)
