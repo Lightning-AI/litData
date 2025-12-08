@@ -324,13 +324,17 @@ def _map_items_to_workers_sequentially(
         assert isinstance(align_chunking, int), "align_chunking must be an integer"
         assert align_chunking > 0, "align_chunking must be a positive integer"
 
-        # minimum num of chunks expected per worker
-        min_chunks_per_worker = len(user_items) // (align_chunking * world_size)
-        last_worker_num_chunks = len(user_items) - (min_chunks_per_worker * align_chunking * (world_size - 1))
-        # so each worker will get at least these many chunks
-        num_items_per_worker = [align_chunking * min_chunks_per_worker for _ in range(world_size - 1)] + [
-            last_worker_num_chunks
-        ]
+        # Compute how many full chunks each worker can take
+        full_chunks = len(user_items) // align_chunking
+        chunks_per_worker = full_chunks // world_size
+
+        # Assign full chunks to all workers except the last
+        num_items_per_worker = [chunks_per_worker * align_chunking for _ in range(world_size - 1)]
+
+        # Last worker receives all remaining items (full chunks + optional tail)
+        remaining = len(user_items) - sum(num_items_per_worker)
+        num_items_per_worker.append(remaining)
+
     else:
         num_items_per_worker = len(user_items) // world_size
 
