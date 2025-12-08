@@ -378,9 +378,9 @@ def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
     assert workers_user_items == [list(range(5))]
     workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
     assert workers_user_items == [[0, 1], [2, 3, 4]]
-
     workers_user_items = _map_items_to_workers_sequentially(2, list(range(6)), align_chunking=2)
     assert workers_user_items == [[0, 1], [2, 3, 4, 5]]
+
     monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
     monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
     with pytest.raises(RuntimeError, match="open an issue on GitHub"):
