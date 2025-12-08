@@ -308,7 +308,8 @@ def _map_items_to_workers_sequentially(
         num_workers: The number of workers to assign items to.
         user_items: The list of items to be distributed among workers.
         align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first.
-            Each worker will receive chunks of this size, except possibly the last worker which may receive a smaller chunk.
+            Each worker will receive chunks of this size,
+            except possibly the last worker which may receive a smaller chunk.
 
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
     >>> assert workers_user_items == [[0, 1], [2, 3, 4]]
@@ -1267,12 +1268,14 @@ class DataProcessor:
                     num_workers=self.num_workers, user_items=user_items, weights=item_sizes
                 )
             else:
+                if self.align_chunking and data_recipe.chunk_size is None:
+                    raise ValueError(
+                        "`align_chunking` is set to True, but the `chunk_size` is not defined in the data recipe."
+                    )
                 workers_user_items = _map_items_to_workers_sequentially(
                     num_workers=self.num_workers,
                     user_items=user_items,
-                    align_chunking=data_recipe.chunk_size
-                    if self.align_chunking and data_recipe.chunk_size is not None
-                    else None,
+                    align_chunking=data_recipe.chunk_size if self.align_chunking else None,
                 )
         else:
             assert isinstance(user_items, multiprocessing.queues.Queue)

@@ -493,6 +493,9 @@ def optimize(
     if chunk_size is None and chunk_bytes is None:
         raise ValueError("Either `chunk_size` or `chunk_bytes` needs to be defined.")
 
+    if align_chunking and chunk_size is None:
+        raise ValueError("When `align_chunking` is set to True, `chunk_size` needs to be defined.")
+
     if not _IS_IN_STUDIO and (machine is not None or num_nodes is not None):
         raise ValueError(
             "Only https://lightning.ai/ supports multiple nodes or selecting a machine.Create an account to try it out."
