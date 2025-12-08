@@ -325,7 +325,6 @@ def _map_items_to_workers_sequentially(
                 "If you need multi-node support, feel free to open an issue on GitHub."
             )
 
-        assert isinstance(align_chunking, int), "align_chunking must be an integer"
         assert align_chunking > 0, "align_chunking must be a positive integer"
 
         # Compute how many full chunks each worker can take
