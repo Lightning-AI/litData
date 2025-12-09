@@ -6,6 +6,7 @@ import torch
 from torch import tensor
 
 from litdata.constants import _VIZ_TRACKER_AVAILABLE
+from litdata.processing.functions import optimize
 from litdata.streaming import (
     Cache,
     CombinedStreamingDataset,
@@ -496,3 +497,33 @@ def test_dataloader_dataset_transform_inheritance(tmpdir, shuffle):
     # Verify that the transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+def getter(index: int):
+    return torch.Tensor(torch.full((4096, 128), index, dtype=torch.long))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+@pytest.mark.parametrize("num_workers", [1, 2])
+def test_dataloader_with_align_chunking(tmp_path, num_workers):
+    output_dir = tmp_path / f"output_workers_{num_workers}"
+
+    optimize(
+        fn=getter,
+        inputs=list(range(7 * 64)),
+        chunk_size=64,
+        output_dir=str(output_dir),
+        num_workers=num_workers,
+        align_chunking=True,
+    )
+
+    # Ensure batches contain elements from the same chunk when using align_chunking
+    dataset = StreamingDataset(str(output_dir), shuffle=True)
+    dataloader = StreamingDataLoader(dataset, batch_size=64, num_workers=num_workers, shuffle=True)
+    for i, batch in enumerate(dataloader):
+        index = batch[:, 0, 0]
+        min_element_in_batch = torch.min(index).item()
+        max_element_in_batch = torch.max(index).item()
+        assert max_element_in_batch - min_element_in_batch < 64, (
+            f"Batch {i} contains elements from multiple chunks: min {min_element_in_batch}, max {max_element_in_batch}"
+        )

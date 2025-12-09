@@ -414,6 +414,16 @@ class CustomDataChunkRecipe(DataChunkRecipe):
         return item
 
 
+class DummyDataChunkRecipe(DataChunkRecipe):
+    is_generator = False
+
+    def prepare_structure(self, input_dir: str) -> list[Any]:
+        return []
+
+    def prepare_item(self, item):
+        return item
+
+
 @pytest.mark.parametrize("delete_cached_files", [True])
 @pytest.mark.parametrize("fast_dev_run", [10])
 @pytest.mark.skipif(condition=not _PIL_AVAILABLE or sys.platform == "win32", reason="Requires: ['pil']")
@@ -489,6 +499,17 @@ def test_data_processsor(fast_dev_run, delete_cached_files, tmpdir, monkeypatch)
 
     expected = (0 if delete_cached_files else 20) if fast_dev_run == 10 else (0 if delete_cached_files else 30)
     assert len(files) == expected
+
+
+def test_data_processor_align_chunking_requires_chunk_size(tmpdir):
+    output_dir = str(tmpdir / "output_dir")
+    data_processor = DataProcessor(input_dir=Dir(), output_dir=output_dir, num_workers=1, align_chunking=True)
+    with pytest.raises(ValueError, match="`chunk_size` is not defined in the data recipe"):
+        data_processor.run(
+            DummyDataChunkRecipe(
+                chunk_bytes="10MB"  # chunk_size is not defined here to trigger the error
+            )
+        )
 
 
 class TestDataProcessor(DataProcessor):

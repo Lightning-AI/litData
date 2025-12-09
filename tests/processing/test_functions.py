@@ -104,6 +104,10 @@ def compress(index):
     return index, index**2
 
 
+def getter(index: int):
+    return torch.Tensor(torch.full((4096, 128), index, dtype=torch.long))
+
+
 def different_compress(index):
     return index, index**2, index**3
 
@@ -121,6 +125,54 @@ def another_fn(i: int):
 def random_image(index):
     fake_img = Image.fromarray(np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8))
     return {"image": fake_img, "class": index}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+def test_optimize_align_chunking_requires_chunk_size(tmp_path):
+    output_dir = tmp_path / "output_requires_chunk_size"
+
+    with pytest.raises(ValueError, match="`chunk_size` needs to be defined"):
+        optimize(
+            fn=getter,
+            inputs=list(range(7 * 64)),
+            chunk_bytes="1MB",
+            output_dir=str(output_dir),
+            num_workers=1,
+            align_chunking=True,
+        )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+@pytest.mark.parametrize(
+    ("num_workers", "expected_worker_chunks"),
+    [
+        # num_workers = 1 => worker 0 writes 7 chunks: chunk-0-0.bin .. chunk-0-6.bin
+        (1, {0: range(7)}),
+        # num_workers = 2 => worker 0 writes 3 chunks, worker 1 writes 4 chunks
+        (2, {0: range(3), 1: range(4)}),
+    ],
+)
+def test_optimize_align_chunking_creates_expected_chunks(tmp_path, num_workers, expected_worker_chunks):
+    output_dir = tmp_path / f"output_workers_{num_workers}"
+
+    optimize(
+        fn=getter,
+        inputs=list(range(7 * 64)),
+        chunk_size=64,
+        output_dir=str(output_dir),
+        num_workers=num_workers,
+        align_chunking=True,
+    )
+
+    assert output_dir.exists()
+
+    actual_files = set(os.listdir(output_dir))
+    expected_chunk_files = {
+        f"chunk-{worker_id}-{i}.bin" for worker_id, indices in expected_worker_chunks.items() for i in indices
+    }
+    expected_files = expected_chunk_files | {"index.json"}
+
+    assert actual_files == expected_files
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
