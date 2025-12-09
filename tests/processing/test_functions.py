@@ -1,5 +1,6 @@
 import glob
 import io
+import math
 import os
 import random
 import shutil
@@ -104,10 +105,6 @@ def compress(index):
     return index, index**2
 
 
-def getter(index: int):
-    return torch.Tensor(torch.full((4096, 128), index, dtype=torch.long))
-
-
 def different_compress(index):
     return index, index**2, index**3
 
@@ -133,7 +130,7 @@ def test_optimize_align_chunking_requires_chunk_size(tmp_path):
 
     with pytest.raises(ValueError, match="`chunk_size` needs to be defined"):
         optimize(
-            fn=getter,
+            fn=compress,
             inputs=list(range(7 * 64)),
             chunk_bytes="1MB",
             output_dir=str(output_dir),
@@ -143,22 +140,17 @@ def test_optimize_align_chunking_requires_chunk_size(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
-@pytest.mark.parametrize(
-    ("num_workers", "expected_worker_chunks"),
-    [
-        # num_workers = 1 => worker 0 writes 7 chunks: chunk-0-0.bin .. chunk-0-6.bin
-        (1, {0: range(7)}),
-        # num_workers = 2 => worker 0 writes 3 chunks, worker 1 writes 4 chunks
-        (2, {0: range(3), 1: range(4)}),
-    ],
-)
-def test_optimize_align_chunking_creates_expected_chunks(tmp_path, num_workers, expected_worker_chunks):
+@pytest.mark.parametrize("num_workers", [1, 2])
+@pytest.mark.parametrize("chunk_size", [16, 32, 64])
+def test_optimize_align_chunking_creates_expected_chunks(tmp_path, chunk_size, num_workers):
     output_dir = tmp_path / f"output_workers_{num_workers}"
 
+    inputs = list(range(7 * 64))
+
     optimize(
-        fn=getter,
-        inputs=list(range(7 * 64)),
-        chunk_size=64,
+        fn=compress,
+        inputs=inputs,
+        chunk_size=chunk_size,
         output_dir=str(output_dir),
         num_workers=num_workers,
         align_chunking=True,
@@ -167,8 +159,20 @@ def test_optimize_align_chunking_creates_expected_chunks(tmp_path, num_workers, 
     assert output_dir.exists()
 
     actual_files = set(os.listdir(output_dir))
+
+    total_items = len(inputs)
+    items_per_worker = total_items / num_workers
+    chunks_per_worker = items_per_worker / chunk_size
+
+    # each worker should create `math.floor(chunks_per_worker)` chunks,
+    # except the last worker which will create the chunk with remaining items `math.ceil(chunks_per_worker)`
+    expected_chunks_by_worker = {
+        worker_id: (math.floor(chunks_per_worker) if worker_id < num_workers - 1 else math.ceil(chunks_per_worker))
+        for worker_id in range(num_workers)
+    }
+
     expected_chunk_files = {
-        f"chunk-{worker_id}-{i}.bin" for worker_id, indices in expected_worker_chunks.items() for i in indices
+        f"chunk-{worker_id}-{i}.bin" for worker_id, indices in expected_chunks_by_worker.items() for i in range(indices)
     }
     expected_files = expected_chunk_files | {"index.json"}
 

@@ -23,6 +23,7 @@ import signal
 import sys
 import tempfile
 import traceback
+import warnings
 from abc import abstractmethod
 from contextlib import suppress
 from dataclasses import dataclass
@@ -319,6 +320,7 @@ def _map_items_to_workers_sequentially(
     assert isinstance(chunk_size, (int, type(None))), "chunk_size must be an integer or None"
 
     num_nodes = _get_num_nodes()
+    node_rank = _get_node_rank()
     world_size = num_nodes * num_workers
 
     if chunk_size is not None:
@@ -327,6 +329,13 @@ def _map_items_to_workers_sequentially(
         # Compute how many full chunks each worker can take
         full_chunks = len(user_items) // chunk_size
         chunks_per_worker = full_chunks // world_size
+
+        if chunks_per_worker == 0 and node_rank == 0:
+            warnings.warn(
+                f"chunk_size ({chunk_size}) is too large relative to dataset size ({len(user_items)}) "
+                f"and world_size ({world_size}). This will result in idle workers. "
+                f"Consider reducing chunk_size or using fewer workers."
+            )
 
         # Assign full chunks to all workers except the last
         num_items_per_worker = [chunks_per_worker * chunk_size for _ in range(world_size - 1)]
@@ -350,7 +359,6 @@ def _map_items_to_workers_sequentially(
     num_items_cumsum_per_worker = np.cumsum([0] + num_items_per_worker)
 
     out = []
-    node_rank = _get_node_rank()
     worker_idx_start = node_rank * num_workers
     worker_idx_end = (node_rank + 1) * num_workers
 

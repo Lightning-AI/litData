@@ -389,7 +389,8 @@ def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
     # 2 nodes, 2 workers per node, chunk_size=2.
     # Total items = 5 => only the final worker should receive them,
     # because no worker except the last can form even one full chunk. (5/ (2*2*2) = 0.625 ~ 0)
-    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), chunk_size=2)
+    with pytest.warns(UserWarning, match="Consider reducing chunk_size or using fewer workers"):
+        workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), chunk_size=2)
     assert workers_user_items == [[], []]
 
     monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")

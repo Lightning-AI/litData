@@ -500,7 +500,7 @@ def test_dataloader_dataset_transform_inheritance(tmpdir, shuffle):
 
 
 def getter(index: int):
-    return torch.Tensor(torch.full((4096, 128), index, dtype=torch.long))
+    return index
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
@@ -519,11 +519,13 @@ def test_dataloader_with_align_chunking(tmp_path, num_workers):
 
     # Ensure batches contain elements from the same chunk when using align_chunking
     dataset = StreamingDataset(str(output_dir), shuffle=True)
+
+    # make sure batch_size of dataloader is equal to chunk_size used during optimize
     dataloader = StreamingDataLoader(dataset, batch_size=64, num_workers=num_workers, shuffle=True)
+
     for i, batch in enumerate(dataloader):
-        index = batch[:, 0, 0]
-        min_element_in_batch = torch.min(index).item()
-        max_element_in_batch = torch.max(index).item()
+        min_element_in_batch = torch.min(batch).item()
+        max_element_in_batch = torch.max(batch).item()
         assert max_element_in_batch - min_element_in_batch < 64, (
             f"Batch {i} contains elements from multiple chunks: min {min_element_in_batch}, max {max_element_in_batch}"
         )

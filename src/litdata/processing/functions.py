@@ -431,7 +431,8 @@ def optimize(
         chunk_bytes: The maximum number of bytes to hold within a chunk.
         align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first
             and placing all remaining items in the final worker. Each worker will receive chunks of this size,
-            except possibly the last worker which may receive a smaller chunk.
+            except possibly the last worker which may receive a smaller chunk. Note: this will result in uneven
+            workload distribution among workers, and last worker may receive more data than others.
         compression: The compression algorithm to use over the chunks.
         encryption: The encryption algorithm to use over the chunks.
         num_workers: The number of workers to use during processing
