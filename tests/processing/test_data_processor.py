@@ -386,8 +386,9 @@ def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
     workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), align_chunking=2)
     assert workers_user_items == [[0, 1]]
 
-    # 2 nodes, 2 workers, 2 chunk size => so each worker should form (5 / 2*2*2) = 0 full chunks
-    # and, the last node's last worker should form a single chunk with all items
+    # 2 nodes, 2 workers per node, chunk_size=2.
+    # Total items = 5 => only the final worker should receive them,
+    # because no worker except the last can form even one full chunk. (5/ (2*2*2) = 0.625 ~ 0)
     workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
     assert workers_user_items == [[], []]
 
@@ -395,6 +396,8 @@ def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
     monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
     workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), align_chunking=2)
     assert workers_user_items == [[2, 3, 4]]
+
+    # On node 1 (rank 1), last worker should receive all items.
     workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
     assert workers_user_items == [[], [0, 1, 2, 3, 4]]
 
