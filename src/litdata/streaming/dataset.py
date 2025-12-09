@@ -13,6 +13,7 @@
 
 import logging
 import os
+from inspect import signature
 from time import time
 from typing import Any, Callable, Optional, Union
 
@@ -62,6 +63,7 @@ class StreamingDataset(IterableDataset):
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
         transform: Optional[Union[Callable, list[Callable]]] = None,
+        sample_count: int = 1,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -89,6 +91,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
+            sample_count: Number of samples to return for each index access.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -202,12 +205,27 @@ class StreamingDataset(IterableDataset):
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
+        self.sample_count = sample_count
         if transform is not None:
             transform = transform if isinstance(transform, list) else [transform]
             for t in transform:
                 if not callable(t):
                     raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
+
+        # define invalid transform conditions for multisample case
+        invalid_transform = self.sample_count > 1 and (
+            not hasattr(self, "transform")
+            or len(self.transform) > 1
+            or "sample_idx" not in signature(self.transform[0]).parameters
+        )
+        if invalid_transform:
+            logger.warning(
+                "Invalid transform configuration detected. "
+                "Either no transform, multiple transforms, or missing `sample_idx` parameter. "
+                "Reverting `sample_count` to 1 and returning data as-is."
+            )
+            self.sample_count = 1
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
     @property
@@ -282,7 +300,7 @@ class StreamingDataset(IterableDataset):
         return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
 
     def __len__(self) -> int:
-        return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
+        return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1) * self.sample_count
 
     def set_batch_size(self, batch_size: int) -> None:
         self.batch_size = batch_size
@@ -324,7 +342,7 @@ class StreamingDataset(IterableDataset):
         self.worker_intervals = workers_intervals[worker_rank]
 
         # The max number of samples to return from `__next__` (in worker)
-        self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
+        self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals) * self.sample_count
 
         # Handle restart
         if self._state_dict:
@@ -407,7 +425,9 @@ class StreamingDataset(IterableDataset):
 
         # replay the indexes for the current chunks
         interval = self.worker_intervals[self.worker_next_chunk_index]
-        current_indexes = np.arange(interval[1], interval[2])
+
+        # multiply the interval by the sample_count for multisample case
+        current_indexes = np.arange(interval[1] * self.sample_count, interval[2] * self.sample_count)
 
         # re-shuffle the indexes
         current_indexes = self.shuffler(
@@ -424,6 +444,17 @@ class StreamingDataset(IterableDataset):
         self.worker_next_chunk_index += 1
 
     def __getitem__(self, index: Union[ChunkedIndex, int, slice]) -> Any:
+        # Deflate index for multisample case
+        if self.sample_count > 1:
+            if isinstance(index, int):
+                sample_idx = index % self.sample_count
+                index = index // self.sample_count
+            elif isinstance(index, ChunkedIndex):
+                sample_idx = index.index % self.sample_count
+                index.index = index.index // self.sample_count
+            else:
+                raise ValueError("Slices are not supported when using `sample_count > 1`.")
+
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -437,10 +468,11 @@ class StreamingDataset(IterableDataset):
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
             return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
         item = self.cache[index]
+
         if hasattr(self, "transform"):
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
-                    item = transform_fn(item)
+                    item = transform_fn(item) if self.sample_count == 1 else transform_fn(item, sample_idx)
             else:
                 item = self.transform(item)
 
@@ -476,7 +508,9 @@ class StreamingDataset(IterableDataset):
 
             # `next_worker_chunks_index` is the index of the chunk that we will be working on now
             interval = self.worker_intervals[self.worker_next_chunk_index]
-            current_indexes = np.arange(interval[1], interval[2])
+
+            # current_indexes = np.arange(interval[1] * self.multisample_factor, interval[2] * self.multisample_factor)
+            current_indexes = np.arange(interval[1] * self.sample_count, interval[2] * self.sample_count)
 
             assert self.shuffler is not None
             assert self.num_chunks is not None

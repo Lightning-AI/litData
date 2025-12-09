@@ -1082,6 +1082,44 @@ dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuf
 
 </details>
 
+
+<details>
+  <summary> ✅ Multi-Sample Transform datasets while Streaming <a id="multi-sample" href="#multi-sample">🔗</a> </summary>
+&nbsp;
+
+Sometimes you need to return a sub-sample batch for a given batch while adding subtle variations to the samples. The multi-sample feature allows you to apply multi-sample transformation while streaming, without the need to store intermediate results.
+
+```python
+def transform_fn(x, sample_idx):
+    """
+    Apply different rotation for each sample based on sample_idx.
+    """
+
+    angles = [0, 15, -15, 30] 
+    angle = angles[sample_idx % len(angles)] 
+
+    torch_transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.Lambda(lambda x: transforms.functional.rotate(x, angle)),  # apply rotation
+        transforms.ToTensor(),               
+        transforms.Normalize(                
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+    return torch_transform(x)
+
+dataset = StreamingDataset(
+data_dir,
+cache_dir=str(cache_dir),
+shuffle=False,
+transform=[transform_fn],
+sample_count=4 # Generate 4 transformed samples per input
+)
+```
+
+</details>
+
 <details>
   <summary> ✅ Split datasets for train, val, test <a id="split-datasets" href="#split-datasets">🔗</a> </summary>
 
