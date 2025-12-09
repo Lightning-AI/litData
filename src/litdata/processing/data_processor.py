@@ -300,14 +300,14 @@ def _upload_fn(
 
 
 def _map_items_to_workers_sequentially(
-    num_workers: int, user_items: list[Any], align_chunking: Optional[int] = None
+    num_workers: int, user_items: list[Any], chunk_size: Optional[int] = None
 ) -> list[list[Any]]:
     """Map the items to the workers sequentially.
 
     Args:
         num_workers: The number of workers to assign items to.
         user_items: The list of items to be distributed among workers.
-        align_chunking: Optional `chunk size` that enforces deterministic,
+        chunk_size: Optional `chunk size` that enforces deterministic,
             single-worker-style chunk boundaries. When set, each worker is
             assigned only full chunks of this size, and the final worker
             receives any remaining items (which may form a partial chunk).
@@ -316,20 +316,20 @@ def _map_items_to_workers_sequentially(
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
     >>> assert workers_user_items == [[0, 1], [2, 3, 4]]
     """
-    assert isinstance(align_chunking, (int, type(None))), "align_chunking must be an integer or None"
+    assert isinstance(chunk_size, (int, type(None))), "chunk_size must be an integer or None"
 
     num_nodes = _get_num_nodes()
     world_size = num_nodes * num_workers
 
-    if align_chunking is not None:
-        assert align_chunking > 0, "align_chunking must be a positive integer"
+    if chunk_size is not None:
+        assert chunk_size > 0, "chunk_size must be a positive integer"
 
         # Compute how many full chunks each worker can take
-        full_chunks = len(user_items) // align_chunking
+        full_chunks = len(user_items) // chunk_size
         chunks_per_worker = full_chunks // world_size
 
         # Assign full chunks to all workers except the last
-        num_items_per_worker = [chunks_per_worker * align_chunking for _ in range(world_size - 1)]
+        num_items_per_worker = [chunks_per_worker * chunk_size for _ in range(world_size - 1)]
 
         # Last worker receives all remaining items (full chunks + optional tail)
         remaining = len(user_items) - sum(num_items_per_worker)
@@ -1271,7 +1271,7 @@ class DataProcessor:
                 workers_user_items = _map_items_to_workers_sequentially(
                     num_workers=self.num_workers,
                     user_items=user_items,
-                    align_chunking=data_recipe.chunk_size if self.align_chunking else None,
+                    chunk_size=data_recipe.chunk_size if self.align_chunking else None,
                 )
         else:
             assert isinstance(user_items, multiprocessing.queues.Queue)
