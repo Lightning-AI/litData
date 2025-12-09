@@ -322,12 +322,6 @@ def _map_items_to_workers_sequentially(
     world_size = num_nodes * num_workers
 
     if align_chunking is not None:
-        if num_nodes > 1:
-            raise RuntimeError(
-                "align_chunking is currently limited to single-node execution. "
-                "If you need multi-node support, feel free to open an issue on GitHub."
-            )
-
         assert align_chunking > 0, "align_chunking must be a positive integer"
 
         # Compute how many full chunks each worker can take

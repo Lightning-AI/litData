@@ -383,8 +383,20 @@ def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
 
     monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
     monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
-    with pytest.raises(RuntimeError, match="open an issue on GitHub"):
-        _map_items_to_workers_sequentially(1, list(range(32)), align_chunking=2)
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), align_chunking=2)
+    assert workers_user_items == [[0, 1]]
+
+    # 2 nodes, 2 workers, 2 chunk size => so each worker should form (5 / 2*2*2) = 0 full chunks
+    # and, the last node's last worker should form a single chunk with all items
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
+    assert workers_user_items == [[], []]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), align_chunking=2)
+    assert workers_user_items == [[2, 3, 4]]
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), align_chunking=2)
+    assert workers_user_items == [[], [0, 1, 2, 3, 4]]
 
 
 def test_fake_queue():
