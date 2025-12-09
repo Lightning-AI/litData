@@ -20,7 +20,7 @@ from datetime import datetime
 from io import BytesIO, FileIO
 from multiprocessing import Queue
 from time import sleep, time
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -52,8 +52,8 @@ class BaseItemLoader(ABC):
         config: dict,
         chunks: list,
         serializers: dict[str, Serializer],
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
-        force_download_queue: Optional[Queue] = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
+        force_download_queue: "Queue | None" = None,
     ) -> None:
         self._config = config
         self._chunks = chunks
@@ -176,7 +176,7 @@ class PyTreeLoader(BaseItemLoader):
         chunk_filepath: str,
         begin: int,
         filesize_bytes: int,
-        encryption: Optional[Encryption] = None,
+        encryption: Encryption | None = None,
     ) -> bytes:
         #
         # Let's say, a chunk contains items from [5,9] index.
@@ -248,7 +248,7 @@ class PyTreeLoader(BaseItemLoader):
         return item_data
 
     def _load_encrypted_data(
-        self, chunk_filepath: str, chunk_index: int, offset: int, encryption: Optional[Encryption]
+        self, chunk_filepath: str, chunk_index: int, offset: int, encryption: Encryption | None
     ) -> bytes:
         """Load and decrypt data from chunk based on the encryption configuration."""
         # Validate the provided encryption object against the expected configuration.
@@ -277,7 +277,7 @@ class PyTreeLoader(BaseItemLoader):
 
         return data
 
-    def _load_data(self, fp: Union[FileIO, BytesIO], offset: int) -> bytes:
+    def _load_data(self, fp: FileIO | BytesIO, offset: int) -> bytes:
         """Load the data from the file pointer."""
         fp.seek(offset)  # move the file pointer to the offset
 
@@ -353,7 +353,7 @@ class PyTreeLoader(BaseItemLoader):
             )
         )
 
-    def _validate_encryption(self, encryption: Optional[Encryption]) -> None:
+    def _validate_encryption(self, encryption: Encryption | None) -> None:
         """Validate the encryption object."""
         if not encryption:
             raise ValueError("Data is encrypted but no encryption object was provided.")
@@ -363,7 +363,7 @@ class PyTreeLoader(BaseItemLoader):
             raise ValueError("Encryption level mismatch.")
 
     @classmethod
-    def encode_data(cls, data: list[bytes], sizes: list[int], flattened: list[Any]) -> tuple[bytes, Optional[int]]:
+    def encode_data(cls, data: list[bytes], sizes: list[int], flattened: list[Any]) -> tuple[bytes, int | None]:
         """Encodes multiple serialized objects into a single binary format with size metadata.
 
         This method combines multiple serialized objects into a single byte array, prefixed with their sizes.
@@ -400,7 +400,7 @@ class PyTreeLoader(BaseItemLoader):
 
 
 class TokensLoader(BaseItemLoader):
-    def __init__(self, block_size: Optional[int] = None):
+    def __init__(self, block_size: int | None = None):
         """The Tokens Loader is an optimizer item loader for NLP.
 
         Args:
@@ -413,7 +413,7 @@ class TokensLoader(BaseItemLoader):
         self._buffers: dict[int, bytes] = {}
         # keeps track of number of readers for each chunk (can be more than 1 if multiple workers are reading)
         self._counter = defaultdict(int)
-        self._dtype: Optional[torch.dtype] = None
+        self._dtype: torch.dtype | None = None
         self._chunk_filepaths: dict[str, bool] = {}
 
     def state_dict(self) -> dict:
@@ -427,7 +427,7 @@ class TokensLoader(BaseItemLoader):
         config: dict,
         chunks: list,
         serializers: dict[str, Serializer],
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
     ) -> None:
         super().setup(config, chunks, serializers, region_of_interest)
 
@@ -580,7 +580,7 @@ class TokensLoader(BaseItemLoader):
                 del self._mmaps[chunk_index]
 
     @classmethod
-    def encode_data(cls, data: list[bytes], _: list[int], flattened: list[Any]) -> tuple[bytes, Optional[int]]:
+    def encode_data(cls, data: list[bytes], _: list[int], flattened: list[Any]) -> tuple[bytes, int | None]:
         r"""Encodes tokenized data into a raw byte format while preserving dimensional information.
 
         Parameters:
@@ -631,7 +631,7 @@ class ParquetLoader(BaseItemLoader):
         config: dict,
         chunks: list,
         serializers: dict[str, Serializer],
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
     ) -> None:
         self._config = config
         self._chunks = chunks

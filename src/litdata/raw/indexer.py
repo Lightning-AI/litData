@@ -18,7 +18,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from litdata.constants import _FSSPEC_AVAILABLE, _PYTHON_GREATER_EQUAL_3_14, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
@@ -47,14 +47,14 @@ class BaseIndexer(ABC):
     """Abstract base class for file indexing strategies."""
 
     @abstractmethod
-    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any] | None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
 
     def build_or_load_index(
         self,
         input_dir: str,
         cache_dir: str,
-        storage_options: Optional[dict[str, Any]],
+        storage_options: dict[str, Any] | None,
         recompute_index: bool = False,
     ) -> list[FileMetadata]:
         """Loads or builds a ZSTD-compressed index of dataset file metadata.
@@ -95,8 +95,8 @@ class BaseIndexer(ABC):
         return self._build_and_cache_index(input_dir, cache_dir, storage_options)
 
     def _load_index_from_cache(
-        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
-    ) -> Optional[list[FileMetadata]]:
+        self, input_dir: str, cache_dir: str, storage_options: dict[str, Any] | None
+    ) -> list[FileMetadata] | None:
         """Tries to load the index from local or remote cache."""
         # 1. Try to load index from local cache.
         local_index_path = Path(cache_dir) / _INDEX_FILENAME
@@ -123,7 +123,7 @@ class BaseIndexer(ABC):
         return None
 
     def _build_and_cache_index(
-        self, input_dir: str, cache_dir: str, storage_options: Optional[dict[str, Any]]
+        self, input_dir: str, cache_dir: str, storage_options: dict[str, Any] | None
     ) -> list[FileMetadata]:
         """Builds a new index and caches it locally and remotely."""
         local_index_path = Path(cache_dir) / _INDEX_FILENAME
@@ -145,7 +145,7 @@ class BaseIndexer(ABC):
         logger.info(f"Built index with {len(files)} files from {input_dir} at {local_index_path}")
         return files
 
-    def _load_index_file(self, index_path: str) -> Optional[list[FileMetadata]]:
+    def _load_index_file(self, index_path: str) -> list[FileMetadata] | None:
         """Loads and decodes an index file."""
         if _PYTHON_GREATER_EQUAL_3_14:
             from compression import zstd
@@ -187,7 +187,7 @@ class BaseIndexer(ABC):
         self,
         remote_path: str,
         local_path: str,
-        storage_options: Optional[dict[str, Any]],
+        storage_options: dict[str, Any] | None,
     ) -> None:
         """Downloads a file from cloud storage."""
         if not _FSSPEC_AVAILABLE:
@@ -202,7 +202,7 @@ class BaseIndexer(ABC):
         self,
         local_path: str,
         remote_path: str,
-        storage_options: Optional[dict[str, Any]],
+        storage_options: dict[str, Any] | None,
     ) -> None:
         """Uploads a file to cloud storage."""
         if not _FSSPEC_AVAILABLE:
@@ -220,12 +220,12 @@ class FileIndexer(BaseIndexer):
     def __init__(
         self,
         max_depth: int = 5,
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
     ):
         self.max_depth = max_depth
         self.extensions = [ext.lower() for ext in (extensions or [])]
 
-    def discover_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def discover_files(self, input_dir: str, storage_options: dict[str, Any] | None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
         parsed_url = urlparse(input_dir)
         if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
@@ -240,7 +240,7 @@ class FileIndexer(BaseIndexer):
         # Local filesystem
         return self._discover_local_files(input_dir)
 
-    def _discover_cloud_files(self, input_dir: str, storage_options: Optional[dict[str, Any]]) -> list[FileMetadata]:
+    def _discover_cloud_files(self, input_dir: str, storage_options: dict[str, Any] | None) -> list[FileMetadata]:
         """Recursively list files in a cloud storage bucket."""
         import fsspec
 

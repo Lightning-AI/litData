@@ -14,9 +14,10 @@
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from torch.utils.data import Dataset
 
@@ -33,9 +34,9 @@ class CacheManager:
 
     def __init__(
         self,
-        input_dir: Union[str, Dir],
-        cache_dir: Optional[str] = None,
-        storage_options: Optional[dict] = None,
+        input_dir: str | Dir,
+        cache_dir: str | None = None,
+        storage_options: dict | None = None,
         cache_files: bool = False,
     ):
         self.input_dir = _resolve_dir(input_dir)
@@ -45,7 +46,7 @@ class CacheManager:
         self.cache_dir = self._create_cache_dir(self._input_dir_path, cache_dir)
 
         self.storage_options = storage_options or {}
-        self._downloader: Optional[Downloader] = None
+        self._downloader: Downloader | None = None
 
     @property
     def downloader(self) -> Downloader:
@@ -59,7 +60,7 @@ class CacheManager:
             )
         return self._downloader
 
-    def _create_cache_dir(self, input_dir: str, cache_dir: Optional[str] = None) -> str:
+    def _create_cache_dir(self, input_dir: str, cache_dir: str | None = None) -> str:
         """Create cache directory if it doesn't exist."""
         if cache_dir is None:
             cache_dir = get_default_cache_dir()
@@ -104,12 +105,12 @@ class StreamingRawDataset(Dataset):
     def __init__(
         self,
         input_dir: str,
-        cache_dir: Optional[str] = None,
-        indexer: Optional[BaseIndexer] = None,
-        storage_options: Optional[dict] = None,
+        cache_dir: str | None = None,
+        indexer: BaseIndexer | None = None,
+        storage_options: dict | None = None,
         cache_files: bool = False,
         recompute_index: bool = False,
-        transform: Optional[Callable[[Union[bytes, list[bytes]]], Any]] = None,
+        transform: Callable[[bytes | list[bytes]], Any] | None = None,
     ):
         """Initialize StreamingRawDataset.
 
@@ -142,12 +143,12 @@ class StreamingRawDataset(Dataset):
         logger.info(f"Discovered {len(self.files)} files.")
 
         # Transform the flat list of files into the desired item structure.
-        self.items: Union[list[FileMetadata], list[list[FileMetadata]]] = self.setup(self.files)
+        self.items: list[FileMetadata] | list[list[FileMetadata]] = self.setup(self.files)
         if not isinstance(self.items, list):
             raise TypeError(f"The setup method must return a list, but returned {type(self.items)}")
         logger.info(f"Dataset setup with {len(self.items)} items.")
 
-    def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
+    def setup(self, files: list[FileMetadata]) -> list[FileMetadata] | list[list[FileMetadata]]:
         """Define the structure of the dataset from the list of discovered files.
 
         Override this method in a subclass to group or filter files into final dataset items.

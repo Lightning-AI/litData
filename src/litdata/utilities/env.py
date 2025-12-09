@@ -12,7 +12,7 @@
 # limitations under the License.
 
 import os
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import torch
 from torch.utils.data import get_worker_info as torch_get_worker_info
@@ -107,7 +107,7 @@ class _WorkerEnv:
         self.rank = rank
 
     @classmethod
-    def detect(cls, get_worker_info_fn: Optional[Callable] = None) -> "_WorkerEnv":
+    def detect(cls, get_worker_info_fn: Callable | None = None) -> "_WorkerEnv":
         """Automatically detects the number of workers and the current rank.
 
         .. note::
@@ -138,7 +138,7 @@ class Environment:
 
     """
 
-    def __init__(self, dist_env: Optional[_DistributedEnv], worker_env: Optional[_WorkerEnv]):
+    def __init__(self, dist_env: _DistributedEnv | None, worker_env: _WorkerEnv | None):
         self.worker_env = worker_env
         self.dist_env = dist_env
 

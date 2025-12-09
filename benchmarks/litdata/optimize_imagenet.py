@@ -10,7 +10,6 @@ import json
 import os
 import time
 from functools import lru_cache, partial
-from typing import Union
 
 import numpy as np
 import requests
@@ -126,7 +125,7 @@ def main():
     seed_everything(args.seed)
 
     # Handle resize_size: if two ints are given, treat as tuple, else int or None
-    resize_size: Union[int, tuple[int, int], None] = None
+    resize_size: int | tuple[int, int] | None = None
     if args.resize_size is not None:
         if isinstance(args.resize_size, list):
             if len(args.resize_size) == 1:

@@ -15,10 +15,11 @@ import asyncio
 import inspect
 import logging
 import os
+from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
 from itertools import cycle
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import torch
 from torch.utils.data import Dataset, IterableDataset
@@ -76,9 +77,9 @@ class CacheDataset(Dataset):
         self,
         dataset: Any,
         cache_dir: str,
-        chunk_bytes: Optional[int],
-        chunk_size: Optional[int],
-        compression: Optional[str],
+        chunk_bytes: int | None,
+        chunk_size: int | None,
+        compression: str | None,
     ):
         """The `CacheDataset` is a dataset wrapper to provide a beginner experience with the Cache.
 
@@ -121,7 +122,7 @@ class CacheCollateFn:
 
     """
 
-    def __init__(self, collate_fn: Optional[Callable] = None) -> None:
+    def __init__(self, collate_fn: Callable | None = None) -> None:
         self.collate_fn = collate_fn or default_collate
 
     def __call__(self, items: list[Any]) -> Any:
@@ -263,18 +264,18 @@ class CacheDataLoader(DataLoader):
         self,
         dataset: Any,
         *args: Any,
-        sampler: Optional[Sampler] = None,
-        batch_sampler: Optional[BatchSampler] = None,
+        sampler: Sampler | None = None,
+        batch_sampler: BatchSampler | None = None,
         num_workers: int = 0,
         shuffle: bool = False,
-        generator: Optional[torch.Generator] = None,
-        batch_size: Optional[int] = None,
+        generator: torch.Generator | None = None,
+        batch_size: int | None = None,
         drop_last: bool = False,
-        cache_dir: Optional[str] = None,
-        chunk_bytes: Optional[int] = _DEFAULT_CHUNK_BYTES,
-        compression: Optional[str] = None,
+        cache_dir: str | None = None,
+        chunk_bytes: int | None = _DEFAULT_CHUNK_BYTES,
+        compression: str | None = None,
         profile: bool = False,
-        collate_fn: Optional[Callable] = None,
+        collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:
         if sampler:
@@ -385,7 +386,7 @@ def _wrapper(fetcher: Any, func: Callable, tracer: Any, profile: int, profile_di
 class _ProfileWorkerLoop:
     """Wrap the PyTorch DataLoader WorkerLoop to add profiling."""
 
-    def __init__(self, profile: Union[int, bool], skip_batches: int, profile_dir: Optional[str] = None):
+    def __init__(self, profile: int | bool, skip_batches: int, profile_dir: str | None = None):
         self._profile = profile
         self._skip_batches = skip_batches
         self._profile_dir = profile_dir if profile_dir else os.getcwd()
@@ -499,7 +500,7 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
 
 
 class StreamingDataLoaderCollateFn:
-    def __init__(self, collate_fn: Optional[Callable] = None) -> None:
+    def __init__(self, collate_fn: Callable | None = None) -> None:
         self.collate_fn = collate_fn or default_collate
 
     def __call__(self, items: list[Any]) -> Any:
@@ -575,17 +576,17 @@ class StreamingDataLoader(DataLoader):
 
     def __init__(
         self,
-        dataset: Union[StreamingDataset, _BaseStreamingDatasetWrapper],
+        dataset: StreamingDataset | _BaseStreamingDatasetWrapper,
         *args: Any,
         batch_size: int = 1,
         num_workers: int = 0,
-        profile_batches: Union[bool, int] = False,
+        profile_batches: bool | int = False,
         profile_skip_batches: int = 0,
-        profile_dir: Optional[str] = None,
-        prefetch_factor: Optional[int] = None,
-        shuffle: Optional[bool] = None,
-        drop_last: Optional[bool] = None,
-        collate_fn: Optional[Callable] = None,
+        profile_dir: str | None = None,
+        prefetch_factor: int | None = None,
+        shuffle: bool | None = None,
+        drop_last: bool | None = None,
+        collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
         if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
@@ -623,9 +624,9 @@ class StreamingDataLoader(DataLoader):
         self._num_samples_yielded_streaming = 0
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
-        self.rng_state: Optional[Any] = None
-        self._worker_idx: Optional[Any] = None  # Lazily initialized in __iter__
-        self._worker_idx_iter: Optional[Any] = None
+        self.rng_state: Any | None = None
+        self._worker_idx: Any | None = None  # Lazily initialized in __iter__
+        self._worker_idx_iter: Any | None = None
         self._latest_worker_idx = 0
         self.restore = False
         super().__init__(

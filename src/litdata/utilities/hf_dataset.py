@@ -3,7 +3,6 @@
 import os
 import shutil
 import tempfile
-from typing import Optional
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.writer import index_parquet_dataset
@@ -11,7 +10,7 @@ from litdata.utilities.dataset_utilities import _try_create_cache_dir, generate_
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
-def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
+def index_hf_dataset(dataset_url: str, cache_dir: str | None = None) -> str:
     """Indexes a Hugging Face dataset and returns the path to the cache directory.
 
     Args:
@@ -65,7 +64,7 @@ def index_hf_dataset(dataset_url: str, cache_dir: Optional[str] = None) -> str:
     return cache_dir
 
 
-def _get_existing_cache(dataset_url: str, cache_dir: Optional[str]) -> Optional[str]:
+def _get_existing_cache(dataset_url: str, cache_dir: str | None) -> str | None:
     """Checks if a cache directory with an index file exists for the given dataset URL.
 
     Args:

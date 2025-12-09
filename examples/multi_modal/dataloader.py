@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any, Union
+from typing import Any
 
 import joblib
 import lightning as pl
@@ -44,7 +44,7 @@ class EncoderAndTokenizer:
 class DocumentClassificationDataset(StreamingDataset):
     """Streaming dataset class."""
 
-    def __init__(self, input_dir: Union[str, Any], hyperparameters: Union[dict, Any] = None) -> None:
+    def __init__(self, input_dir: str | Any, hyperparameters: dict | Any = None) -> None:
         super().__init__(input_dir, shuffle=True, max_cache_size=hyperparameters["max_cache_size"])
         self.hyperparameters = hyperparameters
         self.image_transform = transforms.Compose(

@@ -14,7 +14,7 @@
 import logging
 import os
 from multiprocessing import Queue
-from typing import Any, Optional, Union
+from typing import Any
 
 from litdata.constants import (
     _INDEX_FILENAME,
@@ -35,21 +35,21 @@ logger = logging.Logger(__name__)
 class Cache:
     def __init__(
         self,
-        input_dir: Optional[Union[str, Dir]],
-        subsampled_files: Optional[list[str]] = None,
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
-        compression: Optional[str] = None,
-        encryption: Optional[Encryption] = None,
-        chunk_size: Optional[int] = None,
-        chunk_bytes: Optional[Union[int, str]] = None,
-        item_loader: Optional[BaseItemLoader] = None,
-        max_cache_size: Union[int, str] = "100GB",
-        serializers: Optional[dict[str, Serializer]] = None,
-        writer_chunk_index: Optional[int] = None,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        input_dir: str | Dir | None,
+        subsampled_files: list[str] | None = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
+        compression: str | None = None,
+        encryption: Encryption | None = None,
+        chunk_size: int | None = None,
+        chunk_bytes: int | str | None = None,
+        item_loader: BaseItemLoader | None = None,
+        max_cache_size: int | str = "100GB",
+        serializers: dict[str, Serializer] | None = None,
+        writer_chunk_index: int | None = None,
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
         max_pre_download: int = 2,
-        msg_queue: Optional[Queue] = None,
+        msg_queue: "Queue | None" = None,
         on_demand_bytes: bool = False,
     ):
         """The Cache enables to optimise dataset format for cloud training. This is done by grouping several elements
@@ -106,7 +106,7 @@ class Cache:
         )
         self._is_done = False
         self._distributed_env = _DistributedEnv.detect()
-        self._rank: Optional[int] = None
+        self._rank: int | None = None
 
     @property
     def rank(self) -> int:
@@ -144,25 +144,25 @@ class Cache:
         """Store an item in the writer."""
         self._writer[index] = data
 
-    def _add_item(self, index: int, data: Any) -> Optional[str]:
+    def _add_item(self, index: int, data: Any) -> str | None:
         """Store an item in the writer and optionally return the chunk path."""
         return self._writer.add_item(index, data)
 
-    def __getitem__(self, index: Union[int, ChunkedIndex]) -> dict[str, Any]:
+    def __getitem__(self, index: int | ChunkedIndex) -> dict[str, Any]:
         """Read an item in the reader."""
         if isinstance(index, int):
             index = ChunkedIndex(*self._get_chunk_index_from_index(index))
         return self._reader.read(index)
 
-    def done(self) -> Optional[list[str]]:
+    def done(self) -> list[str] | None:
         """Inform the writer the chunking phase is finished."""
         return self._writer.done()
 
-    def merge(self, num_workers: int = 1, node_rank: Optional[int] = None) -> None:
+    def merge(self, num_workers: int = 1, node_rank: int | None = None) -> None:
         """Inform the writer the chunking phase is finished."""
         self._writer.merge(num_workers, node_rank=node_rank)
 
-    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[dict[str, Any]] = None) -> None:
+    def _merge_no_wait(self, node_rank: int | None = None, existing_index: dict[str, Any] | None = None) -> None:
         """Inform the writer the chunking phase is finished."""
         self._writer._merge_no_wait(node_rank=node_rank, existing_index=existing_index)
 
@@ -175,6 +175,6 @@ class Cache:
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         return self._reader._get_chunk_index_from_index(index)
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> Optional[str]:
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
         """Save the current state of the writer to a checkpoint."""
         return self._writer.save_checkpoint(checkpoint_dir=checkpoint_dir)

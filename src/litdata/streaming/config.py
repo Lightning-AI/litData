@@ -35,12 +35,12 @@ class ChunksConfig:
         self,
         cache_dir: str,
         serializers: dict[str, Serializer],
-        remote_dir: Optional[str],
-        item_loader: Optional[BaseItemLoader] = None,
-        subsampled_files: Optional[list[str]] = None,
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        remote_dir: str | None,
+        item_loader: BaseItemLoader | None = None,
+        subsampled_files: list[str] | None = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
     ) -> None:
         """Reads the index files associated a chunked dataset and enables to map an index to its chunk.
 
@@ -93,7 +93,7 @@ class ChunksConfig:
             )
 
         self._compressor_name = self._config["compression"]
-        self._compressor: Optional[Compressor] = None
+        self._compressor: Compressor | None = None
 
         if self._compressor_name:
             if len(_COMPRESSORS) == 0:
@@ -106,8 +106,8 @@ class ChunksConfig:
                 )
             self._compressor = _COMPRESSORS[self._compressor_name]
 
-        self._skip_chunk_indexes_deletion: Optional[list[int]] = None
-        self.zero_based_roi: Optional[list[tuple[int, int]]] = None
+        self._skip_chunk_indexes_deletion: list[int] | None = None
+        self.zero_based_roi: list[tuple[int, int]] | None = None
         self.filename_to_size_map: dict[str, int] = {}
         for cnk in _original_chunks:
             # since files downloaded while reading will be decompressed, we need to store the name without compression
@@ -120,7 +120,7 @@ class ChunksConfig:
         return chunk_index not in self._skip_chunk_indexes_deletion
 
     @property
-    def skip_chunk_indexes_deletion(self) -> Optional[list[int]]:
+    def skip_chunk_indexes_deletion(self) -> list[int] | None:
         return self._skip_chunk_indexes_deletion
 
     @skip_chunk_indexes_deletion.setter
@@ -315,12 +315,12 @@ class ChunksConfig:
         cls,
         cache_dir: str,
         serializers: dict[str, Serializer],
-        remote_dir: Optional[str] = None,
-        item_loader: Optional[BaseItemLoader] = None,
-        subsampled_files: Optional[list[str]] = None,
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        remote_dir: str | None = None,
+        item_loader: BaseItemLoader | None = None,
+        subsampled_files: list[str] | None = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
     ) -> Optional["ChunksConfig"]:
         cache_index_filepath = os.path.join(cache_dir, _INDEX_FILENAME)
 

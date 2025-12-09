@@ -1,6 +1,6 @@
 import functools
 import warnings
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from packaging import version as packaging_version
@@ -24,7 +24,7 @@ __package_name__ = "litdata"
 
 
 @functools.lru_cache(maxsize=1)
-def _get_newer_version(curr_version: str) -> Optional[str]:
+def _get_newer_version(curr_version: str) -> str | None:
     """Check PyPI for newer versions of ``litdata``.
 
     Returning the newest version if different from the current or ``None`` otherwise.

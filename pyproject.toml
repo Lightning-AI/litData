@@ -45,10 +45,8 @@ lint.extend-select = [
   "SIM",    # see: https://pypi.org/project/flake8-simplify
 ]
 lint.ignore = [
-  "E731",  # Do not assign a lambda expression, use a def
-  "S101",  # todo: Use of `assert` detected
-  "UP007", # todo: non-pep604-annotation-union
-  "UP045", # todo: non-pep604-annotation-optional
+  "E731", # Do not assign a lambda expression, use a def
+  "S101", # todo: Use of `assert` detected
 ]
 lint.per-file-ignores."examples/**" = [
   "D100",
@@ -65,22 +63,20 @@ lint.per-file-ignores."examples/**" = [
 ]
 lint.per-file-ignores."setup.py" = [ "D100", "SIM115" ]
 lint.per-file-ignores."src/**" = [
-  "D100",  # Missing docstring in public module
-  "D101",  # todo: Missing docstring in public class
-  "D102",  # todo: Missing docstring in public method
-  "D103",  # todo: Missing docstring in public function
-  "D104",  # Missing docstring in public package
-  "D105",  # todo: Missing docstring in magic method
-  "D107",  # todo: Missing docstring in __init__
-  "D205",  # todo: 1 blank line required between summary line and description
+  "D100", # Missing docstring in public module
+  "D101", # todo: Missing docstring in public class
+  "D102", # todo: Missing docstring in public method
+  "D103", # todo: Missing docstring in public function
+  "D104", # Missing docstring in public package
+  "D105", # todo: Missing docstring in magic method
+  "D107", # todo: Missing docstring in __init__
+  "D205", # todo: 1 blank line required between summary line and description
   "D401",
-  "D404",  # todo: First line should be in imperative mood; try rephrasing
-  "S310",  # todo: Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
-  "S602",  # todo: `subprocess` call with `shell=True` identified, security issue
-  "S605",  # todo: Starting a process with a shell: seems safe, but may be changed in the future; consider rewriting without `shell`
-  "S607",  # todo: Starting a process with a partial executable path
-  "UP006", # UP006 Use `list` instead of `List` for type annotation
-  "UP035", # UP035 `typing.Tuple` is deprecated, use `tuple` instead
+  "D404", # todo: First line should be in imperative mood; try rephrasing
+  "S310", # todo: Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+  "S602", # todo: `subprocess` call with `shell=True` identified, security issue
+  "S605", # todo: Starting a process with a shell: seems safe, but may be changed in the future; consider rewriting without `shell`
+  "S607", # todo: Starting a process with a partial executable path
 ]
 lint.per-file-ignores."tests/**" = [
   "D100",

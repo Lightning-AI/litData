@@ -15,7 +15,7 @@ import logging
 import random
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal
 
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.dataset import StreamingDataset
@@ -53,7 +53,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
         self,
         datasets: list[StreamingDataset],
         seed: int = 42,
-        weights: Optional[Sequence[float]] = None,
+        weights: Sequence[float] | None = None,
         iterate_over_all: bool = True,
         batching_method: BatchingMethodType = "stratified",
         force_override_state_dict: bool = False,
@@ -98,22 +98,22 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
             weights_sum = sum(weights)
             self._weights = [w / weights_sum for w in weights]
 
-        self._iterator: Optional[_CombinedDatasetIterator] = None
+        self._iterator: _CombinedDatasetIterator | None = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[dict[int, list[int]]] = None
+        self._num_samples_yielded: dict[int, list[int]] | None = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
         self._batching_method: BatchingMethodType = batching_method
 
-    def get_len(self, num_workers: int, batch_size: int) -> Optional[int]:
+    def get_len(self, num_workers: int, batch_size: int) -> int | None:
         self.num_workers = num_workers
         self.batch_size = batch_size
         if self._iterate_over_all:
             return self._get_total_length()
         return None
 
-    def __len__(self) -> Optional[int]:
+    def __len__(self) -> int | None:
         return self.get_len(1, 1)
 
     # total length of the datasets
@@ -153,7 +153,7 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
         return self._iterator
 
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+        self, num_workers: int, batch_size: int, num_samples_yielded: list[int] | None = None
     ) -> dict[str, Any]:
         if self._iterator is None:
             if num_samples_yielded is None:
@@ -167,16 +167,16 @@ class _CombinedDatasetIterator(Iterator):
         self,
         datasets: list[StreamingDataset],
         seed: int,
-        weights: Sequence[Optional[float]],
+        weights: Sequence[float | None],
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
-        batch_size: Union[int, Sequence[int]],
+        batch_size: int | Sequence[int],
         batching_method: BatchingMethodType,
         iterate_over_all: bool = False,
     ) -> None:
         self._datasets = datasets
         self._dataset_iters = [iter(dataset) for dataset in datasets]
-        self._dataset_indexes: list[Optional[int]] = list(range(len(datasets)))
+        self._dataset_indexes: list[int | None] = list(range(len(datasets)))
         self._num_samples_yielded = num_samples_yielded or [0 for _ in range(len(datasets))]
         self._original_weights = deepcopy(weights)
         self._weights = deepcopy(weights)

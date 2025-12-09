@@ -19,7 +19,7 @@ from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 from filelock import FileLock, Timeout
@@ -55,9 +55,9 @@ class PrepareChunksThread(Thread):
         config: ChunksConfig,
         item_loader: BaseItemLoader,
         distributed_env: _DistributedEnv,
-        max_cache_size: Optional[int] = None,
+        max_cache_size: int | None = None,
         max_pre_download: int = 2,
-        rank: Optional[int] = None,
+        rank: int | None = None,
     ) -> None:
         super().__init__(daemon=True)
         self._config = config
@@ -266,16 +266,16 @@ class BinaryReader:
     def __init__(
         self,
         cache_dir: str,
-        subsampled_files: Optional[list[str]] = None,
-        region_of_interest: Optional[list[tuple[int, int]]] = None,
-        max_cache_size: Optional[Union[int, str]] = None,
-        remote_input_dir: Optional[str] = None,
-        compression: Optional[str] = None,
-        encryption: Optional[Encryption] = None,
-        item_loader: Optional[BaseItemLoader] = None,
-        serializers: Optional[dict[str, Serializer]] = None,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        subsampled_files: list[str] | None = None,
+        region_of_interest: list[tuple[int, int]] | None = None,
+        max_cache_size: int | str | None = None,
+        remote_input_dir: str | None = None,
+        compression: str | None = None,
+        encryption: Encryption | None = None,
+        item_loader: BaseItemLoader | None = None,
+        serializers: dict[str, Serializer] | None = None,
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
         max_pre_download: int = 2,
         on_demand_bytes: bool = False,
     ) -> None:
@@ -309,17 +309,17 @@ class BinaryReader:
 
         self._compression = compression
         self._encryption = encryption
-        self._intervals: Optional[list[str]] = None
+        self._intervals: list[str] | None = None
         self.subsampled_files = subsampled_files
         self.region_of_interest = region_of_interest
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._distributed_env = _DistributedEnv.detect()
-        self._rank: Optional[int] = None
-        self._config: Optional[ChunksConfig] = None
-        self._prepare_thread: Optional[PrepareChunksThread] = None
+        self._rank: int | None = None
+        self._config: ChunksConfig | None = None
+        self._prepare_thread: PrepareChunksThread | None = None
         self._item_loader = item_loader or PyTreeLoader()
-        self._last_chunk_index: Optional[int] = None
-        self._last_chunk_size: Optional[int] = None
+        self._last_chunk_index: int | None = None
+        self._last_chunk_size: int | None = None
         self._chunks_queued_for_download = False
         self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
         self._storage_options = storage_options
@@ -334,7 +334,7 @@ class BinaryReader:
 
         return self._config._get_chunk_index_from_index(index)  # type: ignore
 
-    def _try_load_config(self) -> Optional[ChunksConfig]:
+    def _try_load_config(self) -> ChunksConfig | None:
         """Try to load the chunks config if the index files are available."""
         self._config = ChunksConfig.load(
             self._cache_dir,
@@ -577,7 +577,7 @@ def _get_folder_size(path: str, config: ChunksConfig) -> int:
     return size
 
 
-def _get_from_queue(queue: Queue, timeout: float = _DEFAULT_TIMEOUT) -> Optional[Any]:
+def _get_from_queue(queue: Queue, timeout: float = _DEFAULT_TIMEOUT) -> Any | None:
     try:
         return queue.get(timeout=timeout)
     except Empty:
