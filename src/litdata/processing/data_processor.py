@@ -336,9 +336,9 @@ def _map_items_to_workers_sequentially(
         num_items_per_worker.append(remaining)
 
     else:
-        num_items_per_worker = len(user_items) // world_size
+        items_per_worker_count = len(user_items) // world_size
 
-        num_items_per_worker: list[int] = [num_items_per_worker for _ in range(world_size)]
+        num_items_per_worker: list[int] = [items_per_worker_count for _ in range(world_size)]
         reminder = len(user_items) % world_size
 
         for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
