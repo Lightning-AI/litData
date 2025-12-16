@@ -639,25 +639,26 @@ class StreamingDataLoader(DataLoader):
         )  # type: ignore
 
     def __iter__(self) -> Any:
-        if not self.restore:
-            if (
-                isinstance(self.dataset, ParallelStreamingDataset)
-                and self.dataset.is_cycling()
-                and self.dataset.resume
-                and self.current_epoch != 0
-            ):
-                # For ParallelStreamingDataset with _length != None we want to cycle the wrapped datasets i.e. we do not
-                # want to restart at index 0 at every epoch. So we set them in restore state.
+        if (
+            isinstance(self.dataset, ParallelStreamingDataset)
+            and self.dataset.is_cycling()
+            and self.dataset.resume
+            and self.current_epoch != 0
+        ):
+            # For ParallelStreamingDataset with _length != None we want to cycle the wrapped datasets i.e. we do not
+            # want to restart at index 0 at every epoch. So we set them in restore state.
+            if not self.restore:
                 self.load_state_dict(self.state_dict())
-                self.restore = False
-            else:
-                self._latest_worker_idx = 0
-                self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
-                self._worker_idx_iter = iter(self._worker_idx)
-                self._num_samples_yielded_wrapper = {}
-                self._num_samples_yielded_streaming = 0
-                self._num_cycles = {}
-                self.dataset.reset_state_dict()
+                self.current_epoch += 1
+            self.restore = False
+        elif not self.restore:
+            self._latest_worker_idx = 0
+            self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
+            self._worker_idx_iter = iter(self._worker_idx)
+            self._num_samples_yielded_wrapper = {}
+            self._num_samples_yielded_streaming = 0
+            self._num_cycles = {}
+            self.dataset.reset_state_dict()
             self.current_epoch += 1
 
         self.dataset.set_epoch(self.current_epoch)
