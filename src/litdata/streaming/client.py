@@ -105,7 +105,7 @@ class R2Client(S3Client):
 
     def __init__(
         self,
-        refetch_interval: int = 3300,  # 55 minutes - this is the default refresh interval for R2 credentials
+        refetch_interval: int = 3300,
         storage_options: Optional[dict] = {},
         session_options: Optional[dict] = {},
     ) -> None:
