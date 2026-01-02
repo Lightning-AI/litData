@@ -111,7 +111,7 @@ def test_r2_client_initialization():
     """Test R2Client initialization with different parameters."""
     # Test with default parameters
     r2_client = client.R2Client()
-    assert r2_client._refetch_interval == 3600  # 1 hour default
+    assert r2_client._refetch_interval == 3300  # 55 minutes default
     assert r2_client._last_time is None
     assert r2_client._client is None
     assert r2_client._base_storage_options == {}
