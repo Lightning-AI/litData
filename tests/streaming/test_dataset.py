@@ -541,6 +541,33 @@ def test_dataset_cache_recreation(tmpdir):
     assert dataset.shuffler is shuffler  # shuffler gets reused
 
 
+@pytest.mark.timeout(30)
+def test_len_called_before_dataloader_drop_last(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=False)
+    _ = len(dataset)
+
+    batch_size = 8
+    dataloader = StreamingDataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        drop_last=True,
+        shuffle=False,
+    )
+
+    expected_batches = len(dataloader)
+    batches = list(dataloader)
+
+    assert len(batches) == expected_batches
+    assert all(len(batch) == batch_size for batch in batches)
+
+
 def test_dataset_for_text_tokens(tmpdir):
     seed_everything(42)
 
