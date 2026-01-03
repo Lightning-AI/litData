@@ -14,13 +14,14 @@
 import io
 import os
 import pickle
+import struct
 import tempfile
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
 from itertools import chain
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import tifffile
@@ -42,7 +43,7 @@ class Serializer(ABC):
     """
 
     @abstractmethod
-    def serialize(self, data: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, data: Any) -> tuple[bytes, Optional[str]]:
         pass
 
     @abstractmethod
@@ -60,7 +61,7 @@ class Serializer(ABC):
 class PILSerializer(Serializer):
     """The PILSerializer serialize and deserialize PIL Image to and from bytes."""
 
-    def serialize(self, item: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
         mode = item.mode.encode("utf-8")
         width, height = item.size
         raw = item.tobytes()
@@ -94,7 +95,7 @@ class PILSerializer(Serializer):
 class JPEGSerializer(Serializer):
     """The JPEGSerializer serialize and deserialize JPEG image to and from bytes."""
 
-    def serialize(self, item: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
         if not _PIL_AVAILABLE:
             raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
 
@@ -129,21 +130,16 @@ class JPEGSerializer(Serializer):
         raise TypeError(f"The provided item should be of type `JpegImageFile`. Found {item}.")
 
     def deserialize(self, data: bytes) -> torch.Tensor:
-        from torchvision.io import decode_jpeg
-        from torchvision.transforms.functional import pil_to_tensor
+        from torchvision.io import decode_image, decode_jpeg
 
         array = torch.frombuffer(data, dtype=torch.uint8)
-        # Note: Some datasets like Imagenet contains some PNG images with JPEG extension, so we fallback to PIL
+        # Try decoding as JPEG. Some datasets (e.g., ImageNet) may have PNG images with a JPEG extension,
+        # which will cause decode_jpeg to fail. In that case, fall back to a generic image decoder.
         with suppress(RuntimeError):
             return decode_jpeg(array)
 
-        # Fallback to PIL
-        if not _PIL_AVAILABLE:
-            raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
-        from PIL import Image
-
-        img = Image.open(io.BytesIO(data))
-        return pil_to_tensor(img)
+        # Fallback: decode as a generic image (handles PNG, etc.)
+        return decode_image(array)
 
     def can_serialize(self, item: Any) -> bool:
         if not _PIL_AVAILABLE:
@@ -157,7 +153,7 @@ class JPEGSerializer(Serializer):
 class JPEGArraySerializer(Serializer):
     """The JPEGArraySerializer serializes and deserializes lists of JPEG images to and from bytes."""
 
-    def serialize(self, item: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
         # Store number of images as first 4 bytes
         n_images_bytes = np.uint32(len(item)).tobytes()
 
@@ -176,7 +172,7 @@ class JPEGArraySerializer(Serializer):
         # Concatenate all data: n_images + sizes + image bytes
         return b"".join(chain([n_images_bytes, image_sizes_bytes], image_bytes)), None
 
-    def deserialize(self, data: bytes) -> List[torch.Tensor]:
+    def deserialize(self, data: bytes) -> list[torch.Tensor]:
         if len(data) < 4:
             raise ValueError("Input data is too short to contain valid list of images")
 
@@ -226,7 +222,7 @@ class JPEGArraySerializer(Serializer):
 class BytesSerializer(Serializer):
     """The BytesSerializer serialize and deserialize integer to and from bytes."""
 
-    def serialize(self, item: bytes) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: bytes) -> tuple[bytes, Optional[str]]:
         return item, None
 
     def deserialize(self, item: bytes) -> bytes:
@@ -237,42 +233,52 @@ class BytesSerializer(Serializer):
 
 
 class TensorSerializer(Serializer):
-    """The TensorSerializer serialize and deserialize tensor to and from bytes."""
+    """An optimized TensorSerializer that is compatible with deepcopy/pickle."""
 
     def __init__(self) -> None:
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _TORCH_DTYPES_MAPPING.items()}
+        self._header_struct_format = ">II"
+        self._header_struct = struct.Struct(self._header_struct_format)
 
-    def serialize(self, item: torch.Tensor) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
+        if item.device.type != "cpu":
+            item = item.cpu()
+
         dtype_indice = self._dtype_to_indices[item.dtype]
-        data = [np.uint32(dtype_indice).tobytes()]
-        data.append(np.uint32(len(item.shape)).tobytes())
-        for dim in item.shape:
-            data.append(np.uint32(dim).tobytes())
-        data.append(item.numpy().tobytes(order="C"))
-        return b"".join(data), None
 
+        numpy_item = item.numpy(force=True)
+        rank = len(numpy_item.shape)
+        shape_format = f">{rank}I"
+        header_bytes = self._header_struct.pack(dtype_indice, rank)
+        shape_bytes = struct.pack(shape_format, *numpy_item.shape)
+        data_bytes = numpy_item.tobytes()
+        return b"".join([header_bytes, shape_bytes, data_bytes]), None
+
+    # ... (rest of the class remains the same) ...
     def deserialize(self, data: bytes) -> torch.Tensor:
-        dtype_indice = np.frombuffer(data[0:4], np.uint32).item()
+        buffer_view = memoryview(data)
+        dtype_indice, rank = self._header_struct.unpack_from(buffer_view, 0)
         dtype = _TORCH_DTYPES_MAPPING[dtype_indice]
-        shape_size = np.frombuffer(data[4:8], np.uint32).item()
-        shape = []
-        for shape_idx in range(shape_size):
-            shape.append(np.frombuffer(data[8 + 4 * shape_idx : 8 + 4 * (shape_idx + 1)], np.uint32).item())
-        idx_start = 8 + 4 * shape_size
-        idx_end = len(data)
-        if idx_end > idx_start:
-            tensor = torch.frombuffer(data[idx_start:idx_end], dtype=dtype)
-        else:
-            assert idx_start == idx_end, "The starting index should never be greater than end ending index."
-            tensor = torch.empty(shape, dtype=dtype)
-        shape = torch.Size(shape)
-        if tensor.shape == shape:
-            return tensor
-        return torch.reshape(tensor, shape)
+        header_size = self._header_struct.size
+        shape = struct.unpack_from(f">{rank}I", buffer_view, header_size)
+        data_start_offset = header_size + (rank * 4)
+        if data_start_offset < len(buffer_view):
+            tensor_1d = torch.frombuffer(buffer_view[data_start_offset:], dtype=dtype)
+            return tensor_1d.reshape(shape)
+        return torch.empty(shape, dtype=dtype)
 
-    def can_serialize(self, item: torch.Tensor) -> bool:
+    def can_serialize(self, item: Any) -> bool:
         return isinstance(item, torch.Tensor) and len(item.shape) != 1
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        del state["_header_struct"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._header_struct = struct.Struct(self._header_struct_format)
 
 
 class NoHeaderTensorSerializer(Serializer):
@@ -286,7 +292,7 @@ class NoHeaderTensorSerializer(Serializer):
     def setup(self, data_format: str) -> None:
         self._dtype = _TORCH_DTYPES_MAPPING[int(data_format.split(":")[1])]
 
-    def serialize(self, item: torch.Tensor) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
         dtype_indice = self._dtype_to_indices[item.dtype]
         return item.numpy().tobytes(order="C"), f"no_header_tensor:{dtype_indice}"
 
@@ -305,7 +311,7 @@ class NumpySerializer(Serializer):
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _NUMPY_DTYPES_MAPPING.items()}
 
-    def serialize(self, item: np.ndarray) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: np.ndarray) -> tuple[bytes, Optional[str]]:
         dtype_indice = self._dtype_to_indices[item.dtype]
         data = [np.uint32(dtype_indice).tobytes()]
         data.append(np.uint32(len(item.shape)).tobytes())
@@ -345,7 +351,7 @@ class NoHeaderNumpySerializer(Serializer):
     def setup(self, data_format: str) -> None:
         self._dtype = _NUMPY_DTYPES_MAPPING[int(data_format.split(":")[1])]
 
-    def serialize(self, item: np.ndarray) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: np.ndarray) -> tuple[bytes, Optional[str]]:
         dtype_indice: int = self._dtype_to_indices[item.dtype]
         return item.tobytes(order="C"), f"no_header_numpy:{dtype_indice}"
 
@@ -360,7 +366,7 @@ class NoHeaderNumpySerializer(Serializer):
 class PickleSerializer(Serializer):
     """The PickleSerializer serialize and deserialize python objects to and from bytes."""
 
-    def serialize(self, item: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
         return pickle.dumps(item), None
 
     def deserialize(self, data: bytes) -> Any:
@@ -371,7 +377,7 @@ class PickleSerializer(Serializer):
 
 
 class FileSerializer(Serializer):
-    def serialize(self, filepath: str) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, filepath: str) -> tuple[bytes, Optional[str]]:
         print("FileSerializer will be removed in the future.")
         _, file_extension = os.path.splitext(filepath)
         with open(filepath, "rb") as f:
@@ -390,7 +396,7 @@ class FileSerializer(Serializer):
 class VideoSerializer(Serializer):
     _EXTENSIONS = ("mp4", "ogv", "mjpeg", "avi", "mov", "h264", "mpg", "webm", "wmv")
 
-    def serialize(self, filepath: str) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, filepath: str) -> tuple[bytes, Optional[str]]:
         _, file_extension = os.path.splitext(filepath)
         with open(filepath, "rb") as f:
             file_extension = file_extension.replace(".", "").lower()
@@ -415,7 +421,7 @@ class VideoSerializer(Serializer):
 
 
 class StringSerializer(Serializer):
-    def serialize(self, obj: str) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, obj: str) -> tuple[bytes, Optional[str]]:
         return obj.encode("utf-8"), None
 
     def deserialize(self, data: bytes) -> str:
@@ -432,7 +438,7 @@ class NumericSerializer:
         self.dtype = dtype
         self.size = self.dtype().nbytes
 
-    def serialize(self, obj: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, obj: Any) -> tuple[bytes, Optional[str]]:
         return self.dtype(obj).tobytes(), None
 
     def deserialize(self, data: bytes) -> Any:
@@ -458,7 +464,7 @@ class FloatSerializer(NumericSerializer, Serializer):
 class BooleanSerializer(Serializer):
     """The BooleanSerializer serializes and deserializes boolean values to and from bytes."""
 
-    def serialize(self, item: bool) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: bool) -> tuple[bytes, Optional[str]]:
         """Serialize a boolean value to bytes.
 
         Args:
@@ -495,7 +501,7 @@ class BooleanSerializer(Serializer):
 class TIFFSerializer(Serializer):
     """Serializer for TIFF files using tifffile."""
 
-    def serialize(self, item: Any) -> Tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
         if not isinstance(item, str) or not os.path.isfile(item):
             raise ValueError(f"The item to serialize must be a valid file path. Received: {item}")
 
@@ -534,7 +540,7 @@ _SERIALIZERS = OrderedDict(
 )
 
 
-def _get_serializers(serializers: Optional[Dict[str, Serializer]]) -> Dict[str, Serializer]:
+def _get_serializers(serializers: Optional[dict[str, Serializer]]) -> dict[str, Serializer]:
     if serializers is None:
         serializers = {}
     serializers = OrderedDict(serializers)

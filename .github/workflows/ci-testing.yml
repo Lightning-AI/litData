@@ -1,4 +1,4 @@
-name: CI testing
+name: CI Testing
 
 # see: https://help.github.com/en/actions/reference/events-that-trigger-workflows
 on: # Trigger the workflow on push or pull request, but only for the main branch
@@ -19,35 +19,44 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "macos-14", "windows-2022"]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         exclude:
           - { os: "windows-2022", python-version: "3.13" }
-          - { os: "macos-14", python-version: "3.12" }
-          - { os: "macos-14", python-version: "3.13" }
+          - { os: "windows-2022", python-version: "3.14" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
     env:
-      TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
+      UV_TORCH_BACKEND: "cpu"
 
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - name: Install uv and setup python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v7
         with:
+          activate-environment: true
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          enable-cache: true
 
       - name: Install package & dependencies
         run: |
-          pip --version
-          pip install -U lightning-sdk
-          pip install -e ".[extras]" -r requirements/test.txt -U -q --find-links $TORCH_URL
-          pip list
+          uv pip install -U lightning-sdk
+          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
+          uv pip list
 
-      - name: Tests
-        working-directory: tests
-        run: pytest . -v --cov=litdata --durations=100
+      - name: Run fast tests in parallel
+        run: |
+          pytest tests \
+              --ignore=tests/processing \
+              --ignore=tests/raw \
+              -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+
+      - name: Run processing tests sequentially
+        run: |
+          # note that the listed test should match ignored in the previous step
+          pytest \
+            tests/processing tests/raw \
+            --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Statistics
         continue-on-error: true
@@ -64,6 +73,9 @@ jobs:
           env_vars: OS,PYTHON
           name: codecov-umbrella
           fail_ci_if_error: false
+
+      - name: Minimize uv cache
+        run: uv cache prune --ci
 
   testing-guardian:
     runs-on: ubuntu-latest

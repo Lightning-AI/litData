@@ -5,7 +5,7 @@
 
 - Checkout this example in [Lightning Studio](https://lightning.ai/deependu/studios/sine-function-model-prediction-with-litdata-and-pytorch-lightning)
 
----
+______________________________________________________________________
 
 ## Steps
 

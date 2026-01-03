@@ -1,12 +1,11 @@
 <div align="center">
+<h1>
+  Speed up model training by fixing data loading
+</h1>  
 <img src="https://pl-flash-data.s3.amazonaws.com/lit_data_logo.webp" alt="LitData" width="800px"/>
 
 &nbsp;
 &nbsp;
-
-**Transform datasets at scale.    
-Optimize data for fast AI model training.**
-
 
 <pre>
 Transform                              Optimize
@@ -37,7 +36,7 @@ Transform                              Optimize
 
 &nbsp;
 
-<a target="_blank" href="https://lightning.ai/docs/overview/prep-data/optimize-datasets-for-model-training-speed">
+<a target="_blank" href="https://lightning.ai/docs/overview/optimize-data/optimize-datasets">
   <img src="https://pl-bolts-doc-images.s3.us-east-2.amazonaws.com/app-2/get-started-badge.svg" height="36px" alt="Get started"/>
 </a>
 
@@ -45,10 +44,21 @@ Transform                              Optimize
 
 &nbsp;
 
-# Transform data at scale. Optimize for fast model training.
-LitData scales [data processing tasks](#transform-datasets) (data scraping, image resizing, distributed inference, embedding creation) on local or cloud machines. It also enables [optimizing datasets](#speed-up-model-training) to accelerate AI model training and work with large remote datasets without local loading.
+# Why LitData?
+Speeding up model training involves more than kernel tuning. Data loading frequently slows down training, because datasets are too large to fit on disk, consist of millions of small files, or stream slowly from the cloud. 
+
+LitData provides tools to preprocess and optimize datasets into a format that streams efficiently from any cloud or local source. It also includes a map operator for distributed data processing before optimization. This makes data pipelines faster, cloud-agnostic, and can improve training throughput by up to 20×.
 
 &nbsp;
+
+# Looking for GPUs?
+Over 340,000 developers use [Lightning Cloud](https://lightning.ai/?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) - purpose-built for PyTorch and PyTorch Lightning. 
+- [GPUs](https://lightning.ai/pricing?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) from $0.19.   
+- [Clusters](https://lightning.ai/clusters?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): frontier-grade training/inference clusters.   
+- [AI Studio (vibe train)](https://lightning.ai/studios?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): workspaces where AI helps you debug, tune and vibe train.
+- [AI Studio (vibe deploy)](https://lightning.ai/studios?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): workspaces where AI helps you optimize, and deploy models.     
+- [Notebooks](https://lightning.ai/notebooks?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): Persistent GPU workspaces where AI helps you code and analyze.
+- [Inference](https://lightning.ai/deploy?utm_source=litdata&utm_medium=referral&utm_campaign=litdata): Deploy models as inference APIs.
 
 # Quick start
 First, install LitData:
@@ -79,10 +89,39 @@ pip install 'litdata[extras]'
 ----
 
 # Speed up model training
+Stream datasets directly from cloud storage without local downloads. Choose the approach that fits your workflow:
+
+## Option 1: Start immediately with existing data ⚡⚡
+Stream raw files directly from cloud storage - no pre-optimization needed.
+
+```python
+from litdata import StreamingRawDataset
+from torch.utils.data import DataLoader
+
+# Point to your existing cloud data
+dataset = StreamingRawDataset("s3://my-bucket/raw-data/")
+dataloader = DataLoader(dataset, batch_size=32)
+
+for batch in dataloader:
+    # Process raw bytes on-the-fly
+    pass
+```
+
+**Key benefits:**
+
+✅ **Instant access:**         Start streaming immediately without preprocessing.    
+✅ **Zero setup time:**        No data conversion or optimization required.    
+✅ **Native format:**          Work with original file formats (images, text, etc.).    
+✅ **Flexible processing:**    Apply transformations on-the-fly during streaming.    
+✅ **Cloud-native:**           Stream directly from S3, GCS, or Azure storage.    
+
+## Option 2: Optimize for maximum performance ⚡⚡⚡  
 Accelerate model training (20x faster) by optimizing datasets for streaming directly from cloud storage. Work with remote data without local downloads with features like loading data subsets, accessing individual samples, and resumable streaming.
 
-**Step 1: Optimize the data**
-This step will format the dataset for fast loading. The data will be written in a chunked binary format.
+**Step 1: Optimize your data (one-time setup)**
+
+Transform raw data into optimized chunks for maximum streaming speed.
+This step formats the dataset for fast loading by writing data in an efficient chunked binary format.
 
 ```python
 import numpy as np
@@ -91,24 +130,24 @@ import litdata as ld
 
 def random_images(index):
     # Replace with your actual image loading here (e.g., .jpg, .png, etc.)
-    # (recommended to pass as compressed formats like JPEG for better storage and optimized streaming speed)
-    # You can also apply resizing or reduce image quality to further increase streaming speed and save space.
+    # Recommended: use compressed formats like JPEG for better storage and optimized streaming speed
+    # You can also apply resizing or reduce image quality to further increase streaming speed and save space
     fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
     fake_labels = np.random.randint(10)
 
     # You can use any key:value pairs. Note that their types must not change between samples, and Python lists must
-    # always contain the same number of elements with the same types.
+    # always contain the same number of elements with the same types
     data = {"index": index, "image": fake_images, "class": fake_labels}
 
     return data
 
 if __name__ == "__main__":
-    # The optimize function writes data in an optimized format.
+    # The optimize function writes data in an optimized format
     ld.optimize(
         fn=random_images,                   # the function applied to each input
         inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
         output_dir="fast_data",             # optimized data is stored here
-        num_workers=4,                      # The number of workers on the same machine
+        num_workers=4,                      # the number of workers on the same machine
         chunk_bytes="64MB"                  # size of each chunk
     )
 ```
@@ -122,14 +161,14 @@ aws s3 cp --recursive fast_data s3://my-bucket/fast_data
 
 **Step 3: Stream the data during training**
 
-Load the data by replacing the PyTorch DataSet and DataLoader with the StreamingDataset and StreamingDataloader
+Load the data by replacing the PyTorch Dataset and DataLoader with the StreamingDataset and StreamingDataLoader.
 
 ```python
 import litdata as ld
 
 dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
 
-# Custom collate function to handle the batch (Optional)
+# Custom collate function to handle the batch (optional)
 def collate_fn(batch):
     return {
         "image": [sample["image"] for sample in batch],
@@ -144,15 +183,15 @@ for sample in dataloader:
 
 **Key benefits:**
 
-✅ Accelerate training:       Optimized datasets load 20x faster.      
-✅ Stream cloud datasets:     Work with cloud data without downloading it.    
-✅ Pytorch-first:             Works with PyTorch libraries like PyTorch Lightning, Lightning Fabric, Hugging Face.    
-✅ Easy collaboration:        Share and access datasets in the cloud, streamlining team projects.     
-✅ Scale across GPUs:         Streamed data automatically scales to all GPUs.      
-✅ Flexible storage:          Use S3, GCS, Azure, or your own cloud account for data storage.    
-✅ Compression:               Reduce your data footprint by using advanced compression algorithms.  
-✅ Run local or cloud:        Run on your own machines or auto-scale to 1000s of cloud GPUs with Lightning Studios.         
-✅ Enterprise security:       Self host or process data on your cloud account with Lightning Studios.  
+✅ **Accelerate training:**       Optimized datasets load 20x faster.      
+✅ **Stream cloud datasets:**     Work with cloud data without downloading it.    
+✅ **PyTorch-first:**             Works with PyTorch libraries like PyTorch Lightning, Lightning Fabric, Hugging Face.    
+✅ **Easy collaboration:**        Share and access datasets in the cloud, streamlining team projects.     
+✅ **Scale across GPUs:**         Streamed data automatically scales to all GPUs.      
+✅ **Flexible storage:**          Use S3, GCS, Azure, or your own cloud account for data storage.    
+✅ **Compression:**               Reduce your data footprint by using advanced compression algorithms.  
+✅ **Run local or cloud:**        Run on your own machines or auto-scale to 1000s of cloud GPUs with Lightning Studios.         
+✅ **Enterprise security:**       Self host or process data on your cloud account with Lightning Studios.  
 
 &nbsp;
 
@@ -202,7 +241,83 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary> ✅ Stream large cloud datasets</summary>
+  <summary> ✅ Stream raw datasets from cloud storage (beta) <a id="stream-raw" href="#stream-raw">🔗</a> </summary>
+  &nbsp;
+
+Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
+
+**Prerequisites:**
+
+Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+
+```bash
+# for aws s3
+pip install "litdata[extra]" s3fs
+
+# for gcloud storage
+pip install "litdata[extra]" gcsfs
+```
+
+**Usage Example:**
+```python
+from torch.utils.data import DataLoader
+from litdata import StreamingRawDataset
+
+dataset = StreamingRawDataset("s3://bucket/files/")
+
+# Use with PyTorch DataLoader
+loader = DataLoader(dataset, batch_size=32)
+for batch in loader:
+    # Each item is raw bytes
+    pass
+```
+
+> Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+
+
+You can also customize how files are grouped by subclassing `StreamingRawDataset` and overriding the `setup` method. This is useful for pairing related files (e.g., image and mask, audio and transcript) or any custom grouping logic.
+
+```python
+from typing import Union
+from torch.utils.data import DataLoader
+from litdata import StreamingRawDataset
+from litdata.raw.indexer import FileMetadata
+
+class SegmentationRawDataset(StreamingRawDataset):
+    def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
+        # TODO: Implement your custom grouping logic here.
+        # For example, group files by prefix, extension, or any rule you need.
+        # Return a list of groups, where each group is a list of FileMetadata.
+        # Example:
+        #   return [[image, mask], ...]
+        pass
+
+# Initialize the custom dataset
+dataset = SegmentationRawDataset("s3://bucket/files/")
+loader = DataLoader(dataset, batch_size=32)
+for item in loader:
+    # Each item in the batch is a pair: [image_bytes, mask_bytes]
+    pass
+```
+
+**Smart Index Caching**
+
+`StreamingRawDataset` automatically caches the file index for instant startup. Initial scan, builds and caches the index, then subsequent runs load instantly.
+
+**Two-Level Cache:**
+- **Local:** Stored in your cache directory for instant access
+- **Remote:** Automatically saved to cloud storage (e.g., `s3://bucket/files/index.json.zstd`) for reuse
+
+**Force Rebuild:**
+```python
+# When dataset files have changed
+dataset = StreamingRawDataset("s3://bucket/files/", recompute_index=True)
+```
+
+</details>
+
+<details>
+  <summary> ✅ Stream large cloud datasets <a id="stream-large" href="#stream-large">🔗</a> </summary>
 &nbsp;
 
 Use data stored on the cloud without needing to download it all to your computer, saving time and space.
@@ -236,20 +351,10 @@ storage_options = {
 
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
 
-# s5cmd compatible storage options for a custom S3-compatible endpoint
-# Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
-storage_options = {
-    "AWS_ACCESS_KEY_ID": "your_access_key_id",
-    "AWS_SECRET_ACCESS_KEY": "your_secret_access_key",
-    "S3_ENDPOINT_URL": "your_endpoint_url",  # Required only for custom endpoints
-}
 
 
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
 ```
-
-Alternative: Using `s5cmd` for S3 Operations
-
 
 Also, you can specify a custom cache directory when initializing your dataset. This is useful when you want to store the cache in a specific location.
 ```python
@@ -262,7 +367,7 @@ dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache")
 </details>
 
 <details>
-  <summary> ✅ Stream Hugging Face 🤗 datasets</summary>
+  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
 
 &nbsp;
 
@@ -375,7 +480,7 @@ Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that *
 </details>
 
 <details>
-  <summary> ✅ Streams on multi-GPU, multi-node</summary>
+  <summary> ✅ Streams on multi-GPU, multi-node <a id="multi-gpu" href="#multi-gpu">🔗</a> </summary>
 
 &nbsp;
 
@@ -407,7 +512,7 @@ for batch in val_dataloader:
 </details>
 
 <details>
-  <summary> ✅ Stream from multiple cloud providers</summary>
+  <summary> ✅ Stream from multiple cloud providers <a id="cloud-providers" href="#cloud-providers">🔗</a> </summary>
 
 &nbsp;
 
@@ -438,9 +543,6 @@ aws_storage_options={
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
-
-# Read data from AWS S3 using s5cmd
-# Note: If s5cmd is installed, it will be used by default for S3 operations. If you prefer not to use s5cmd, you can disable it by setting the environment variable: `DISABLE_S5CMD=1`
 aws_storage_options={
     "AWS_ACCESS_KEY_ID": os.environ['AWS_ACCESS_KEY_ID'],
     "AWS_SECRET_ACCESS_KEY": os.environ['AWS_SECRET_ACCESS_KEY'],
@@ -448,11 +550,6 @@ aws_storage_options={
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
-# Read Data from AWS S3 with Unsigned Request using s5cmd
-aws_storage_options={
-  "AWS_NO_SIGN_REQUEST": "Yes" # Required for unsigned requests
-  "S3_ENDPOINT_URL": os.environ['AWS_ENDPOINT_URL'],  # Required only for custom endpoints
-}
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
 
@@ -473,14 +570,14 @@ dataset = ld.StreamingDataset("azure://my-bucket/my-data", storage_options=azure
 </details>  
 
 <details>
-  <summary> ✅ Pause, resume data streaming</summary>
+  <summary> ✅ Pause, resume data streaming <a id="pause-resume" href="#pause-resume">🔗</a> </summary>
 &nbsp;
 
 Stream data during long training, if interrupted, pick up right where you left off without any issues.
 
 LitData provides a stateful `Streaming DataLoader` e.g. you can `pause` and `resume` your training whenever you want.
 
-Info: The `Streaming DataLoader` was used by [Lit-GPT](https://github.com/Lightning-AI/lit-gpt/blob/main/pretrain/tinyllama.py) to pretrain LLMs. Restarting from an older checkpoint was critical to get to pretrain the full model due to several failures (network, CUDA Errors, etc..).
+Info: The `Streaming DataLoader` was used by [Lit-GPT](https://github.com/Lightning-AI/litgpt/blob/main/tutorials/pretrain_tinyllama.md) to pretrain LLMs. Restarting from an older checkpoint was critical to get to pretrain the full model due to several failures (network, CUDA Errors, etc..).
 
 ```python
 import os
@@ -507,7 +604,7 @@ for batch_idx, batch in enumerate(dataloader):
 
 
 <details>
-  <summary> ✅ Use shared queue for Optimizing</summary>
+  <summary> ✅ Use shared queue for Optimizing <a id="shared-queue" href="#shared-queue">🔗</a> </summary>
 &nbsp;
 
 If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
@@ -564,7 +661,7 @@ if __name__ == "__main__":
 
 
 <details>
-  <summary> ✅ Use a <code>Queue</code> as input for optimizing data</summary>
+  <summary> ✅ Use a <code>Queue</code> as input for optimizing data <a id="queue-input" href="#queue-input">🔗</a> </summary>
 &nbsp;
 
 Sometimes you don’t have a static list of inputs to optimize — instead, you have a stream of data coming in over time. In such cases, you can use a multiprocessing.Queue to feed data into the optimize() function.
@@ -621,7 +718,7 @@ if __name__ == "__main__":
 
 
 <details>
-  <summary> ✅ LLM Pre-training </summary>
+  <summary> ✅ LLM Pre-training <a id="llm-training" href="#llm-training">🔗</a> </summary>
 &nbsp;
 
 LitData is highly optimized for LLM pre-training. First, we need to tokenize the entire dataset and then we can consume it.
@@ -684,7 +781,7 @@ for batch in tqdm(train_dataloader):
 </details>
 
 <details>
-  <summary> ✅ Filter illegal data </summary>
+  <summary> ✅ Filter illegal data <a id="filter-data" href="#filter-data">🔗</a> </summary>
 &nbsp;
 
 Sometimes, you have bad data that you don't want to include in the optimized dataset. With LitData, yield only the good data sample to include. 
@@ -746,7 +843,7 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Combine datasets</summary>
+  <summary> ✅ Combine datasets <a id="combine-datasets" href="#combine-datasets">🔗</a> </summary>
 &nbsp;
 
 Mix and match different sets of data to experiment and create better models.
@@ -818,7 +915,7 @@ combined_dataset = CombinedStreamingDataset(
 </details>
 
 <details>
-  <summary> ✅ Parallel streaming</summary>
+  <summary> ✅ Parallel streaming <a id="parallel-streaming" href="#parallel-streaming">🔗</a> </summary>
 &nbsp;
 
 While `CombinedDataset` allows to fetch a sample from one of the datasets it wraps at each iteration, `ParallelStreamingDataset` can be used to fetch a sample from all the wrapped datasets at each iteration:
@@ -868,7 +965,7 @@ parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transfor
 </details>
 
 <details>
-  <summary> ✅ Cycle datasets</summary>
+  <summary> ✅ Cycle datasets <a id="cycle-datasets" href="#cycle-datasets">🔗</a> </summary>
 &nbsp;
 
 `ParallelStreamingDataset` can also be used to cycle a `StreamingDataset`. This allows to dissociate the epoch length from the number of samples in the dataset.
@@ -895,7 +992,7 @@ You can even set `length` to `float("inf")` for an infinite dataset!
 </details>
 
 <details>
-  <summary> ✅ Merge datasets</summary>
+  <summary> ✅ Merge datasets <a id="merge-datasets" href="#merge-datasets">🔗</a> </summary>
 &nbsp;
 
 Merge multiple optimized datasets into one.
@@ -930,12 +1027,12 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Transform datasets while Streaming</summary>
+  <summary> ✅ Transform datasets while Streaming <a id="transform-streaming" href="#transform-streaming">🔗</a> </summary>
 &nbsp;
 
 Transform datasets on-the-fly while streaming them, allowing for efficient data processing without the need to store intermediate results.
 
-- You can use the `transform` argument in `StreamingDataset` to apply a transformation function to each sample as it is streamed.
+- You can use the `transform` argument in `StreamingDataset` to apply a `transformation function` or `a list of transformation functions` to each sample as it is streamed.
 
 ```python
 # Define a simple transform function
@@ -953,7 +1050,7 @@ def transform_fn(x, *args, **kwargs):
     return torch_transform(x)  # Apply the transform to the input image
 
 # Create dataset with appropriate configuration
-dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=[transform_fn])
 ```
 
 Or, you can create a subclass of `StreamingDataset` and override its `transform` method to apply custom transformations to each sample.
@@ -986,7 +1083,7 @@ dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuf
 </details>
 
 <details>
-  <summary> ✅ Split datasets for train, val, test</summary>
+  <summary> ✅ Split datasets for train, val, test <a id="split-datasets" href="#split-datasets">🔗</a> </summary>
 
 &nbsp;
 
@@ -1015,7 +1112,7 @@ print(test_dataset)
 </details>
 
 <details>
-  <summary> ✅ Load a subset of the remote dataset</summary>
+  <summary> ✅ Load a subset of the remote dataset <a id="load-subset" href="#load-subset">🔗</a> </summary>
 
 &nbsp;
 Work on a smaller, manageable portion of your data to save time and resources.
@@ -1033,7 +1130,7 @@ print(len(dataset)) # display the length of your data
 </details>
 
 <details>
-  <summary> ✅ Upsample from your source datasets </summary>
+  <summary> ✅ Upsample from your source datasets <a id="upsample-datasets" href="#upsample-datasets">🔗</a> </summary>
 
 &nbsp;
 Use to control the size of one iteration of a StreamingDataset using repeats. Contains `floor(N)` possibly shuffled copies of the source data, then a subsampling of the remainder.
@@ -1051,7 +1148,7 @@ print(len(dataset)) # display the length of your data
 </details>
 
 <details>
-  <summary> ✅ Easily modify optimized cloud datasets</summary>
+  <summary> ✅ Easily modify optimized cloud datasets <a id="modify-datasets" href="#modify-datasets">🔗</a> </summary>
 &nbsp;
 
 Add new data to an existing dataset or start fresh if needed, providing flexibility in data management.
@@ -1092,7 +1189,7 @@ The `overwrite` mode will delete the existing data and start from fresh.
 </details>
 
 <details>
-  <summary> ✅ Stream parquet datasets</summary>
+  <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
 Stream Parquet datasets directly with LitData—no need to convert them into LitData’s optimized binary format! If your dataset is already in Parquet format, you can efficiently index and stream it using `StreamingDataset` and `StreamingDataLoader`.
@@ -1151,7 +1248,7 @@ for sample in dataloader:
 </details>
 
 <details>
-  <summary> ✅ Use compression</summary>
+  <summary> ✅ Use compression <a id="compression" href="#compression">🔗</a> </summary>
 &nbsp;
 
 Reduce your data footprint by using advanced compression algorithms.
@@ -1184,7 +1281,7 @@ Using [zstd](https://github.com/facebook/zstd), you can achieve high compression
 </details>
 
 <details>
-  <summary> ✅ Access samples without full data download</summary>
+  <summary> ✅ Access samples without full data download <a id="access-samples" href="#access-samples">🔗</a> </summary>
 &nbsp;
 
 Look at specific parts of a large dataset without downloading the whole thing or loading it on a local machine.
@@ -1202,7 +1299,7 @@ print(dataset[42]) # show the 42th element of the dataset
 </details>
 
 <details>
-  <summary> ✅ Use any data transforms</summary>
+  <summary> ✅ Use any data transforms <a id="data-transforms" href="#data-transforms">🔗</a> </summary>
 &nbsp;
 
 Customize how your data is processed to better fit your needs.
@@ -1230,7 +1327,7 @@ for batch in dataloader:
 </details>
 
 <details>
-  <summary> ✅ Profile data loading speed</summary>
+  <summary> ✅ Profile data loading speed <a id="profile-loading" href="#profile-loading">🔗</a> </summary>
 &nbsp;
 
 Measure and optimize how fast your data is being loaded, improving efficiency.
@@ -1248,7 +1345,7 @@ This generates a Chrome trace called `result.json`. Then, visualize this trace b
 </details>
 
 <details>
-  <summary> ✅ Reduce memory use for large files</summary>
+  <summary> ✅ Reduce memory use for large files <a id="reduce-memory" href="#reduce-memory">🔗</a> </summary>
 &nbsp;
 
 Handle large data files efficiently without using too much of your computer's memory.
@@ -1286,7 +1383,7 @@ outputs = optimize(
 </details>
 
 <details>
-  <summary> ✅ Limit local cache space</summary>
+  <summary> ✅ Limit local cache space <a id="limit-cache" href="#limit-cache">🔗</a> </summary>
 &nbsp;
 
 Limit the amount of disk space used by temporary files, preventing storage issues.
@@ -1302,7 +1399,7 @@ dataset = StreamingDataset(..., max_cache_size="10GB")
 </details>
 
 <details>
-  <summary> ✅ Change cache directory path</summary>
+  <summary> ✅ Change cache directory path <a id="cache-directory" href="#cache-directory">🔗</a> </summary>
 &nbsp;
 
 Specify the directory where cached files should be stored, ensuring efficient data retrieval and management. This is particularly useful for organizing your data storage and improving access times.
@@ -1320,7 +1417,7 @@ dataset = StreamingDataset(input_dir=Dir(path=cache_dir, url=data_dir))
 </details>
 
 <details>
-  <summary> ✅ Optimize loading on networked drives</summary>
+  <summary> ✅ Optimize loading on networked drives <a id="networked-drives" href="#networked-drives">🔗</a> </summary>
 &nbsp;
 
 Optimize data handling for computers on a local network to improve performance for on-site setups.
@@ -1336,7 +1433,7 @@ dataset = StreamingDataset(input_dir="local:/data/shared-drive/some-data")
 </details>
 
 <details>
-  <summary> ✅ Optimize dataset in distributed environment</summary>
+  <summary> ✅ Optimize dataset in distributed environment <a id="distributed-optimization" href="#distributed-optimization">🔗</a> </summary>
 &nbsp;
 
 Lightning can distribute large workloads across hundreds of machines in parallel. This can reduce the time to complete a data processing task from weeks to minutes by scaling to enough machines.
@@ -1378,7 +1475,7 @@ print(dataset[:])
 </details>
 
 <details>
-  <summary> ✅ Encrypt, decrypt data at chunk/sample level</summary>
+  <summary> ✅ Encrypt, decrypt data at chunk/sample level <a id="encrypt-decrypt" href="#encrypt-decrypt">🔗</a> </summary>
 &nbsp;
 
 Secure data by applying encryption to individual samples or chunks, ensuring sensitive information is protected during storage.
@@ -1447,7 +1544,7 @@ This allows the data to remain secure while maintaining flexibility in the encry
 </details>
 
 <details>
-  <summary> ✅ Debug & Profile LitData with logs & Litracer</summary>
+  <summary> ✅ Debug & Profile LitData with logs & Litracer <a id="debug-profile" href="#debug-profile">🔗</a> </summary>
 
 &nbsp;
 
@@ -1514,13 +1611,62 @@ if __name__ == "__main__":
 
 </details>
 
+<details>
+  <summary> ✅ Lightning AI Data Connections - Direct download and upload <a id="lightning-connections" href="#lightning-connections">🔗</a> </summary>
+
+&nbsp;
+
+[Lightning Studios](https://lightning.ai/) have special directories for data connections that are available to an entire teamspace. LitData functions that reference those directories will experience a significant performance increase as uploads and downloads will happen directly from the bucket that backs the folder.
+
+For example, output artifacts from this code will be directly uploaded to the `my-data-1` s3 bucket.
+
+```python
+from litdata import optimize
+
+def should_keep(data):
+    if data % 2 == 0:
+        yield data
+
+if __name__ == "__main__":
+    optimize(
+        fn=should_keep,
+        inputs=list(range(1000)),
+        output_dir="/teamspace/s3_connections/my-data-1/output",
+        chunk_bytes="64MB",
+        num_workers=1
+    )
+```
+
+
+Similarly, data will be downloaded directly from the `my-data-1` s3 bucket in this example code.
+
+```python
+from litdata import StreamingRawDataset
+
+if __name__ == "__main__":
+    data_dir = "/teamspace/s3_connections/my-bucket-1/data"
+
+    raw_dataset = StreamingRawDataset(data_dir)
+
+    data = list(raw_dataset)
+    print(data)
+```
+
+References to any of the following directories will work similarly:
+1. `/teamspace/lightning_storage/...`
+2. `/teamspace/s3_connections/...`
+3. `/teamspace/gcs_connections/...`
+4. `/teamspace/s3_folders/...`
+5. `/teamspace/gcs_folders/...`
+</details>
+
 &nbsp;
 
 
 ## Features for transforming datasets
 
 <details>
-  <summary> ✅ Parallelize data transformations (map)</summary>
+  <summary> ✅ Parallelize data transformations (map) <a id="map" href="#map">🔗</a> </summary>
 &nbsp;
 
 Apply the same change to different parts of the dataset at once to save time and effort.
@@ -1559,8 +1705,8 @@ map(
 # Benchmarks
 In this section we show benchmarks for speed to optimize a dataset and the resulting streaming speed ([Reproduce the benchmark](https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries)).
 
-## Streaming speed
-
+## Streaming speed 
+### LitData Chunks
 Data optimized and streamed with LitData achieves a 20x speed up over non optimized data and 2x speed up over other streaming solutions.
 
 Speed to stream Imagenet 1.2M from AWS S3:
@@ -1596,6 +1742,19 @@ Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
 | ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
 | ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
 | ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
+### Raw Dataset
+
+Speed to stream raw Imagenet 1.2M from different cloud storage providers:
+
+
+| Storage | Images / s (without transform) | Images / s (with transform) |
+|---------|-------------------|----------------|
+| AWS S3  | ~6400 +/- 100     | ~3200 +/- 100  |
+| Google Cloud Storage | ~5650 +/- 100     | ~3100 +/- 100  |
+
+> **Note:**
+> Use `StreamingRawDataset` if you want to stream your data as-is. Use `StreamingDataset` if you want the fastest streaming and are okay with optimizing your data first.
 
 &nbsp;
 

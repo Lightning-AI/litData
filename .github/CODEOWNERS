@@ -5,7 +5,7 @@
 * @tchaton @lantiga @justusschock
 
 # CI/CD and configs
-/.github/       @borda @tchaton @lantiga @justusschock
-*.yml           @borda @tchaton @lantiga @justusschock
+/.github/       @tchaton @justusschock
+*.yml           @tchaton @justusschock
 
 /src            @tchaton @lantiga @justusschock

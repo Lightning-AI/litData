@@ -1,5 +1,6 @@
 import glob
 import io
+import math
 import os
 import random
 import shutil
@@ -16,10 +17,11 @@ import requests
 import torch
 from PIL import Image
 
-from litdata import StreamingDataset, map, merge_datasets, optimize, walk
+from litdata import StreamingDataLoader, StreamingDataset, index_parquet_dataset, map, merge_datasets, optimize, walk
 from litdata.processing.data_processor import ALL_DONE
 from litdata.processing.functions import _get_input_dir, _resolve_dir
 from litdata.streaming.cache import Cache
+from litdata.streaming.item_loader import ParquetLoader
 from litdata.utilities.encryption import FernetEncryption, RSAEncryption
 
 
@@ -120,6 +122,61 @@ def another_fn(i: int):
 def random_image(index):
     fake_img = Image.fromarray(np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8))
     return {"image": fake_img, "class": index}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+def test_optimize_align_chunking_requires_chunk_size(tmp_path):
+    output_dir = tmp_path / "output_requires_chunk_size"
+
+    with pytest.raises(ValueError, match="`chunk_size` needs to be defined"):
+        optimize(
+            fn=compress,
+            inputs=list(range(7 * 64)),
+            chunk_bytes="1MB",
+            output_dir=str(output_dir),
+            num_workers=1,
+            align_chunking=True,
+        )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+@pytest.mark.parametrize("num_workers", [1, 2])
+@pytest.mark.parametrize("chunk_size", [16, 32, 64])
+def test_optimize_align_chunking_creates_expected_chunks(tmp_path, chunk_size, num_workers):
+    output_dir = tmp_path / f"output_workers_{num_workers}"
+
+    inputs = list(range(7 * 64))
+
+    optimize(
+        fn=compress,
+        inputs=inputs,
+        chunk_size=chunk_size,
+        output_dir=str(output_dir),
+        num_workers=num_workers,
+        align_chunking=True,
+    )
+
+    assert output_dir.exists()
+
+    actual_files = set(os.listdir(output_dir))
+
+    total_items = len(inputs)
+    items_per_worker = total_items / num_workers
+    chunks_per_worker = items_per_worker / chunk_size
+
+    # each worker should create `math.floor(chunks_per_worker)` chunks,
+    # except the last worker which will create the chunk with remaining items `math.ceil(chunks_per_worker)`
+    expected_chunks_by_worker = {
+        worker_id: (math.floor(chunks_per_worker) if worker_id < num_workers - 1 else math.ceil(chunks_per_worker))
+        for worker_id in range(num_workers)
+    }
+
+    expected_chunk_files = {
+        f"chunk-{worker_id}-{i}.bin" for worker_id, indices in expected_chunks_by_worker.items() for i in range(indices)
+    }
+    expected_files = expected_chunk_files | {"index.json"}
+
+    assert actual_files == expected_files
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
@@ -746,3 +803,105 @@ def test_optimize_with_queues_as_input(tmpdir, num_workers):
     complete_data = sorted(ds[:])  # Sort to ensure order
     for idx, data in enumerate(complete_data):
         assert data == (idx, idx**2)
+
+
+def optimize_fn(data):
+    # Extract single elements from list-based record
+    index = data["index"][0]
+    question = data["question"][0]
+    answer = data["answer"][0]
+    return {"index": index, "question": question, "answer": answer}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+@pytest.mark.parametrize("num_workers", [5, 6, 8])
+def test_optimize_with_streaming_dataloader_on_parquet_data(tmpdir, num_workers):
+    """Test optimization with StreamingDataLoader on parquet data with multiple workers.
+
+    This test ensures that when using StreamingDataLoader as input to optimize(),
+    all items are processed correctly without loss due to StopIteration issues
+    that can occur with multiple workers.
+
+    Reproduces issue: https://github.com/Lightning-AI/litdata/issues/599
+    """
+    # Prepare parquet dataset
+    parquet_dir = os.path.join(tmpdir, "parquet")
+    os.makedirs(parquet_dir, exist_ok=True)
+    import polars as pl
+
+    num_items = 500
+    indexes = list(range(num_items))
+    questions = [f"What is the capital of country {i}?" for i in range(num_items)]
+    answers = [f"The capital of country {i} is city {i}." for i in range(num_items)]
+
+    df = pl.DataFrame({"index": indexes, "question": questions, "answer": answers})
+    parquet_file = os.path.join(parquet_dir, "sample.parquet")
+    df.write_parquet(parquet_file)
+
+    # Index the parquet dataset and create a streaming dataset and dataloader
+    index_parquet_dataset(parquet_dir)
+    dataset = StreamingDataset(parquet_dir, item_loader=ParquetLoader())
+    dataloader = StreamingDataLoader(dataset)
+
+    # Verify the dataloader has the expected length
+    assert len(dataloader) == num_items, f"Expected dataloader length {num_items}, got {len(dataloader)}"
+
+    # Optimize the dataset using the streaming dataloader as input
+    output_dir = os.path.join(tmpdir, "out")
+    os.makedirs(output_dir, exist_ok=True)
+
+    optimize(
+        fn=optimize_fn,
+        inputs=dataloader,
+        num_workers=num_workers,
+        output_dir=output_dir,
+        chunk_bytes="64MB",
+    )
+
+    # Verify optimized dataset length - this is the critical test
+    ds = StreamingDataset(output_dir)
+    actual_length = len(ds)
+    assert actual_length == num_items, (
+        f"Expected {num_items} items, got {actual_length}. "
+        f"Missing {num_items - actual_length} items with {num_workers} workers."
+    )
+
+    # Verify a sample record structure
+    sample_record = ds[0]
+    assert "index" in sample_record, "Missing 'index' field in sample record"
+    assert "question" in sample_record, "Missing 'question' field in sample record"
+    assert "answer" in sample_record, "Missing 'answer' field in sample record"
+
+    # Verify the first record has expected values
+    assert sample_record["index"] == 0, f"Expected index 0, got {sample_record['index']}"
+    assert sample_record["question"] == "What is the capital of country 0?", (
+        f"Unexpected question: {sample_record['question']}"
+    )
+    assert sample_record["answer"] == "The capital of country 0 is city 0.", (
+        f"Unexpected answer: {sample_record['answer']}"
+    )
+
+    # check all the indexes are correct
+    indexes = [sample_record["index"].item() for sample_record in ds]
+    assert indexes == list(range(num_items)), f"Expected indexes to be {list(range(num_items))}, but got {indexes}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow")
+@pytest.mark.parametrize("verbose", [True, False])
+def test_verbose_optimize(tmpdir, verbose):
+    output_dir = str(tmpdir / "output_dir")
+
+    with mock.patch("builtins.print") as mock_print:
+        optimize(
+            fn=compress,
+            inputs=list(range(5)),
+            num_workers=1,
+            output_dir=output_dir,
+            chunk_size=2,
+            verbose=verbose,
+            mode="overwrite",
+        )
+    if verbose:
+        mock_print.assert_called()
+    else:
+        mock_print.assert_not_called()

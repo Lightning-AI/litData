@@ -14,14 +14,13 @@
 import logging
 import os
 from time import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 from torch.utils.data import IterableDataset
 
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
-from litdata.debugger import _get_log_msg
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader
@@ -53,16 +52,16 @@ class StreamingDataset(IterableDataset):
         shuffle: bool = False,
         drop_last: Optional[bool] = None,
         seed: int = 42,
-        serializers: Optional[Dict[str, Serializer]] = None,
+        serializers: Optional[dict[str, Serializer]] = None,
         max_cache_size: Union[int, str] = "100GB",
         subsample: float = 1.0,
         encryption: Optional[Encryption] = None,
-        storage_options: Optional[Dict] = {},
-        session_options: Optional[Dict] = {},
+        storage_options: Optional[dict] = {},
+        session_options: Optional[dict] = {},
         max_pre_download: int = 2,
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
-        transform: Optional[Callable] = None,
+        transform: Optional[Union[Callable, list[Callable]]] = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -89,7 +88,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a directory, the function will look for `index.json` within it.
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
-            transform: Optional transformation function to apply to each item in the dataset.
+            transform: Optional transformation function or list of functions to apply to each item in the dataset.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -122,8 +121,8 @@ class StreamingDataset(IterableDataset):
 
         self.input_dir = input_dir
         self.cache_dir = cache_dir
-        self.subsampled_files: List[str] = []
-        self.region_of_interest: List[Tuple[int, int]] = []
+        self.subsampled_files: list[str] = []
+        self.region_of_interest: list[tuple[int, int]] = []
         self.subsampled_files, self.region_of_interest = subsample_streaming_dataset(
             self.input_dir,
             self.cache_dir,
@@ -169,9 +168,9 @@ class StreamingDataset(IterableDataset):
 
         self.cache: Optional[Cache] = None
         self.worker_env: Optional[_WorkerEnv] = None
-        self.worker_chunks: List[int] = []  # chunk indexes that the current worker will download, read & stream
-        self.worker_intervals: List[List[int]] = []  # chunk index intervals for the current worker
-        self.upcoming_indexes: List[int] = []  # contains list of upcoming indexes to be processed
+        self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
+        self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
+        self.upcoming_indexes: list[int] = []  # contains list of upcoming indexes to be processed
 
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
@@ -187,20 +186,41 @@ class StreamingDataset(IterableDataset):
         self.random_state = None
         self.shuffler: Optional[Shuffle] = None
         self.serializers = serializers
-        self._state_dict: Optional[Dict[str, Any]] = None
+        self._state_dict: Optional[dict[str, Any]] = None
         self._force_override_state_dict = force_override_state_dict
         # Has slightly different meaning in the context of the dataset
         # We consider `num_workers = 0` from `torch.utils.DataLoader` still as 1 worker (the main process)
         self.num_workers: int = 1
         self.batch_size: int = 1
         self._encryption = encryption
+        # Ensure data_connection_id is included in storage_options if available from input_dir
+        if input_dir.data_connection_id and storage_options is not None:
+            storage_options = storage_options.copy()
+            storage_options["data_connection_id"] = input_dir.data_connection_id
+        elif input_dir.data_connection_id and storage_options is None:
+            storage_options = {"data_connection_id": input_dir.data_connection_id}
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
         if transform is not None:
-            if not callable(transform):
-                raise ValueError(f"Transform should be a callable. Found {transform}")
+            transform = transform if isinstance(transform, list) else [transform]
+            for t in transform:
+                if not callable(t):
+                    raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
+        self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
+
+    @property
+    def on_demand_bytes(self) -> bool:
+        return self._on_demand_bytes
+
+    @on_demand_bytes.setter
+    def on_demand_bytes(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise ValueError(f"on_demand_bytes should be a boolean. Found {value}")
+        self._on_demand_bytes = value
+        assert self.cache is not None, "Cache must be initialized before setting on_demand_bytes."
+        self.cache._reader.on_demand_bytes = value
 
     def set_shuffle(self, shuffle: bool) -> None:
         if self.shuffle != shuffle:
@@ -244,6 +264,7 @@ class StreamingDataset(IterableDataset):
             storage_options=self.storage_options,
             session_options=self.session_options,
             max_pre_download=self.max_pre_download,
+            on_demand_bytes=self._on_demand_bytes,
         )
         cache._reader._try_load_config()
 
@@ -259,7 +280,7 @@ class StreamingDataset(IterableDataset):
         seed = self.seed
         drop_last = self.drop_last
         if self._state_dict is not None:
-            state: Dict[str, Any] = self._state_dict
+            state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
         return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
@@ -284,18 +305,18 @@ class StreamingDataset(IterableDataset):
 
     def __iter__(self) -> "StreamingDataset":
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
-        logger.debug(_get_log_msg({"name": "iterating_dataset", "ph": "B"}))
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
             self.distributed_env = _DistributedEnv.detect()
 
         self.worker_env = _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
+        self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
 
         # Handle restart
         if self._state_dict:
             self._validate_state_dict()
-            state: Dict[str, Any] = self._state_dict
+            state: dict[str, Any] = self._state_dict
             self.current_epoch = state["current_epoch"]
 
         workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
@@ -350,12 +371,12 @@ class StreamingDataset(IterableDataset):
 
         return self
 
-    def _resume(self, workers_chunks: List[List[int]], workers_intervals: List[Any]) -> None:
+    def _resume(self, workers_chunks: list[list[int]], workers_intervals: list[Any]) -> None:
         assert self._state_dict
         assert self.worker_env
         assert self.shuffler
 
-        state: Dict[str, Any] = self._state_dict
+        state: dict[str, Any] = self._state_dict
 
         num_workers = state["num_workers"]
         batch_size = state["batch_size"]
@@ -406,7 +427,7 @@ class StreamingDataset(IterableDataset):
         # bump the chunk_index
         self.worker_next_chunk_index += 1
 
-    def __getitem__(self, index: Union[ChunkedIndex, int]) -> Any:
+    def __getitem__(self, index: Union[ChunkedIndex, int, slice]) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -414,22 +435,20 @@ class StreamingDataset(IterableDataset):
         if isinstance(index, int):
             index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
         elif isinstance(index, slice):
+            self.on_demand_bytes = False  # for slices, we always want to store the chunks
             start, stop, step = index.indices(len(self))
             _my_indices = list(range(start, stop, step))
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
             return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
-        logger.debug(
-            _get_log_msg(
-                {"name": f"getitem_dataset_for_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "B"}
-            )
-        )
         item = self.cache[index]
-        logger.debug(
-            _get_log_msg(
-                {"name": f"getitem_dataset_for_chunk_index_{index.chunk_index}_and_index_{index.index}", "ph": "E"}
-            )
-        )
-        return self.transform(item) if hasattr(self, "transform") else item
+        if hasattr(self, "transform"):
+            if isinstance(self.transform, list):
+                for transform_fn in self.transform:
+                    item = transform_fn(item)
+            else:
+                item = self.transform(item)
+
+        return item
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)
@@ -439,7 +458,7 @@ class StreamingDataset(IterableDataset):
             # if they are equal, means, worker has processed all the chunks
             self.current_epoch += 1
             self.reset_state_dict()
-            logger.debug(_get_log_msg({"name": "iterating_dataset", "ph": "E"}))
+            self.on_demand_bytes = True  # reset on_demand_bytes to True
             raise StopIteration
 
         # Lazily re-populate the interval to reduce memory usage.
@@ -448,6 +467,7 @@ class StreamingDataset(IterableDataset):
             if self.num_chunks is not None and self.worker_next_chunk_index >= self.num_chunks:
                 self.current_epoch += 1
                 self.reset_state_dict()
+                self.on_demand_bytes = True  # reset on_demand_bytes to True
                 raise StopIteration
 
             # if upcoming_indexes is empty, means either:
@@ -473,16 +493,23 @@ class StreamingDataset(IterableDataset):
         # Get the first index
         index = self.upcoming_indexes.pop(0)
 
+        chunk_indexes = None if self.has_triggered_download else self.worker_chunks[self.worker_next_chunk_index - 1 :]
+        is_last_index = (self.worker_next_chunk_index) == self.num_chunks and len(self.upcoming_indexes) == 0
+        chunk_index = self.worker_chunks[self.worker_next_chunk_index - 1]
+        chunk_size = (
+            self.worker_intervals[self.worker_next_chunk_index - 1][2]
+            - self.worker_intervals[self.worker_next_chunk_index - 1][1]
+        )
+
         # Call the `__getitem__` method.
         data = self.__getitem__(
             ChunkedIndex(
                 index=index,
-                chunk_index=self.worker_chunks[self.worker_next_chunk_index - 1],
+                chunk_index=chunk_index,
                 # We provide the chunks indexes only one the first
-                chunk_indexes=None
-                if self.has_triggered_download
-                else self.worker_chunks[self.worker_next_chunk_index - 1 :],
-                is_last_index=(self.worker_next_chunk_index) == self.num_chunks and len(self.upcoming_indexes) == 0,
+                chunk_indexes=chunk_indexes,
+                is_last_index=is_last_index,
+                chunk_size=chunk_size,
             )
         )
 
@@ -492,7 +519,7 @@ class StreamingDataset(IterableDataset):
 
         return data
 
-    def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> Dict[str, Any]:
+    def state_dict(self, num_samples_yielded: int, num_workers: int, batch_size: int) -> dict[str, Any]:
         if _is_in_dataloader_worker():
             raise RuntimeError("The method `state_dict` should only be called in the main process.")
 
@@ -518,7 +545,7 @@ class StreamingDataset(IterableDataset):
             "region_of_interest": self.region_of_interest,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if state_dict:
             # the state is restored within the workers
             self._state_dict = state_dict
@@ -536,7 +563,7 @@ class StreamingDataset(IterableDataset):
         assert self.worker_env
         assert self.cache
 
-        state: Dict[str, Any] = self._state_dict
+        state: dict[str, Any] = self._state_dict
         if state["shuffle"] != self.shuffle:
             if not self._force_override_state_dict:
                 raise ValueError(
@@ -642,7 +669,7 @@ class StreamingDataset(IterableDataset):
 
     def reset(self) -> None:
         # undo all the properties associated with original dataset
-        default_properties: Dict[str, Any] = {
+        default_properties: dict[str, Any] = {
             "cache": None,
             "worker_env": None,
             "worker_chunks": [],
@@ -674,7 +701,7 @@ def is_integer(value: str) -> bool:
         return False
 
 
-def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int) -> Dict[int, int]:
+def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int) -> dict[int, int]:
     """This function replays the sampling from the dataloader."""
     divisible_num_batches_yielded = num_samples_yielded // (num_workers * batch_size)
 
@@ -698,8 +725,8 @@ def _replay_sampling(num_samples_yielded: int, batch_size: int, num_workers: int
 
 
 def _replay_chunks_sampling(
-    workers_intervals: Dict[int, List[Any]], indexes: Dict[int, int]
-) -> Tuple[Dict[int, int], Dict[int, int]]:
+    workers_intervals: dict[int, list[Any]], indexes: dict[int, int]
+) -> tuple[dict[int, int], dict[int, int]]:
     chunks_index = {}
 
     for worker_idx in range(len(workers_intervals)):

@@ -10,10 +10,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from lightning_utilities.core.imports import RequirementCache
+import warnings
 
 from litdata.__about__ import *  # noqa: F403
+from litdata.constants import _LIGHTNING_SDK_AVAILABLE
 from litdata.processing.functions import map, merge_datasets, optimize, walk
+from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
@@ -24,8 +26,15 @@ from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.train_test_split import train_test_split
 
+warnings.filterwarnings(
+    "ignore",
+    message=r"A newer version of lightning-sdk.*",
+    category=UserWarning,
+)
+
 __all__ = [
     "StreamingDataset",
+    "StreamingRawDataset",
     "CombinedStreamingDataset",
     "StreamingDataLoader",
     "TokensLoader",
@@ -39,7 +48,8 @@ __all__ = [
     "index_hf_dataset",
     "breakpoint",
 ]
-if RequirementCache("lightning_sdk"):
+
+if _LIGHTNING_SDK_AVAILABLE:
     from lightning_sdk import Machine  # noqa: F401
 
-    __all__ + ["Machine"]
+    __all__.append("Machine")
