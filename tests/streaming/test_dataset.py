@@ -567,6 +567,8 @@ def test_len_called_before_dataloader_drop_last(tmpdir):
     expected_batches = len(dataloader)
     batches = list(dataloader)
 
+    # With drop_last=True and 100 items: 100 // 8 = 12 full batches (4 items dropped)
+    assert expected_batches == 12
     assert len(batches) == expected_batches
     assert all(len(batch) == batch_size for batch in batches)
 
