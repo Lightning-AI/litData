@@ -301,7 +301,7 @@ def _upload_fn(
 
 
 def _map_items_to_workers_sequentially(
-    num_workers: int, user_items: list[Any], chunk_size: Optional[int] = None
+    num_workers: int, user_items: list[Any], chunk_size: int | None = None
 ) -> list[list[Any]]:
     """Map the items to the workers sequentially.
 
