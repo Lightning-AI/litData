@@ -18,13 +18,13 @@ import multiprocessing as mp
 import os
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import torch
@@ -73,7 +73,7 @@ def _get_indexed_paths(data: Any) -> dict[int, str]:
     }
 
 
-def _get_input_dir(inputs: Sequence[Any]) -> Optional[str]:
+def _get_input_dir(inputs: Sequence[Any]) -> str | None:
     indexed_paths = _get_indexed_paths(inputs[0])
 
     if len(indexed_paths) == 0:
@@ -111,20 +111,20 @@ class LambdaMapRecipe(MapRecipe):
     def __init__(
         self,
         fn: Callable[[str, Any], None],
-        inputs: Union[Sequence[Any], StreamingDataLoader],
+        inputs: Sequence[Any] | StreamingDataLoader,
         storage_options: dict[str, Any] = {},
     ):
         super().__init__(storage_options)
         self._fn = fn
         self._inputs = inputs
-        self._device: Optional[str] = None
+        self._device: str | None = None
 
         _fn = self._fn if isinstance(self._fn, FunctionType) else self._fn.__call__  # type: ignore
         params = inspect.signature(_fn).parameters
         self._contains_device = "device" in params
         self._contains_is_last = "is_last" in params
 
-    def prepare_structure(self, _: Optional[str]) -> Any:
+    def prepare_structure(self, _: str | None) -> Any:
         return self._inputs
 
     def prepare_item(self, item_metadata: Any, output_dir: str, is_last: bool) -> None:
@@ -161,12 +161,12 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
     def __init__(
         self,
         fn: Callable[[Any], None],
-        inputs: Union[Sequence[Any], StreamingDataLoader],
-        chunk_size: Optional[int],
-        chunk_bytes: Optional[Union[int, str]],
-        compression: Optional[str],
-        encryption: Optional[Encryption] = None,
-        existing_index: Optional[dict[str, Any]] = None,
+        inputs: Sequence[Any] | StreamingDataLoader,
+        chunk_size: int | None,
+        chunk_bytes: int | str | None,
+        compression: str | None,
+        encryption: Encryption | None = None,
+        existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
     ):
         super().__init__(
@@ -199,7 +199,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
     def _prepare_item_generator(self, item_metadata: Any) -> Any:
         yield from self._fn(item_metadata)  # type: ignore
 
-    def prepare_structure(self, input_dir: Optional[str]) -> Any:
+    def prepare_structure(self, input_dir: str | None) -> Any:
         return self._inputs
 
     def prepare_item(self, item_metadata: Any) -> Any:
@@ -213,11 +213,11 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         self,
         fn: Callable[[Any], None],
         queue: mp.Queue,
-        chunk_size: Optional[int],
-        chunk_bytes: Optional[Union[int, str]],
-        compression: Optional[str],
-        encryption: Optional[Encryption] = None,
-        existing_index: Optional[dict[str, Any]] = None,
+        chunk_size: int | None,
+        chunk_bytes: int | str | None,
+        compression: str | None,
+        encryption: Encryption | None = None,
+        existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
     ):
         super().__init__(
@@ -232,7 +232,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         self.existing_index = existing_index
         self.is_generator = False
 
-    def prepare_structure(self, input_dir: Optional[str]) -> Any:
+    def prepare_structure(self, input_dir: str | None) -> Any:
         return self._queue
 
     def prepare_item(self, item_metadata: Any) -> Any:
@@ -241,22 +241,22 @@ class QueueDataChunkRecipe(DataChunkRecipe):
 
 def map(
     fn: Callable[[str, Any], None],
-    inputs: Union[Sequence[Any], StreamingDataLoader],
-    output_dir: Union[str, Path, Dir],
-    input_dir: Optional[Union[str, Path]] = None,
-    weights: Optional[list[int]] = None,
-    num_workers: Optional[int] = None,
-    fast_dev_run: Union[bool, int] = False,
-    num_nodes: Optional[int] = None,
-    machine: Optional[Union["Machine", str]] = None,
-    num_downloaders: Optional[int] = None,
-    num_uploaders: Optional[int] = None,
+    inputs: Sequence[Any] | StreamingDataLoader,
+    output_dir: str | Path | Dir,
+    input_dir: str | Path | None = None,
+    weights: list[int] | None = None,
+    num_workers: int | None = None,
+    fast_dev_run: bool | int = False,
+    num_nodes: int | None = None,
+    machine: "Machine | str | None" = None,
+    num_downloaders: int | None = None,
+    num_uploaders: int | None = None,
     reorder_files: bool = True,
     error_when_not_empty: bool = False,
-    reader: Optional[BaseReader] = None,
-    batch_size: Optional[int] = None,
-    start_method: Optional[str] = None,
-    optimize_dns: Optional[bool] = None,
+    reader: BaseReader | None = None,
+    batch_size: int | None = None,
+    start_method: str | None = None,
+    optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
 ) -> None:
@@ -386,30 +386,30 @@ def map(
 #
 def optimize(
     fn: Callable[[Any], Any],
-    inputs: Optional[Union[Sequence[Any], StreamingDataLoader]] = None,
+    inputs: Sequence[Any] | StreamingDataLoader | None = None,
     output_dir: str = "optimized_data",
-    queue: Optional[mp.Queue] = None,
-    input_dir: Optional[str] = None,
-    weights: Optional[list[int]] = None,
-    chunk_size: Optional[int] = None,
-    chunk_bytes: Optional[Union[int, str]] = None,
+    queue: "mp.Queue | None" = None,
+    input_dir: str | None = None,
+    weights: list[int] | None = None,
+    chunk_size: int | None = None,
+    chunk_bytes: int | str | None = None,
     align_chunking: bool = False,
-    compression: Optional[str] = None,
-    encryption: Optional[Encryption] = None,
-    num_workers: Optional[int] = None,
+    compression: str | None = None,
+    encryption: Encryption | None = None,
+    num_workers: int | None = None,
     fast_dev_run: bool = False,
-    num_nodes: Optional[int] = None,
-    machine: Optional[Union["Machine", str]] = None,
-    num_downloaders: Optional[int] = None,
-    num_uploaders: Optional[int] = None,
+    num_nodes: int | None = None,
+    machine: "Machine | str | None" = None,
+    num_downloaders: int | None = None,
+    num_uploaders: int | None = None,
     reorder_files: bool = True,
-    reader: Optional[BaseReader] = None,
-    batch_size: Optional[int] = None,
-    mode: Optional[Literal["append", "overwrite"]] = None,
+    reader: BaseReader | None = None,
+    batch_size: int | None = None,
+    mode: Literal["append", "overwrite"] | None = None,
     use_checkpoint: bool = False,
-    item_loader: Optional[BaseItemLoader] = None,
-    start_method: Optional[str] = None,
-    optimize_dns: Optional[bool] = None,
+    item_loader: BaseItemLoader | None = None,
+    start_method: str | None = None,
+    optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
     verbose: bool = True,
@@ -579,7 +579,7 @@ def optimize(
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
-            recipe: Optional[Union[LambdaDataChunkRecipe, QueueDataChunkRecipe]] = None
+            recipe: LambdaDataChunkRecipe | QueueDataChunkRecipe | None = None
             if queue is None:
                 assert isinstance(inputs, (Sequence, StreamingDataLoader))
                 recipe = LambdaDataChunkRecipe(
@@ -625,7 +625,7 @@ class walk:
 
     """
 
-    def __init__(self, folder: str, max_workers: Optional[int] = os.cpu_count()) -> None:
+    def __init__(self, folder: str, max_workers: int | None = os.cpu_count()) -> None:
         self.folders = [folder]
         self.max_workers = max_workers or 1
         self.futures: list[concurrent.futures.Future] = []
@@ -675,7 +675,7 @@ class CopyInfo:
 def merge_datasets(
     input_dirs: list[str],
     output_dir: str,
-    max_workers: Optional[int] = os.cpu_count(),
+    max_workers: int | None = os.cpu_count(),
     storage_options: dict[str, Any] = {},
 ) -> None:
     """Enables to merge multiple existing optimized datasets into a single optimized dataset.

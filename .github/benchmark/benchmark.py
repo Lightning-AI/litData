@@ -2,7 +2,6 @@
 
 import argparse
 from dataclasses import dataclass
-from typing import Optional
 
 from lightning_sdk import Machine, Studio
 
@@ -19,8 +18,8 @@ class BenchmarkArgs:
 
     pr_number: int
     branch: str
-    org: Optional[str]
-    user: Optional[str]
+    org: str | None
+    user: str | None
     teamspace: str
     machine: Machine
     make_args: str
@@ -75,7 +74,7 @@ class LitDataBenchmark:
         self.org = config.org
         self.machine = config.machine
         self.make_args = config.make_args
-        self.studio: Optional[Studio] = None
+        self.studio: Studio | None = None
 
     def run(self) -> None:
         """Run the LitData benchmark."""

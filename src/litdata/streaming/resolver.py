@@ -22,7 +22,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from time import sleep
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -37,9 +37,9 @@ if TYPE_CHECKING:
 class Dir:
     """Holds a directory path and possibly its associated remote URL."""
 
-    path: Optional[str] = None
-    url: Optional[str] = None
-    data_connection_id: Optional[str] = None
+    path: str | None = None
+    url: str | None = None
+    data_connection_id: str | None = None
 
 
 class CloudProvider(str, Enum):
@@ -47,7 +47,7 @@ class CloudProvider(str, Enum):
     GCP = "gcp"
 
 
-def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
+def _resolve_dir(dir_path: str | Path | Dir | None) -> Dir:
     if isinstance(dir_path, Dir):
         return Dir(
             path=str(dir_path.path) if dir_path.path else None,
@@ -105,7 +105,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     return Dir(path=dir_path_absolute, url=None)
 
 
-def _match_studio(target_id: Optional[str], target_name: Optional[str], cloudspace: Any) -> bool:
+def _match_studio(target_id: str | None, target_name: str | None, cloudspace: Any) -> bool:
     if cloudspace.name is not None and target_name is not None and cloudspace.name.lower() == target_name.lower():
         return True
 
@@ -119,7 +119,7 @@ def _match_studio(target_id: Optional[str], target_name: Optional[str], cloudspa
     )
 
 
-def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Optional[str]) -> Dir:
+def _resolve_studio(dir_path: str, target_name: str | None, target_id: str | None) -> Dir:
     from lightning_sdk.lightning_cloud.rest_client import LightningClient
 
     client = LightningClient(max_tries=2)
@@ -330,7 +330,7 @@ def _assert_dir_is_empty(
 
 def _assert_dir_has_index_file(
     output_dir: Dir,
-    mode: Optional[Literal["append", "overwrite"]] = None,
+    mode: Literal["append", "overwrite"] | None = None,
     use_checkpoint: bool = False,
     storage_options: dict[str, Any] = {},
 ) -> None:
@@ -449,8 +449,8 @@ def _resolve_time_template(path: str) -> str:
 def _execute(
     name: str,
     num_nodes: int,
-    machine: Optional[Union["Machine", str]] = None,
-    command: Optional[str] = None,
+    machine: "Machine | str | None" = None,
+    command: str | None = None,
     interruptible: bool = False,
 ) -> None:
     """Remotely execute the current operator."""
