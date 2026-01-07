@@ -373,6 +373,36 @@ def test_map_items_to_workers_sequentially(monkeypatch):
     assert workers_user_items == [[24, 25], [26, 27], [28, 29], [30, 31]]
 
 
+def test_map_items_to_workers_sequentially_align_chunking(monkeypatch):
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), chunk_size=2)
+    assert workers_user_items == [list(range(5))]
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), chunk_size=2)
+    assert workers_user_items == [[0, 1], [2, 3, 4]]
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(6)), chunk_size=2)
+    assert workers_user_items == [[0, 1], [2, 3, 4, 5]]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "0")
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), chunk_size=2)
+    assert workers_user_items == [[0, 1]]
+
+    # 2 nodes, 2 workers per node, chunk_size=2.
+    # Total items = 5 => only the final worker should receive them,
+    # because no worker except the last can form even one full chunk. (5/ (2*2*2) = 0.625 ~ 0)
+    with pytest.warns(UserWarning, match="Consider reducing chunk_size or using fewer workers"):
+        workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), chunk_size=2)
+    assert workers_user_items == [[], []]
+
+    monkeypatch.setenv("DATA_OPTIMIZER_NUM_NODES", "2")
+    monkeypatch.setenv("DATA_OPTIMIZER_NODE_RANK", "1")
+    workers_user_items = _map_items_to_workers_sequentially(1, list(range(5)), chunk_size=2)
+    assert workers_user_items == [[2, 3, 4]]
+
+    # On node 1 (rank 1), last worker should receive all items.
+    workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)), chunk_size=2)
+    assert workers_user_items == [[], [0, 1, 2, 3, 4]]
+
+
 def test_fake_queue():
     q = FakeQueue()
     index = [1, 2]
@@ -395,6 +425,16 @@ class CustomDataChunkRecipe(DataChunkRecipe):
         filepaths = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
         assert len(filepaths) == 30
         return filepaths
+
+    def prepare_item(self, item):
+        return item
+
+
+class DummyDataChunkRecipe(DataChunkRecipe):
+    is_generator = False
+
+    def prepare_structure(self, input_dir: str) -> list[Any]:
+        return []
 
     def prepare_item(self, item):
         return item
@@ -475,6 +515,17 @@ def test_data_processsor(fast_dev_run, delete_cached_files, tmpdir, monkeypatch)
 
     expected = (0 if delete_cached_files else 20) if fast_dev_run == 10 else (0 if delete_cached_files else 30)
     assert len(files) == expected
+
+
+def test_data_processor_align_chunking_requires_chunk_size(tmpdir):
+    output_dir = str(tmpdir / "output_dir")
+    data_processor = DataProcessor(input_dir=Dir(), output_dir=output_dir, num_workers=1, align_chunking=True)
+    with pytest.raises(ValueError, match="`chunk_size` is not defined in the data recipe"):
+        data_processor.run(
+            DummyDataChunkRecipe(
+                chunk_bytes="10MB"  # chunk_size is not defined here to trigger the error
+            )
+        )
 
 
 class TestDataProcessor(DataProcessor):
