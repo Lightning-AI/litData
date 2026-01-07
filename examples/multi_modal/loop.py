@@ -3,7 +3,7 @@
 import logging
 import os
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any
 
 import lightning as pl
 import pandas as pd
@@ -259,7 +259,7 @@ class LitModel(pl.LightningModule):
         scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
         return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
 
-    def configure_callbacks(self) -> Union[Sequence[pl.pytorch.Callback], pl.pytorch.Callback]:
+    def configure_callbacks(self) -> Sequence[pl.pytorch.Callback] | pl.pytorch.Callback:
         """Configure Early stopping or Model Checkpointing."""
         early_stop = EarlyStopping(
             monitor="val_MulticlassAccuracy", patience=self.hyperparameters["patience"], mode="max"

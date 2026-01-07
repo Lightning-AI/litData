@@ -13,8 +13,9 @@
 
 import logging
 import os
+from collections.abc import Callable
 from time import time
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -46,22 +47,22 @@ class StreamingDataset(IterableDataset):
 
     def __init__(
         self,
-        input_dir: Union[str, "Dir"],
-        cache_dir: Optional[Union[str, "Dir"]] = None,
-        item_loader: Optional[BaseItemLoader] = None,
+        input_dir: "str | Dir",
+        cache_dir: "str | Dir | None" = None,
+        item_loader: BaseItemLoader | None = None,
         shuffle: bool = False,
-        drop_last: Optional[bool] = None,
+        drop_last: bool | None = None,
         seed: int = 42,
-        serializers: Optional[dict[str, Serializer]] = None,
-        max_cache_size: Union[int, str] = "100GB",
+        serializers: dict[str, Serializer] | None = None,
+        max_cache_size: int | str = "100GB",
         subsample: float = 1.0,
-        encryption: Optional[Encryption] = None,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        encryption: Encryption | None = None,
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
         max_pre_download: int = 2,
-        index_path: Optional[str] = None,
+        index_path: str | None = None,
         force_override_state_dict: bool = False,
-        transform: Optional[Union[Callable, list[Callable]]] = None,
+        transform: Callable | list[Callable] | None = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -166,8 +167,8 @@ class StreamingDataset(IterableDataset):
                 "Consider increasing the `max_cache_size` to at least 25GB to avoid potential performance degradation."
             )
 
-        self.cache: Optional[Cache] = None
-        self.worker_env: Optional[_WorkerEnv] = None
+        self.cache: Cache | None = None
+        self.worker_env: _WorkerEnv | None = None
         self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
         self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
         self.upcoming_indexes: list[int] = []  # contains list of upcoming indexes to be processed
@@ -175,18 +176,18 @@ class StreamingDataset(IterableDataset):
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
 
-        self.num_chunks: Optional[int] = None  # total number of chunks that the current worker will work on
+        self.num_chunks: int | None = None  # total number of chunks that the current worker will work on
         self.global_index = 0  # total number of samples processed by the current worker up until now
 
         # number of samples processed by the current worker in the current chunk
         self.consumed_sample_count_in_curr_chunk = 0
         self.has_triggered_download = False
-        self.min_items_per_replica: Optional[int] = None
+        self.min_items_per_replica: int | None = None
         self.current_epoch = 1
         self.random_state = None
-        self.shuffler: Optional[Shuffle] = None
+        self.shuffler: Shuffle | None = None
         self.serializers = serializers
-        self._state_dict: Optional[dict[str, Any]] = None
+        self._state_dict: dict[str, Any] | None = None
         self._force_override_state_dict = force_override_state_dict
         # Has slightly different meaning in the context of the dataset
         # We consider `num_workers = 0` from `torch.utils.DataLoader` still as 1 worker (the main process)
@@ -223,10 +224,32 @@ class StreamingDataset(IterableDataset):
         self.cache._reader.on_demand_bytes = value
 
     def set_shuffle(self, shuffle: bool) -> None:
-        self.shuffle = shuffle
+        """Set the shuffle parameter.
+
+        Invalidates the shuffler cache when the parameter changes to ensure
+        subsequent length calculations reflect the new shuffle setting.
+
+        Args:
+            shuffle: Whether to shuffle the dataset.
+
+        """
+        if self.shuffle != shuffle:
+            self.shuffle = shuffle
+            self.shuffler = None  # Reset shuffler to pick up new shuffle setting
 
     def set_drop_last(self, drop_last: bool) -> None:
-        self.drop_last = drop_last
+        """Set the drop_last parameter.
+
+        Invalidates the shuffler cache when the parameter changes to ensure
+        subsequent length calculations reflect the new drop_last setting.
+
+        Args:
+            drop_last: Whether to drop the last incomplete batch.
+
+        """
+        if self.drop_last != drop_last:
+            self.drop_last = drop_last
+            self.shuffler = None  # Reset shuffler to pick up new drop_last setting
 
     def set_epoch(self, current_epoch: int) -> None:
         """Set the current epoch to the dataset on epoch starts.
@@ -423,7 +446,7 @@ class StreamingDataset(IterableDataset):
         # bump the chunk_index
         self.worker_next_chunk_index += 1
 
-    def __getitem__(self, index: Union[ChunkedIndex, int, slice]) -> Any:
+    def __getitem__(self, index: ChunkedIndex | int | slice) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)

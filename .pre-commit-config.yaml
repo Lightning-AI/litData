@@ -55,7 +55,7 @@ repos:
         #args: ["--write-changes"] # uncomment if you want to get automatic fixing
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.3
+    rev: v0.14.10
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -85,7 +85,7 @@ repos:
         args: ["--print-width=120"]
 
   - repo: https://github.com/tox-dev/pyproject-fmt
-    rev: v2.7.0
+    rev: v2.11.1
     hooks:
       - id: pyproject-fmt
         additional_dependencies: [tox]

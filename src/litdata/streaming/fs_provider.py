@@ -12,7 +12,7 @@
 # limitations under the License.
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 from urllib import parse
 
 from litdata.constants import _GOOGLE_STORAGE_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -20,7 +20,7 @@ from litdata.streaming.client import R2Client, S3Client
 
 
 class FsProvider(ABC):
-    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = {}):
         self.storage_options = storage_options
 
     @abstractmethod
@@ -50,7 +50,7 @@ class FsProvider(ABC):
 
 
 class GCPFsProvider(FsProvider):
-    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = {}):
         if not _GOOGLE_STORAGE_AVAILABLE:
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
         from google.cloud import storage
@@ -133,7 +133,7 @@ class GCPFsProvider(FsProvider):
 
 
 class S3FsProvider(FsProvider):
-    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = {}):
         super().__init__(storage_options=storage_options)
         self.client = S3Client(storage_options=storage_options)
 
@@ -225,7 +225,7 @@ class S3FsProvider(FsProvider):
 
 
 class R2FsProvider(S3FsProvider):
-    def __init__(self, storage_options: Optional[dict[str, Any]] = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = {}):
         super().__init__(storage_options=storage_options)
 
         # Create R2Client with refreshable credentials
@@ -324,7 +324,7 @@ def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> tu
     return bucket_name, blob_path
 
 
-def _get_fs_provider(remote_filepath: str, storage_options: Optional[dict[str, Any]] = {}) -> FsProvider:
+def _get_fs_provider(remote_filepath: str, storage_options: dict[str, Any] | None = {}) -> FsProvider:
     obj = parse.urlparse(remote_filepath)
     if obj.scheme == "gs":
         return GCPFsProvider(storage_options=storage_options)

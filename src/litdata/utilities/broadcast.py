@@ -14,9 +14,10 @@
 import json
 import os
 import pickle
+from collections.abc import Callable
 from logging import Logger
 from time import sleep
-from typing import Any, Callable, Optional
+from typing import Any
 from urllib.parse import urljoin
 
 import requests
@@ -53,8 +54,8 @@ class _HTTPClient:
     def __init__(
         self,
         base_url: str,
-        auth_token: Optional[str] = None,
-        log_callback: Optional[Callable] = None,
+        auth_token: str | None = None,
+        log_callback: Callable | None = None,
         use_retry: bool = True,
     ) -> None:
         self.base_url = base_url
@@ -89,9 +90,7 @@ class _HTTPClient:
         url = urljoin(self.base_url, path)
         return self.session.get(url)
 
-    def post(
-        self, path: str, *, query_params: Optional[dict] = None, data: Optional[bytes] = None, json: Any = None
-    ) -> Any:
+    def post(self, path: str, *, query_params: dict | None = None, data: bytes | None = None, json: Any = None) -> Any:
         url = urljoin(self.base_url, path)
         return self.session.post(url, data=data, params=query_params, json=json)
 
@@ -153,7 +152,7 @@ def broadcast_object(key: str, obj: Any, rank: int) -> Any:
     return obj
 
 
-def _get_token() -> Optional[str]:
+def _get_token() -> str | None:
     """This function tries to retrieve a temporary token."""
     if os.getenv("LIGHTNING_CLOUD_URL") is None:
         return None
