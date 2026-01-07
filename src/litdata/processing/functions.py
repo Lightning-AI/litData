@@ -24,7 +24,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 import torch
@@ -248,7 +248,7 @@ def map(
     num_workers: int | None = None,
     fast_dev_run: bool | int = False,
     num_nodes: int | None = None,
-    machine: Union["Machine", str] | None = None,
+    machine: "Machine | str | None" = None,
     num_downloaders: int | None = None,
     num_uploaders: int | None = None,
     reorder_files: bool = True,
@@ -399,7 +399,7 @@ def optimize(
     num_workers: int | None = None,
     fast_dev_run: bool = False,
     num_nodes: int | None = None,
-    machine: Union["Machine", str] | None = None,
+    machine: "Machine | str | None" = None,
     num_downloaders: int | None = None,
     num_uploaders: int | None = None,
     reorder_files: bool = True,
