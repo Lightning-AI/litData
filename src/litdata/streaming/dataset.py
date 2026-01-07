@@ -15,7 +15,7 @@ import logging
 import os
 from collections.abc import Callable
 from time import time
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -47,8 +47,8 @@ class StreamingDataset(IterableDataset):
 
     def __init__(
         self,
-        input_dir: Union[str, "Dir"],
-        cache_dir: Union[str, "Dir"] | None = None,
+        input_dir: "str | Dir",
+        cache_dir: "str | Dir | None" = None,
         item_loader: BaseItemLoader | None = None,
         shuffle: bool = False,
         drop_last: bool | None = None,

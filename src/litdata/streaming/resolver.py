@@ -22,7 +22,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from time import sleep
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -449,7 +449,7 @@ def _resolve_time_template(path: str) -> str:
 def _execute(
     name: str,
     num_nodes: int,
-    machine: Union["Machine", str] | None = None,
+    machine: "Machine | str | None" = None,
     command: str | None = None,
     interruptible: bool = False,
 ) -> None:
