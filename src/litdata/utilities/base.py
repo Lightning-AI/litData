@@ -13,7 +13,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from typing import Any, Optional, Union
+from typing import Any
 
 from torch.utils.data import IterableDataset
 
@@ -30,18 +30,18 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
 
     _datasets: list[StreamingDataset]
     _current_epoch: int
-    batch_size: Union[int, Sequence[int]]
+    batch_size: int | Sequence[int]
     num_workers: int
     _force_override_state_dict: bool
     _use_streaming_dataloader: bool
-    _num_samples_yielded: Optional[dict[int, list[int]]] = None
+    _num_samples_yielded: dict[int, list[int]] | None = None
 
     def set_shuffle(self, shuffle: bool) -> None:
         """Set the current shuffle to the datasets."""
         for dataset in self._datasets:
             dataset.set_shuffle(shuffle)
 
-    def set_batch_size(self, batch_size: Union[int, Sequence[int]]) -> None:
+    def set_batch_size(self, batch_size: int | Sequence[int]) -> None:
         """Set the current batch size.
 
         This method now supports either:
@@ -137,14 +137,14 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
     def set_epoch(self, current_epoch: int) -> None: ...
 
     @abstractmethod
-    def get_len(self, num_workers: int, batch_size: int) -> Optional[int]: ...
+    def get_len(self, num_workers: int, batch_size: int) -> int | None: ...
 
     @abstractmethod
-    def __len__(self) -> Optional[int]: ...
+    def __len__(self) -> int | None: ...
 
     @abstractmethod
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+        self, num_workers: int, batch_size: int, num_samples_yielded: list[int] | None = None
     ) -> dict[str, Any]: ...
 
     @abstractmethod

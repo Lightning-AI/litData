@@ -17,7 +17,7 @@ import logging
 import random
 from collections.abc import Iterator
 from copy import deepcopy
-from typing import Any, Literal, Optional, Protocol, Union
+from typing import Any, Literal, Protocol
 
 import numpy as np
 import torch
@@ -33,12 +33,12 @@ from litdata.utilities.env import _WorkerEnv
 
 logger = logging.getLogger("litdata.streaming.parallel")
 
-RandomGenerator = Union[random.Random, np.random.Generator, torch.Generator]
+RandomGenerator = random.Random | np.random.Generator | torch.Generator
 GeneratorName = Literal["random", "numpy", "torch"]
 
 
 class Transform(Protocol):
-    def __call__(self, samples: tuple[Any, ...], rng: Optional[dict[GeneratorName, RandomGenerator]] = None) -> Any: ...
+    def __call__(self, samples: tuple[Any, ...], rng: dict[GeneratorName, RandomGenerator] | None = None) -> Any: ...
 
 
 class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
@@ -84,9 +84,9 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
     def __init__(
         self,
         datasets: list[StreamingDataset],
-        length: Optional[Union[int, float]] = None,
+        length: int | float | None = None,
         force_override_state_dict: bool = False,
-        transform: Optional[Transform] = None,
+        transform: Transform | None = None,
         seed: int = 42,
         resume: bool = True,
         reset_rngs: bool = False,
@@ -131,10 +131,10 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         self._transform_nargs = transform_nargs
         self._seed = seed
         self._reset_rngs = reset_rngs
-        self._iterator: Optional[_ParallelDatasetIterator] = None
+        self._iterator: _ParallelDatasetIterator | None = None
         self._use_streaming_dataloader = False
-        self._num_samples_yielded: Optional[dict[int, list[int]]] = None
-        self._num_cycles: Optional[dict[int, list[int]]] = None
+        self._num_samples_yielded: dict[int, list[int]] | None = None
+        self._num_cycles: dict[int, list[int]] | None = None
         self._current_epoch = 0
         self.num_workers = 1
         self.batch_size = 1
@@ -177,7 +177,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
                     # do not call dset.set_epoch as it is ignored if the dataset has non-None _state_dict attribute
                     dset.current_epoch = i_cycle + 1
 
-    def get_len(self, num_workers: int, batch_size: int) -> Optional[int]:
+    def get_len(self, num_workers: int, batch_size: int) -> int | None:
         self.num_workers = num_workers
         self.batch_size = batch_size
         # initialize lengths even if self._length is not None to call self._get_len() on all the wrapped datasets and
@@ -249,7 +249,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
         )
         return self._iterator
 
-    def __len__(self) -> Optional[int]:
+    def __len__(self) -> int | None:
         # ``batch_size`` may be a sequence when per-dataset values were set on
         # the wrapper.  For length estimation we only need a scalar; we take
         # the first element if a sequence is provided.
@@ -260,8 +260,8 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def get_num_samples_yielded(
         self,
-        num_samples_yielded: Optional[dict[int, list[int]]] = None,
-        num_cycles: Optional[dict[int, list[int]]] = None,
+        num_samples_yielded: dict[int, list[int]] | None = None,
+        num_cycles: dict[int, list[int]] | None = None,
     ) -> tuple[list[int], list[int]]:
         """Get the number of samples yielded and the number of cycles for each dataset across workers.
 
@@ -297,7 +297,7 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
             self._num_cycles = state_dict["num_cycles"]
 
     def state_dict(
-        self, num_workers: int, batch_size: int, num_samples_yielded: Optional[list[int]] = None
+        self, num_workers: int, batch_size: int, num_samples_yielded: list[int] | None = None
     ) -> dict[str, Any]:
         if self._iterator is None and num_samples_yielded is None:
             return {}
@@ -319,10 +319,10 @@ class _ParallelDatasetIterator(Iterator):
         use_streaming_dataloader: bool,
         num_samples_yielded: Any,
         num_cycles: Any,
-        length: Optional[Union[int, float]],
+        length: int | float | None,
         dset_lengths: list[int],
-        transform: Optional[Transform],
-        transform_nargs: Optional[int],
+        transform: Transform | None,
+        transform_nargs: int | None,
         rngs: dict[GeneratorName, RandomGenerator],
     ) -> None:
         self._datasets = datasets
@@ -356,7 +356,7 @@ class _ParallelDatasetIterator(Iterator):
             return self._transform(samples, self._rngs)
         raise RuntimeError(f"transform function must take 1 or 2 arguments, got {self._transform_nargs} instead.")
 
-    def __next__(self) -> Union[Any, dict[str, Any]]:
+    def __next__(self) -> Any | dict[str, Any]:
         if self._length is not None and self._count >= self._length:
             raise StopIteration
         samples, _resets = zip(*[self._get_sample(i) for i in range(len(self._datasets))])
