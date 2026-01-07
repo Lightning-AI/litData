@@ -149,15 +149,17 @@ class BaseIndexer(ABC):
         """Loads and decodes an index file."""
         if _PYTHON_GREATER_EQUAL_3_14:
             from compression import zstd
+            from compression.zstd import ZstdError
         else:
             import zstd
+            from zstd import Error as ZstdError
 
         try:
             with open(index_path, "rb") as f:
                 compressed_data = f.read()
             metadata = json.loads(zstd.decompress(compressed_data).decode("utf-8"))
             return [FileMetadata.from_dict(file_data) for file_data in metadata["files"]]
-        except (FileNotFoundError, json.JSONDecodeError, zstd.ZstdError, KeyError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, ZstdError, KeyError) as e:
             logger.warning(f"Failed to load index from local cache at `{index_path}`: {e}. ")
             return None
 
@@ -165,8 +167,10 @@ class BaseIndexer(ABC):
         """Encodes and saves an index file."""
         if _PYTHON_GREATER_EQUAL_3_14:
             from compression import zstd
+            from compression.zstd import ZstdError
         else:
             import zstd
+            from zstd import Error as ZstdError
 
         try:
             metadata = {
@@ -176,7 +180,7 @@ class BaseIndexer(ABC):
             }
             with open(index_path, "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
-        except (OSError, zstd.ZstdError) as e:
+        except (OSError, ZstdError) as e:
             logger.warning(f"Error caching index to {index_path}: {e}")
 
     def _download_from_cloud(

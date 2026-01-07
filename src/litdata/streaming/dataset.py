@@ -224,10 +224,32 @@ class StreamingDataset(IterableDataset):
         self.cache._reader.on_demand_bytes = value
 
     def set_shuffle(self, shuffle: bool) -> None:
-        self.shuffle = shuffle
+        """Set the shuffle parameter.
+
+        Invalidates the shuffler cache when the parameter changes to ensure
+        subsequent length calculations reflect the new shuffle setting.
+
+        Args:
+            shuffle: Whether to shuffle the dataset.
+
+        """
+        if self.shuffle != shuffle:
+            self.shuffle = shuffle
+            self.shuffler = None  # Reset shuffler to pick up new shuffle setting
 
     def set_drop_last(self, drop_last: bool) -> None:
-        self.drop_last = drop_last
+        """Set the drop_last parameter.
+
+        Invalidates the shuffler cache when the parameter changes to ensure
+        subsequent length calculations reflect the new drop_last setting.
+
+        Args:
+            drop_last: Whether to drop the last incomplete batch.
+
+        """
+        if self.drop_last != drop_last:
+            self.drop_last = drop_last
+            self.shuffler = None  # Reset shuffler to pick up new drop_last setting
 
     def set_epoch(self, current_epoch: int) -> None:
         """Set the current epoch to the dataset on epoch starts.
