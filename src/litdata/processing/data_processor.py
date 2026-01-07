@@ -31,7 +31,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, TypeVar
 from urllib import parse
 
 import numpy as np
@@ -83,7 +83,7 @@ def _get_default_cache() -> str:
     return "/cache" if _IS_IN_STUDIO else tempfile.gettempdir()
 
 
-def _get_cache_dir(name: Optional[str] = None) -> str:
+def _get_cache_dir(name: str | None = None) -> str:
     """Returns the cache directory used by the Cache to store the chunks."""
     cache_dir = os.getenv("DATA_OPTIMIZER_CACHE_FOLDER", f"{_get_default_cache()}/chunks")
     if name is None:
@@ -91,7 +91,7 @@ def _get_cache_dir(name: Optional[str] = None) -> str:
     return os.path.join(cache_dir, name.lstrip("/"))
 
 
-def _get_cache_data_dir(name: Optional[str] = None) -> str:
+def _get_cache_data_dir(name: str | None = None) -> str:
     """Returns the cache data directory used by the DataProcessor workers to download the files."""
     cache_dir = os.getenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", f"{_get_default_cache()}/data")
     if name is None:
@@ -133,7 +133,7 @@ def _download_data_target(
 
     while True:
         # 2. Fetch from the queue
-        r: Optional[tuple[int, Any, list[str]]] = queue_in.get()
+        r: tuple[int, Any, list[str]] | None = queue_in.get()
 
         # 3. Terminate the process if we received a termination signal
         if r is None:
@@ -240,7 +240,7 @@ def _upload_fn(
         fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
     while True:
-        data: Optional[Union[str, tuple[str, str]]] = upload_queue.get()
+        data: str | tuple[str, str] | None = upload_queue.get()
 
         tmpdir = None
 
@@ -301,7 +301,7 @@ def _upload_fn(
 
 
 def _map_items_to_workers_sequentially(
-    num_workers: int, user_items: list[Any], chunk_size: Optional[int] = None
+    num_workers: int, user_items: list[Any], chunk_size: int | None = None
 ) -> list[list[Any]]:
     """Map the items to the workers sequentially.
 
@@ -377,7 +377,7 @@ def _map_items_to_workers_sequentially(
 def _map_items_to_workers_weighted(
     num_workers: int,
     user_items: list[Any],
-    weights: Optional[list[int]] = None,
+    weights: list[int] | None = None,
     file_size: bool = True,
 ) -> list[list[Any]]:
     """Map the items to the workers based on the weights.
@@ -440,7 +440,7 @@ def _to_path(element: str) -> str:
     return element if _IS_IN_STUDIO and element.startswith("/teamspace") else str(Path(element).resolve())
 
 
-def _is_path(input_dir: Optional[str], element: Any) -> bool:
+def _is_path(input_dir: str | None, element: Any) -> bool:
     if not isinstance(element, str):
         return False
 
@@ -504,22 +504,22 @@ class BaseWorker:
         data_recipe: "DataRecipe",
         input_dir: Dir,
         output_dir: Dir,
-        items: Optional[list[Any]],
+        items: list[Any] | None,
         progress_queue: Queue,
         error_queue: Queue,
         stop_queue: Queue,
         num_downloaders: int,
         num_uploaders: int,
         remove: bool,
-        reader: Optional[BaseReader] = None,
+        reader: BaseReader | None = None,
         writer_starting_chunk_index: int = 0,
         use_checkpoint: bool = False,
-        checkpoint_chunks_info: Optional[list[dict[str, Any]]] = None,
-        checkpoint_next_index: Optional[int] = None,
-        item_loader: Optional[BaseItemLoader] = None,
+        checkpoint_chunks_info: list[dict[str, Any]] | None = None,
+        checkpoint_next_index: int | None = None,
+        item_loader: BaseItemLoader | None = None,
         storage_options: dict[str, Any] = {},
         keep_data_ordered: bool = True,
-        shared_queue: Union[Queue, FakeQueue, None] = None,
+        shared_queue: "Queue | FakeQueue | None" = None,
         using_queue_optimize: bool = False,  # using queues as inputs for optimize fn
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
@@ -537,7 +537,7 @@ class BaseWorker:
         self.remove = remove
         self.reader = reader
         self.paths: list[list[str]] = []
-        self.remover: Optional[Process] = None
+        self.remover: Process | None = None
         self.downloaders: list[Process] = []
         self.uploaders: list[Process] = []
         self.to_download_queues: list[Queue] = []
@@ -551,7 +551,7 @@ class BaseWorker:
             assert shared_queue is not None
             self.ready_to_process_queue = shared_queue
         else:
-            self.ready_to_process_queue: Union[Queue, FakeQueue] = FakeQueue() if self.no_downloaders else Queue()
+            self.ready_to_process_queue: Queue | FakeQueue = FakeQueue() if self.no_downloaders else Queue()
 
         self.remove_queue: Queue = Queue()
         self.progress_queue: Queue = progress_queue
@@ -562,8 +562,8 @@ class BaseWorker:
         self._index_counter = 0
         self.writer_starting_chunk_index: int = writer_starting_chunk_index
         self.use_checkpoint: bool = use_checkpoint
-        self.checkpoint_chunks_info: Optional[list[dict[str, Any]]] = checkpoint_chunks_info
-        self.checkpoint_next_index: Optional[int] = checkpoint_next_index
+        self.checkpoint_chunks_info: list[dict[str, Any]] | None = checkpoint_chunks_info
+        self.checkpoint_next_index: int | None = checkpoint_next_index
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
 
@@ -729,7 +729,7 @@ class BaseWorker:
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
             self.cache._writer._chunk_index += self.checkpoint_next_index
 
-    def _try_upload(self, data: Optional[Union[str, tuple[str, str]]]) -> None:
+    def _try_upload(self, data: str | tuple[str, str] | None) -> None:
         if not data or (self.output_dir.url if self.output_dir.url else self.output_dir.path) is None:
             return
 
@@ -933,13 +933,13 @@ class DataWorkerProcess(BaseWorker, Process):
 
 @dataclass
 class _Result:
-    size: Optional[int] = None
-    num_bytes: Optional[str] = None
-    data_format: Optional[str] = None
-    compression: Optional[str] = None
-    encryption: Optional[Encryption] = None
-    num_chunks: Optional[int] = None
-    num_bytes_per_chunk: Optional[list[int]] = None
+    size: int | None = None
+    num_bytes: str | None = None
+    data_format: str | None = None
+    compression: str | None = None
+    encryption: Encryption | None = None
+    num_chunks: int | None = None
+    num_bytes_per_chunk: list[int] | None = None
 
 
 T = TypeVar("T")
@@ -953,7 +953,7 @@ class DataRecipe:
     """
 
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
+    def prepare_structure(self, input_dir: str | None) -> list[T]:
         """Prepare the structure of the data.
 
         This is the structure of the data that will be used by the worker. (inputs)
@@ -971,20 +971,20 @@ class DataRecipe:
         pass
 
     def __init__(self, storage_options: dict[str, Any] = {}) -> None:
-        self._name: Optional[str] = None
+        self._name: str | None = None
         self.storage_options = storage_options
 
-    def _done(self, size: Optional[int], delete_cached_files: bool, output_dir: Dir) -> _Result:
+    def _done(self, size: int | None, delete_cached_files: bool, output_dir: Dir) -> _Result:
         return _Result(size=size)
 
 
 class DataChunkRecipe(DataRecipe):
     def __init__(
         self,
-        chunk_size: Optional[int] = None,
-        chunk_bytes: Optional[Union[int, str]] = None,
-        compression: Optional[str] = None,
-        encryption: Optional[Encryption] = None,
+        chunk_size: int | None = None,
+        chunk_bytes: int | str | None = None,
+        compression: str | None = None,
+        encryption: Encryption | None = None,
         storage_options: dict[str, Any] = {},
     ):
         super().__init__(storage_options)
@@ -997,7 +997,7 @@ class DataChunkRecipe(DataRecipe):
         self.encryption = encryption
 
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
+    def prepare_structure(self, input_dir: str | None) -> list[T]:
         """Return the structure of your data.
 
         Each element should contain at least a filepath.
@@ -1008,7 +1008,7 @@ class DataChunkRecipe(DataRecipe):
     def prepare_item(self, item_metadata: T) -> Any:
         """Returns `prepare_item` method is persisted in chunked binary files."""
 
-    def _done(self, size: Optional[int], delete_cached_files: bool, output_dir: Dir) -> _Result:
+    def _done(self, size: int | None, delete_cached_files: bool, output_dir: Dir) -> _Result:
         num_nodes = _get_num_nodes()
         cache_dir = _get_cache_dir()
 
@@ -1050,7 +1050,7 @@ class DataChunkRecipe(DataRecipe):
             size=size,
         )
 
-    def _upload_index(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: Optional[int]) -> None:
+    def _upload_index(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None) -> None:
         """Upload the index file to the remote cloud directory."""
         if output_dir.path is None and output_dir.url is None:
             return
@@ -1099,7 +1099,7 @@ class DataChunkRecipe(DataRecipe):
 
 class MapRecipe(DataRecipe):
     @abstractmethod
-    def prepare_structure(self, input_dir: Optional[str]) -> list[T]:
+    def prepare_structure(self, input_dir: str | None) -> list[T]:
         """Return the structure of your data.
 
         Each element should contain at least a filepath.
@@ -1114,22 +1114,22 @@ class MapRecipe(DataRecipe):
 class DataProcessor:
     def __init__(
         self,
-        input_dir: Union[str, Dir],
-        output_dir: Optional[Union[str, Dir]] = None,
-        num_workers: Optional[int] = None,
+        input_dir: str | Dir,
+        output_dir: str | Dir | None = None,
+        num_workers: int | None = None,
         align_chunking: bool = False,
-        num_downloaders: Optional[int] = None,
-        num_uploaders: Optional[int] = None,
+        num_downloaders: int | None = None,
+        num_uploaders: int | None = None,
         delete_cached_files: bool = True,
-        fast_dev_run: Optional[Union[bool, int]] = None,
-        random_seed: Optional[int] = 42,
+        fast_dev_run: bool | int | None = None,
+        random_seed: int | None = 42,
         reorder_files: bool = True,
-        weights: Optional[list[int]] = None,
-        reader: Optional[BaseReader] = None,
-        state_dict: Optional[dict[int, int]] = None,
+        weights: list[int] | None = None,
+        reader: BaseReader | None = None,
+        state_dict: dict[int, int] | None = None,
         use_checkpoint: bool = False,
-        item_loader: Optional[BaseItemLoader] = None,
-        start_method: Optional[str] = None,
+        item_loader: BaseItemLoader | None = None,
+        start_method: str | None = None,
         storage_options: dict[str, Any] = {},
         keep_data_ordered: bool = True,
         verbose: bool = True,
@@ -1187,19 +1187,19 @@ class DataProcessor:
         self.fast_dev_run = _get_fast_dev_run() if fast_dev_run is None else fast_dev_run
         self.workers: Any = []
         self.workers_tracker: dict[int, int] = {}
-        self.progress_queue: Optional[Queue] = None
+        self.progress_queue: Queue | None = None
         self.error_queue: Queue = Queue()
         self.stop_queues: list[Queue] = []
         self.reorder_files = reorder_files
         self.weights = weights
         self.reader = reader
         self.use_checkpoint = use_checkpoint
-        self.checkpoint_chunks_info: Optional[list[list[dict[str, Any]]]] = None
-        self.checkpoint_next_index: Optional[list[int]] = None
+        self.checkpoint_chunks_info: list[list[dict[str, Any]]] | None = None
+        self.checkpoint_next_index: list[int] | None = None
         self.item_loader = item_loader
         self.storage_options = storage_options
         self.keep_data_ordered = keep_data_ordered
-        self.shared_queue: Union[Queue, FakeQueue, None] = None
+        self.shared_queue: Queue | FakeQueue | None = None
 
         # Queue for routing worker logs to the main process without breaking tqdm output.
         self.msg_queue: Queue = Queue()
@@ -1241,7 +1241,7 @@ class DataProcessor:
         torch.manual_seed(self.random_seed)
 
         # Call the setup method of the user
-        user_items: Union[list[Any], StreamingDataLoader, Queue] = data_recipe.prepare_structure(
+        user_items: list[Any] | StreamingDataLoader | Queue = data_recipe.prepare_structure(
             self.input_dir.path if self.input_dir else None
         )
         if not isinstance(user_items, (list, StreamingDataLoader, multiprocessing.queues.Queue)):
@@ -1253,7 +1253,7 @@ class DataProcessor:
         if self.reader:
             user_items = self.reader.remap_items(user_items, self.num_workers)
 
-        workers_user_items: Optional[list[list[int]]] = None
+        workers_user_items: list[list[int]] | None = None
 
         if isinstance(user_items, list):
             assert isinstance(user_items, list)
@@ -1460,7 +1460,7 @@ class DataProcessor:
         raise RuntimeError(f"We found the following error {error}.")
 
     def _create_process_workers(
-        self, data_recipe: DataRecipe, workers_user_items: Optional[list[list[Any]]] = None
+        self, data_recipe: DataRecipe, workers_user_items: list[list[Any]] | None = None
     ) -> None:
         if not self.keep_data_ordered and workers_user_items is not None:
             self.shared_queue = Queue()
@@ -1695,7 +1695,7 @@ def in_notebook() -> bool:
     return "ipykernel" in sys.modules
 
 
-def flush_msg_queue(msg_queue: Queue, pbar: Optional[Any] = None):
+def flush_msg_queue(msg_queue: Queue, pbar: Any | None = None):
     """Flush messages from a queue and print them without breaking the tqdm progress bar.
 
     This function drains all available messages from the given queue and prints them.

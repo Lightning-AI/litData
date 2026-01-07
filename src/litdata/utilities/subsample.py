@@ -1,10 +1,10 @@
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
 
 def shuffle_lists_together(
-    list1: list[Any], list2: list[Any], random_seed_sampler: Optional[np.random.RandomState] = None, seed: int = 42
+    list1: list[Any], list2: list[Any], random_seed_sampler: np.random.RandomState | None = None, seed: int = 42
 ) -> tuple[list[Any], list[Any]]:
     """Shuffles list1 and applies the same shuffle order to list2.
 

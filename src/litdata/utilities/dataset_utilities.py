@@ -5,7 +5,8 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -39,15 +40,15 @@ def wait_for_predicate(
 
 def subsample_streaming_dataset(
     input_dir: Dir,
-    cache_dir: Optional[Dir] = None,
-    item_loader: Optional[BaseItemLoader] = None,
+    cache_dir: Dir | None = None,
+    item_loader: BaseItemLoader | None = None,
     subsample: float = 1.0,
     shuffle: bool = False,
     seed: int = 42,
-    storage_options: Optional[dict] = {},
-    session_options: Optional[dict] = {},
-    index_path: Optional[str] = None,
-    fnmatch_pattern: Optional[str] = None,
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
+    fnmatch_pattern: str | None = None,
 ) -> tuple[list[str], list[tuple[int, int]]]:
     """Subsample streaming dataset.
 
@@ -153,7 +154,7 @@ def subsample_streaming_dataset(
     return final_files, final_roi
 
 
-def _should_replace_path(path: Optional[str]) -> bool:
+def _should_replace_path(path: str | None) -> bool:
     """Whether the input path is a special path to be replaced."""
     if path is None or path == "":
         return True
@@ -169,10 +170,10 @@ def _should_replace_path(path: Optional[str]) -> bool:
 
 
 def _read_updated_at(
-    input_dir: Optional[Dir],
-    storage_options: Optional[dict] = {},
-    session_options: Optional[dict] = {},
-    index_path: Optional[str] = None,
+    input_dir: Dir | None,
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
 ) -> str:
     """Read last updated timestamp from index.json file."""
     last_updation_timestamp = "0"
@@ -243,12 +244,12 @@ def get_default_cache_dir() -> str:
 
 
 def _try_create_cache_dir(
-    input_dir: Optional[str],
-    cache_dir: Optional[str] = None,
-    storage_options: Optional[dict] = {},
-    session_options: Optional[dict] = {},
-    index_path: Optional[str] = None,
-) -> Optional[str]:
+    input_dir: str | None,
+    cache_dir: str | None = None,
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
+) -> str | None:
     """Prepare and return the cache directory for a dataset."""
     resolved_input_dir = _resolve_dir(input_dir)
     updated_at = _read_updated_at(resolved_input_dir, storage_options, session_options, index_path)
@@ -269,7 +270,7 @@ def _try_create_cache_dir(
     return cache_dir
 
 
-def generate_roi(chunks: list[dict[str, Any]], item_loader: Optional[BaseItemLoader] = None) -> list[tuple[int, int]]:
+def generate_roi(chunks: list[dict[str, Any]], item_loader: BaseItemLoader | None = None) -> list[tuple[int, int]]:
     """Generates default region_of_interest for chunks."""
     roi = []
 

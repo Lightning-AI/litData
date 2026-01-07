@@ -14,7 +14,7 @@
 import json
 import os
 from time import time
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 import botocore
@@ -51,12 +51,12 @@ class S3Client:
     def __init__(
         self,
         refetch_interval: int = 3300,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
     ) -> None:
         self._refetch_interval = refetch_interval
-        self._last_time: Optional[float] = None
-        self._client: Optional[Any] = None
+        self._last_time: float | None = None
+        self._client: Any | None = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
 
@@ -106,8 +106,8 @@ class R2Client(S3Client):
     def __init__(
         self,
         refetch_interval: int = 3300,
-        storage_options: Optional[dict] = {},
-        session_options: Optional[dict] = {},
+        storage_options: dict | None = {},
+        session_options: dict | None = {},
     ) -> None:
         # Store R2-specific options before calling super()
         self._base_storage_options: dict = storage_options or {}
