@@ -871,9 +871,25 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
         if i == break_at:
             break
+    expected_3 = [
+        [torch.tensor([4]), torch.tensor([4])],
+        [torch.tensor([9]), torch.tensor([9])],
+        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([5]), torch.tensor([5])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_3 if resume and length is not None else expected_1)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+        if i == break_at:
+            break
 
 
-@pytest.mark.parametrize("length", [None, 6])
+@pytest.mark.parametrize("length", [None, 5])
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
@@ -888,7 +904,6 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
         [torch.tensor([1]), torch.tensor([1])],
         [torch.tensor([3]), torch.tensor([3])],
         [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([2]), torch.tensor([2])],
     ]
     batches_1 = []
     for i, batch in enumerate(dloader):
@@ -897,17 +912,31 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
         batches_1.append(batch)
     expected_2 = [
         [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([0]), torch.tensor([0])],
         [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([0]), torch.tensor([0])],
         [torch.tensor([3]), torch.tensor([3])],
+        [torch.tensor([1]), torch.tensor([1])],
     ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
                 torch.equal(x, y)
                 for x, y in zip(batch, (expected_2 if resume and length is not None else expected_1)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+    expected_3 = [
+        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([3]), torch.tensor([3])],
+        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([2]), torch.tensor([2])],
+        [torch.tensor([1]), torch.tensor([1])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_3 if resume and length is not None else expected_1)[i])
             )
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
