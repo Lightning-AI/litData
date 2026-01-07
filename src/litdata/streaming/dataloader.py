@@ -649,6 +649,7 @@ class StreamingDataLoader(DataLoader):
                 # For ParallelStreamingDataset with _length != None we want to cycle the wrapped datasets i.e. we do not
                 # want to restart at index 0 at every epoch. So we set them in restore state.
                 self.load_state_dict(self.state_dict())
+                self.restore = False
             else:
                 self._latest_worker_idx = 0
                 self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))

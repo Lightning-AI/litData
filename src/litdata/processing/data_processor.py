@@ -23,6 +23,7 @@ import signal
 import sys
 import tempfile
 import traceback
+import warnings
 from abc import abstractmethod
 from contextlib import suppress
 from dataclasses import dataclass
@@ -299,29 +300,65 @@ def _upload_fn(
             remove_queue.put([local_filepath])
 
 
-def _map_items_to_workers_sequentially(num_workers: int, user_items: list[Any]) -> list[list[Any]]:
+def _map_items_to_workers_sequentially(
+    num_workers: int, user_items: list[Any], chunk_size: Optional[int] = None
+) -> list[list[Any]]:
     """Map the items to the workers sequentially.
+
+    Args:
+        num_workers: The number of workers to assign items to.
+        user_items: The list of items to be distributed among workers.
+        chunk_size: Optional `chunk size` that enforces deterministic,
+            single-worker-style chunk boundaries. When set, each worker is
+            assigned only full chunks of this size, and the final worker
+            receives any remaining items (which may form a partial chunk).
+
 
     >>> workers_user_items = _map_items_to_workers_sequentially(2, list(range(5)))
     >>> assert workers_user_items == [[0, 1], [2, 3, 4]]
     """
+    assert isinstance(chunk_size, (int, type(None))), "chunk_size must be an integer or None"
+
     num_nodes = _get_num_nodes()
+    node_rank = _get_node_rank()
     world_size = num_nodes * num_workers
-    num_items_per_worker = len(user_items) // world_size
 
-    num_items_per_worker: list[int] = [num_items_per_worker for _ in range(world_size)]
-    reminder = len(user_items) % world_size
+    if chunk_size is not None:
+        assert chunk_size > 0, "chunk_size must be a positive integer"
 
-    for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
-        if reminder == 0:
-            break
-        num_items_per_worker[worker_idx] += 1
-        reminder -= 1
+        # Compute how many full chunks each worker can take
+        full_chunks = len(user_items) // chunk_size
+        chunks_per_worker = full_chunks // world_size
+
+        if chunks_per_worker == 0 and node_rank == 0:
+            warnings.warn(
+                f"chunk_size ({chunk_size}) is too large relative to dataset size ({len(user_items)}) "
+                f"and world_size ({world_size}). This will result in idle workers. "
+                f"Consider reducing chunk_size or using fewer workers."
+            )
+
+        # Assign full chunks to all workers except the last
+        num_items_per_worker = [chunks_per_worker * chunk_size for _ in range(world_size - 1)]
+
+        # Last worker receives all remaining items (full chunks + optional tail)
+        remaining = len(user_items) - sum(num_items_per_worker)
+        num_items_per_worker.append(remaining)
+
+    else:
+        items_per_worker_count = len(user_items) // world_size
+
+        num_items_per_worker: list[int] = [items_per_worker_count for _ in range(world_size)]
+        reminder = len(user_items) % world_size
+
+        for worker_idx in range(len(num_items_per_worker) - 1, -1, -1):
+            if reminder == 0:
+                break
+            num_items_per_worker[worker_idx] += 1
+            reminder -= 1
 
     num_items_cumsum_per_worker = np.cumsum([0] + num_items_per_worker)
 
     out = []
-    node_rank = _get_node_rank()
     worker_idx_start = node_rank * num_workers
     worker_idx_end = (node_rank + 1) * num_workers
 
@@ -1080,6 +1117,7 @@ class DataProcessor:
         input_dir: Union[str, Dir],
         output_dir: Optional[Union[str, Dir]] = None,
         num_workers: Optional[int] = None,
+        align_chunking: bool = False,
         num_downloaders: Optional[int] = None,
         num_uploaders: Optional[int] = None,
         delete_cached_files: bool = True,
@@ -1102,6 +1140,8 @@ class DataProcessor:
             input_dir: The path to where the input data are stored.
             output_dir: The path to where the output data are stored.
             num_workers: The number of worker threads to use.
+            align_chunking: Ensures chunk boundaries match the single-worker layout by packing full chunks first
+                and placing all remaining items in the final worker.
             num_downloaders: The number of file downloaders to use.
             num_uploaders: The number of file uploaders to use.
             delete_cached_files: Whether to delete the cached files.
@@ -1140,6 +1180,7 @@ class DataProcessor:
         self.output_dir = _resolve_dir(output_dir)
 
         self.num_workers = num_workers or (1 if fast_dev_run else (os.cpu_count() or 1) * 4)
+        self.align_chunking = align_chunking
         self.num_downloaders = num_downloaders or 2
         self.num_uploaders = num_uploaders or 1
         self.delete_cached_files = delete_cached_files
@@ -1231,8 +1272,14 @@ class DataProcessor:
                     num_workers=self.num_workers, user_items=user_items, weights=item_sizes
                 )
             else:
+                if self.align_chunking and data_recipe.chunk_size is None:
+                    raise ValueError(
+                        "`align_chunking` is set to True, but the `chunk_size` is not defined in the data recipe."
+                    )
                 workers_user_items = _map_items_to_workers_sequentially(
-                    num_workers=self.num_workers, user_items=user_items
+                    num_workers=self.num_workers,
+                    user_items=user_items,
+                    chunk_size=data_recipe.chunk_size if self.align_chunking else None,
                 )
         else:
             assert isinstance(user_items, multiprocessing.queues.Queue)
