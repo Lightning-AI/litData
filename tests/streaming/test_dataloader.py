@@ -362,9 +362,7 @@ def test_resume_dataloader_mid_epoch_with_new_dataset(tmpdir):
 
     dataloader_state = dataloader.state_dict()
     dataset = StreamingDataset(str(dataset_2_path), shuffle=False)
-    dataloader = StreamingDataLoader(
-        dataset, batch_size=4, num_workers=2, dataset_change_policy="next_epoch"
-    )
+    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2, dataset_change_policy="next_epoch")
     dataloader.load_state_dict(dataloader_state)
     assert not dataloader.restore
 
@@ -400,9 +398,7 @@ def test_resume_mid_epoch_with_new_dataset_next_epoch_e2e(tmp_path):
         return dataset
 
     def _make_dataloader(path, policy="error"):
-        return StreamingDataLoader(
-            _make_dataset(path), batch_size=2, num_workers=0, dataset_change_policy=policy
-        )
+        return StreamingDataLoader(_make_dataset(path), batch_size=2, num_workers=0, dataset_change_policy=policy)
 
     class _ValueCheckModel(LightningModule):
         def __init__(self, expected_value, expected_epoch=None):
