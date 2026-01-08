@@ -604,20 +604,12 @@ class StreamingDataLoader(DataLoader):
         num_workers: int = 0,
         profile_batches: bool | int = False,
         profile_skip_batches: int = 0,
-
-        profile_dir: Optional[str] = None,
-        prefetch_factor: Optional[int] = None,
-        shuffle: Optional[bool] = None,
-        drop_last: Optional[bool] = None,
-        dataset_change_policy: DatasetChangePolicy = "error",
-        collate_fn: Optional[Callable] = None,
-
         profile_dir: str | None = None,
         prefetch_factor: int | None = None,
         shuffle: bool | None = None,
         drop_last: bool | None = None,
+        dataset_change_policy: DatasetChangePolicy = "error",
         collate_fn: Callable | None = None,
-
         **kwargs: Any,
     ) -> None:  # pyright: ignore
         if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
@@ -656,17 +648,10 @@ class StreamingDataLoader(DataLoader):
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
         self._num_samples_yielded_streaming = 0
-
-        self._num_samples_yielded_wrapper: Dict[int, List[int]] = {}
-        self._num_cycles: Dict[int, List[int]] = {}
-        self.rng_state: Optional[Any] = None
-        self._dataset_change_policy = dataset_change_policy
-        self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
-        self._worker_idx_iter: Optional[Any] = None
-
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
         self.rng_state: Any | None = None
+        self._dataset_change_policy = dataset_change_policy
         self._worker_idx: Any | None = None  # Lazily initialized in __iter__
         self._worker_idx_iter: Any | None = None
 
@@ -791,9 +776,6 @@ class StreamingDataLoader(DataLoader):
         return False
 
     def state_dict(self) -> Dict[str, Any]:
-
-    def state_dict(self) -> dict[str, Any]:
-
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
             return {
@@ -854,6 +836,8 @@ class StreamingDataLoader(DataLoader):
             self.restore = False
             self.dataset.reset_state_dict()
             self._latest_worker_idx = 0
+            if self._worker_idx is None:
+                self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
             self._worker_idx_iter = iter(self._worker_idx)
             self._num_samples_yielded_streaming = 0
             self._num_samples_yielded_wrapper = {}

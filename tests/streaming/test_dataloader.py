@@ -373,8 +373,8 @@ def test_resume_dataloader_mid_epoch_with_new_dataset(tmpdir):
 
 @pytest.mark.timeout(300)
 def test_resume_mid_epoch_with_new_dataset_next_epoch_e2e(tmp_path):
-    from pytorch_lightning import LightningModule, Trainer
-    from pytorch_lightning.callbacks import ModelCheckpoint
+    from lightning.pytorch import LightningModule, Trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint
 
     def _write_dataset(path, value):
         cache = Cache(input_dir=str(path), chunk_size=4)
