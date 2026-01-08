@@ -10,15 +10,15 @@ setup: install-dependencies install-pre-commit
 	@echo "All set! Ready to go!"
 
 test: clean
-	pip install -q -r requirements.txt
-	pip install -q -r requirements/test.txt
+	uv pip install -q -r requirements.txt
+	uv pip install -q -r requirements/test.txt
 
 	# use this to run tests
 	python -m coverage run --source litdata -m pytest src -v --flake8
 	python -m coverage report
 
 docs: clean
-	pip install . --quiet -r requirements/docs.txt
+	uv pip install . --quiet -r requirements/docs.txt
 	python -m sphinx -b html -W --keep-going docs/source docs/build
 
 clean:
@@ -34,13 +34,13 @@ clean:
 	rm -rf ./dist
 
 install-dependencies:
-	pip install -r requirements.txt
-	pip install -r requirements/test.txt
-	pip install -r requirements/docs.txt
-	pip install -r requirements/extras.txt
-	pip install -e .
+	uv pip install -r requirements.txt
+	uv pip install -r requirements/test.txt
+	uv pip install -r requirements/docs.txt
+	uv pip install -r requirements/extras.txt
+	uv pip install -e .
 
 
 install-pre-commit:
-	pip install pre-commit
+	uv pip install pre-commit
 	pre-commit install

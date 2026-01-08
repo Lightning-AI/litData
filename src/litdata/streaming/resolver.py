@@ -18,9 +18,11 @@ import shutil
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from time import sleep
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib import parse
 
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE, _SUPPORTED_PROVIDERS
@@ -28,28 +30,39 @@ from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provid
 
 if TYPE_CHECKING:
     from lightning_sdk import Machine
+    from lightning_sdk.lightning_cloud.openapi import V1DataConnection
 
 
 @dataclass
 class Dir:
     """Holds a directory path and possibly its associated remote URL."""
 
-    path: Optional[str] = None
-    url: Optional[str] = None
+    path: str | None = None
+    url: str | None = None
+    data_connection_id: str | None = None
 
 
-def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
+class CloudProvider(str, Enum):
+    AWS = "aws"
+    GCP = "gcp"
+
+
+def _resolve_dir(dir_path: str | Path | Dir | None) -> Dir:
     if isinstance(dir_path, Dir):
-        return Dir(path=str(dir_path.path) if dir_path.path else None, url=str(dir_path.url) if dir_path.url else None)
+        return Dir(
+            path=str(dir_path.path) if dir_path.path else None,
+            url=str(dir_path.url) if dir_path.url else None,
+            data_connection_id=dir_path.data_connection_id if dir_path.data_connection_id else None,
+        )
 
     if dir_path is None:
         return Dir()
 
     if not isinstance(dir_path, (str, Path)):
-        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {dir_path}")
+        raise ValueError(f"`dir_path` must be either a string, Path, or Dir, got: {type(dir_path)}")
 
     if isinstance(dir_path, str):
-        cloud_prefixes = ("s3://", "gs://", "azure://", "hf://")
+        cloud_prefixes = ("s3://", "gs://", "r2://", "azure://", "hf://")
         if dir_path.startswith(cloud_prefixes):
             return Dir(path=None, url=dir_path)
 
@@ -61,6 +74,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     dir_path_absolute = str(Path(dir_path).absolute().resolve())
     dir_path = str(dir_path)  # Convert to string if it was a Path object
 
+    # Handle special teamspace paths
     if dir_path_absolute.startswith("/teamspace/studios/this_studio"):
         return Dir(path=dir_path_absolute, url=None)
 
@@ -73,8 +87,17 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     if dir_path_absolute.startswith("/teamspace/s3_connections") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_s3_connections(dir_path_absolute)
 
+    if dir_path_absolute.startswith("/teamspace/gcs_connections") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_gcs_connections(dir_path_absolute)
+
     if dir_path_absolute.startswith("/teamspace/s3_folders") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_s3_folders(dir_path_absolute)
+
+    if dir_path_absolute.startswith("/teamspace/gcs_folders") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_gcs_folders(dir_path_absolute)
+
+    if dir_path_absolute.startswith("/teamspace/lightning_storage") and len(dir_path_absolute.split("/")) > 3:
+        return _resolve_lightning_storage(dir_path_absolute)
 
     if dir_path_absolute.startswith("/teamspace/datasets") and len(dir_path_absolute.split("/")) > 3:
         return _resolve_datasets(dir_path_absolute)
@@ -82,7 +105,7 @@ def _resolve_dir(dir_path: Optional[Union[str, Path, Dir]]) -> Dir:
     return Dir(path=dir_path_absolute, url=None)
 
 
-def _match_studio(target_id: Optional[str], target_name: Optional[str], cloudspace: Any) -> bool:
+def _match_studio(target_id: str | None, target_name: str | None, cloudspace: Any) -> bool:
     if cloudspace.name is not None and target_name is not None and cloudspace.name.lower() == target_name.lower():
         return True
 
@@ -96,7 +119,7 @@ def _match_studio(target_id: Optional[str], target_name: Optional[str], cloudspa
     )
 
 
-def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Optional[str]) -> Dir:
+def _resolve_studio(dir_path: str, target_name: str | None, target_id: str | None) -> Dir:
     from lightning_sdk.lightning_cloud.rest_client import LightningClient
 
     client = LightningClient(max_tries=2)
@@ -104,6 +127,7 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
     # Get the ids from env variables
     cluster_id = os.getenv("LIGHTNING_CLUSTER_ID", None)
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
+    provider = os.getenv("LIGHTNING_CLOUD_PROVIDER", CloudProvider.AWS)
 
     if cluster_id is None:
         raise RuntimeError("The `LIGHTNING_CLUSTER_ID` couldn't be found from the environment variables.")
@@ -126,28 +150,59 @@ def _resolve_studio(dir_path: str, target_name: Optional[str], target_id: Option
             f"We didn't find a matching cluster associated with the id {target_cloud_space[0].cluster_id}."
         )
 
-    bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+    if provider == CloudProvider.AWS:
+        bucket_name = target_cluster[0].spec.aws_v1.bucket_name
+        scheme = "s3"
+    elif provider == CloudProvider.GCP:
+        bucket_name = target_cluster[0].spec.google_cloud_v1.bucket_name
+        scheme = "gs"
+    else:
+        raise ValueError(f"Unsupported cloud provider: {provider}. Supported providers are AWS and GCP.")
 
     return Dir(
         path=dir_path,
         url=os.path.join(
-            f"s3://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
+            f"{scheme}://{bucket_name}/projects/{project_id}/cloudspaces/{target_cloud_space[0].id}/code/content",
             *dir_path.split("/")[4:],
         ),
     )
 
 
-def _resolve_s3_connections(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+@lru_cache(maxsize=5)
+def _resolve_data_connection(dir_path: str) -> "V1DataConnection":
+    """Resolve data connection from teamspace path with caching.
 
-    client = LightningClient(max_tries=2)
+    Extracts connection name from paths like '/teamspace/s3_connections/my_dataset'
+    and fetches the corresponding data connection from Lightning Cloud.
+
+    Args:
+        dir_path: Teamspace path containing the connection name
+
+    Returns:
+        V1DataConnection: The resolved data connection object
+
+    Raises:
+        ValueError: If path format is invalid or connection not found
+        RuntimeError: If required environment variables are missing
+    """
+    # Validate dir_path format - must start with /teamspace/ and have expected structure
+    if not dir_path.startswith("/teamspace/"):
+        raise ValueError(f"Invalid dir_path format: {dir_path}. Expected path starting with '/teamspace/'.")
+
+    path_parts = dir_path.split("/")
+    if len(path_parts) < 4:
+        raise ValueError(f"Invalid teamspace path: {dir_path}. Expected at least 4 path components.")
 
     # Get the ids from env variables
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
     if project_id is None:
         raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
 
-    target_name = dir_path.split("/")[3]
+    target_name = path_parts[3]
+
+    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+
+    client = LightningClient(max_tries=2)
 
     data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
 
@@ -156,29 +211,41 @@ def _resolve_s3_connections(dir_path: str) -> Dir:
     if not data_connection:
         raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
 
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].aws.source, *dir_path.split("/")[4:]))
+    return data_connection[0]
+
+
+def _resolve_s3_connections(dir_path: str) -> Dir:
+    data_connection = _resolve_data_connection(dir_path)
+
+    return Dir(path=dir_path, url=os.path.join(data_connection.aws.source, *dir_path.split("/")[4:]))
+
+
+def _resolve_gcs_connections(dir_path: str) -> Dir:
+    data_connection = _resolve_data_connection(dir_path)
+
+    return Dir(path=dir_path, url=os.path.join(data_connection.gcp.source, *dir_path.split("/")[4:]))
 
 
 def _resolve_s3_folders(dir_path: str) -> Dir:
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
+    data_connection = _resolve_data_connection(dir_path)
 
-    client = LightningClient(max_tries=2)
+    return Dir(path=dir_path, url=os.path.join(data_connection.s3_folder.source, *dir_path.split("/")[4:]))
 
-    # Get the ids from env variables
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    if project_id is None:
-        raise RuntimeError("The `LIGHTNING_CLOUD_PROJECT_ID` couldn't be found from the environment variables.")
 
-    target_name = dir_path.split("/")[3]
+def _resolve_gcs_folders(dir_path: str) -> Dir:
+    data_connection = _resolve_data_connection(dir_path)
 
-    data_connections = client.data_connection_service_list_data_connections(project_id).data_connections
+    return Dir(path=dir_path, url=os.path.join(data_connection.gcs_folder.source, *dir_path.split("/")[4:]))
 
-    data_connection = [dc for dc in data_connections if dc.name == target_name]
 
-    if not data_connection:
-        raise ValueError(f"We didn't find any matching data connection with the provided name `{target_name}`.")
+def _resolve_lightning_storage(dir_path: str) -> Dir:
+    data_connection = _resolve_data_connection(dir_path)
 
-    return Dir(path=dir_path, url=os.path.join(data_connection[0].s3_folder.source, *dir_path.split("/")[4:]))
+    return Dir(
+        path=dir_path,
+        url=os.path.join(data_connection.r2.source, *dir_path.split("/")[4:]),
+        data_connection_id=data_connection.id,
+    )
 
 
 def _resolve_datasets(dir_path: str) -> Dir:
@@ -230,7 +297,7 @@ def _resolve_datasets(dir_path: str) -> Dir:
 
 
 def _assert_dir_is_empty(
-    output_dir: Dir, append: bool = False, overwrite: bool = False, storage_options: Dict[str, Any] = {}
+    output_dir: Dir, append: bool = False, overwrite: bool = False, storage_options: dict[str, Any] = {}
 ) -> None:
     if not isinstance(output_dir, Dir):
         raise ValueError("The provided output_dir isn't a `Dir` Object.")
@@ -243,7 +310,12 @@ def _assert_dir_is_empty(
     if obj.scheme not in _SUPPORTED_PROVIDERS:
         not_supported_provider(output_dir.url)
 
-    fs_provider = _get_fs_provider(output_dir.url, storage_options)
+    # Add data connection ID to storage_options for R2 connections
+    merged_storage_options = storage_options.copy()
+    if output_dir.data_connection_id:
+        merged_storage_options["data_connection_id"] = output_dir.data_connection_id
+
+    fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
     is_empty = fs_provider.is_empty(output_dir.url)
 
@@ -258,9 +330,9 @@ def _assert_dir_is_empty(
 
 def _assert_dir_has_index_file(
     output_dir: Dir,
-    mode: Optional[Literal["append", "overwrite"]] = None,
+    mode: Literal["append", "overwrite"] | None = None,
     use_checkpoint: bool = False,
-    storage_options: Dict[str, Any] = {},
+    storage_options: dict[str, Any] = {},
 ) -> None:
     if mode is not None and mode not in ["append", "overwrite"]:
         raise ValueError(f"The provided `mode` should be either `append` or `overwrite`. Found {mode}.")
@@ -307,7 +379,12 @@ def _assert_dir_has_index_file(
     if obj.scheme not in _SUPPORTED_PROVIDERS:
         not_supported_provider(output_dir.url)
 
-    fs_provider = _get_fs_provider(output_dir.url, storage_options)
+    # Add data connection ID to storage_options for R2 connections
+    merged_storage_options = storage_options.copy()
+    if output_dir.data_connection_id:
+        merged_storage_options["data_connection_id"] = output_dir.data_connection_id
+
+    fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
 
     prefix = output_dir.url.rstrip("/") + "/"
 
@@ -372,8 +449,8 @@ def _resolve_time_template(path: str) -> str:
 def _execute(
     name: str,
     num_nodes: int,
-    machine: Optional[Union["Machine", str]] = None,
-    command: Optional[str] = None,
+    machine: "Machine | str | None" = None,
+    command: str | None = None,
     interruptible: bool = False,
 ) -> None:
     """Remotely execute the current operator."""

@@ -13,9 +13,9 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, TypeVar
+from typing import TypeVar
 
-from litdata.constants import _ZSTD_AVAILABLE
+from litdata.constants import _PYTHON_GREATER_EQUAL_3_14, _ZSTD_AVAILABLE
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 
 TCompressor = TypeVar("TCompressor", bound="Compressor")
@@ -36,7 +36,7 @@ class Compressor(ABC):
 
     @classmethod
     @abstractmethod
-    def register(cls, compressors: Dict[str, "Compressor"]) -> None:
+    def register(cls, compressors: dict[str, "Compressor"]) -> None:
         pass
 
 
@@ -55,20 +55,26 @@ class ZSTDCompressor(Compressor):
         return f"{self.extension}:{self.level}"
 
     def compress(self, data: bytes) -> bytes:
-        import zstd
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression import zstd
+        else:
+            import zstd
 
         return zstd.compress(data, self.level)
 
     def decompress(self, data: bytes) -> bytes:
-        import zstd
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression import zstd
+        else:
+            import zstd
 
-        logger.debug(_get_log_msg({"name": "Decompressing data", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
+        logger.debug(_get_log_msg({"name": "decompress", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
         decompressed_data = zstd.decompress(data)
-        logger.debug(_get_log_msg({"name": "Decompressed data", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
+        logger.debug(_get_log_msg({"name": "decompress", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
         return decompressed_data
 
     @classmethod
-    def register(cls, compressors: Dict[str, "Compressor"]) -> None:
+    def register(cls, compressors: dict[str, "Compressor"]) -> None:
         if not _ZSTD_AVAILABLE:
             return
 
@@ -79,6 +85,6 @@ class ZSTDCompressor(Compressor):
             compressors[f"zstd:{level}"] = ZSTDCompressor(level)
 
 
-_COMPRESSORS: Dict[str, Compressor] = {}
+_COMPRESSORS: dict[str, Compressor] = {}
 
 ZSTDCompressor.register(_COMPRESSORS)

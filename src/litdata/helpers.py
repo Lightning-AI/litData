@@ -1,9 +1,11 @@
 import functools
 import warnings
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from packaging import version as packaging_version
+
+from litdata.constants import _LITDATA_DISABLE_VERSION_CHECK
 
 
 class WarningCache(set):
@@ -22,13 +24,13 @@ __package_name__ = "litdata"
 
 
 @functools.lru_cache(maxsize=1)
-def _get_newer_version(curr_version: str) -> Optional[str]:
+def _get_newer_version(curr_version: str) -> str | None:
     """Check PyPI for newer versions of ``litdata``.
 
     Returning the newest version if different from the current or ``None`` otherwise.
 
     """
-    if packaging_version.parse(curr_version).is_prerelease:
+    if _LITDATA_DISABLE_VERSION_CHECK == 1 or packaging_version.parse(curr_version).is_prerelease:
         return None
     try:
         response = requests.get(f"https://pypi.org/pypi/{__package_name__}/json", timeout=30)

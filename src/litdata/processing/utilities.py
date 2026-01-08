@@ -16,9 +16,10 @@ import json
 import os
 import tempfile
 import urllib
+from collections.abc import Callable
 from contextlib import contextmanager
 from subprocess import DEVNULL, Popen
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 from urllib import parse
 
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
@@ -28,18 +29,18 @@ from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provid
 
 #! TODO: Not sure what this function is used for.
 def _create_dataset(
-    input_dir: Optional[str],
+    input_dir: str | None,
     storage_dir: str,
     dataset_type: Any,
-    empty: Optional[bool] = None,
-    size: Optional[int] = None,
-    num_bytes: Optional[str] = None,
-    data_format: Optional[Union[str, Tuple[str]]] = None,
-    compression: Optional[str] = None,
-    num_chunks: Optional[int] = None,
-    num_bytes_per_chunk: Optional[List[int]] = None,
-    name: Optional[str] = None,
-    version: Optional[int] = None,
+    empty: bool | None = None,
+    size: int | None = None,
+    num_bytes: str | None = None,
+    data_format: str | tuple[str] | None = None,
+    compression: str | None = None,
+    num_chunks: int | None = None,
+    num_bytes_per_chunk: list[int] | None = None,
+    name: str | None = None,
+    version: int | None = None,
 ) -> None:
     """Create a dataset with metadata information about its source and destination using the Lightning SDK.
 
@@ -95,13 +96,13 @@ def _create_dataset(
             raise ex
 
 
-def get_worker_rank() -> Optional[str]:
+def get_worker_rank() -> str | None:
     return os.getenv("DATA_OPTIMIZER_GLOBAL_RANK")
 
 
 #! TODO: Do we still need this? It is not used anywhere.
 def catch(func: Callable) -> Callable:
-    def _wrapper(*args: Any, **kwargs: Any) -> Tuple[Any, Optional[Exception]]:
+    def _wrapper(*args: Any, **kwargs: Any) -> tuple[Any, Exception | None]:
         try:
             return func(*args, **kwargs), None
         except Exception as e:
@@ -200,7 +201,7 @@ def _get_work_dir() -> str:
     return f"s3://{bucket_name}/projects/{project_id}/lightningapps/{app_id}/artifacts/{work_id}/content/"
 
 
-def read_index_file_content(output_dir: Dir, storage_options: Dict[str, Any] = {}) -> Optional[Dict[str, Any]]:
+def read_index_file_content(output_dir: Dir, storage_options: dict[str, Any] = {}) -> dict[str, Any] | None:
     """Read the index file content."""
     if not isinstance(output_dir, Dir):
         raise ValueError("The provided output_dir should be a Dir object.")
@@ -241,7 +242,7 @@ def read_index_file_content(output_dir: Dir, storage_options: Dict[str, Any] = {
             return None
 
 
-def extract_rank_and_index_from_filename(chunk_filename: str) -> Tuple[int, int]:
+def extract_rank_and_index_from_filename(chunk_filename: str) -> tuple[int, int]:
     """Extract the rank and index from the filename.
 
     It is assumed that the filename is in the format `chunk-<rank>-<index>.bin` or
@@ -272,3 +273,10 @@ def remove_uuid_from_filename(filepath: str) -> str:
 
     # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
     return filepath[:-38] + ".json"
+
+
+def construct_storage_options(storage_options: dict[str, Any], input_dir: Dir) -> dict[str, Any]:
+    merged_storage_options = storage_options.copy()
+    if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
+        merged_storage_options["data_connection_id"] = input_dir.data_connection_id
+    return merged_storage_options

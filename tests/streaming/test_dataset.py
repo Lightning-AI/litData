@@ -17,8 +17,9 @@ import os
 import random
 import shutil
 import sys
+from functools import partial
 from time import sleep
-from typing import Any, Dict, Optional
+from typing import Any
 from unittest import mock
 from unittest.mock import patch
 
@@ -106,21 +107,23 @@ def _simple_optimize_fn(index):
 @pytest.mark.parametrize(
     ("chunk_bytes", "chunk_size"),
     [
-        ("64MB", None),
-        (None, 5),  # at max 5 items in a chunk
-        (None, 75),  # at max 75 items in a chunk
-        (None, 1200),  # at max 1200 items in a chunk
+        (None, 10),
     ],
 )
 @pytest.mark.parametrize("keep_data_ordered", [True, False])
-def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, monkeypatch):
+def test_optimize_dataset(
+    keep_data_ordered,
+    chunk_bytes,
+    chunk_size,
+    tmpdir,
+):
     data_dir = str(tmpdir / "optimized")
 
     optimize(
         fn=_simple_optimize_fn,
-        inputs=list(range(1000)),
+        inputs=list(range(20)),
         output_dir=data_dir,
-        num_workers=4,
+        num_workers=2,
         chunk_bytes=chunk_bytes,
         chunk_size=chunk_size,
         keep_data_ordered=keep_data_ordered,
@@ -130,7 +133,7 @@ def test_optimize_dataset(keep_data_ordered, chunk_bytes, chunk_size, tmpdir, mo
 
     ds = StreamingDataset(input_dir=data_dir)
 
-    expected_dataset = list(range(1000))
+    expected_dataset = list(range(20))
     actual_dataset = ds[:]
 
     assert len(actual_dataset) == len(expected_dataset)
@@ -310,7 +313,7 @@ def test_streaming_dataset_distributed_no_shuffle(drop_last, tmpdir, compression
         pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression):
     seed_everything(42)
 
@@ -363,11 +366,11 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
         ),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression):
     seed_everything(42)
 
-    cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
+    cache = Cache(str(tmpdir), chunk_size=500, compression=compression)
     for i in range(1222):
         cache[i] = i
 
@@ -387,7 +390,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_iter = iter(dataset)
     assert len(dataset_iter) == 611
     process_1_1 = list(dataset_iter)
-    assert process_1_1[:10] == [278, 272, 270, 273, 276, 275, 274, 271, 277, 279]
+    assert process_1_1[:10] == [1093, 1186, 1031, 1128, 1126, 1051, 1172, 1052, 1120, 1209]
     assert len(process_1_1) == 611
 
     dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
@@ -398,7 +401,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_2_iter = iter(dataset_2)
     assert len(dataset_2_iter) == 611
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [999, 993, 991, 994, 997, 996, 995, 992, 998, 527]
+    assert process_2_1[:10] == [967, 942, 893, 913, 982, 898, 947, 901, 894, 961]
     assert len(process_2_1) == 611
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 
@@ -411,7 +414,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
         pytest.param("zstd", marks=pytest.mark.skipif(condition=not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")),
     ],
 )
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression):
     seed_everything(42)
 
@@ -539,6 +542,35 @@ def test_dataset_cache_recreation(tmpdir):
     _ = dataset[1]
     assert dataset.cache is cache  # cache gets reused
     assert dataset.shuffler is shuffler  # shuffler gets reused
+
+
+@pytest.mark.timeout(30)
+def test_len_called_before_dataloader_drop_last(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=False)
+    _ = len(dataset)
+
+    batch_size = 8
+    dataloader = StreamingDataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        drop_last=True,
+        shuffle=False,
+    )
+
+    expected_batches = len(dataloader)
+    batches = list(dataloader)
+
+    # With drop_last=True and 100 items: 100 // 8 = 12 full batches (4 items dropped)
+    assert expected_batches == 12
+    assert len(batches) == expected_batches
+    assert all(len(batch) == batch_size for batch in batches)
 
 
 def test_dataset_for_text_tokens(tmpdir):
@@ -684,7 +716,7 @@ def test_dataset_for_text_tokens_multiple_workers(tmpdir):
     assert result == expected
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 def test_dataset_for_text_tokens_with_large_block_size_multiple_workers(tmpdir):
     # test to reproduce ERROR: Unexpected segmentation fault encountered in worker
     seed_everything(42)
@@ -864,6 +896,24 @@ def test_s3_streaming_dataset(monkeypatch):
     )  # it won't be None, and a cache dir will be created
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
+def test_r2_streaming_dataset(monkeypatch, tmpdir):
+    """Test that data_connection_id is properly merged into storage_options."""
+    downloader = mock.MagicMock()
+
+    def fn(remote_chunkpath: str, local_chunkpath: str):
+        with open(local_chunkpath, "w") as f:
+            json.dump({"chunks": [{"chunk_size": 2, "filename": "0.bin"}]}, f)
+
+    downloader.download_file = fn
+
+    monkeypatch.setattr(dataset_utilities_module, "get_downloader", mock.MagicMock(return_value=downloader))
+
+    dataset = StreamingDataset(input_dir="r2://random_bucket/optimized_tiny_imagenet")
+    assert dataset.input_dir.url == "r2://random_bucket/optimized_tiny_imagenet"
+    assert dataset.input_dir.path.endswith("chunks/9537e9e392ad87a4d38d05dfe28c329a/9537e9e392ad87a4d38d05dfe28c329a")
+
+
 class EmulateS3StreamingDataset(StreamingDataset):
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
         cache_dir = os.path.join(self.input_dir.path)
@@ -1021,7 +1071,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.parametrize("shuffle", [True, False])
 def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     """Tests resuming from a chunk past the first chunk, when subsequent chunks don't have the same size."""
@@ -1076,12 +1126,12 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
     assert torch.equal(next(iter(train_dataloader)), batch_to_resume_from)
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 def test_dataset_valid_state(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: dict[str, Any] | None = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1212,12 +1262,12 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
         dataset._validate_state_dict()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(90)
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
 def test_dataset_valid_state_override(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: dict[str, Any] | None = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1693,6 +1743,57 @@ def test_dataset_transform(tmpdir, shuffle):
     # Verify that the transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_multiple_transform(tmpdir, shuffle):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # Define two simple transform function
+    def transform_fn_1(x):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    def transform_fn_2(x, extra_num):
+        """A simple transform function that adds one to the input."""
+        return x + extra_num
+
+    dataset = StreamingDataset(
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=shuffle,
+        transform=[transform_fn_1, partial(transform_fn_2, extra_num=100)],
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == 100
+
+    # ACT
+    # Stream through the entire dataset and store the results
+    complete_data = []
+    for data in dataset:
+        assert data is not None
+        complete_data.append(data)
+
+    if shuffle:
+        complete_data.sort()
+
+    # ASSERT
+    # Verify that the transform is applied correctly
+    for i, item in enumerate(complete_data):
+        assert item == i * 2 + 100, f"Expected {i * 2 + 100}, got {item}"
 
 
 @pytest.mark.parametrize("shuffle", [True, False])

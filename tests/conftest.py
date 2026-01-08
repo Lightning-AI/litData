@@ -1,5 +1,6 @@
 import os
 import shutil
+import signal
 import sys
 import threading
 from collections import OrderedDict
@@ -9,14 +10,14 @@ from unittest.mock import Mock
 import pytest
 import torch.distributed
 
-from litdata import CombinedStreamingDataset, ParallelStreamingDataset, StreamingDataset
+from litdata import CombinedStreamingDataset, StreamingDataset
 from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
 from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def teardown_process_group():
     """Ensures distributed process group gets closed before the next test runs."""
     yield
@@ -25,9 +26,8 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
-def set_env():
-    # Set environment variable before each test to configure BaseWorker's maximum wait time
-    os.environ["DATA_OPTIMIZER_TIMEOUT"] = "20"
+def disable_signals(monkeypatch):
+    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
@@ -52,9 +52,9 @@ def mosaic_mds_index_data():
     }
 
 
-@pytest.fixture
-def combined_dataset(tmpdir_factory):
-    tmpdir = tmpdir_factory.mktemp("data")
+@pytest.fixture(scope="session")
+def prepare_combined_dataset(tmpdir_factory):
+    tmpdir = tmpdir_factory.mktemp("combined_dataset")
     datasets = [str(tmpdir.join(f"dataset_{i}")) for i in range(2)]
     for dataset in datasets:
         cache = Cache(input_dir=dataset, chunk_bytes="64MB")
@@ -62,25 +62,15 @@ def combined_dataset(tmpdir_factory):
             cache[i] = i
         cache.done()
         cache.merge()
-
-    dataset_1 = StreamingDataset(datasets[0], shuffle=True)
-    dataset_2 = StreamingDataset(datasets[1], shuffle=True)
-    return CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
+    return datasets
 
 
 @pytest.fixture
-def parallel_dataset(tmp_path_factory, request):
-    tmpdir = tmp_path_factory.mktemp("data")
-    datasets = [str(tmpdir / f"dataset_{i}") for i in range(2)]
-    for dataset, num_items in zip(datasets, [48, 56]):
-        cache = Cache(input_dir=dataset, chunk_size=10)
-        for i in range(num_items):
-            cache[i] = i
-        cache.done()
-        cache.merge()
-    dataset_1 = StreamingDataset(datasets[0], shuffle=True)
-    dataset_2 = StreamingDataset(datasets[1], shuffle=True)
-    return ParallelStreamingDataset(datasets=[dataset_1, dataset_2], length=request.param), request.param
+def combined_dataset(prepare_combined_dataset):
+    dataset_1_path, dataset_2_path = prepare_combined_dataset
+    dataset_1 = StreamingDataset(dataset_1_path)
+    dataset_2 = StreamingDataset(dataset_2_path)
+    return CombinedStreamingDataset(datasets=[dataset_1, dataset_2])
 
 
 @pytest.fixture
@@ -101,6 +91,14 @@ def fsspec_mock(monkeypatch):
     fsspec = ModuleType("fsspec")
     monkeypatch.setitem(sys.modules, "fsspec", fsspec)
     return fsspec
+
+
+@pytest.fixture
+def obstore_mock(monkeypatch):
+    obstore = ModuleType("obstore")
+    monkeypatch.setitem(sys.modules, "obstore", obstore)
+    obstore.store = Mock()
+    return obstore
 
 
 @pytest.fixture
@@ -134,7 +132,7 @@ def lightning_sdk_mock(monkeypatch):
     return lightning_sdk
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def _thread_police():
     """Attempts stopping left-over threads to avoid test interactions.
 
@@ -159,6 +157,8 @@ def _thread_police():
         elif thread.name == "QueueFeederThread":
             thread.join(timeout=20)
         else:
+            if thread.name.startswith("pytest_timeout"):
+                continue
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 

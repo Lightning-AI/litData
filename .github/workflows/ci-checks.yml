@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref }}
-  cancel-in-progress: ${{ ! (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check-typing:
@@ -30,10 +30,18 @@ jobs:
       testing-matrix: |
         {
           "os": ["ubuntu-latest", "macos-14", "windows-latest"],
-          "python-version": ["3.8", "3.10"]
+          "python-version": ["3.10", "3.11"]
         }
 
   check-docs:
     uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
     with:
       requirements-file: "requirements/docs.txt"
+      python-version: "3.10"
+
+  check-md-links:
+    uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@main
+    with:
+      config-file: ".github/markdown-links-config.json"
+      base-branch: "main"
+      force-check-all: "yes"

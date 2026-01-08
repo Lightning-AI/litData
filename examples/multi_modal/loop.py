@@ -2,7 +2,8 @@
 
 import logging
 import os
-from typing import Any, Dict, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 import lightning as pl
 import pandas as pd
@@ -147,7 +148,7 @@ class LitModel(pl.LightningModule):
         """
         return self.module(x, y, z)
 
-    def training_step(self, batch: Dict[str, torch.Tensor]) -> Dict:
+    def training_step(self, batch: dict[str, torch.Tensor]) -> dict:
         """Call the eval share for training.
 
         Returns:
@@ -156,7 +157,7 @@ class LitModel(pl.LightningModule):
         """
         return self._shared_eval_step(batch, "train")
 
-    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict:
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> dict:
         """Call the eval share for validation.
 
         Returns:
@@ -165,7 +166,7 @@ class LitModel(pl.LightningModule):
         """
         return self._shared_eval_step(batch, "val")
 
-    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict:
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> dict:
         """Call the eval share for test.
 
         Returns:
@@ -176,7 +177,7 @@ class LitModel(pl.LightningModule):
         self.pred_list.append(ret)
         return ret
 
-    def _shared_eval_step(self, batch: Dict[str, torch.Tensor], mode: str) -> Dict:
+    def _shared_eval_step(self, batch: dict[str, torch.Tensor], mode: str) -> dict:
         """Calculate the desired metrics.
 
         Args:
@@ -226,7 +227,7 @@ class LitModel(pl.LightningModule):
             self.log_dict(output)
             self.test_metrics.reset()
 
-    def predict(self, batch: Dict[str, torch.Tensor], batch_idx: int = 0, dataloader_idx: int = 0) -> torch.Tensor:
+    def predict(self, batch: dict[str, torch.Tensor], batch_idx: int = 0, dataloader_idx: int = 0) -> torch.Tensor:
         """Model prediction  without softmax and argmax to predict class label."""
         self.eval()
         with torch.no_grad():
@@ -258,7 +259,7 @@ class LitModel(pl.LightningModule):
         scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
         return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
 
-    def configure_callbacks(self) -> Union[Sequence[pl.pytorch.Callback], pl.pytorch.Callback]:
+    def configure_callbacks(self) -> Sequence[pl.pytorch.Callback] | pl.pytorch.Callback:
         """Configure Early stopping or Model Checkpointing."""
         early_stop = EarlyStopping(
             monitor="val_MulticlassAccuracy", patience=self.hyperparameters["patience"], mode="max"

@@ -1,7 +1,7 @@
 import logging
 import os
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 
@@ -12,8 +12,8 @@ from litdata.utilities.subsample import shuffle_lists_together, subsample_filena
 
 
 def train_test_split(
-    streaming_dataset: StreamingDataset, splits: List[float], seed: int = 42
-) -> List[StreamingDataset]:
+    streaming_dataset: StreamingDataset, splits: list[float], seed: int = 42, shuffle: bool = True
+) -> list[StreamingDataset]:
     """Splits a StreamingDataset into multiple subsets for training, testing, and validation.
 
     This function splits a StreamingDataset into multiple non-overlapping subsets based on the provided proportions.
@@ -24,6 +24,7 @@ def train_test_split(
         splits: A list of floats representing the proportion of data to be allocated to each split
                              (e.g., [0.8, 0.1, 0.1] for 80% training, 10% testing, and 10% validation).
         seed: An integer used to seed the random number generator for reproducibility.
+        shuffle: A boolean indicating whether to shuffle the data before splitting.
 
     Returns:
         List[StreamingDataset]: A list of StreamingDataset instances, where each element represents a split of the
@@ -47,31 +48,34 @@ def train_test_split(
     # we need subsampled chunk filenames, original chunk file, and subsampled_roi
 
     dummy_streaming_dataset = deepcopy_dataset(streaming_dataset)
-    dummy_subsampled_chunk_filename = dummy_streaming_dataset.subsampled_files
+    # Note: We make this a set to speed up the computation of subsampled_chunks.
+    dummy_subsampled_chunk_filename = set(dummy_streaming_dataset.subsampled_files)
     dummy_subsampled_roi = dummy_streaming_dataset.region_of_interest
-    subsampled_chunks: List[Dict[str, Any]] = []
+    subsampled_chunks: list[dict[str, Any]] = []
 
     input_dir = dummy_streaming_dataset.input_dir
     assert input_dir.path
 
-    if os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
-        # load chunks from `index.json` file
-        data = load_index_file(input_dir.path)
-
-        original_chunks = data["chunks"]
-        subsampled_chunks = [
-            _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
-        ]
-    else:
+    if not os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
         raise ValueError("Couldn't load original chunk file.")
+
+    # load chunks from `index.json` file
+    data = load_index_file(input_dir.path)
+
+    # subsample the chunks defined in the index file
+    original_chunks = data["chunks"]
+    subsampled_chunks = [
+        _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
+    ]
 
     new_datasets = [deepcopy_dataset(streaming_dataset) for _ in splits]
 
     dataset_length = sum([my_roi[1] - my_roi[0] for my_roi in dummy_subsampled_roi])
 
-    subsampled_chunks, dummy_subsampled_roi = shuffle_lists_together(
-        subsampled_chunks, dummy_subsampled_roi, np.random.RandomState([seed])
-    )
+    if shuffle:
+        subsampled_chunks, dummy_subsampled_roi = shuffle_lists_together(
+            subsampled_chunks, dummy_subsampled_roi, np.random.RandomState([seed])
+        )
 
     item_count_list = [int(dataset_length * split) for split in splits]
 

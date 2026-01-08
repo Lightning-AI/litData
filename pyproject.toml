@@ -13,18 +13,16 @@
 # limitations under the License.
 
 [build-system]
-requires = [
-  "setuptools",
-  "wheel",
-]
+requires = [ "setuptools", "wheel" ]
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py310"
 line-length = 120
 # Exclude a variety of commonly ignored directories.
 exclude = [
   ".git",
   "docs",
+  "src/litdata/debugger.py",
   "src/litdata/utilities/_pytree.py",
 ]
 # Enable Pyflakes `E` and `F` codes by default.
@@ -116,16 +114,8 @@ wrap-descriptions = 120
 blank = true
 
 [tool.pytest.ini_options]
-testpaths = [
-  "tests",
-]
-norecursedirs = [
-  ".git",
-  ".github",
-  "dist",
-  "build",
-  "docs",
-]
+testpaths = [ "tests" ]
+norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
 addopts = [
   "--strict-markers",
   "--doctest-modules",
@@ -133,12 +123,8 @@ addopts = [
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-markers = [
-  "cloud: Run the cloud tests for example",
-]
-filterwarnings = [
-  "error::FutureWarning",
-]
+markers = [ "cloud: Run the cloud tests for example" ]
+filterwarnings = [ "error::FutureWarning" ]
 xfail_strict = true
 junit_duration_report = "call"
 
@@ -152,9 +138,7 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-files = [
-  "src",
-]
+files = [ "src" ]
 # This section is for folders with "-" as they are not valid python modules
 exclude = [
   "src/litdata/utilities/_pytree.py",
@@ -166,6 +150,7 @@ exclude = [
   "src/litdata/imports.py",
   "src/litdata/imports.py",
   "src/litdata/processing/data_processor.py",
+  "src/litdata/debugger.py",
 ]
 install_types = "True"
 non_interactive = "True"
@@ -186,6 +171,5 @@ warn_no_return = "False"
 [[tool.mypy.overrides]]
 # the list can be generated with:
 # mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
-module = [
-]
+module = [  ]
 ignore_errors = "True"

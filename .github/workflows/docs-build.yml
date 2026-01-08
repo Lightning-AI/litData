@@ -6,11 +6,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-docs:
     uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
     with:
       requirements-file: "requirements/docs.txt"
+      python-version: "3.10"
 
   # https://github.com/marketplace/actions/deploy-to-github-pages
   docs-deploy:
@@ -18,15 +23,15 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # deploy needs git credentials
+      - uses: actions/checkout@v6 # deploy needs git credentials
       - name: Download prepared docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: docs-html-${{ github.sha }}
           path: docs/build/html
 
       - name: Deploy 🚀
-        uses: JamesIves/github-pages-deploy-action@v4.7.3
+        uses: JamesIves/github-pages-deploy-action@v4.7.6
         if: ${{ github.event_name == 'push' }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

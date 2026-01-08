@@ -5,29 +5,51 @@ import os
 import shutil
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
-from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
+from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME, _LITDATA_CACHE_DIR
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, TokensLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
 
 
+def wait_for_predicate(
+    predicate: Callable[[], bool],
+    timeout: float,
+) -> bool:
+    """Wait until the given predicate becomes True or the timeout expires.
+
+    Args:
+        predicate: A function returning a boolean condition to check.
+        timeout: Maximum time (in seconds) to wait.
+
+    Returns:
+        True if predicate became True within timeout, else False.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def subsample_streaming_dataset(
     input_dir: Dir,
-    cache_dir: Optional[Dir] = None,
-    item_loader: Optional[BaseItemLoader] = None,
+    cache_dir: Dir | None = None,
+    item_loader: BaseItemLoader | None = None,
     subsample: float = 1.0,
     shuffle: bool = False,
     seed: int = 42,
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
-    index_path: Optional[str] = None,
-    fnmatch_pattern: Optional[str] = None,
-) -> Tuple[List[str], List[Tuple[int, int]]]:
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
+    fnmatch_pattern: str | None = None,
+) -> tuple[list[str], list[tuple[int, int]]]:
     """Subsample streaming dataset.
 
     But before doing that, we will do some preprocessing:
@@ -38,8 +60,8 @@ def subsample_streaming_dataset(
     - Once chunks are ready, subsample (chunk filenames, region_of_interest).
 
     """
-    subsampled_files: List[str] = []
-    roi: List[Tuple[int, int]] = []
+    subsampled_files: list[str] = []
+    roi: list[tuple[int, int]] = []
 
     # Make sure input_dir contains cache path and remote url
     if _should_replace_path(input_dir.path):
@@ -63,12 +85,18 @@ def subsample_streaming_dataset(
         if index_path is not None:
             copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
         else:
-            downloader = get_downloader(input_dir.url, input_dir.path, [], storage_options, session_options)
+            # Merge data_connection_id from resolved directory into storage_options for R2 connections
+            merged_storage_options = storage_options.copy() if storage_options is not None else {}
+            if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
+                merged_storage_options["data_connection_id"] = input_dir.data_connection_id
+
+            downloader = get_downloader(input_dir.url, input_dir.path, [], merged_storage_options, session_options)
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
-    time.sleep(0.5)  # Give some time for the file to be available
+    def path_exists(p: str) -> bool:
+        return wait_for_predicate(lambda: os.path.exists(p), timeout=0.5)
 
-    if not os.path.exists(input_dir.path):
+    if not path_exists(input_dir.path):
         raise FileNotFoundError(f"The provided dataset path `{input_dir.path}` does not exist.")
 
     if os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
@@ -96,8 +124,8 @@ def subsample_streaming_dataset(
 
         return subsampled_files, roi
 
-    final_files: List[str] = []
-    final_roi: List[Tuple[int, int]] = []
+    final_files: list[str] = []
+    final_roi: list[tuple[int, int]] = []
 
     random_seed_sampler = None
     if shuffle:
@@ -126,7 +154,7 @@ def subsample_streaming_dataset(
     return final_files, final_roi
 
 
-def _should_replace_path(path: Optional[str]) -> bool:
+def _should_replace_path(path: str | None) -> bool:
     """Whether the input path is a special path to be replaced."""
     if path is None or path == "":
         return True
@@ -137,14 +165,15 @@ def _should_replace_path(path: Optional[str]) -> bool:
         or path.startswith("/teamspace/s3_folders/")
         or path.startswith("/teamspace/gcs_folders/")
         or path.startswith("/teamspace/gcs_connections/")
+        or path.startswith("/teamspace/lightning_storage/")
     )
 
 
 def _read_updated_at(
-    input_dir: Optional[Dir],
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
-    index_path: Optional[str] = None,
+    input_dir: Dir | None,
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
 ) -> str:
     """Read last updated timestamp from index.json file."""
     last_updation_timestamp = "0"
@@ -208,17 +237,19 @@ def get_default_cache_dir() -> str:
     Returns:
         str: The resolved default cache root directory.
     """
+    if _LITDATA_CACHE_DIR is not None:
+        return _LITDATA_CACHE_DIR
     is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
     return _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
 
 
 def _try_create_cache_dir(
-    input_dir: Optional[str],
-    cache_dir: Optional[str] = None,
-    storage_options: Optional[Dict] = {},
-    session_options: Optional[Dict] = {},
-    index_path: Optional[str] = None,
-) -> Optional[str]:
+    input_dir: str | None,
+    cache_dir: str | None = None,
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
+    index_path: str | None = None,
+) -> str | None:
     """Prepare and return the cache directory for a dataset."""
     resolved_input_dir = _resolve_dir(input_dir)
     updated_at = _read_updated_at(resolved_input_dir, storage_options, session_options, index_path)
@@ -239,7 +270,7 @@ def _try_create_cache_dir(
     return cache_dir
 
 
-def generate_roi(chunks: List[Dict[str, Any]], item_loader: Optional[BaseItemLoader] = None) -> List[Tuple[int, int]]:
+def generate_roi(chunks: list[dict[str, Any]], item_loader: BaseItemLoader | None = None) -> list[tuple[int, int]]:
     """Generates default region_of_interest for chunks."""
     roi = []
 
@@ -254,7 +285,7 @@ def generate_roi(chunks: List[Dict[str, Any]], item_loader: Optional[BaseItemLoa
     return roi
 
 
-def load_index_file(input_dir: str) -> Dict[str, Any]:
+def load_index_file(input_dir: str) -> dict[str, Any]:
     """Load index file from the specified input directory.
 
     This function supports loading both chunk-based and mds shard-based index files.
@@ -284,7 +315,7 @@ def load_index_file(input_dir: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Index file not found at {index_filepath}.")
 
 
-def adapt_mds_shards_to_chunks(data: Dict[str, Any]) -> Dict[str, Any]:
+def adapt_mds_shards_to_chunks(data: dict[str, Any]) -> dict[str, Any]:
     """Adapt mds shard-based index data to chunk-based format for compatibility.
     For more details about MDS, refer to the MosaicML Streaming documentation: https://github.com/mosaicml/streaming.
 

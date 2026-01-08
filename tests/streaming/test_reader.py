@@ -4,6 +4,8 @@ import shutil
 from time import sleep
 from unittest import mock
 
+import pytest
+
 from litdata.streaming import reader
 from litdata.streaming.cache import Cache
 from litdata.streaming.config import ChunkedIndex
@@ -167,8 +169,13 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     assert len(os.listdir(cache_dir)) == 14
 
     thread = PrepareChunksThread(
-        cache._reader.config, item_loader=PyTreeLoader(), distributed_env=_DistributedEnv(1, 1, 1), max_cache_size=10000
+        cache._reader.config,
+        item_loader=PyTreeLoader(),
+        distributed_env=_DistributedEnv(1, 1, 1),
+        max_pre_download=2,
+        max_cache_size=10000,
     )
+
     assert not thread._delete_chunks_when_processed
 
     thread = PrepareChunksThread(
@@ -199,3 +206,23 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     thread.join()
     sleep(0.1)
     assert thread._has_exited
+
+
+@pytest.mark.parametrize("on_demand_bytes", [True, False])
+def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
+    monkeypatch.setattr(reader, "_LONG_DEFAULT_TIMEOUT", 0.1)
+
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache = Cache(input_dir=cache_dir, chunk_size=2, max_cache_size=28020, on_demand_bytes=on_demand_bytes)
+
+    for i in range(25):
+        cache[i] = i
+
+    cache.done()
+    cache.merge()
+
+    for i in range(25):
+        idx = ChunkedIndex(*cache._get_chunk_index_from_index(i), is_last_index=i == 24)
+        item = cache._reader.read(idx)
+        assert item == i

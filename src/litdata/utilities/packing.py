@@ -12,10 +12,10 @@
 # limitations under the License.
 
 from collections import defaultdict
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
-def _pack_greedily(items: List[Any], weights: List[int], num_bins: int) -> Tuple[Dict[int, List[Any]], Dict[int, int]]:
+def _pack_greedily(items: list[Any], weights: list[int], num_bins: int) -> tuple[dict[int, list[Any]], dict[int, int]]:
     """Greedily pack items with given weights into bins such that the total weight of each bin is roughly equally
     distributed among all bins.
 

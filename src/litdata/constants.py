@@ -12,8 +12,8 @@
 # limitations under the License.
 
 import os
+import sys
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import torch
@@ -24,15 +24,21 @@ _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")
 _DEFAULT_LIGHTNING_CACHE_DIR = os.path.join("/cache", "chunks")
-_SUPPORTED_PROVIDERS = ("s3", "gs")  # cloud providers supported by litdata for uploading (optimize, map, merge, etc)
+_LITDATA_CACHE_DIR = os.getenv("LITDATA_CACHE_DIR", None)
+_SUPPORTED_PROVIDERS = (
+    "s3",
+    "gs",
+    "r2",
+)  # cloud providers supported by litdata for uploading (optimize, map, merge, etc)
 
 # This is required for full pytree serialization / deserialization support
 _TORCH_GREATER_EQUAL_2_1_0 = RequirementCache("torch>=2.1.0")
 _VIZ_TRACKER_AVAILABLE = RequirementCache("viztracer")
 _BOTO3_AVAILABLE = RequirementCache("boto3")
 _FSSPEC_AVAILABLE = RequirementCache("fsspec")
-_TORCH_AUDIO_AVAILABLE = RequirementCache("torchaudio")
-_ZSTD_AVAILABLE = RequirementCache("zstd")
+# zstd is built into Python 3.14+, otherwise require the zstd package
+_PYTHON_GREATER_EQUAL_3_14 = sys.version_info >= (3, 14)
+_ZSTD_AVAILABLE = _PYTHON_GREATER_EQUAL_3_14 or RequirementCache("zstd")
 _CRYPTOGRAPHY_AVAILABLE = RequirementCache("cryptography")
 _GOOGLE_STORAGE_AVAILABLE = RequirementCache("google.cloud.storage")
 _AZURE_STORAGE_AVAILABLE = RequirementCache("azure.storage.blob")
@@ -44,13 +50,14 @@ _POLARS_AVAILABLE = RequirementCache("polars>1.0.0")
 _PIL_AVAILABLE = RequirementCache("PIL")
 _TORCH_VISION_AVAILABLE = RequirementCache("torchvision")
 _AV_AVAILABLE = RequirementCache("av")
+_OBSTORE_AVAILABLE = RequirementCache("obstore")
 
 _DEBUG = bool(int(os.getenv("DEBUG_LITDATA", "0")))
 _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
-_DISABLE_S5CMD = bool(int(os.getenv("DISABLE_S5CMD", "0")))
+_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0"))
 
 # DON'T CHANGE ORDER
 _TORCH_DTYPES_MAPPING = {
@@ -97,7 +104,7 @@ _NUMPY_SCTYPES = [  # All NumPy scalar types from np.core.sctypes.values()
     str,
     np.void,
 ]
-_NUMPY_DTYPES_MAPPING: Dict[int, np.dtype] = {i: np.dtype(v) for i, v in enumerate(_NUMPY_SCTYPES)}
+_NUMPY_DTYPES_MAPPING: dict[int, np.dtype] = {i: np.dtype(v) for i, v in enumerate(_NUMPY_SCTYPES)}
 
 _TIME_FORMAT = "%Y-%m-%d_%H-%M-%S.%fZ"
 _IS_IN_STUDIO = bool(os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)) and bool(os.getenv("LIGHTNING_CLUSTER_ID", None))

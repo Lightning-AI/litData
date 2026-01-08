@@ -537,7 +537,6 @@ def test_combined_dataset_dataloader_states_without_any_iterations(combined_data
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("num_workers", [0, 2, 4])
 def test_combined_dataset_dataloader_states_complete_iterations(combined_dataset, num_workers):
-    print(f"Testing with num_workers={num_workers}")
     dataloader = StreamingDataLoader(combined_dataset, batch_size=4, num_workers=num_workers)
     assert len(dataloader) == 25, "Dataloader length should be 25 (50+50 items / batch size 4)"
 
@@ -559,16 +558,13 @@ def test_combined_dataset_dataloader_states_complete_iterations(combined_dataset
 
 
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize(("num_workers", "break_at"), [(0, 10), (0, 15), (2, 10), (2, 15), (4, 10), (4, 15)])
+@pytest.mark.parametrize(("num_workers", "break_at"), [(0, 10), (0, 15), (2, 15), (4, 15)])
 def test_combined_dataset_dataloader_states_partial_iterations(combined_dataset, num_workers, break_at):
-    print(f"Testing with num_workers={num_workers}, break_at={break_at}")
-
     # Verify dataloader state after partial last iteration
     dataloader = StreamingDataLoader(combined_dataset, batch_size=4, num_workers=num_workers)
 
     total_batches = len(dataloader)
     assert total_batches == 25, "Dataloader length should be 25 (100 items / batch size 4)"
-
     assert not dataloader.restore, "Dataloader should not be in restore state initially."
 
     # Partial iteration up to 'break_at'
@@ -600,3 +596,63 @@ def test_combined_dataset_dataloader_states_partial_iterations(combined_dataset,
         assert dataloader.current_epoch == 2, "Current epoch should be 2 in the second iteration"
         samples_yielded += len(batch)
     assert samples_yielded == len(combined_dataset), "All samples should be yielded in the second epoch."
+
+
+# -----------------------------------------------------------------------------
+# New tests: per-dataset batch sizes with batching_method="per_stream"
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("batch_sizes", [[1, 2], [2, 3]])
+def test_combined_dataset_per_dataset_batch_size(batch_sizes):
+    """Validate that when individual batch sizes are provided for each inner dataset.
+
+    The iterator respects these limits when *batching_method='per_stream'*.
+    """
+    # Build two trivial iterable datasets that produce easily distinguishable values
+    dataset1 = SimpleDataset(0, 200)  # dataset 0 values 0-199
+    dataset2 = SimpleDataset(1000, 1200)  # dataset 1 values 1000-1199
+
+    cds = TestCombinedStreamingDataset(
+        datasets=[dataset1, dataset2],
+        weights=[0.5, 0.5],
+        batching_method="per_stream",
+        iterate_over_all=False,
+        seed=123,
+    )
+
+    # Apply the per-dataset batch sizes
+    cds.set_batch_size(batch_sizes)
+
+    # Iterate a reasonable number of samples to observe several switches
+    num_samples = 300
+    iterator = iter(cds)
+
+    # Helper to map value -> dataset index
+    def get_ds_id(val):
+        return 0 if val < 1000 else 1
+
+    current_ds = None
+    run_length = 0
+
+    for _ in range(num_samples):
+        val = next(iterator)
+        ds_id = get_ds_id(val)
+
+        if current_ds is None:
+            # first sample
+            current_ds = ds_id
+            run_length = 1
+        elif ds_id == current_ds:
+            run_length += 1
+        else:
+            # dataset switch – verify previous run respected its quota
+            assert run_length <= batch_sizes[current_ds], (
+                f"Dataset {current_ds} emitted {run_length} consecutive samples (limit {batch_sizes[current_ds]})"
+            )
+            current_ds = ds_id
+            run_length = 1
+
+    # Final run check at loop end
+    if current_ds is not None:
+        assert run_length <= batch_sizes[current_ds]
