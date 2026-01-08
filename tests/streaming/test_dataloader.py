@@ -342,6 +342,111 @@ def test_resume_dataloader_with_new_dataset(tmpdir):
         assert dataloader.current_epoch == 2, "Current epoch should be 2"
 
 
+@pytest.mark.timeout(120)
+def test_resume_dataloader_mid_epoch_with_new_dataset(tmpdir):
+    dataset_1_path = tmpdir.join("dataset_1")
+    dataset_2_path = tmpdir.join("dataset_2")
+    for dataset, start in [(dataset_1_path, 0), (dataset_2_path, 100)]:
+        cache = Cache(input_dir=str(dataset), chunk_bytes="64MB")
+        for i in range(50):
+            cache[i] = i + start
+        cache.done()
+        cache.merge()
+
+    dataset = StreamingDataset(str(dataset_1_path), shuffle=False)
+    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2)
+    for batch_idx, _ in enumerate(dataloader):
+        if batch_idx == 2:
+            break
+
+    dataloader_state = dataloader.state_dict()
+    dataset = StreamingDataset(str(dataset_2_path), shuffle=False)
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=4, num_workers=2, dataset_change_policy="next_epoch"
+    )
+    dataloader.load_state_dict(dataloader_state)
+    assert not dataloader.restore
+
+    first_batch = next(iter(dataloader))
+    assert dataloader.current_epoch == 2, "Current epoch should be 2"
+    assert (first_batch >= 100).all().item()
+
+
+@pytest.mark.timeout(300)
+def test_resume_mid_epoch_with_new_dataset_next_epoch_e2e(tmp_path):
+    from pytorch_lightning import LightningModule, Trainer
+    from pytorch_lightning.callbacks import ModelCheckpoint
+
+    def _write_dataset(path, value):
+        cache = Cache(input_dir=str(path), chunk_size=4)
+        for i in range(8):
+            cache[i] = value
+        cache.done()
+        cache.merge()
+
+    data_dir_1 = tmp_path / "data_1"
+    data_dir_2 = tmp_path / "data_2"
+    _write_dataset(data_dir_1, 0)
+    _write_dataset(data_dir_2, 1)
+
+    def _make_dataset(path):
+        dataset = StreamingDataset(str(path), shuffle=False)
+
+        def transform(x, dataset=dataset):
+            return (x, dataset.current_epoch)
+
+        dataset.transform = transform
+        return dataset
+
+    def _make_dataloader(path, policy="error"):
+        return StreamingDataLoader(
+            _make_dataset(path), batch_size=2, num_workers=0, dataset_change_policy=policy
+        )
+
+    class _ValueCheckModel(LightningModule):
+        def __init__(self, expected_value, expected_epoch=None):
+            super().__init__()
+            self.expected_value = expected_value
+            self.expected_epoch = expected_epoch
+            self.layer = torch.nn.Linear(1, 1)
+
+        def training_step(self, batch, batch_idx):
+            values, epochs = batch
+            assert (values == self.expected_value).all().item()
+            if self.expected_epoch is not None:
+                assert (epochs == self.expected_epoch).all().item()
+            loss = self.layer(values.float().unsqueeze(-1)).mean()
+            return loss
+
+        def configure_optimizers(self):
+            return torch.optim.SGD(self.parameters(), lr=0.1)
+
+    ckpt_callback = ModelCheckpoint(dirpath=str(tmp_path), save_last=True)
+    trainer = Trainer(
+        max_steps=2,
+        logger=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        callbacks=[ckpt_callback],
+    )
+    trainer.fit(_ValueCheckModel(expected_value=0), train_dataloaders=_make_dataloader(data_dir_1))
+    ckpt_path = ckpt_callback.last_model_path
+    assert ckpt_path
+
+    trainer = Trainer(
+        max_steps=1,
+        logger=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
+    )
+    trainer.fit(
+        _ValueCheckModel(expected_value=1, expected_epoch=2),
+        train_dataloaders=_make_dataloader(data_dir_2, policy="next_epoch"),
+        ckpt_path=ckpt_path,
+    )
+
+
 def test_resume_dataloader_after_some_workers_are_done(tmpdir):
     # see https://github.com/Lightning-AI/litData/issues/563
     dset_path = tmpdir.join("dataset")
