@@ -14,7 +14,7 @@
 import importlib
 from functools import lru_cache
 from importlib.util import find_spec
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 import pkg_resources
 from typing_extensions import ParamSpec
@@ -83,7 +83,7 @@ class RequirementCache:
 
     """
 
-    def __init__(self, requirement: str, module: Optional[str] = None) -> None:
+    def __init__(self, requirement: str, module: str | None = None) -> None:
         self.requirement = requirement
         self.module = module
 

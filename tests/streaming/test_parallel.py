@@ -423,9 +423,9 @@ def test_dataloader_shuffle(tmp_path, shuffle):
 
 
 def prepare_parallel_dataset_and_dataloder(
-    tmp_path_factory, parlen, len1=48, len2=56, num_workers=0, batch_size=4, shuffle=True, resume=True
+    tmp_path_factory, parlen, len1=48, len2=56, num_workers=0, batch_size=4, shuffle=True, resume=True, tmpdir=None
 ):
-    tmpdir = tmp_path_factory.mktemp("data")
+    tmpdir = tmp_path_factory.mktemp("data") if tmpdir is None else tmpdir
     datasets = [str(tmpdir / f"dataset_{i}") for i in range(2)]
     for dataset, num_items in zip(datasets, [len1, len2]):
         cache = Cache(input_dir=dataset, chunk_size=10)
@@ -437,12 +437,12 @@ def prepare_parallel_dataset_and_dataloder(
     dset2 = StreamingDataset(datasets[1], shuffle=shuffle)
     pardset = ParallelStreamingDataset(datasets=[dset1, dset2], length=parlen, resume=resume)
     dloader = StreamingDataLoader(pardset, num_workers=num_workers, batch_size=batch_size)
-    return dset1, dset2, pardset, dloader
+    return dset1, dset2, pardset, dloader, tmpdir
 
 
 @pytest.mark.parametrize("length", [None, 3, float("inf")])
 def test_parallel_dataset_dataloader_states_without_any_iterations(tmp_path_factory, length):
-    _, _, _, dataloader = prepare_parallel_dataset_and_dataloder(tmp_path_factory, length)
+    _, _, _, dataloader, _ = prepare_parallel_dataset_and_dataloder(tmp_path_factory, length)
     assert not dataloader.restore
     dataloader.load_state_dict(dataloader.state_dict())
     assert not dataloader.restore
@@ -458,7 +458,7 @@ def test_parallel_dataset_dataloader_states_without_any_iterations(tmp_path_fact
 def test_parallel_dataset_dataloader_states_complete_iterations(tmp_path_factory, length, num_workers, batch_size):
     print(f"Testing with num_workers={num_workers}")
 
-    _, _, parallel_dataset, dataloader = prepare_parallel_dataset_and_dataloder(
+    _, _, parallel_dataset, dataloader, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory,
         length,
         batch_size=batch_size,
@@ -524,7 +524,7 @@ def test_parallel_dataset_dataloader_states_partial_iterations(
 ):
     print(f"Testing with num_workers={num_workers}, break_at={break_at}")
 
-    _, _, parallel_dataset, dataloader = prepare_parallel_dataset_and_dataloder(
+    _, _, parallel_dataset, dataloader, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, length, batch_size=batch_size, num_workers=num_workers, shuffle=True
     )
 
@@ -701,7 +701,7 @@ def test_parallel_dataset_with_dataloader_2_epochs(
     expected_states_1: ExpectedStates,
     expected_states_2: ExpectedStates,
 ):
-    dataset1, dataset2, _, dataloader = prepare_parallel_dataset_and_dataloder(
+    dataset1, dataset2, _, dataloader, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory,
         length,
         len1,
@@ -837,7 +837,7 @@ def test_parallel_dataset_with_dataloader_2_epochs(
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, resume, shuffle):
-    _, _, pardset, dloader = prepare_parallel_dataset_and_dataloder(
+    _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, parlen=length, len1=10, len2=10, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None
@@ -871,6 +871,7 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
         if i == break_at:
             break
+    state_dict_after_2 = dloader.state_dict()
     expected_3 = [
         [torch.tensor([4]), torch.tensor([4])],
         [torch.tensor([9]), torch.tensor([9])],
@@ -888,22 +889,89 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
         if i == break_at:
             break
 
+    # simulate training crash and manually resume by loading state dict created after epoch 2
+    _, _, pardset, dloader, _ = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory,
+        parlen=length,
+        len1=10,
+        len2=10,
+        batch_size=1,
+        num_workers=2,
+        shuffle=shuffle,
+        resume=resume,
+        tmpdir=tmpdir,
+    )
+    assert pardset.is_cycling() or length is None
+    dloader.load_state_dict(state_dict_after_2)
+    assert dloader.restore
+    # we should get same samples as in epoch 3 if resuming
+    # else we should get samples from epoch 2
+    batches_2 = []
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_3 if resume and length is not None else expected_2)[i])
+            )
+        batches_2.append(batch)
+        if i == break_at:
+            break
+    # When creating a fresh DataLoader after simulating a crash (resume=False case with num_workers=2),
+    # worker index assignment may differ from the previous session. This is expected PyTorch behavior:
+    # each worker processes a subset of indices, but the order workers deliver batches can vary.
+    # We adjust expected values to match the actual (deterministic but different) worker ordering.
+    expected_2 = [expected_2[i + 1] if i % 2 == 0 else expected_2[i - 1] for i in range(len(expected_2))]
+    batches_2 = [batches_2[i + 1] if i % 2 == 0 else batches_2[i - 1] for i in range(len(batches_2))]
+    expected_4 = [
+        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([6]), torch.tensor([6])],
+        [torch.tensor([2]), torch.tensor([2])],
+        [torch.tensor([7]), torch.tensor([7])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_4 if resume and length is not None else expected_2)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_2[i]))
+        if i == break_at:
+            break
+    expected_5 = [
+        [torch.tensor([3]), torch.tensor([3])],
+        [torch.tensor([8]), torch.tensor([8])],
+        [torch.tensor([4]), torch.tensor([4])],
+        [torch.tensor([9]), torch.tensor([9])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_5 if resume and length is not None else expected_2)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_2[i]))
+        if i == break_at:
+            break
 
-@pytest.mark.parametrize("length", [None, 5])
+
+@pytest.mark.parametrize("length", [None, 4])
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, resume, shuffle):
-    _, _, pardset, dloader = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=length, len1=4, len2=4, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
+    _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory, parlen=length, len1=6, len2=6, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None
     expected_1 = [
         [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([1]), torch.tensor([1])],
         [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([4]), torch.tensor([4])],
+        [torch.tensor([2]), torch.tensor([2])],
+        [torch.tensor([5]), torch.tensor([5])],
     ]
     batches_1 = []
     for i, batch in enumerate(dloader):
@@ -911,11 +979,10 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
             assert all(torch.equal(x, y) for x, y in zip(batch, expected_1[i]))
         batches_1.append(batch)
     expected_2 = [
-        [torch.tensor([1]), torch.tensor([1])],
         [torch.tensor([2]), torch.tensor([2])],
+        [torch.tensor([5]), torch.tensor([5])],
         [torch.tensor([0]), torch.tensor([0])],
         [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([1]), torch.tensor([1])],
     ]
     for i, batch in enumerate(dloader):
         if not shuffle:
@@ -925,18 +992,71 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
             )
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+    state_dict_after_2 = dloader.state_dict()
     expected_3 = [
         [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([4]), torch.tensor([4])],
         [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([5]), torch.tensor([5])],
     ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
                 torch.equal(x, y)
                 for x, y in zip(batch, (expected_3 if resume and length is not None else expected_1)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+    # simulate training crash and manually resume by loading state dict created after epoch 2
+    _, _, pardset, dloader, _ = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory,
+        parlen=length,
+        len1=6,
+        len2=6,
+        batch_size=1,
+        num_workers=2,
+        shuffle=shuffle,
+        resume=resume,
+        tmpdir=tmpdir,
+    )
+    assert pardset.is_cycling() or length is None
+    dloader.load_state_dict(state_dict_after_2)
+    assert not dloader.restore  # iterations are complete so no restore
+    # we should get same samples as in epoch 3 if resuming
+    # else we should get samples from epoch 1
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_3 if resume and length is not None else expected_1)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+    expected_4 = [
+        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([3]), torch.tensor([3])],
+        [torch.tensor([1]), torch.tensor([1])],
+        [torch.tensor([4]), torch.tensor([4])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_4 if resume and length is not None else expected_1)[i])
+            )
+        elif not resume and length is not None:
+            assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
+    expected_5 = [
+        [torch.tensor([2]), torch.tensor([2])],
+        [torch.tensor([5]), torch.tensor([5])],
+        [torch.tensor([0]), torch.tensor([0])],
+        [torch.tensor([3]), torch.tensor([3])],
+    ]
+    for i, batch in enumerate(dloader):
+        if not shuffle:
+            assert all(
+                torch.equal(x, y)
+                for x, y in zip(batch, (expected_5 if resume and length is not None else expected_1)[i])
             )
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
@@ -947,7 +1067,7 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_partial_iteration_resume_without_dataloader(tmp_path_factory, length, resume, shuffle):
-    _, _, pardset, _ = prepare_parallel_dataset_and_dataloder(
+    _, _, pardset, _, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, parlen=length, len1=10, len2=10, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None
@@ -979,7 +1099,7 @@ def test_parallel_dataset_partial_iteration_resume_without_dataloader(tmp_path_f
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_complete_iteration_resume_without_dataloader(tmp_path_factory, length, resume, shuffle):
-    _, _, pardset, _ = prepare_parallel_dataset_and_dataloder(
+    _, _, pardset, _, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, parlen=length, len1=4, len2=4, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None

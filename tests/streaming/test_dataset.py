@@ -19,7 +19,7 @@ import shutil
 import sys
 from functools import partial
 from time import sleep
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 from unittest.mock import patch
 
@@ -542,6 +542,35 @@ def test_dataset_cache_recreation(tmpdir):
     _ = dataset[1]
     assert dataset.cache is cache  # cache gets reused
     assert dataset.shuffler is shuffler  # shuffler gets reused
+
+
+@pytest.mark.timeout(30)
+def test_len_called_before_dataloader_drop_last(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=False)
+    _ = len(dataset)
+
+    batch_size = 8
+    dataloader = StreamingDataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        drop_last=True,
+        shuffle=False,
+    )
+
+    expected_batches = len(dataloader)
+    batches = list(dataloader)
+
+    # With drop_last=True and 100 items: 100 // 8 = 12 full batches (4 items dropped)
+    assert expected_batches == 12
+    assert len(batches) == expected_batches
+    assert all(len(batch) == batch_size for batch in batches)
 
 
 def test_dataset_for_text_tokens(tmpdir):
@@ -1102,7 +1131,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
 def test_dataset_valid_state(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[dict[str, Any]] = None
+    index_json_content: dict[str, Any] | None = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1238,7 +1267,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
 def test_dataset_valid_state_override(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[dict[str, Any]] = None
+    index_json_content: dict[str, Any] | None = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from time import time
-from typing import Any, Optional, Union
+from typing import Any
 from urllib import parse
 
 from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE
@@ -19,9 +19,9 @@ from litdata.utilities.env import _DistributedEnv
 class ParquetDir(ABC):
     def __init__(
         self,
-        dir_path: Optional[Union[str, Dir]],
-        cache_path: Optional[str] = None,
-        storage_options: Optional[dict] = {},
+        dir_path: str | Dir | None,
+        cache_path: str | None = None,
+        storage_options: dict | None = {},
         num_workers: int = 4,
     ):
         self.dir = _resolve_dir(dir_path)
@@ -73,9 +73,9 @@ class ParquetDir(ABC):
 class LocalParquetDir(ParquetDir):
     def __init__(
         self,
-        dir_path: Optional[Union[str, Dir]],
-        cache_path: Optional[str] = None,
-        storage_options: Optional[dict] = {},
+        dir_path: str | Dir | None,
+        cache_path: str | None = None,
+        storage_options: dict | None = {},
         num_workers: int = 4,
     ):
         if not _PYARROW_AVAILABLE:
@@ -122,9 +122,9 @@ class LocalParquetDir(ParquetDir):
 class CloudParquetDir(ParquetDir):
     def __init__(
         self,
-        dir_path: Optional[Union[str, Dir]],
-        cache_path: Optional[str] = None,
-        storage_options: Optional[dict] = None,
+        dir_path: str | Dir | None,
+        cache_path: str | None = None,
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
         if not _FSSPEC_AVAILABLE:
@@ -222,9 +222,9 @@ class CloudParquetDir(ParquetDir):
 class HFParquetDir(ParquetDir):
     def __init__(
         self,
-        dir_path: Optional[Union[str, Dir]],
-        cache_path: Optional[str] = None,
-        storage_options: Optional[dict] = None,
+        dir_path: str | Dir | None,
+        cache_path: str | None = None,
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
         if not _HF_HUB_AVAILABLE:
@@ -300,8 +300,8 @@ class HFParquetDir(ParquetDir):
 
 def get_parquet_indexer_cls(
     dir_path: str,
-    cache_path: Optional[str] = None,
-    storage_options: Optional[dict] = {},
+    cache_path: str | None = None,
+    storage_options: dict | None = {},
     num_workers: int = 4,
 ) -> ParquetDir:
     """Get the appropriate ParquetDir class based on the directory path scheme.

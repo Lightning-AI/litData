@@ -18,7 +18,7 @@ import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
 from time import sleep, time
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 
@@ -40,7 +40,7 @@ class Item:
     index: int
     data: bytes
     bytes: int
-    dim: Optional[int] = None
+    dim: int | None = None
 
     def __len__(self) -> int:
         return self.bytes
@@ -50,15 +50,15 @@ class BinaryWriter:
     def __init__(
         self,
         cache_dir: str,
-        chunk_size: Optional[int] = None,
-        chunk_bytes: Optional[Union[int, str]] = None,
-        compression: Optional[str] = None,
-        encryption: Optional[Encryption] = None,
+        chunk_size: int | None = None,
+        chunk_bytes: int | str | None = None,
+        compression: str | None = None,
+        encryption: Encryption | None = None,
         follow_tensor_dimension: bool = True,
-        serializers: Optional[dict[str, Serializer]] = None,
-        chunk_index: Optional[int] = None,
-        item_loader: Optional[BaseItemLoader] = None,
-        msg_queue: Optional[Queue] = None,
+        serializers: dict[str, Serializer] | None = None,
+        chunk_index: int | None = None,
+        item_loader: BaseItemLoader | None = None,
+        msg_queue: "Queue | None" = None,
     ):
         """The BinaryWriter enables to chunk dataset into an efficient streaming format for cloud training.
 
@@ -94,8 +94,8 @@ class BinaryWriter:
         self._item_loader = item_loader or PyTreeLoader()
         self.msg_queue = msg_queue
 
-        self._data_format: Optional[list[str]] = None
-        self._data_spec: Optional[PyTree] = None
+        self._data_format: list[str] | None = None
+        self._data_spec: PyTree | None = None
 
         if self._compression:
             if len(_COMPRESSORS) == 0:
@@ -109,11 +109,11 @@ class BinaryWriter:
 
         self._serialized_items: dict[int, Item] = {}
         self._chunk_index = chunk_index or 0
-        self._min_index: Optional[int] = None
-        self._max_index: Optional[int] = None
+        self._min_index: int | None = None
+        self._max_index: int | None = None
         self._chunks_info: list[dict[str, Any]] = []
-        self._worker_env: Optional[_WorkerEnv] = None
-        self._rank: Optional[int] = None
+        self._worker_env: _WorkerEnv | None = None
+        self._rank: int | None = None
         self._is_done = False
         self._distributed_env = _DistributedEnv.detect()
         self._follow_tensor_dimension = follow_tensor_dimension
@@ -161,7 +161,7 @@ class BinaryWriter:
             "item_loader": self._item_loader.__class__.__name__,
         }
 
-    def serialize(self, items: Any) -> tuple[bytes, Optional[int]]:
+    def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
         # Flatten the items provided by the users
         flattened, data_spec = tree_flatten(items)
@@ -290,7 +290,7 @@ class BinaryWriter:
         if self._chunk_size:
             assert num_items.item() <= self._chunk_size
 
-        dim: Optional[int] = None
+        dim: int | None = None
         if items[0].dim:
             dim = sum([item.dim if item.dim is not None else 0 for item in items])
 
@@ -327,7 +327,7 @@ class BinaryWriter:
         """
         self.add_item(index, items)
 
-    def add_item(self, index: int, items: Any) -> Optional[str]:
+    def add_item(self, index: int, items: Any) -> str | None:
         """Given an index and items will serialize the items and store an Item object to the growing
         `_serialized_items`.
         """
@@ -451,7 +451,7 @@ class BinaryWriter:
         self._is_done = True
         return filepaths
 
-    def merge(self, num_workers: int = 1, node_rank: Optional[int] = None) -> None:
+    def merge(self, num_workers: int = 1, node_rank: int | None = None) -> None:
         """Once all the workers have written their own index, the merge function is responsible to read and merge them
         into a single index.
         """
@@ -480,7 +480,7 @@ class BinaryWriter:
 
         self._merge_no_wait(node_rank=node_rank)
 
-    def _merge_no_wait(self, node_rank: Optional[int] = None, existing_index: Optional[dict[str, Any]] = None) -> None:
+    def _merge_no_wait(self, node_rank: int | None = None, existing_index: dict[str, Any] | None = None) -> None:
         """Once all the workers have written their own index, the merge function is responsible to read and merge them
         into a single index.
 
@@ -548,7 +548,7 @@ class BinaryWriter:
             )
         return out
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> Optional[str]:
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
         """Save the current state of the writer to a checkpoint."""
         checkpoint_dir = os.path.join(self._cache_dir, checkpoint_dir)
         if not os.path.exists(checkpoint_dir):
@@ -573,8 +573,8 @@ class BinaryWriter:
 
 def index_parquet_dataset(
     pq_dir_url: str,
-    cache_dir: Optional[str] = None,
-    storage_options: Optional[dict] = {},
+    cache_dir: str | None = None,
+    storage_options: dict | None = {},
     num_workers: int = 4,
 ) -> None:
     """Index a Parquet dataset from a specified URL.

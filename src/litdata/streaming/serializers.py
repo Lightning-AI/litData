@@ -21,7 +21,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
 from itertools import chain
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import tifffile
@@ -43,7 +43,7 @@ class Serializer(ABC):
     """
 
     @abstractmethod
-    def serialize(self, data: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, data: Any) -> tuple[bytes, str | None]:
         pass
 
     @abstractmethod
@@ -61,7 +61,7 @@ class Serializer(ABC):
 class PILSerializer(Serializer):
     """The PILSerializer serialize and deserialize PIL Image to and from bytes."""
 
-    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
         mode = item.mode.encode("utf-8")
         width, height = item.size
         raw = item.tobytes()
@@ -95,7 +95,7 @@ class PILSerializer(Serializer):
 class JPEGSerializer(Serializer):
     """The JPEGSerializer serialize and deserialize JPEG image to and from bytes."""
 
-    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
         if not _PIL_AVAILABLE:
             raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
 
@@ -153,7 +153,7 @@ class JPEGSerializer(Serializer):
 class JPEGArraySerializer(Serializer):
     """The JPEGArraySerializer serializes and deserializes lists of JPEG images to and from bytes."""
 
-    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
         # Store number of images as first 4 bytes
         n_images_bytes = np.uint32(len(item)).tobytes()
 
@@ -222,7 +222,7 @@ class JPEGArraySerializer(Serializer):
 class BytesSerializer(Serializer):
     """The BytesSerializer serialize and deserialize integer to and from bytes."""
 
-    def serialize(self, item: bytes) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: bytes) -> tuple[bytes, str | None]:
         return item, None
 
     def deserialize(self, item: bytes) -> bytes:
@@ -241,7 +241,7 @@ class TensorSerializer(Serializer):
         self._header_struct_format = ">II"
         self._header_struct = struct.Struct(self._header_struct_format)
 
-    def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: torch.Tensor) -> tuple[bytes, str | None]:
         if item.device.type != "cpu":
             item = item.cpu()
 
@@ -287,12 +287,12 @@ class NoHeaderTensorSerializer(Serializer):
     def __init__(self) -> None:
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _TORCH_DTYPES_MAPPING.items()}
-        self._dtype: Optional[torch.dtype] = None
+        self._dtype: torch.dtype | None = None
 
     def setup(self, data_format: str) -> None:
         self._dtype = _TORCH_DTYPES_MAPPING[int(data_format.split(":")[1])]
 
-    def serialize(self, item: torch.Tensor) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: torch.Tensor) -> tuple[bytes, str | None]:
         dtype_indice = self._dtype_to_indices[item.dtype]
         return item.numpy().tobytes(order="C"), f"no_header_tensor:{dtype_indice}"
 
@@ -311,7 +311,7 @@ class NumpySerializer(Serializer):
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _NUMPY_DTYPES_MAPPING.items()}
 
-    def serialize(self, item: np.ndarray) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: np.ndarray) -> tuple[bytes, str | None]:
         dtype_indice = self._dtype_to_indices[item.dtype]
         data = [np.uint32(dtype_indice).tobytes()]
         data.append(np.uint32(len(item.shape)).tobytes())
@@ -346,12 +346,12 @@ class NoHeaderNumpySerializer(Serializer):
     def __init__(self) -> None:
         super().__init__()
         self._dtype_to_indices = {v: k for k, v in _NUMPY_DTYPES_MAPPING.items()}
-        self._dtype: Optional[np.dtype] = None
+        self._dtype: np.dtype | None = None
 
     def setup(self, data_format: str) -> None:
         self._dtype = _NUMPY_DTYPES_MAPPING[int(data_format.split(":")[1])]
 
-    def serialize(self, item: np.ndarray) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: np.ndarray) -> tuple[bytes, str | None]:
         dtype_indice: int = self._dtype_to_indices[item.dtype]
         return item.tobytes(order="C"), f"no_header_numpy:{dtype_indice}"
 
@@ -366,7 +366,7 @@ class NoHeaderNumpySerializer(Serializer):
 class PickleSerializer(Serializer):
     """The PickleSerializer serialize and deserialize python objects to and from bytes."""
 
-    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
         return pickle.dumps(item), None
 
     def deserialize(self, data: bytes) -> Any:
@@ -377,7 +377,7 @@ class PickleSerializer(Serializer):
 
 
 class FileSerializer(Serializer):
-    def serialize(self, filepath: str) -> tuple[bytes, Optional[str]]:
+    def serialize(self, filepath: str) -> tuple[bytes, str | None]:
         print("FileSerializer will be removed in the future.")
         _, file_extension = os.path.splitext(filepath)
         with open(filepath, "rb") as f:
@@ -396,7 +396,7 @@ class FileSerializer(Serializer):
 class VideoSerializer(Serializer):
     _EXTENSIONS = ("mp4", "ogv", "mjpeg", "avi", "mov", "h264", "mpg", "webm", "wmv")
 
-    def serialize(self, filepath: str) -> tuple[bytes, Optional[str]]:
+    def serialize(self, filepath: str) -> tuple[bytes, str | None]:
         _, file_extension = os.path.splitext(filepath)
         with open(filepath, "rb") as f:
             file_extension = file_extension.replace(".", "").lower()
@@ -421,7 +421,7 @@ class VideoSerializer(Serializer):
 
 
 class StringSerializer(Serializer):
-    def serialize(self, obj: str) -> tuple[bytes, Optional[str]]:
+    def serialize(self, obj: str) -> tuple[bytes, str | None]:
         return obj.encode("utf-8"), None
 
     def deserialize(self, data: bytes) -> str:
@@ -438,7 +438,7 @@ class NumericSerializer:
         self.dtype = dtype
         self.size = self.dtype().nbytes
 
-    def serialize(self, obj: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, obj: Any) -> tuple[bytes, str | None]:
         return self.dtype(obj).tobytes(), None
 
     def deserialize(self, data: bytes) -> Any:
@@ -464,7 +464,7 @@ class FloatSerializer(NumericSerializer, Serializer):
 class BooleanSerializer(Serializer):
     """The BooleanSerializer serializes and deserializes boolean values to and from bytes."""
 
-    def serialize(self, item: bool) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: bool) -> tuple[bytes, str | None]:
         """Serialize a boolean value to bytes.
 
         Args:
@@ -501,7 +501,7 @@ class BooleanSerializer(Serializer):
 class TIFFSerializer(Serializer):
     """Serializer for TIFF files using tifffile."""
 
-    def serialize(self, item: Any) -> tuple[bytes, Optional[str]]:
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
         if not isinstance(item, str) or not os.path.isfile(item):
             raise ValueError(f"The item to serialize must be a valid file path. Received: {item}")
 
@@ -540,7 +540,7 @@ _SERIALIZERS = OrderedDict(
 )
 
 
-def _get_serializers(serializers: Optional[dict[str, Serializer]]) -> dict[str, Serializer]:
+def _get_serializers(serializers: dict[str, Serializer] | None) -> dict[str, Serializer]:
     if serializers is None:
         serializers = {}
     serializers = OrderedDict(serializers)

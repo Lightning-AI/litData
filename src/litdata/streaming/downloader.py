@@ -19,7 +19,7 @@ import tempfile
 from abc import ABC
 from contextlib import suppress
 from time import time
-from typing import Any, Optional
+from typing import Any
 from urllib import parse
 
 from filelock import FileLock, Timeout
@@ -44,7 +44,7 @@ class Downloader(ABC):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         self._remote_dir = remote_dir
@@ -114,7 +114,7 @@ class S3Downloader(Downloader):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
@@ -224,7 +224,7 @@ class R2Downloader(Downloader):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
@@ -337,7 +337,7 @@ class GCPDownloader(Downloader):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         if not _GOOGLE_STORAGE_AVAILABLE:
@@ -450,7 +450,7 @@ class AzureDownloader(Downloader):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         if not _AZURE_STORAGE_AVAILABLE:
@@ -559,7 +559,7 @@ class HFDownloader(Downloader):
         remote_dir: str,
         cache_dir: str,
         chunks: list[dict[str, Any]],
-        storage_options: Optional[dict] = {},
+        storage_options: dict | None = {},
         **kwargs: Any,
     ):
         if not _HF_HUB_AVAILABLE:
@@ -654,8 +654,8 @@ def get_downloader(
     remote_dir: str,
     cache_dir: str,
     chunks: list[dict[str, Any]],
-    storage_options: Optional[dict] = {},
-    session_options: Optional[dict] = {},
+    storage_options: dict | None = {},
+    session_options: dict | None = {},
 ) -> Downloader:
     """Get the appropriate downloader instance based on the remote directory prefix.
 

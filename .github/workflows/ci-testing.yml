@@ -8,6 +8,10 @@ on: # Trigger the workflow on push or pull request, but only for the main branch
     branches: [main]
     types: [opened, reopened, ready_for_review, synchronize]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     shell: bash
@@ -30,7 +34,7 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install uv and setup python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v7
         with:
