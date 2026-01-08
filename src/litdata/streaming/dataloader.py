@@ -19,11 +19,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
 from itertools import cycle
-
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
-
-from typing import Any
-
+from typing import Any, Literal
 
 import torch
 from torch.utils.data import Dataset, IterableDataset
@@ -59,7 +55,7 @@ logger = logging.getLogger("litdata.streaming.dataloader")
 DatasetChangePolicy = Literal["error", "next_epoch"]
 
 
-def _streaming_dataset_signature(state_dict: Dict[str, Any]) -> Tuple[Any, ...]:
+def _streaming_dataset_signature(state_dict: dict[str, Any]) -> tuple[Any, ...]:
     return (
         state_dict.get("input_dir_path"),
         state_dict.get("input_dir_url"),
@@ -740,8 +736,7 @@ class StreamingDataLoader(DataLoader):
             return length
         return len(self._index_sampler)
 
-
-    def _has_dataset_changed(self, state_dict: Dict[str, Any]) -> bool:
+    def _has_dataset_changed(self, state_dict: dict[str, Any]) -> bool:
         if not state_dict:
             return False
 
@@ -756,7 +751,7 @@ class StreamingDataLoader(DataLoader):
             if not all(isinstance(d, StreamingDataset) for d in self.dataset._datasets):
                 return False
 
-            saved_signatures: List[Tuple[Any, ...]] = []
+            saved_signatures: list[tuple[Any, ...]] = []
             for dataset_idx in range(len(self.dataset._datasets)):
                 key = str(dataset_idx)
                 if key not in state_dict:
@@ -765,9 +760,7 @@ class StreamingDataLoader(DataLoader):
 
             current_signatures = [
                 _streaming_dataset_signature(
-                    dataset.state_dict(
-                        num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size
-                    )
+                    dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size)
                 )
                 for dataset in self.dataset._datasets
             ]
@@ -775,7 +768,7 @@ class StreamingDataLoader(DataLoader):
 
         return False
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
             return {
