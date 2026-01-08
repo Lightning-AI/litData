@@ -640,25 +640,31 @@ class StreamingDataLoader(DataLoader):
         )  # type: ignore
 
     def __iter__(self) -> Any:
-        if not self.restore:
-            if (
-                isinstance(self.dataset, ParallelStreamingDataset)
-                and self.dataset.is_cycling()
-                and self.dataset.resume
-                and self.current_epoch != 0
-            ):
-                # For ParallelStreamingDataset with _length != None we want to cycle the wrapped datasets i.e. we do not
-                # want to restart at index 0 at every epoch. So we set them in restore state.
+        if (
+            isinstance(self.dataset, ParallelStreamingDataset)
+            and self.dataset.is_cycling()
+            and self.dataset.resume
+            and self.current_epoch != 0
+        ):
+            # For cycling ParallelStreamingDataset with resume=True, we maintain dataset position across epochs
+            # instead of resetting to index 0. This block handles two scenarios:
+            # 1. Automatic epoch transitions: When `self.restore` is False, we persist the current state via
+            #    load_state_dict() to continue from where we left off, then increment the epoch.
+            # 2. Manual checkpoint resume: When `self.restore` is True (set by an explicit load_state_dict() call),
+            #    we skip re-saving state since the position was already restored from the checkpoint.
+            # In both cases, we clear `self.restore` to ensure subsequent epochs trigger automatic state persistence.
+            if not self.restore:
                 self.load_state_dict(self.state_dict())
-                self.restore = False
-            else:
-                self._latest_worker_idx = 0
-                self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
-                self._worker_idx_iter = iter(self._worker_idx)
-                self._num_samples_yielded_wrapper = {}
-                self._num_samples_yielded_streaming = 0
-                self._num_cycles = {}
-                self.dataset.reset_state_dict()
+                self.current_epoch += 1
+            self.restore = False
+        elif not self.restore:
+            self._latest_worker_idx = 0
+            self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
+            self._worker_idx_iter = iter(self._worker_idx)
+            self._num_samples_yielded_wrapper = {}
+            self._num_samples_yielded_streaming = 0
+            self._num_cycles = {}
+            self.dataset.reset_state_dict()
             self.current_epoch += 1
 
         self.dataset.set_epoch(self.current_epoch)
