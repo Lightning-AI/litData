@@ -363,9 +363,7 @@ def test_resume_dataloader_mid_epoch_with_new_dataset(tmpdir):
 
     dataloader_state = dataloader.state_dict()
     dataset = StreamingDataset(str(dataset_2_path), shuffle=False)
-    dataloader = StreamingDataLoader(
-        dataset, batch_size=4, num_workers=num_workers, dataset_change_policy="next_epoch"
-    )
+    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=num_workers, dataset_change_policy="next_epoch")
     dataloader.load_state_dict(dataloader_state)
     assert not dataloader.restore
 
