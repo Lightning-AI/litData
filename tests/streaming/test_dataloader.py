@@ -355,14 +355,17 @@ def test_resume_dataloader_mid_epoch_with_new_dataset(tmpdir):
         cache.merge()
 
     dataset = StreamingDataset(str(dataset_1_path), shuffle=False)
-    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2)
+    num_workers = 0 if sys.platform == "darwin" else 2
+    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=num_workers)
     for batch_idx, _ in enumerate(dataloader):
         if batch_idx == 2:
             break
 
     dataloader_state = dataloader.state_dict()
     dataset = StreamingDataset(str(dataset_2_path), shuffle=False)
-    dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2, dataset_change_policy="next_epoch")
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=4, num_workers=num_workers, dataset_change_policy="next_epoch"
+    )
     dataloader.load_state_dict(dataloader_state)
     assert not dataloader.restore
 
