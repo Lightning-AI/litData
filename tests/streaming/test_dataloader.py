@@ -425,6 +425,8 @@ def test_resume_mid_epoch_with_new_dataset_next_epoch_e2e(tmp_path):
         logger=False,
         enable_model_summary=False,
         enable_progress_bar=False,
+        accelerator="cpu",
+        devices=1,
         callbacks=[ckpt_callback],
     )
     trainer.fit(_ValueCheckModel(expected_value=0), train_dataloaders=_make_dataloader(data_dir_1))
@@ -437,6 +439,8 @@ def test_resume_mid_epoch_with_new_dataset_next_epoch_e2e(tmp_path):
         enable_model_summary=False,
         enable_progress_bar=False,
         enable_checkpointing=False,
+        accelerator="cpu",
+        devices=1,
     )
     trainer.fit(
         _ValueCheckModel(expected_value=1, expected_epoch=2),
