@@ -1440,12 +1440,12 @@ class DataProcessor:
                 storage_dir=self.output_dir.path,
                 dataset_type=data_type,
                 empty=False,
-                size=result.size,
+                size=str(result.size),
                 num_bytes=result.num_bytes,
                 data_format=result.data_format,
                 compression=result.compression,
-                num_chunks=result.num_chunks,
-                num_bytes_per_chunk=result.num_bytes_per_chunk,
+                num_chunks=str(result.num_chunks),
+                num_bytes_per_chunk=[str(v) for v in (result.num_bytes_per_chunk or [])],
             )
         if self.verbose:
             print("Finished data processing!")
