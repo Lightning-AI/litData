@@ -85,7 +85,7 @@ repos:
         args: ["--print-width=120"]
 
   - repo: https://github.com/tox-dev/pyproject-fmt
-    rev: v2.11.1
+    rev: v2.8.0
     hooks:
       - id: pyproject-fmt
         additional_dependencies: [tox]
