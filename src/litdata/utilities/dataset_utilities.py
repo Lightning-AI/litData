@@ -174,7 +174,11 @@ def _should_replace_path_filestores(path: str | None) -> bool:
     if path is None or path == "":
         return True
 
-    return path.startswith("/teamspace/filestore_folders/") or path.startswith("/teamspace/efs_connections/")
+    return (
+        path.startswith("/teamspace/filestore_folders/")
+        or path.startswith("/teamspace/efs_connections/")
+        or path.startswith("/teamspace/efs_folders/")
+    )
 
 
 def _read_updated_at(
