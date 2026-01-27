@@ -24,10 +24,11 @@ from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader
+from litdata.streaming.config import ChunksConfig
+from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
-from litdata.streaming.serializers import Serializer
+from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
@@ -277,12 +278,25 @@ class StreamingDataset(IterableDataset):
                 self.input_dir.path = cache_path
 
         if _should_replace_path_filestores(self.input_dir.path):
-            cache_path = _try_create_cache_dir(
-                input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+            # Load the config to know whether the dataset has been compressed
+            config = ChunksConfig.load(
+                self.input_dir.path,
+                _get_serializers(self.serializers),
+                None,
+                self.item_loader or PyTreeLoader(),
+                self.subsampled_files,
+                self.region_of_interest,
+                self.storage_options,
+                self.session_options,
             )
-            if cache_path is not None:
-                self.input_dir.url = self.input_dir.path
-                self.input_dir.path = cache_path
+
+            if config._compressor is not None:
+                cache_path = _try_create_cache_dir(
+                    input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+                )
+                if cache_path is not None:
+                    self.input_dir.url = self.input_dir.path
+                    self.input_dir.path = cache_path
 
         cache = Cache(
             input_dir=self.input_dir,
