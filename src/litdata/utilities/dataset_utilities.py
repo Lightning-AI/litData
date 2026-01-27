@@ -169,6 +169,14 @@ def _should_replace_path(path: str | None) -> bool:
     )
 
 
+def _should_replace_path_filestores(path: str | None) -> bool:
+    """Whether the input path is a special path to be replaced."""
+    if path is None or path == "":
+        return True
+
+    return path.startswith("/teamspace/filestore_folders/") or path.startswith("/teamspace/efs_connections/")
+
+
 def _read_updated_at(
     input_dir: Dir | None,
     storage_options: dict | None = {},

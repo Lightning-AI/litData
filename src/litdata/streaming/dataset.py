@@ -29,7 +29,12 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer
 from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
-from litdata.utilities.dataset_utilities import _should_replace_path, _try_create_cache_dir, subsample_streaming_dataset
+from litdata.utilities.dataset_utilities import (
+    _should_replace_path,
+    _should_replace_path_filestores,
+    _try_create_cache_dir,
+    subsample_streaming_dataset,
+)
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int
@@ -269,6 +274,14 @@ class StreamingDataset(IterableDataset):
                 cache_dir=self.cache_dir.path,
             )
             if cache_path is not None:
+                self.input_dir.path = cache_path
+
+        if _should_replace_path_filestores(self.input_dir.path):
+            cache_path = _try_create_cache_dir(
+                input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+            )
+            if cache_path is not None:
+                self.input_dir.url = self.input_dir.path
                 self.input_dir.path = cache_path
 
         cache = Cache(
