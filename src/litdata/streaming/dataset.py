@@ -280,7 +280,7 @@ class StreamingDataset(IterableDataset):
         if _should_replace_path_filestores(self.input_dir.path):
             # Load the config to know whether the dataset has been compressed
             config = ChunksConfig.load(
-                self.input_dir.path,
+                self.input_dir.path or "",
                 _get_serializers(self.serializers),
                 None,
                 self.item_loader or PyTreeLoader(),
@@ -290,7 +290,7 @@ class StreamingDataset(IterableDataset):
                 self.session_options,
             )
 
-            if config._compressor is not None:
+            if config and config._compressor is not None:
                 cache_path = _try_create_cache_dir(
                     input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
                 )
