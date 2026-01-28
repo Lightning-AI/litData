@@ -290,7 +290,12 @@ class StreamingDataset(IterableDataset):
                 self.session_options,
             )
 
-            if config and config._compressor is not None:
+            # If the dataset is compressed, cache the decompressed files on local disk.
+            # Benchmarking with non-compressed datasets stored on filestores showed that
+            # copying files to local disk introduces unnecessary overhead and slows down
+            # the first epoch. Therefore, we avoid caching non-compressed datasets locally.
+            is_compressed = config and config._compressor is not None
+            if is_compressed:
                 cache_path = _try_create_cache_dir(
                     input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
                 )

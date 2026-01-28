@@ -73,7 +73,7 @@ class ChunksConfig:
 
         assert _original_chunks is not None
 
-        if subsampled_files is None or not subsampled_files:
+        if subsampled_files is None:
             self._chunks = _original_chunks
         else:
             self._chunks = load_subsampled_chunks(subsampled_files, _original_chunks)
