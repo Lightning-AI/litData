@@ -24,12 +24,18 @@ from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader
+from litdata.streaming.config import ChunksConfig
+from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
-from litdata.streaming.serializers import Serializer
+from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
-from litdata.utilities.dataset_utilities import _should_replace_path, _try_create_cache_dir, subsample_streaming_dataset
+from litdata.utilities.dataset_utilities import (
+    _should_replace_path,
+    _should_replace_path_filestores,
+    _try_create_cache_dir,
+    subsample_streaming_dataset,
+)
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int
@@ -270,6 +276,32 @@ class StreamingDataset(IterableDataset):
             )
             if cache_path is not None:
                 self.input_dir.path = cache_path
+
+        if _should_replace_path_filestores(self.input_dir.path):
+            # Load the config to know whether the dataset has been compressed
+            config = ChunksConfig.load(
+                self.input_dir.path or "",
+                _get_serializers(self.serializers),
+                None,
+                self.item_loader or PyTreeLoader(),
+                self.subsampled_files,
+                self.region_of_interest,
+                self.storage_options,
+                self.session_options,
+            )
+
+            # If the dataset is compressed, cache the decompressed files on local disk.
+            # Benchmarking with non-compressed datasets stored on filestores showed that
+            # copying files to local disk introduces unnecessary overhead and slows down
+            # the first epoch. Therefore, we avoid caching non-compressed datasets locally.
+            is_compressed = config and config._compressor is not None
+            if is_compressed:
+                cache_path = _try_create_cache_dir(
+                    input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+                )
+                if cache_path is not None:
+                    self.input_dir.url = self.input_dir.path
+                    self.input_dir.path = cache_path
 
         cache = Cache(
             input_dir=self.input_dir,
