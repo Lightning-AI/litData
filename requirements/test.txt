@@ -1,5 +1,5 @@
 av >=14.0.0
-coverage ==7.12.*
+coverage ==7.13.*
 cryptography==45.0.7
 mosaicml-streaming==0.13.0
 pytest ==8.4.*
