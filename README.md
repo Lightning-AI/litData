@@ -592,6 +592,10 @@ if os.path.isfile("dataloader_state.pt"):
     state_dict = torch.load("dataloader_state.pt")
     dataloader.load_state_dict(state_dict)
 
+# If you resume from a checkpoint with a different dataset, use
+# StreamingDataLoader(..., dataset_change_policy="next_epoch") to skip the
+# remainder of the old epoch and start fresh on the new data.
+
 # Iterate over the data
 for batch_idx, batch in enumerate(dataloader):
 
