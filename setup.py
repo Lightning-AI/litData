@@ -4,9 +4,9 @@ import os
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from lightning_utilities.install.requirements import _parse_requirements
-from packaging.requirements import Requirement
 from setuptools import find_packages, setup
+
+from litdata.requirements import _parse_requirements
 
 _PATH_ROOT = os.path.dirname(__file__)
 _PATH_SOURCE = os.path.join(_PATH_ROOT, "src")
