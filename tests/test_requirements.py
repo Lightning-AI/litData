@@ -1,16 +1,16 @@
 import pytest
 
 from litdata.requirements import (
-    _RequirementWithComment,
     _parse_requirements,
+    _RequirementWithComment,
     _yield_lines,
     load_requirements,
 )
 
-
 # ---------------------------------------------------------------------------
 # _yield_lines
 # ---------------------------------------------------------------------------
+
 
 class TestYieldLines:
     def test_string_input(self):
@@ -29,6 +29,7 @@ class TestYieldLines:
 # ---------------------------------------------------------------------------
 # _RequirementWithComment
 # ---------------------------------------------------------------------------
+
 
 class TestRequirementWithComment:
     def test_init_with_comment_and_pip_argument(self):
@@ -90,6 +91,7 @@ class TestRequirementWithComment:
 # _parse_requirements
 # ---------------------------------------------------------------------------
 
+
 class TestParseRequirements:
     def test_parses_list(self):
         lines = ["# ignored", "", "this # is an", "--piparg", "example", "foo # strict", "thing"]
@@ -131,6 +133,7 @@ class TestParseRequirements:
 # ---------------------------------------------------------------------------
 # load_requirements
 # ---------------------------------------------------------------------------
+
 
 class TestLoadRequirements:
     def test_loads_from_temp_file(self, tmp_path):

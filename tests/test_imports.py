@@ -1,6 +1,6 @@
 import operator
 import warnings
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,10 +13,10 @@ from litdata.imports import (
     requires,
 )
 
-
 # ---------------------------------------------------------------------------
 # compare_version
 # ---------------------------------------------------------------------------
+
 
 class TestCompareVersion:
     def test_existing_package_passing(self):
@@ -35,6 +35,7 @@ class TestCompareVersion:
 # ---------------------------------------------------------------------------
 # RequirementCache
 # ---------------------------------------------------------------------------
+
 
 class TestRequirementCache:
     def test_no_args_raises(self):
@@ -79,6 +80,7 @@ class TestRequirementCache:
 # ModuleAvailableCache
 # ---------------------------------------------------------------------------
 
+
 class TestModuleAvailableCache:
     def test_emits_deprecation_warning(self):
         with warnings.catch_warnings(record=True) as w:
@@ -102,6 +104,7 @@ class TestModuleAvailableCache:
 # ---------------------------------------------------------------------------
 # LazyModule / lazy_import
 # ---------------------------------------------------------------------------
+
 
 class TestLazyModule:
     def test_does_not_import_immediately(self):
@@ -129,6 +132,7 @@ class TestLazyModule:
 # ---------------------------------------------------------------------------
 # requires decorator
 # ---------------------------------------------------------------------------
+
 
 class TestRequires:
     def test_available_requirement_runs(self):
