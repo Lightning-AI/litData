@@ -85,7 +85,7 @@ def _create_dataset(
                 num_bytes_per_chunk=num_bytes_per_chunk or [],
                 storage_dir=storage_dir,
                 type=dataset_type,
-                version=version or "",
+                version=version,
             ),
             project_id=project_id,
         )
