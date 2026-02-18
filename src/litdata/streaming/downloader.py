@@ -539,18 +539,25 @@ class LocalDownloader(Downloader):
         if not os.path.exists(remote_filepath):
             raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
 
+        lock_path = local_filepath + ".lock"
+        lock_acquired = False
         with (
             suppress(Timeout, FileNotFoundError),
-            FileLock(local_filepath + ".lock", timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0),
+            FileLock(lock_path, timeout=1 if remote_filepath.endswith(_INDEX_FILENAME) else 0),
         ):
-            if remote_filepath == local_filepath or os.path.exists(local_filepath):
-                return
-            # make an atomic operation to be safe
-            temp_file_path = local_filepath + ".tmp"
-            shutil.copy(remote_filepath, temp_file_path)
-            os.rename(temp_file_path, local_filepath)
+            lock_acquired = True
+            if not (remote_filepath == local_filepath or os.path.exists(local_filepath)):
+                # make an atomic operation to be safe
+                temp_file_path = local_filepath + ".tmp"
+                shutil.copy(remote_filepath, temp_file_path)
+                os.rename(temp_file_path, local_filepath)
+        # FileLock doesn't delete its lock file on release — we clean it up manually.
+        # This must happen after release (Windows can't delete open files) and after the
+        # work is done (on Linux, deleting an in-use lock file lets other processes lock
+        # on a new inode, bypassing mutual exclusion).
+        if lock_acquired:
             with contextlib.suppress(Exception):
-                os.remove(local_filepath + ".lock")
+                os.remove(lock_path)
 
 
 class HFDownloader(Downloader):

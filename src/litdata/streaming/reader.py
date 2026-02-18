@@ -113,28 +113,40 @@ class PrepareChunksThread(Thread):
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
         countpath = chunk_filepath + ".cnt"
-        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=3):
-            if not os.path.exists(countpath):
-                return 0
-            with open(countpath) as count_f:
-                try:
-                    curr_count = int(count_f.read().strip())
-                except Exception:
-                    curr_count = 1
-            curr_count -= 1
-            if curr_count <= 0:
-                with suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath)
-
-                with suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath + ".lock")
+        lock_path = countpath + ".lock"
+        curr_count = 0
+        remove_lock = False
+        with suppress(Timeout, FileNotFoundError), FileLock(lock_path, timeout=3):
+            if os.path.exists(countpath):
+                with open(countpath) as count_f:
+                    try:
+                        curr_count = int(count_f.read().strip())
+                    except Exception:
+                        curr_count = 1
+                curr_count -= 1
+                if curr_count <= 0:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(countpath)
+                    remove_lock = True
+                else:
+                    with open(countpath, "w+") as count_f:
+                        logger.debug(
+                            _get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"})
+                        )
+                        count_f.write(str(curr_count))
+                        logger.debug(
+                            _get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"})
+                        )
             else:
-                with open(countpath, "w+") as count_f:
-                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
-                    count_f.write(str(curr_count))
-                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
-            return curr_count
-        return 0
+                remove_lock = True
+        # FileLock doesn't delete its lock file on release — we clean it up manually.
+        # This must happen after release (Windows can't delete open files) and after the
+        # work is done (on Linux, deleting an in-use lock file lets other processes lock
+        # on a new inode, bypassing mutual exclusion).
+        if remove_lock:
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(lock_path)
+        return curr_count
 
     def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
