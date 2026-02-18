@@ -144,31 +144,20 @@ class PrepareChunksThread(Thread):
                 os.remove(lock_path)
         return curr_count
 
-    def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
-        """Inform the item loader of the chunk to delete."""
-        logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
-        # TODO: Fix the can_delete method
-        can_delete_chunk = self._config.can_delete(chunk_index)
-        chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+    def _cleanup_download_locks(self, chunk_filepath: str, chunk_index: int) -> None:
+        """Remove stale download lock files for a chunk.
 
-        if not skip_lock:
-            remaining_locks = self._remaining_locks(chunk_filepath)
-            if remaining_locks > 0:  # Can't delete this, something has it
-                if _DEBUG:
-                    print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
-                return
+        Download lock files (e.g. ``chunk-0-3.zstd.bin.lock``) are FileLock artifacts created
+        during download. They are safe to remove once the chunk exists locally, regardless of
+        the refcount held in ``.cnt`` files.  Reference-count lock files (``.cnt.lock``) are
+        excluded because they may still be needed by concurrent refcount operations.
 
-        if _DEBUG:
-            with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
-                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
-
-        self._item_loader.delete(chunk_index, chunk_filepath)
-
+        """
         base_name = os.path.basename(chunk_filepath)
         base_prefix = os.path.splitext(base_name)[0]
         cache_dir = os.path.dirname(chunk_filepath)
         pattern = os.path.join(cache_dir, f"{base_prefix}*.lock")
-        matched_locks = glob.glob(pattern)
+        matched_locks = [p for p in glob.glob(pattern) if not p.endswith(".cnt.lock")]
         if matched_locks:
             logger.debug(f"_apply_delete({chunk_index}): glob matched {matched_locks}")
         for lock_path in matched_locks:
@@ -179,6 +168,31 @@ class PrepareChunksThread(Thread):
                 logger.warning(f"_apply_delete({chunk_index}): failed to remove {lock_path}: {e}")
             except Exception as e:
                 logger.warning(f"_apply_delete({chunk_index}): unexpected error removing {lock_path}: {e}")
+
+    def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
+        """Inform the item loader of the chunk to delete."""
+        logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
+        # TODO: Fix the can_delete method
+        can_delete_chunk = self._config.can_delete(chunk_index)
+        chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+
+        if not skip_lock:
+            remaining_locks = self._remaining_locks(chunk_filepath)
+            if remaining_locks > 0:  # Can't delete this, something has it
+                logger.debug(
+                    f"_apply_delete({chunk_index}): skipping data deletion, remaining_locks={remaining_locks}"
+                )
+                if _DEBUG:
+                    print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
+                self._cleanup_download_locks(chunk_filepath, chunk_index)
+                return
+
+        if _DEBUG:
+            with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
+                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+
+        self._item_loader.delete(chunk_index, chunk_filepath)
+        self._cleanup_download_locks(chunk_filepath, chunk_index)
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
