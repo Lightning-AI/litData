@@ -68,6 +68,10 @@ def _create_dataset(
     client = LightningClient(retry=False)
 
     try:
+        # Some strings represent protobuf strings, some protouf uint64s
+        # The uint64s need a default of None so they're not added to the 
+        # request body, which avoids a 400 response due to an invalid request.
+        # The protobuf string types can default to "" just fine.
         client.dataset_service_create_dataset(
             body=DatasetServiceCreateDatasetBody(
                 cloud_space_id=(studio_id if lightning_app_id is None else None) or "",
@@ -77,11 +81,11 @@ def _create_dataset(
                 input_dir=input_dir or "",
                 lightning_app_id=lightning_app_id or "",
                 name=name or "",
-                size=size or "",
-                num_bytes=num_bytes or "",
+                size=size,
+                num_bytes=num_bytes,
                 data_format=(str(data_format) if data_format else data_format) or "",
                 compression=compression or "",
-                num_chunks=num_chunks or "",
+                num_chunks=num_chunks,
                 num_bytes_per_chunk=num_bytes_per_chunk or [],
                 storage_dir=storage_dir,
                 type=dataset_type,
