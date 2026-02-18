@@ -81,7 +81,7 @@ def test_reader_lock_cleanup_with_nonlocal_like_downloader(tmpdir, caplog):
         # Diagnostic: dump all files and captured logs before asserting
         all_files = sorted(os.listdir(cache_dir))
         print(f"\n[DIAG] All files in cache_dir: {all_files}")
-        print(f"[DIAG] Captured log messages:")
+        print("[DIAG] Captured log messages:")
         for record in caplog.records:
             print(f"  [{record.levelname}] {record.message}")
 
