@@ -1,7 +1,7 @@
 torch
 torchvision
 lightning-utilities
-filelock <3.24  # v3.24.0 removed lock file auto-delete on Windows, breaking our cleanup logic
+filelock
 numpy
 boto3
 requests
