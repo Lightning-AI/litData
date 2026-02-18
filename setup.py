@@ -4,7 +4,8 @@ import os
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from pkg_resources import parse_requirements
+from lightning_utilities.install.requirements import _parse_requirements
+from packaging.requirements import Requirement
 from setuptools import find_packages, setup
 
 _PATH_ROOT = os.path.dirname(__file__)
@@ -20,7 +21,7 @@ def _load_py_module(fname, pkg="litdata"):
 
 
 def _load_requirements(path_dir: str = _PATH_ROOT, file_name: str = "requirements.txt") -> list:
-    reqs = parse_requirements(open(os.path.join(path_dir, file_name)).readlines())
+    reqs = _parse_requirements(open(os.path.join(path_dir, file_name)).readlines())
     return list(map(str, reqs))
 
 
