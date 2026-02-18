@@ -189,7 +189,11 @@ class PrepareChunksThread(Thread):
             with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
                 tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
-        self._item_loader.delete(chunk_index, chunk_filepath)
+        try:
+            self._item_loader.delete(chunk_index, chunk_filepath)
+        except (FileNotFoundError, PermissionError) as e:
+            logger.debug(f"_apply_delete({chunk_index}): could not remove data file: {e}")
+
         self._cleanup_download_locks(chunk_filepath, chunk_index)
 
     def stop(self) -> None:
@@ -491,6 +495,10 @@ class BinaryReader:
             self._last_chunk_size = index.chunk_size
 
         if index.is_last_index and self._prepare_thread:
+            # Close the item loader's handle on the last chunk before requesting
+            # deletion.  On Windows, os.remove fails if the file is still open.
+            self._item_loader.close(self._last_chunk_index)
+
             # inform the thread it is time to stop
             self._prepare_thread._decrement_local_lock(index.chunk_index)
             self._prepare_thread.delete([index.chunk_index])
@@ -504,7 +512,6 @@ class BinaryReader:
                         "This can happen if the chunk files are too large."
                     )
             self._prepare_thread = None
-            self._item_loader.close(self._last_chunk_index)
             self._last_chunk_index = None
             self._last_chunk_size = None
             self._chunks_queued_for_download = False
