@@ -146,6 +146,7 @@ class PrepareChunksThread(Thread):
 
     def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
+        logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
         # TODO: Fix the can_delete method
         can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
@@ -167,9 +168,17 @@ class PrepareChunksThread(Thread):
         base_prefix = os.path.splitext(base_name)[0]
         cache_dir = os.path.dirname(chunk_filepath)
         pattern = os.path.join(cache_dir, f"{base_prefix}*.lock")
-        for lock_path in glob.glob(pattern):
-            with suppress(FileNotFoundError, PermissionError):
+        matched_locks = glob.glob(pattern)
+        if matched_locks:
+            logger.debug(f"_apply_delete({chunk_index}): glob matched {matched_locks}")
+        for lock_path in matched_locks:
+            try:
                 os.remove(lock_path)
+                logger.debug(f"_apply_delete({chunk_index}): removed {lock_path}")
+            except (FileNotFoundError, PermissionError) as e:
+                logger.warning(f"_apply_delete({chunk_index}): failed to remove {lock_path}: {e}")
+            except Exception as e:
+                logger.warning(f"_apply_delete({chunk_index}): unexpected error removing {lock_path}: {e}")
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
