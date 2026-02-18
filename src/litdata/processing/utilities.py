@@ -69,7 +69,7 @@ def _create_dataset(
 
     try:
         # Some strings represent protobuf strings, some protouf uint64s
-        # The uint64s need a default of None so they're not added to the 
+        # The uint64s need a default of None so they're not added to the
         # request body, which avoids a 400 response due to an invalid request.
         # The protobuf string types can default to "" just fine.
         client.dataset_service_create_dataset(
