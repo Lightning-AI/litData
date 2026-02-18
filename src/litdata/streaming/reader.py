@@ -179,9 +179,7 @@ class PrepareChunksThread(Thread):
         if not skip_lock:
             remaining_locks = self._remaining_locks(chunk_filepath)
             if remaining_locks > 0:  # Can't delete this, something has it
-                logger.debug(
-                    f"_apply_delete({chunk_index}): skipping data deletion, remaining_locks={remaining_locks}"
-                )
+                logger.debug(f"_apply_delete({chunk_index}): skipping data deletion, remaining_locks={remaining_locks}")
                 if _DEBUG:
                     print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
                 self._cleanup_download_locks(chunk_filepath, chunk_index)
