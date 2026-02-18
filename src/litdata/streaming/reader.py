@@ -130,13 +130,9 @@ class PrepareChunksThread(Thread):
                     remove_lock = True
                 else:
                     with open(countpath, "w+") as count_f:
-                        logger.debug(
-                            _get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"})
-                        )
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
                         count_f.write(str(curr_count))
-                        logger.debug(
-                            _get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"})
-                        )
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
             else:
                 remove_lock = True
         # FileLock doesn't delete its lock file on release — we clean it up manually.
