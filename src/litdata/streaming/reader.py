@@ -113,31 +113,65 @@ class PrepareChunksThread(Thread):
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
         countpath = chunk_filepath + ".cnt"
-        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=3):
-            if not os.path.exists(countpath):
-                return 0
-            with open(countpath) as count_f:
-                try:
-                    curr_count = int(count_f.read().strip())
-                except Exception:
-                    curr_count = 1
-            curr_count -= 1
-            if curr_count <= 0:
-                with suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath)
-
-                with suppress(FileNotFoundError, PermissionError):
-                    os.remove(countpath + ".lock")
+        lock_path = countpath + ".lock"
+        curr_count = 0
+        remove_lock = False
+        with suppress(Timeout, FileNotFoundError), FileLock(lock_path, timeout=3):
+            if os.path.exists(countpath):
+                with open(countpath) as count_f:
+                    try:
+                        curr_count = int(count_f.read().strip())
+                    except Exception:
+                        curr_count = 1
+                curr_count -= 1
+                if curr_count <= 0:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(countpath)
+                    remove_lock = True
+                else:
+                    with open(countpath, "w+") as count_f:
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
+                        count_f.write(str(curr_count))
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
             else:
-                with open(countpath, "w+") as count_f:
-                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
-                    count_f.write(str(curr_count))
-                    logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
-            return curr_count
-        return 0
+                remove_lock = True
+        # FileLock doesn't delete its lock file on release — we clean it up manually.
+        # This must happen after release (Windows can't delete open files) and after the
+        # work is done (on Linux, deleting an in-use lock file lets other processes lock
+        # on a new inode, bypassing mutual exclusion).
+        if remove_lock:
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(lock_path)
+        return curr_count
+
+    def _cleanup_download_locks(self, chunk_filepath: str, chunk_index: int) -> None:
+        """Remove stale download lock files for a chunk.
+
+        Download lock files (e.g. ``chunk-0-3.zstd.bin.lock``) are FileLock artifacts created
+        during download. They are safe to remove once the chunk exists locally, regardless of
+        the refcount held in ``.cnt`` files.  Reference-count lock files (``.cnt.lock``) are
+        excluded because they may still be needed by concurrent refcount operations.
+
+        """
+        base_name = os.path.basename(chunk_filepath)
+        base_prefix = os.path.splitext(base_name)[0]
+        cache_dir = os.path.dirname(chunk_filepath)
+        pattern = os.path.join(cache_dir, f"{base_prefix}*.lock")
+        matched_locks = [p for p in glob.glob(pattern) if not p.endswith(".cnt.lock")]
+        if matched_locks:
+            logger.debug(f"_apply_delete({chunk_index}): glob matched {matched_locks}")
+        for lock_path in matched_locks:
+            try:
+                os.remove(lock_path)
+                logger.debug(f"_apply_delete({chunk_index}): removed {lock_path}")
+            except (FileNotFoundError, PermissionError) as e:
+                logger.warning(f"_apply_delete({chunk_index}): failed to remove {lock_path}: {e}")
+            except Exception as e:
+                logger.warning(f"_apply_delete({chunk_index}): unexpected error removing {lock_path}: {e}")
 
     def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
+        logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
         # TODO: Fix the can_delete method
         can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
@@ -145,23 +179,22 @@ class PrepareChunksThread(Thread):
         if not skip_lock:
             remaining_locks = self._remaining_locks(chunk_filepath)
             if remaining_locks > 0:  # Can't delete this, something has it
+                logger.debug(f"_apply_delete({chunk_index}): skipping data deletion, remaining_locks={remaining_locks}")
                 if _DEBUG:
                     print(f"Skip delete {chunk_filepath} by {self._rank or 0}, current lock count: {remaining_locks}")
+                self._cleanup_download_locks(chunk_filepath, chunk_index)
                 return
 
         if _DEBUG:
             with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
                 tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
 
-        self._item_loader.delete(chunk_index, chunk_filepath)
+        try:
+            self._item_loader.delete(chunk_index, chunk_filepath)
+        except (FileNotFoundError, PermissionError) as e:
+            logger.debug(f"_apply_delete({chunk_index}): could not remove data file: {e}")
 
-        base_name = os.path.basename(chunk_filepath)
-        base_prefix = os.path.splitext(base_name)[0]
-        cache_dir = os.path.dirname(chunk_filepath)
-        pattern = os.path.join(cache_dir, f"{base_prefix}*.lock")
-        for lock_path in glob.glob(pattern):
-            with suppress(FileNotFoundError, PermissionError):
-                os.remove(lock_path)
+        self._cleanup_download_locks(chunk_filepath, chunk_index)
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
@@ -462,6 +495,10 @@ class BinaryReader:
             self._last_chunk_size = index.chunk_size
 
         if index.is_last_index and self._prepare_thread:
+            # Close the item loader's handle on the last chunk before requesting
+            # deletion.  On Windows, os.remove fails if the file is still open.
+            self._item_loader.close(self._last_chunk_index)
+
             # inform the thread it is time to stop
             self._prepare_thread._decrement_local_lock(index.chunk_index)
             self._prepare_thread.delete([index.chunk_index])
@@ -475,7 +512,6 @@ class BinaryReader:
                         "This can happen if the chunk files are too large."
                     )
             self._prepare_thread = None
-            self._item_loader.close(self._last_chunk_index)
             self._last_chunk_index = None
             self._last_chunk_size = None
             self._chunks_queued_for_download = False
