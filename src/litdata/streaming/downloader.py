@@ -598,11 +598,13 @@ class HFDownloader(Downloader):
             FileLock(local_filepath + ".lock", timeout=0),
             tempfile.TemporaryDirectory() as tmpdir,
         ):
-            _, _, _, repo_org, repo_name, path = remote_filepath.split("/", 5)
-            repo_id = f"{repo_org}/{repo_name}"
+            _, _, _, repo_org, repo_name_revision, path = remote_filepath.split("/", 5)
+            splits = repo_name_revision.split("@", 2)
+            repo_id = f"{repo_org}/{splits[0]}"
             downloaded_path = hf_hub_download(
                 repo_id,
                 path,
+                revision=splits[1] if len(splits) == 2 else None,
                 cache_dir=tmpdir,
                 repo_type="dataset",
                 **self._storage_options,
