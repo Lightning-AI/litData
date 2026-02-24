@@ -19,7 +19,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
 from itertools import cycle
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch.utils.data import Dataset, IterableDataset
@@ -51,6 +51,21 @@ from litdata.utilities.base import (
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
+
+DatasetChangePolicy = Literal["error", "next_epoch"]
+
+
+def _streaming_dataset_signature(state_dict: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        state_dict.get("input_dir_path"),
+        state_dict.get("input_dir_url"),
+        state_dict.get("item_loader"),
+        state_dict.get("seed"),
+        state_dict.get("shuffle"),
+        state_dict.get("drop_last"),
+        state_dict.get("subsampled_files"),
+        state_dict.get("region_of_interest"),
+    )
 
 
 def _equal_items(data_1: Any, data_2: Any) -> bool:
@@ -569,6 +584,9 @@ class StreamingDataLoader(DataLoader):
         profile_skip_batches (int): How many batches to skip before recording
         profile_batches (int, bool, optional): Whether to record data loading profile and generate a result.json file.
         profile_dir (int, bool,  optional): Where to store the recorded trace when profile_batches is enabled.
+        dataset_change_policy (str, optional): Behavior when resuming from a checkpoint with a different dataset
+            configuration. Use ``"next_epoch"`` to skip the remainder of the current epoch and start a new one,
+            or ``"error"`` (default) to keep the existing behavior.
 
     """
 
@@ -586,6 +604,7 @@ class StreamingDataLoader(DataLoader):
         prefetch_factor: int | None = None,
         shuffle: bool | None = None,
         drop_last: bool | None = None,
+        dataset_change_policy: DatasetChangePolicy = "error",
         collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
@@ -600,6 +619,9 @@ class StreamingDataLoader(DataLoader):
 
         if drop_last is not None:
             dataset.set_drop_last(drop_last)
+
+        if dataset_change_policy not in ("error", "next_epoch"):
+            raise ValueError(f"Invalid dataset_change_policy: {dataset_change_policy}")
 
         dataset.set_batch_size(batch_size)
         dataset.set_num_workers(num_workers)
@@ -625,8 +647,10 @@ class StreamingDataLoader(DataLoader):
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
         self.rng_state: Any | None = None
+        self._dataset_change_policy = dataset_change_policy
         self._worker_idx: Any | None = None  # Lazily initialized in __iter__
         self._worker_idx_iter: Any | None = None
+
         self._latest_worker_idx = 0
         self.restore = False
         super().__init__(
@@ -712,6 +736,38 @@ class StreamingDataLoader(DataLoader):
             return length
         return len(self._index_sampler)
 
+    def _has_dataset_changed(self, state_dict: dict[str, Any]) -> bool:
+        if not state_dict:
+            return False
+
+        if isinstance(self.dataset, StreamingDataset):
+            current_signature = _streaming_dataset_signature(
+                self.dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size)
+            )
+            saved_signature = _streaming_dataset_signature(state_dict)
+            return current_signature != saved_signature
+
+        if isinstance(self.dataset, (CombinedStreamingDataset, ParallelStreamingDataset)):
+            if not all(isinstance(d, StreamingDataset) for d in self.dataset._datasets):
+                return False
+
+            saved_signatures: list[tuple[Any, ...]] = []
+            for dataset_idx in range(len(self.dataset._datasets)):
+                key = str(dataset_idx)
+                if key not in state_dict:
+                    return True
+                saved_signatures.append(_streaming_dataset_signature(state_dict[key]))
+
+            current_signatures = [
+                _streaming_dataset_signature(
+                    dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size)
+                )
+                for dataset in self.dataset._datasets
+            ]
+            return current_signatures != saved_signatures
+
+        return False
+
     def state_dict(self) -> dict[str, Any]:
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
@@ -764,6 +820,22 @@ class StreamingDataLoader(DataLoader):
 
         """
         self.current_epoch = obj["current_epoch"]
+
+        if self._dataset_change_policy == "next_epoch" and self._has_dataset_changed(obj["dataset"]):
+            logger.info(
+                "Detected a dataset change while resuming. Skipping the remainder of the current epoch and "
+                "continuing from the next one."
+            )
+            self.restore = False
+            self.dataset.reset_state_dict()
+            self._latest_worker_idx = 0
+            if self._worker_idx is None:
+                self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
+            self._worker_idx_iter = iter(self._worker_idx)
+            self._num_samples_yielded_streaming = 0
+            self._num_samples_yielded_wrapper = {}
+            self._num_cycles = {}
+            return
 
         if isinstance(self.dataset, StreamingDataset):
             self._num_samples_yielded_streaming = obj["num_samples_yielded"]
