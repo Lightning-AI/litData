@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6 # deploy needs git credentials
       - name: Download prepared docs
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: docs-html-${{ github.sha }}
           path: docs/build/html
