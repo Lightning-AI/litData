@@ -277,6 +277,7 @@ def test_assert_no_header_numpy_serializer():
     np.testing.assert_equal(t, new_t)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
 @pytest.mark.skipif(condition=not _AV_AVAILABLE, reason="Requires: 'av'")
 def test_wav_deserialization(tmpdir):
     from torch.hub import download_url_to_file
