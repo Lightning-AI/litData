@@ -34,6 +34,7 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
 
     steps:
+      # FFmpeg is required for Video Deserializer tests
       - name: Install FFmpeg (Linux)
         if: runner.os == 'Linux'
         run: |
