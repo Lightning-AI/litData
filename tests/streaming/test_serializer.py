@@ -293,7 +293,14 @@ def test_wav_deserialization(tmpdir):
     vframes, aframes, info = serializer.deserialize(data)
     assert vframes.shape == torch.Size([301, 512, 512, 3])
     assert aframes.shape == torch.Size([1, 0])
-    assert info == {"video_fps": 25.0}
+    # The metadata keys for video serialization may vary by serializer.
+    # For example, `torchvision` typically uses `video_fps`, while `torchcodec` uses `average_fps`.
+    # Despite these naming differences, both keys represent the same fps value,
+    # ensuring consistency in video frame rate representation across serialization methods.
+    assert "video_fps" in info or "average_fps" in info
+    fps = info.get("video_fps", info.get("average_fps"))
+    assert fps is not None
+    assert fps == 25.0
 
 
 def test_get_serializers():

@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
+from dataclasses import asdict
 from itertools import chain
 from typing import Any
 
@@ -32,6 +33,7 @@ from litdata.constants import (
     _NUMPY_DTYPES_MAPPING,
     _PIL_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
+    _TORCH_VISION_LESS_THAN_0_26,
 )
 
 
@@ -403,6 +405,13 @@ class VideoSerializer(Serializer):
             return f.read(), f"video:{file_extension}"
 
     def deserialize(self, data: bytes) -> Any:
+        # if using torchvision <=0.25, we will use torchvision.io to decode the video
+        # otherwise, we will use torchcodec to decode the video, which is faster and more robust
+        if _TORCH_VISION_LESS_THAN_0_26:
+            return self._deserialize_with_torchvision_io(data)
+        return self._deserialize_with_torchcodec(data)
+
+    def _deserialize_with_torchvision_io(self, data: bytes) -> Any:
         if not _AV_AVAILABLE:
             raise ModuleNotFoundError("av is required. Run `pip install av`")
 
@@ -415,6 +424,29 @@ class VideoSerializer(Serializer):
             with open(fname, "wb") as stream:
                 stream.write(data)
             return torchvision.io.read_video(fname, pts_unit="sec")
+
+    def _deserialize_with_torchcodec(self, data: bytes) -> Any:
+        try:
+            import torch
+            from torchcodec.decoders import AudioDecoder, VideoDecoder
+        except ImportError:
+            raise ModuleNotFoundError("torchcodec is required. Run `pip install torchcodec>0.11`")
+
+        dec = VideoDecoder(data, dimension_order="NHWC")  # NHWC → T,H,W,C after stacking
+        metadata = asdict(dec.metadata) if dec.metadata is not None else {}
+
+        # get_all_frames() returns a FrameBatch; .data is (N, C, H, W) or (N, H, W, C)
+        # depending on dimension_order above
+        frame_batch = dec.get_all_frames()
+        video = frame_batch.data  # shape: (T, H, W, C) with NHWC
+
+        try:
+            audio_dec = AudioDecoder(data)
+            audio = audio_dec.get_all_samples().data  # (num_channels, num_samples)
+        except ValueError:
+            audio = torch.zeros(1, 0)  # old torchvision path returns aframes with shape (1, 0) for no-audio videos.
+
+        return video, audio, metadata
 
     def can_serialize(self, data: Any) -> bool:
         return isinstance(data, str) and os.path.isfile(data) and any(data.endswith(ext) for ext in self._EXTENSIONS)
@@ -540,7 +572,9 @@ _SERIALIZERS = OrderedDict(
 )
 
 
-def _get_serializers(serializers: dict[str, Serializer] | None) -> dict[str, Serializer]:
+def _get_serializers(
+    serializers: dict[str, Serializer] | None,
+) -> dict[str, Serializer]:
     if serializers is None:
         serializers = {}
     serializers = OrderedDict(serializers)
