@@ -572,9 +572,7 @@ _SERIALIZERS = OrderedDict(
 )
 
 
-def _get_serializers(
-    serializers: dict[str, Serializer] | None,
-) -> dict[str, Serializer]:
+def _get_serializers(serializers: dict[str, Serializer] | None) -> dict[str, Serializer]:
     if serializers is None:
         serializers = {}
     serializers = OrderedDict(serializers)
