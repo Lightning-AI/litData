@@ -35,19 +35,10 @@ jobs:
 
     steps:
       # FFmpeg is required for Video Deserializer tests
-      - name: Install FFmpeg (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Install FFmpeg (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ffmpeg
-
-      - name: Install FFmpeg (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ffmpeg
+      - name: Set up FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: "6.0"
 
       - uses: actions/checkout@v6
       - name: Install uv and setup python ${{ matrix.python-version }}
