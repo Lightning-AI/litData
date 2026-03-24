@@ -49,7 +49,7 @@ _PYARROW_AVAILABLE = RequirementCache("pyarrow")
 _POLARS_AVAILABLE = RequirementCache("polars>1.0.0")
 _PIL_AVAILABLE = RequirementCache("PIL")
 _TORCH_VISION_AVAILABLE = RequirementCache("torchvision")
-_TORCH_VISION_LESS_THAN_0_26 = RequirementCache("torchvision<0.26")
+_TORCH_VISION_LESS_THAN_0_26 = RequirementCache("torchvision<0.26.0")
 _AV_AVAILABLE = RequirementCache("av")
 _OBSTORE_AVAILABLE = RequirementCache("obstore")
 
