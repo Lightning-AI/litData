@@ -220,18 +220,7 @@ class StreamingDataset(IterableDataset):
                     raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
 
-        # define invalid transform conditions for multisample case
-        if self.sample_count > 1:
-            if not hasattr(self, "transform"):
-                raise ValueError("Transform is required when using sample_count > 1.")
-
-            if isinstance(self.transform, list) and len(self.transform) > 1:
-                raise ValueError("Only a single transform is allowed when using sample_count > 1.")
-
-            if isinstance(self.transform, list) and "sample_idx" not in signature(self.transform[0]).parameters:
-                raise ValueError(
-                    "The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
-                )
+        self._validate_transform_for_multisample()
 
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
@@ -274,6 +263,20 @@ class StreamingDataset(IterableDataset):
         if self.drop_last != drop_last:
             self.drop_last = drop_last
             self.shuffler = None  # Reset shuffler to pick up new drop_last setting
+
+    def _validate_transform_for_multisample(self) -> None:
+        """Validate the transform configuration when using `sample_count > 1`."""
+        if self.sample_count > 1:
+            if not hasattr(self, "transform"):
+                raise ValueError("Transform is required when using sample_count > 1.")
+
+            if isinstance(self.transform, list) and len(self.transform) > 1:
+                raise ValueError("Only a single transform is allowed when using sample_count > 1.")
+
+            if isinstance(self.transform, list) and "sample_idx" not in signature(self.transform[0]).parameters:
+                raise ValueError(
+                    "The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
+                )
 
     def set_epoch(self, current_epoch: int) -> None:
         """Set the current epoch to the dataset on epoch starts.
