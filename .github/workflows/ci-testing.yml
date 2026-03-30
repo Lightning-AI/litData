@@ -34,6 +34,15 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
 
     steps:
+      # FFmpeg is required for Video Deserializer tests
+      - name: Setup FFmpeg (shared libs, Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Setup FFmpeg (shared libs, macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
       - uses: actions/checkout@v6
       - name: Install uv and setup python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v7
