@@ -567,7 +567,6 @@ class StreamingDataset(IterableDataset):
             # `next_worker_chunks_index` is the index of the chunk that we will be working on now
             interval = self.worker_intervals[self.worker_next_chunk_index]
 
-            # current_indexes = np.arange(interval[1] * self.multisample_factor, interval[2] * self.multisample_factor)
             current_indexes = np.arange(interval[1] * self.sample_count, interval[2] * self.sample_count)
 
             assert self.shuffler is not None
