@@ -370,7 +370,7 @@ class StreamingDataset(IterableDataset):
         return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
 
     def __len__(self) -> int:
-        return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1) * self.sample_count
+        return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
 
     def set_batch_size(self, batch_size: int) -> None:
         self.batch_size = batch_size
@@ -385,7 +385,9 @@ class StreamingDataset(IterableDataset):
         if self.shuffler is None:
             cache = self._create_cache(worker_env=worker_env)
             self.shuffler = self._create_shuffler(cache)
-        return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
+        return self.shuffler.get_len(
+            self.distributed_env, self.num_workers, self.batch_size, self.current_epoch, self.sample_count
+        )
 
     def __iter__(self) -> "StreamingDataset":
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.

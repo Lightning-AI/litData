@@ -538,6 +538,10 @@ def test_dataloader_dataset_multisample_transform(tmpdir):
 
     # ACT
     dl = StreamingDataLoader(dataset, batch_size=10, num_workers=1, shuffle=False)
+    dataloader_length = len(dl)
+    assert dataloader_length == (original_dataset_length * sample_count) // 10, (
+        f"Expected dataloader length {(original_dataset_length * sample_count) // 10}, got {dataloader_length}"
+    )
 
     complete_data = []
     for batch in dl:
@@ -550,18 +554,15 @@ def test_dataloader_dataset_multisample_transform(tmpdir):
 
 
 # Define simple transform functions
-def transform_fn_sq(x, sample_idx):
-    """A simple transform function that doubles the input."""
+def transform_fn_1(x, sample_idx):
     return x * sample_idx
 
 
-def transform_fn_add(x, sample_idx):
-    """A simple transform function that adds the sample_idx to the input."""
+def transform_fn_2(x, sample_idx):
     return x + sample_idx
 
 
 def transform_fn_no_sample_idx(x):
-    """A simple transform function that doubles the input."""
     return x
 
 
@@ -592,7 +593,7 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
             cache_dir=str(cache_dir),
             shuffle=False,
             sample_count=4,
-            transform=[transform_fn_sq, transform_fn_add],
+            transform=[transform_fn_1, transform_fn_2],
         )
 
     # Verify that a ValueError is raised when sample_idx parameter is missing
