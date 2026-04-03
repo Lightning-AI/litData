@@ -212,6 +212,8 @@ class StreamingDataset(IterableDataset):
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
+        if not isinstance(sample_count, int) or sample_count < 1:
+            raise ValueError(f"`sample_count` should be an integer greater than or equal to 1. Found {sample_count!r}")
         self.sample_count = sample_count
         if transform is not None:
             transform = transform if isinstance(transform, list) else [transform]
