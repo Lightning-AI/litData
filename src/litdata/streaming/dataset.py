@@ -273,9 +273,9 @@ class StreamingDataset(IterableDataset):
             if isinstance(self.transform, list) and len(self.transform) > 1:
                 raise ValueError("Only a single transform is allowed when using sample_count > 1.")
 
-            if isinstance(self.transform, list) and "sample_idx" not in signature(self.transform[0]).parameters:
+            if isinstance(self.transform, list) and len(signature(self.transform[0]).parameters) != 2:
                 raise ValueError(
-                    "The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
+                    "The transform function must accept two arguments (item, sample_idx) when using sample_count > 1."
                 )
 
     def set_epoch(self, current_epoch: int) -> None:

@@ -1844,6 +1844,12 @@ def test_dataset_transform_inheritance(tmpdir, shuffle):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
 
 
+# a simple transform function
+def simple_multisample_transform_fn(x, sample_index):
+    """A simple transform function that doubles the input."""
+    return x + sample_index
+
+
 def test_dataset_transform_multisample(tmpdir):
     """Test if the dataset transform is applied correctly."""
     # Create a simple dataset
@@ -1853,85 +1859,29 @@ def test_dataset_transform_multisample(tmpdir):
     os.makedirs(cache_dir)
     os.makedirs(data_dir)
 
-    # Create a dataset with 100 items, 20 items per chunk
+    # Create a dataset with 100 items, 20 items per chunk, and a multisample transform that generates 3 samples per item
+    original_dataset_length = 100
+    sample_count = 3
+
     cache = Cache(str(data_dir), chunk_size=20)
-    for i in range(100):
-        cache[i] = i
+    for i in range(original_dataset_length):
+        cache[i] = i * sample_count  # so, that data stored will be {0, 3, 6, ..., 297}
     cache.done()
     cache.merge()
 
-    # Define simple transform functions
-    def transform_fn_sq(x, sample_idx):
-        """A simple transform function that doubles the input."""
-        return x * sample_idx
-
-    sample_count = 3
     dataset = StreamingDataset(
-        data_dir, cache_dir=str(cache_dir), shuffle=False, transform=transform_fn_sq, sample_count=sample_count
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=False,
+        transform=simple_multisample_transform_fn,
+        sample_count=sample_count,
     )
     dataset_length = len(dataset)
-    assert dataset_length == 300
+    assert dataset_length == original_dataset_length * sample_count, (
+        f"Expected dataset length {original_dataset_length * sample_count}, got {dataset_length}"
+    )
 
     # ASSERT
     # Verify that the transform functions are applied correctly
     for i, item in enumerate(dataset):
-        assert item is not None
-        if i % sample_count == 0:
-            assert item == (i // sample_count) * 0, f"Expected {(i // sample_count) * 0}, got {item}"
-        elif i % sample_count == 1:
-            assert item == (i // sample_count) * 1, f"Expected {(i // sample_count) * 1}, got {item}"
-        else:
-            assert item == (i // sample_count) * 2, f"Expected {(i // sample_count) * 2}, got {item}"
-
-
-def test_dataset_transform_multisample_invalid_config(tmpdir, caplog):
-    """Test if the dataset raises an error when is_multisample is True but transform is not a list."""
-    # Create a simple dataset
-    # Create directories for cache and data
-    cache_dir = os.path.join(tmpdir, "cache_dir")
-    data_dir = os.path.join(tmpdir, "data_dir")
-    os.makedirs(cache_dir)
-    os.makedirs(data_dir)
-
-    # Define simple transform functions
-    def transform_fn_sq(x, sample_idx):
-        """A simple transform function that doubles the input."""
-        return x * sample_idx
-
-    def transform_fn_add(x, sample_idx):
-        """A simple transform function that adds the sample_idx to the input."""
-        return x + sample_idx
-
-    def transform_fn_no_sample_idx(x):
-        """A simple transform function that misses the sample_idx parameter."""
-        return x
-
-    # Create a dataset with 100 items, 20 items per chunk
-    cache = Cache(str(data_dir), chunk_size=20)
-    for i in range(100):
-        cache[i] = i
-    cache.done()
-    cache.merge()
-
-    # ASSERT
-    # Verify that a ValueError is raised when no transform is provided
-    with pytest.raises(ValueError, match="Transform is required when using sample_count > 1."):
-        StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
-
-    # Verify that a ValueError is raised when multiple transforms are provided
-    with pytest.raises(ValueError, match="Only a single transform is allowed when using sample_count > 1."):
-        StreamingDataset(
-            data_dir,
-            cache_dir=str(cache_dir),
-            shuffle=False,
-            sample_count=4,
-            transform=[transform_fn_sq, transform_fn_add],
-        )
-
-    # Verify that a ValueError is raised when sample_idx parameter is missing
-    with pytest.raises(
-        ValueError, match="The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
-    ):
-        StreamingDataset(
-            data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4, transform=transform_fn_no_sample_idx
-        )
+        assert i == item, f"Expected {i}, got {item}"
