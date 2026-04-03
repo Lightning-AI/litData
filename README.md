@@ -1120,7 +1120,8 @@ dataset = StreamingDataset(
 )
 ```
 
-- only a single transform is allowed and it must accept (item, sample_idx) as arguments.
+- **Note:** Only a single transform is supported here, and it must accept `(item, sample_idx)` as arguments.
+- If your use case needs multiple transforms or a different signature, please [open an issue](https://github.com/Lightning-AI/litdata/issues) so it can be considered.
 
 #### 💡 Why this is useful
 
