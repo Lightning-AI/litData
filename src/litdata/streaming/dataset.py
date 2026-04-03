@@ -268,7 +268,7 @@ class StreamingDataset(IterableDataset):
         """Validate the transform configuration when using `sample_count > 1`."""
         if self.sample_count > 1:
             if not hasattr(self, "transform"):
-                raise ValueError("Transform is required when using sample_count > 1.")
+                raise ValueError("`transform` is required when using sample_count > 1.")
 
             if isinstance(self.transform, list) and len(self.transform) > 1:
                 raise ValueError("Only a single transform is allowed when using sample_count > 1.")
