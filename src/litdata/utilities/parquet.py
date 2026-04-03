@@ -21,9 +21,12 @@ class ParquetDir(ABC):
         self,
         dir_path: str | Dir | None,
         cache_path: str | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
+        if storage_options is None:
+            storage_options = {}
+
         self.dir = _resolve_dir(dir_path)
         self.cache_path = cache_path
         self.storage_options = storage_options
