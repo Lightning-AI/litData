@@ -505,7 +505,7 @@ def simple_multisample_transform_fn(x, sample_idx):
     return x + sample_idx
 
 
-def test_dataloader_dataset_transform_multisample(tmpdir):
+def test_dataloader_dataset_multisample_transform(tmpdir):
     """Test if the dataset's transform is applied correctly with dataloader."""
     # Create a simple dataset
     # Create directories for cache and data

@@ -1120,6 +1120,8 @@ dataset = StreamingDataset(
 )
 ```
 
+- only a single transform is allowed and it must accept (item, sample_idx) as arguments.
+
 #### 💡 Why this is useful
 
 > Imagine you have a dataset of **1,000 images**.

@@ -1850,7 +1850,7 @@ def simple_multisample_transform_fn(x, sample_index):
     return x + sample_index
 
 
-def test_dataset_transform_multisample(tmpdir):
+def test_dataset_multisample_transform(tmpdir):
     """Test if the dataset transform is applied correctly."""
     # Create a simple dataset
     # Create directories for cache and data
@@ -1870,6 +1870,52 @@ def test_dataset_transform_multisample(tmpdir):
     cache.merge()
 
     dataset = StreamingDataset(
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=False,
+        transform=simple_multisample_transform_fn,
+        sample_count=sample_count,
+    )
+    dataset_length = len(dataset)
+    assert dataset_length == original_dataset_length * sample_count, (
+        f"Expected dataset length {original_dataset_length * sample_count}, got {dataset_length}"
+    )
+
+    # ASSERT
+    # Verify that the transform functions are applied correctly
+    for i, item in enumerate(dataset):
+        assert i == item, f"Expected {i}, got {item}"
+
+
+class TransformedStreamingDataset(StreamingDataset):
+    """A custom dataset class that inherits from StreamingDataset and applies a multisample transform."""
+
+    # Define a simple multisample transform function
+    def transform(self, x, sample_index):
+        """A simple transform function that adds ``sample_index`` to the input."""
+        return x + sample_index
+
+
+def test_dataset_multisample_inheritance_transform(tmpdir):
+    """Test if the dataset transform is applied correctly."""
+    # Create a simple dataset
+    # Create directories for cache and data
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    # Create a dataset with 100 items, 20 items per chunk, and a multisample transform that generates 3 samples per item
+    original_dataset_length = 100
+    sample_count = 3
+
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(original_dataset_length):
+        cache[i] = i * sample_count  # so, that data stored will be {0, 3, 6, ..., 297}
+    cache.done()
+    cache.merge()
+
+    dataset = TransformedStreamingDataset(
         data_dir,
         cache_dir=str(cache_dir),
         shuffle=False,
