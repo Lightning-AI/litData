@@ -269,16 +269,24 @@ class StreamingDataset(IterableDataset):
     def _validate_transform_for_multisample(self) -> None:
         """Validate the transform configuration when using `sample_count > 1`."""
         if self.sample_count > 1:
-            if not hasattr(self, "transform"):
+            if not hasattr(self, "transform") or self.transform is None:
                 raise ValueError("`transform` is required when using sample_count > 1.")
 
-            if isinstance(self.transform, list) and len(self.transform) > 1:
-                raise ValueError("Only a single transform is allowed when using sample_count > 1.")
+            transform = self.transform
+            if isinstance(transform, list):
+                if len(transform) != 1:
+                    raise ValueError("Exactly one transform is required when using sample_count > 1.")
+                transform = transform[0]
 
-            if isinstance(self.transform, list) and len(signature(self.transform[0]).parameters) != 2:
+            if not callable(transform):
+                raise ValueError("The transform must be callable when using sample_count > 1.")
+
+            try:
+                signature(transform).bind(object(), 0)
+            except (TypeError, ValueError) as ex:
                 raise ValueError(
                     "The transform function must accept two arguments (item, sample_idx) when using sample_count > 1."
-                )
+                ) from ex
 
     def set_epoch(self, current_epoch: int) -> None:
         """Set the current epoch to the dataset on epoch starts.
