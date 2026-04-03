@@ -501,7 +501,7 @@ def test_dataloader_dataset_transform_inheritance(tmpdir, shuffle):
 
 # a simple transform function
 def simple_multisample_transform_fn(x, sample_idx):
-    """A simple transform function that doubles the input."""
+    """A simple transform function that adds the sample index to the input."""
     return x + sample_idx
 
 
