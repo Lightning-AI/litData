@@ -582,7 +582,7 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
     cache.merge()
 
     # Verify that a ValueError is raised when no transform is provided
-    with pytest.raises(ValueError, match="Transform is required when using sample_count > 1"):
+    with pytest.raises(ValueError, match="`transform` is required when using sample_count > 1"):
         StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
 
     # Verify that a ValueError is raised when multiple transforms are provided
