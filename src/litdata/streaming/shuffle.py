@@ -47,10 +47,13 @@ class Shuffle(ABC):
         )
         worker_start = distributed_env.global_rank * num_workers
         worker_end = worker_start + num_workers
-        return sum(
-            (interval[2] - interval[1]) * sample_count
-            for intervals in workers_intervals[worker_start:worker_end]
-            for interval in intervals
+        return (
+            sum(
+                (interval[2] - interval[1])
+                for intervals in workers_intervals[worker_start:worker_end]
+                for interval in intervals
+            )
+            * sample_count
         )
 
     @abstractmethod
