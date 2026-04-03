@@ -586,7 +586,7 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
         StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
 
     # Verify that a ValueError is raised when multiple transforms are provided
-    with pytest.raises(ValueError, match="Only a single transform is allowed when using sample_count > 1"):
+    with pytest.raises(ValueError, match="Exactly one transform is required"):
         StreamingDataset(
             data_dir,
             cache_dir=str(cache_dir),
