@@ -1919,7 +1919,6 @@ def test_dataset_multisample_inheritance_transform(tmpdir):
         data_dir,
         cache_dir=str(cache_dir),
         shuffle=False,
-        transform=simple_multisample_transform_fn,
         sample_count=sample_count,
     )
     dataset_length = len(dataset)

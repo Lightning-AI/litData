@@ -544,7 +544,7 @@ class StreamingDataset(IterableDataset):
                 for transform_fn in self.transform:
                     item = transform_fn(item) if self.sample_count == 1 else transform_fn(item, sample_idx)
             else:
-                item = self.transform(item)
+                item = self.transform(item) if self.sample_count == 1 else self.transform(item, sample_idx)
 
         return item
 
