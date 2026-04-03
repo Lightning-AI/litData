@@ -1082,6 +1082,67 @@ dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuf
 
 </details>
 
+
+<details>
+  <summary> ✅ Multi-Sample Transform datasets while Streaming <a id="multi-sample" href="#multi-sample">🔗</a> </summary>
+&nbsp;
+
+In many training setups, like for `vision models`, you don’t just want one version of each sample. You want multiple slightly different versions to improve generalization.
+
+The `multi-sample transform` feature lets you generate these variations on the fly while streaming, without storing augmented copies on disk.
+
+Instead of duplicating your dataset, you define a transform function that takes a `sample_idx`. This index lets you apply a different transformation for each variation of the same input.
+
+```python
+def transform_fn(x, sample_idx):
+    """
+    Apply different rotation for each sample based on sample_idx.
+    """
+
+    angles = [0, 15, -15, 30] 
+    angle = angles[sample_idx % len(angles)] 
+
+    torch_transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.Lambda(lambda x: transforms.functional.rotate(x, angle)),  # apply rotation
+        transforms.ToTensor(),               
+        transforms.Normalize(                
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+    return torch_transform(x)
+
+dataset = StreamingDataset(
+    data_dir,
+    transform=[transform_fn],
+    sample_count=4 # Generate 4 variations per input sample
+)
+```
+
+- **Note:** Only a single transform is supported here, and it must accept `(item, sample_idx)` as arguments.
+- If your use case needs multiple transforms or a different signature, please [open an issue](https://github.com/Lightning-AI/litdata/issues) so it can be considered.
+
+#### 💡 Why this is useful
+
+> Imagine you have a dataset of **1,000 images**.
+> 
+> Instead of storing multiple augmented versions (which increases storage and preprocessing time), you can:
+> 
+>   > Keep just the original 1,000 images, dynamically generate multiple variations per image during training.
+>
+> For example, based on sample_idx, you can:
+> 
+> - Apply flips (horizontal/vertical)
+> - Use different crops (center, random, zoomed)
+> - Rotate at different angles
+> - Adjust brightness, contrast, or noise
+> 
+> 
+>So, with 1,000 original images and sample_count=10, you get `10,000 unique training samples` without needing to store them all on disk. Each image effectively produces 10 different training samples.
+
+</details>
+
 <details>
   <summary> ✅ Split datasets for train, val, test <a id="split-datasets" href="#split-datasets">🔗</a> </summary>
 
