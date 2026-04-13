@@ -20,7 +20,9 @@ from litdata.streaming.client import R2Client, S3Client
 
 
 class FsProvider(ABC):
-    def __init__(self, storage_options: dict[str, Any] | None = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = None):
+        if storage_options is None:
+            storage_options = {}
         self.storage_options = storage_options
 
     @abstractmethod
@@ -50,7 +52,7 @@ class FsProvider(ABC):
 
 
 class GCPFsProvider(FsProvider):
-    def __init__(self, storage_options: dict[str, Any] | None = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = None):
         if not _GOOGLE_STORAGE_AVAILABLE:
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
         from google.cloud import storage
@@ -133,9 +135,9 @@ class GCPFsProvider(FsProvider):
 
 
 class S3FsProvider(FsProvider):
-    def __init__(self, storage_options: dict[str, Any] | None = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = None):
         super().__init__(storage_options=storage_options)
-        self.client = S3Client(storage_options=storage_options)
+        self.client = S3Client(storage_options=self.storage_options)
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
         bucket_name, blob_path = get_bucket_and_path(remote_path, "s3")
@@ -225,11 +227,11 @@ class S3FsProvider(FsProvider):
 
 
 class R2FsProvider(S3FsProvider):
-    def __init__(self, storage_options: dict[str, Any] | None = {}):
+    def __init__(self, storage_options: dict[str, Any] | None = None):
         super().__init__(storage_options=storage_options)
 
         # Create R2Client with refreshable credentials
-        self.client = R2Client(storage_options=storage_options)
+        self.client = R2Client(storage_options=self.storage_options)
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
         bucket_name, blob_path = get_bucket_and_path(remote_path, "r2")
@@ -324,7 +326,7 @@ def get_bucket_and_path(remote_filepath: str, expected_scheme: str = "s3") -> tu
     return bucket_name, blob_path
 
 
-def _get_fs_provider(remote_filepath: str, storage_options: dict[str, Any] | None = {}) -> FsProvider:
+def _get_fs_provider(remote_filepath: str, storage_options: dict[str, Any] | None = None) -> FsProvider:
     obj = parse.urlparse(remote_filepath)
     if obj.scheme == "gs":
         return GCPFsProvider(storage_options=storage_options)
