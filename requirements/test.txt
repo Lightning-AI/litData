@@ -1,6 +1,6 @@
 av >=14.0.0
 coverage ==7.13.*
-cryptography==45.0.7
+cryptography==46.0.6
 mosaicml-streaming==0.13.0
 pytest ==9.0.*
 pytest-asyncio>=1.0.0
