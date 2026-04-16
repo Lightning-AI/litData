@@ -1535,16 +1535,15 @@ def test_dataset_with_mosaic_mds_data(tmpdir):
 
     dataset = StreamingDataset(input_dir=str(tmpdir))
     dataloader = DataLoader(dataset, batch_size=4, drop_last=True)
-    i = 0
-    for batch in dataloader:
+
+    for i, batch in enumerate(dataloader):
         assert len(batch["class"]) == 4
         assert len(batch["image"]) == 4
         assert list(batch["class"]) == [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 3]
-        i += 1
 
     dataloader = DataLoader(dataset, batch_size=4, drop_last=False)
-    i = 0
-    for batch in dataloader:
+
+    for i, batch in enumerate(dataloader):
         if i == 2:
             # last batch is smaller than batch_size
             assert len(batch["class"]) == 2
@@ -1554,7 +1553,6 @@ def test_dataset_with_mosaic_mds_data(tmpdir):
         assert len(batch["class"]) == 4
         assert len(batch["image"]) == 4
         assert list(batch["class"]) == [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 3]
-        i += 1
 
 
 @pytest.mark.parametrize("shuffle", [True, False])
