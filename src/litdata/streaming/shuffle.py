@@ -34,16 +34,26 @@ class Shuffle(ABC):
         self.drop_last = drop_last
 
     @lru_cache(maxsize=10)
-    def get_len(self, distributed_env: _DistributedEnv, num_workers: int, batch_size: int, current_epoch: int) -> int:
+    def get_len(
+        self,
+        distributed_env: _DistributedEnv,
+        num_workers: int,
+        batch_size: int,
+        current_epoch: int,
+        sample_count: int = 1,
+    ) -> int:
         _, workers_intervals = self.get_chunks_and_intervals_per_workers(
             distributed_env, num_workers, batch_size, current_epoch
         )
         worker_start = distributed_env.global_rank * num_workers
         worker_end = worker_start + num_workers
-        return sum(
-            (interval[2] - interval[1])
-            for intervals in workers_intervals[worker_start:worker_end]
-            for interval in intervals
+        return (
+            sum(
+                (interval[2] - interval[1])
+                for intervals in workers_intervals[worker_start:worker_end]
+                for interval in intervals
+            )
+            * sample_count
         )
 
     @abstractmethod
