@@ -7,7 +7,8 @@ import torch
 from litdata.constants import _NUMPY_DTYPES_MAPPING, _TORCH_DTYPES_MAPPING
 from litdata.streaming import Cache, item_loader
 from litdata.streaming.dataset import StreamingDataset
-from litdata.streaming.item_loader import PyTreeLoader, TokensLoader
+from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader, TokensLoader
+from litdata.streaming.writer import index_parquet_dataset
 
 
 def test_serializer_setup():
@@ -89,3 +90,118 @@ def test_force_download(monkeypatch, tmpdir):
 
     with pytest.raises(Exception, match="worked"):
         loader.load_item_from_chunk(0, 0, "chunk_filepath", 0, 1)
+
+
+def _write_parquet_with_row_groups(path, row_group_values):
+    """Write a parquet file where each element of row_group_values becomes its own row group."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = pa.schema([("col", pa.int64())])
+    with pq.ParquetWriter(path, schema) as writer:
+        for values in row_group_values:
+            writer.write_table(pa.table({"col": list(values)}, schema=schema))
+
+
+@pytest.mark.parametrize(
+    "row_group_sizes",
+    [
+        [10, 5, 5],  # regression: uneven groups, shrinking
+        [3, 7, 2, 8],  # uneven groups, varying
+        [20],  # single group
+        [1, 1, 1, 1, 1],  # many size-1 groups
+        [5, 5, 5],  # uniform control case
+    ],
+)
+@pytest.mark.parametrize("low_memory", [True, False])
+def test_parquet_loader_row_group_sizes(tmp_path, row_group_sizes, low_memory):
+    """ParquetLoader must correctly read every row regardless of row-group layout."""
+    parquet_dir = tmp_path / "pq"
+    parquet_dir.mkdir()
+
+    row_group_values = []
+    expected = []
+
+    for value, size in enumerate(row_group_sizes):
+        row_group_values.append([value] * size)
+        expected.extend([value] * size)
+        value += 1
+    _write_parquet_with_row_groups(parquet_dir / "data.parquet", row_group_values)
+
+    index_parquet_dataset(str(parquet_dir))
+    dataset = StreamingDataset(str(parquet_dir), item_loader=ParquetLoader(low_memory=low_memory))
+
+    assert len(dataset) == sum(row_group_sizes)
+    actual = [dataset[i]["col"] for i in range(len(dataset))]
+    assert actual == expected
+
+
+@pytest.mark.parametrize("low_memory", [True, False])
+def test_parquet_loader_random_access(tmp_path, low_memory):
+    """Out-of-order access must return the right row for each index."""
+    import random
+
+    parquet_dir = tmp_path / "pq"
+    parquet_dir.mkdir()
+
+    row_group_sizes = [10, 5, 5]
+    row_group_values = []
+    expected = []
+
+    for value, size in enumerate(row_group_sizes):
+        row_group_values.append([value] * size)
+        expected.extend([value] * size)
+
+    _write_parquet_with_row_groups(parquet_dir / "data.parquet", row_group_values)
+
+    index_parquet_dataset(str(parquet_dir))
+    dataset = StreamingDataset(str(parquet_dir), item_loader=ParquetLoader(low_memory=low_memory))
+
+    indices = list(range(len(dataset)))
+    random.Random(0).shuffle(indices)
+    for i in indices:
+        assert dataset[i]["col"] == expected[i]
+
+
+def test_parquet_loader_row_group_boundaries(tmp_path):
+    """First and last row of each group (the modulo edges in the old implementation)."""
+    parquet_dir = tmp_path / "pq"
+    parquet_dir.mkdir()
+
+    row_group_sizes = [10, 5, 5]
+    _write_parquet_with_row_groups(
+        parquet_dir / "data.parquet",
+        [[v] * s for v, s in enumerate(row_group_sizes)],
+    )
+
+    index_parquet_dataset(str(parquet_dir))
+    dataset = StreamingDataset(str(parquet_dir), item_loader=ParquetLoader(low_memory=True))
+
+    boundaries = [0, 9, 10, 14, 15, 19]
+    expected = [0, 0, 1, 1, 2, 2]
+    for idx, exp in zip(boundaries, expected):
+        assert dataset[idx]["col"] == exp
+
+
+def test_parquet_loader_cache_eviction_with_uneven_groups(tmp_path):
+    """After fully reading a row group, it must be evicted from the in-memory cache."""
+    parquet_dir = tmp_path / "pq"
+    parquet_dir.mkdir()
+
+    row_group_sizes = [10, 5, 5]
+    _write_parquet_with_row_groups(
+        parquet_dir / "data.parquet",
+        [[v] * s for v, s in enumerate(row_group_sizes)],
+    )
+
+    index_parquet_dataset(str(parquet_dir))
+    loader = ParquetLoader(low_memory=True)
+    dataset = StreamingDataset(str(parquet_dir), item_loader=loader)
+
+    # Iterate through the whole dataset sequentially.
+    for i in range(len(dataset)):
+        dataset[i]
+
+    # After a sequential pass every row group in the chunk should have been evicted.
+    for chunk_index, groups in loader._chunk_row_groups.items():
+        assert groups == {}, f"chunk {chunk_index} still holds row groups: {list(groups)}"
