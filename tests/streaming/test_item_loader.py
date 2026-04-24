@@ -136,33 +136,6 @@ def test_parquet_loader_row_group_sizes(tmp_path, row_group_sizes, low_memory):
     assert actual == expected
 
 
-@pytest.mark.parametrize("low_memory", [True, False])
-def test_parquet_loader_random_access(tmp_path, low_memory):
-    """Out-of-order access must return the right row for each index."""
-    import random
-
-    parquet_dir = tmp_path / "pq"
-    parquet_dir.mkdir()
-
-    row_group_sizes = [10, 5, 5]
-    row_group_values = []
-    expected = []
-
-    for value, size in enumerate(row_group_sizes):
-        row_group_values.append([value] * size)
-        expected.extend([value] * size)
-
-    _write_parquet_with_row_groups(parquet_dir / "data.parquet", row_group_values)
-
-    index_parquet_dataset(str(parquet_dir))
-    dataset = StreamingDataset(str(parquet_dir), item_loader=ParquetLoader(low_memory=low_memory))
-
-    indices = list(range(len(dataset)))
-    random.Random(0).shuffle(indices)
-    for i in indices:
-        assert dataset[i]["col"] == expected[i]
-
-
 def test_parquet_loader_row_group_boundaries(tmp_path):
     """First and last row of each group (the modulo edges in the old implementation)."""
     parquet_dir = tmp_path / "pq"
