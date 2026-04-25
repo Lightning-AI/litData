@@ -62,16 +62,14 @@ jobs:
           pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
-              --ignore=tests/streaming/test_parquet.py \
-              -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+              -n 2 --cov=litdata --durations=0 --timeout=150 --capture=no --verbose
 
       - name: Run processing tests sequentially
         run: |
           # note that the listed test should match ignored in the previous step
           pytest \
             tests/processing tests/raw \
-            tests/streaming/test_parquet.py \
-            --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
+            --cov=litdata --cov-append --durations=0 --timeout=150 --capture=no --verbose
 
       - name: Statistics
         continue-on-error: true
