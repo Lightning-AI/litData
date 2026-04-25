@@ -70,7 +70,7 @@ jobs:
           # note that the listed test should match ignored in the previous step
           pytest \
             tests/processing tests/raw \
-            tests/streaming/test_parquet.py::test_stream_hf_parquet_dataset[True-False] \
+            tests/streaming/test_parquet.py::test_stream_hf_parquet_dataset \
             --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Statistics
