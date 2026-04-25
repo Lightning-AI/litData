@@ -62,7 +62,7 @@ jobs:
           pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
-              --ignore=tests/streaming/test_parquet.py::test_stream_hf_parquet_dataset
+              --ignore=tests/streaming/test_parquet.py::test_stream_hf_parquet_dataset \
               -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Run processing tests sequentially
