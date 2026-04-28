@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 [build-system]
 requires = [ "setuptools", "wheel" ]
 
@@ -112,6 +113,33 @@ wrap-summaries = 119
 wrap-descriptions = 120
 blank = true
 
+[tool.pyproject-fmt]
+keep_full_version = true
+
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]
+ini_options.norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
+ini_options.addopts = [
+  "--strict-markers",
+  "--doctest-modules",
+  "--color=yes",
+  "--disable-pytest-warnings",
+  "--ignore=legacy/checkpoints",
+]
+ini_options.markers = [ "cloud: Run the cloud tests for example" ]
+ini_options.filterwarnings = [ "error::FutureWarning" ]
+ini_options.xfail_strict = true
+ini_options.junit_duration_report = "call"
+
+[tool.coverage]
+report.exclude_lines = [
+  "pass",
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "rank_zero_warn",
+  "warnings",
+]
+
 [tool.mypy]
 files = [ "src" ]
 # This section is for folders with "-" as they are not valid python modules
@@ -145,29 +173,6 @@ overrides = [
   # TODO: the goal is for this to be empty
   # the list can be generated with:
   # mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
-  { module = [], ignore_errors = "True" },
-]
-
-[tool.pytest]
-ini_options.testpaths = [ "tests" ]
-ini_options.norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
-ini_options.addopts = [
-  "--strict-markers",
-  "--doctest-modules",
-  "--color=yes",
-  "--disable-pytest-warnings",
-  "--ignore=legacy/checkpoints",
-]
-ini_options.markers = [ "cloud: Run the cloud tests for example" ]
-ini_options.filterwarnings = [ "error::FutureWarning" ]
-ini_options.xfail_strict = true
-ini_options.junit_duration_report = "call"
-
-[tool.coverage]
-report.exclude_lines = [
-  "pass",
-  "pragma: no cover",
-  "raise NotImplementedError",
-  "rank_zero_warn",
-  "warnings",
+  { module = [
+  ], ignore_errors = "True" },
 ]
