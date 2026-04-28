@@ -98,7 +98,7 @@ lint.pydocstyle.convention = "google"
 
 [tool.codespell]
 # Todo: enable also python files in a next step
-# skip = '*.py'
+#skip = '*.py'
 quiet-level = 3
 # comma separated list of words; waiting for:
 #  https://github.com/codespell-project/codespell/issues/2839#issuecomment-1731601603
@@ -113,31 +113,28 @@ wrap-summaries = 119
 wrap-descriptions = 120
 blank = true
 
-[tool.pyproject-fmt]
-keep_full_version = true
-
-[tool.pytest]
-ini_options.testpaths = [ "tests" ]
-ini_options.norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
-ini_options.addopts = [
+[tool.pytest.ini_options]
+testpaths = [ "tests" ]
+norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
+addopts = [
   "--strict-markers",
   "--doctest-modules",
   "--color=yes",
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-ini_options.markers = [ "cloud: Run the cloud tests for example" ]
-ini_options.filterwarnings = [ "error::FutureWarning" ]
-ini_options.xfail_strict = true
-ini_options.junit_duration_report = "call"
+markers = [ "cloud: Run the cloud tests for example" ]
+filterwarnings = [ "error::FutureWarning" ]
+xfail_strict = true
+junit_duration_report = "call"
 
-[tool.coverage]
-report.exclude_lines = [
-  "pass",
+[tool.coverage.report]
+exclude_lines = [
   "pragma: no cover",
-  "raise NotImplementedError",
-  "rank_zero_warn",
   "warnings",
+  "pass",
+  "rank_zero_warn",
+  "raise NotImplementedError",
 ]
 
 [tool.mypy]
@@ -168,11 +165,11 @@ allow_redefinition = "True"
 disable_error_code = "attr-defined"
 # style choices
 warn_no_return = "False"
-overrides = [
-  # Ignore mypy errors for these files
-  # TODO: the goal is for this to be empty
-  # the list can be generated with:
-  # mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
-  { module = [
-  ], ignore_errors = "True" },
-]
+
+# Ignore mypy errors for these files
+# TODO: the goal is for this to be empty
+[[tool.mypy.overrides]]
+# the list can be generated with:
+# mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
+module = [  ]
+ignore_errors = "True"
