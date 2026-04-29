@@ -3,12 +3,16 @@ name: Greetings
 
 on: [issues] # pull_request
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   greeting:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/first-interaction@v3
+      - uses: actions/first-interaction@v3.1.0
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          issue-message: "Hi! thanks for your contribution!, great first issue!"
-          pr-message: "Hey thanks for the input! Please give us a bit of time to review it!"
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_message: "Hi! Thanks for your contribution! Great first issue!"
+          pr_message: "Hey, thanks for the input! Please give us a bit of time to review it!"
