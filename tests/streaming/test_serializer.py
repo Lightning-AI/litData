@@ -410,3 +410,90 @@ def test_boolean_serializer():
     assert not serializer.can_serialize(1)
     assert not serializer.can_serialize("True")
     assert not serializer.can_serialize(None)
+
+
+class TestWritableDeserializedArrays:
+    """Tests that deserialized numpy arrays and tensors are writable.
+
+    This addresses issue #818: np.frombuffer() and torch.frombuffer() with
+    bytes objects produce non-writable arrays/tensors, which triggers
+    UserWarning from PyTorch.
+    """
+
+    def test_numpy_serializer_deserialize_returns_writable_array(self):
+        """NumpySerializer.deserialize should return a writable numpy array."""
+        serializer = NumpySerializer()
+        arr = np.ones((3, 4), dtype=np.float32)
+        data, _ = serializer.serialize(arr)
+        result = serializer.deserialize(data)
+        assert result.flags.writeable is True, "Deserialized numpy array should be writable"
+
+    def test_no_header_numpy_serializer_deserialize_returns_writable_array(self):
+        """NoHeaderNumpySerializer.deserialize should return a writable numpy array."""
+        serializer = NoHeaderNumpySerializer()
+        arr = np.ones((10,), dtype=np.float64)
+        data, name = serializer.serialize(arr)
+        serializer.setup(name)
+        result = serializer.deserialize(data)
+        assert result.flags.writeable is True, "Deserialized numpy array should be writable"
+
+    def test_tensor_serializer_deserialize_no_non_writable_warning(self):
+        """TensorSerializer.deserialize should not emit UserWarning about non-writable tensors."""
+        import warnings
+
+        serializer = TensorSerializer()
+        tensor = torch.ones((3, 4), dtype=torch.float32)
+        data, _ = serializer.serialize(tensor)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = serializer.deserialize(data)
+            writable_warnings = [w for w in caught if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()]
+            assert len(writable_warnings) == 0, f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+
+    def test_no_header_tensor_serializer_deserialize_no_non_writable_warning(self):
+        """NoHeaderTensorSerializer.deserialize should not emit UserWarning about non-writable tensors."""
+        import warnings
+
+        serializer = NoHeaderTensorSerializer()
+        tensor = torch.ones((10,), dtype=torch.float32)
+        data, name = serializer.serialize(tensor)
+        serializer.setup(name)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = serializer.deserialize(data)
+            writable_warnings = [w for w in caught if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()]
+            assert len(writable_warnings) == 0, f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+
+    def test_numpy_serializer_deserialize_correctness(self):
+        """Deserialized numpy array values should match the original."""
+        serializer = NumpySerializer()
+        arr = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+        data, _ = serializer.serialize(arr)
+        result = serializer.deserialize(data)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_tensor_serializer_deserialize_correctness(self):
+        """Deserialized tensor values should match the original."""
+        serializer = TensorSerializer()
+        tensor = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
+        data, _ = serializer.serialize(tensor)
+        result = serializer.deserialize(data)
+        assert torch.equal(result, tensor)
+
+    def test_no_header_numpy_serializer_deserialize_correctness(self):
+        """Deserialized no-header numpy array values should match the original."""
+        serializer = NoHeaderNumpySerializer()
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+        data, name = serializer.serialize(arr)
+        serializer.setup(name)
+        result = serializer.deserialize(data)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_no_header_tensor_serializer_deserialize_correctness(self):
+        """Deserialized no-header tensor values should match the original."""
+        serializer = NoHeaderTensorSerializer()
+        tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        data, name = serializer.serialize(tensor)
+        serializer.setup(name)
+        result = serializer.deserialize(data)
+        assert torch.equal(result, tensor)

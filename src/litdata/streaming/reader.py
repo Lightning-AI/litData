@@ -33,8 +33,6 @@ from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 
-warnings.filterwarnings("ignore", message=".*The given buffer is not writable.*")
-
 
 logger = logging.getLogger("litdata.streaming.reader")
 
@@ -332,7 +330,6 @@ class BinaryReader:
 
         """
         super().__init__()
-        warnings.filterwarnings("ignore", message=".*The given buffer is not writable.*")
 
         self._cache_dir = cache_dir
         self._remote_input_dir = remote_input_dir

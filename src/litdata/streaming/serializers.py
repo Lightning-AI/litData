@@ -134,7 +134,7 @@ class JPEGSerializer(Serializer):
     def deserialize(self, data: bytes) -> torch.Tensor:
         from torchvision.io import decode_image, decode_jpeg
 
-        array = torch.frombuffer(data, dtype=torch.uint8)
+        array = torch.frombuffer(bytearray(data), dtype=torch.uint8)
         # Try decoding as JPEG. Some datasets (e.g., ImageNet) may have PNG images with a JPEG extension,
         # which will cause decode_jpeg to fail. In that case, fall back to a generic image decoder.
         with suppress(RuntimeError):
@@ -266,7 +266,7 @@ class TensorSerializer(Serializer):
         shape = struct.unpack_from(f">{rank}I", buffer_view, header_size)
         data_start_offset = header_size + (rank * 4)
         if data_start_offset < len(buffer_view):
-            tensor_1d = torch.frombuffer(buffer_view[data_start_offset:], dtype=dtype)
+            tensor_1d = torch.frombuffer(bytearray(buffer_view[data_start_offset:]), dtype=dtype)
             return tensor_1d.reshape(shape)
         return torch.empty(shape, dtype=dtype)
 
@@ -300,7 +300,7 @@ class NoHeaderTensorSerializer(Serializer):
 
     def deserialize(self, data: bytes) -> torch.Tensor:
         assert self._dtype
-        return torch.frombuffer(data, dtype=self._dtype) if len(data) > 0 else torch.empty((0,), dtype=self._dtype)
+        return torch.frombuffer(bytearray(data), dtype=self._dtype) if len(data) > 0 else torch.empty((0,), dtype=self._dtype)
 
     def can_serialize(self, item: torch.Tensor) -> bool:
         return isinstance(item, torch.Tensor) and len(item.shape) == 1
@@ -333,7 +333,7 @@ class NumpySerializer(Serializer):
             shape.append(np.frombuffer(data[8 + 4 * shape_idx : 8 + 4 * (shape_idx + 1)], np.uint32).item())
 
         # deserialize the numpy array bytes
-        tensor = np.frombuffer(data[8 + 4 * shape_size : len(data)], dtype=dtype)
+        tensor = np.frombuffer(data[8 + 4 * shape_size : len(data)], dtype=dtype).copy()
         if tensor.shape == shape:
             return tensor
         return np.reshape(tensor, shape)
@@ -359,7 +359,7 @@ class NoHeaderNumpySerializer(Serializer):
 
     def deserialize(self, data: bytes) -> np.ndarray:
         assert self._dtype
-        return np.frombuffer(data, dtype=self._dtype)
+        return np.frombuffer(data, dtype=self._dtype).copy()
 
     def can_serialize(self, item: np.ndarray) -> bool:
         return isinstance(item, np.ndarray) and len(item.shape) == 1
