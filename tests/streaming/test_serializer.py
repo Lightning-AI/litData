@@ -447,8 +447,14 @@ class TestWritableDeserializedArrays:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             result = serializer.deserialize(data)
-            writable_warnings = [w for w in caught if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()]
-            assert len(writable_warnings) == 0, f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+            writable_warnings = [
+                w
+                for w in caught
+                if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()
+            ]
+            assert len(writable_warnings) == 0, (
+                f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+            )
 
     def test_no_header_tensor_serializer_deserialize_no_non_writable_warning(self):
         """NoHeaderTensorSerializer.deserialize should not emit UserWarning about non-writable tensors."""
@@ -461,8 +467,14 @@ class TestWritableDeserializedArrays:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             result = serializer.deserialize(data)
-            writable_warnings = [w for w in caught if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()]
-            assert len(writable_warnings) == 0, f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+            writable_warnings = [
+                w
+                for w in caught
+                if "non-writable" in str(w.message).lower() or "not writable" in str(w.message).lower()
+            ]
+            assert len(writable_warnings) == 0, (
+                f"Should not emit non-writable warnings, got: {[str(w.message) for w in writable_warnings]}"
+            )
 
     def test_numpy_serializer_deserialize_correctness(self):
         """Deserialized numpy array values should match the original."""

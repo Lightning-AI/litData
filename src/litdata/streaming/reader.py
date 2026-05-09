@@ -14,7 +14,6 @@
 import glob
 import logging
 import os
-import warnings
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Queue
@@ -32,7 +31,6 @@ from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
-
 
 logger = logging.getLogger("litdata.streaming.reader")
 

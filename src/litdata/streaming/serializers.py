@@ -300,7 +300,11 @@ class NoHeaderTensorSerializer(Serializer):
 
     def deserialize(self, data: bytes) -> torch.Tensor:
         assert self._dtype
-        return torch.frombuffer(bytearray(data), dtype=self._dtype) if len(data) > 0 else torch.empty((0,), dtype=self._dtype)
+        return (
+            torch.frombuffer(bytearray(data), dtype=self._dtype)
+            if len(data) > 0
+            else torch.empty((0,), dtype=self._dtype)
+        )
 
     def can_serialize(self, item: torch.Tensor) -> bool:
         return isinstance(item, torch.Tensor) and len(item.shape) == 1
