@@ -1466,6 +1466,52 @@ def test_upload_fn_with_data_connection_id(tmpdir, monkeypatch):
     get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
 
 
+def test_download_data_target_prefers_local_file_over_r2(tmpdir, monkeypatch):
+    """Prefer local source files over R2 downloads.
+
+    When a source file exists locally, _download_data_target should copy it
+    directly instead of downloading from R2, even when input_dir.url is set.
+    """
+    input_dir = os.path.join(tmpdir, "input_dir")
+    os.makedirs(input_dir, exist_ok=True)
+
+    # Create a source file that is locally accessible (simulate a mounted drive)
+    source_file = os.path.join(input_dir, "sample.txt")
+    with open(source_file, "w") as f:
+        f.write("hello")
+
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    queue_in = mock.MagicMock()
+    queue_out = mock.MagicMock()
+
+    # input_dir has both path and url set, as happens with lightning_storage paths
+    input_dir_obj = Dir(path=input_dir, url="r2://some-bucket")
+
+    paths = [source_file, None]
+
+    def fn(*_, **__):
+        value = paths.pop(0)
+        if value is None:
+            return value
+        return (0, 0, [value])
+
+    queue_in.get = fn
+
+    fs_provider = mock.MagicMock()
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", mock.MagicMock(return_value=fs_provider))
+    monkeypatch.setattr(data_processor_module, "_wait_for_disk_usage_higher_than_threshold", mock.MagicMock())
+
+    _download_data_target(input_dir_obj, cache_dir, queue_in, queue_out)
+
+    # File should be copied locally, not downloaded via R2
+    fs_provider.download_file.assert_not_called()
+    assert os.path.exists(os.path.join(cache_dir, "sample.txt"))
+    with open(os.path.join(cache_dir, "sample.txt")) as f:
+        assert f.read() == "hello"
+
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_data_chunk_recipe_upload_index_with_data_connection_id(tmpdir, monkeypatch):
     """Test DataChunkRecipe._upload_index passes data_connection_id correctly."""

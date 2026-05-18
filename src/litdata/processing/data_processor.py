@@ -160,7 +160,7 @@ def _download_data_target(
                 if input_dir.path:
                     local_path = path.replace(input_dir.path, cache_dir)
 
-                if input_dir.url and input_dir.path:
+                if input_dir.url and input_dir.path and not os.path.isfile(path):
                     path = path.replace(input_dir.path, input_dir.url)
 
                 obj = parse.urlparse(path)
