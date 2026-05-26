@@ -16,7 +16,6 @@ on: # Trigger the workflow on push or pull request, but only for the main branch
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -34,18 +33,24 @@ jobs:
       - name: Check package
         run: twine check dist/* --strict
 
-      # We do this, since failures on test.pypi aren't that bad
-      #  - name: Publish to Test PyPI
-      #    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
-      #    uses: pypa/gh-action-pypi-publish@v1.10.0
-      #    with:
-      #      user: __token__
-      #      password: ${{ secrets.test_pypi_password }}
-      #      repository_url: https://test.pypi.org/legacy/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
+
+  publish-pypi:
+    needs: build
+    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-packages-${{ github.sha }}
+          path: dist
 
       - name: Publish distribution 📦 to PyPI
-        if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
         uses: pypa/gh-action-pypi-publish@v1.14.0
-        with:
-          user: __token__
-          password: ${{ secrets.pypi_password }}
