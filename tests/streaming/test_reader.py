@@ -208,6 +208,45 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     assert thread._has_exited
 
 
+def test_force_download_skips_complete_chunk(tmpdir):
+    """A queued force-download must not delete a chunk that is already complete on disk."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    remote_dir = os.path.join(tmpdir, "remote_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    cache = Cache(input_dir=Dir(path=cache_dir, url=remote_dir), chunk_size=2, max_cache_size=28020)
+    for i in range(10):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    shutil.copytree(cache_dir, remote_dir, dirs_exist_ok=True)
+
+    cache._reader._try_load_config()
+
+    thread = PrepareChunksThread(
+        cache._reader.config,
+        item_loader=PyTreeLoader(),
+        distributed_env=_DistributedEnv(1, 1, 1),
+        max_pre_download=2,
+        max_cache_size=28020,
+    )
+
+    chunk_filepath, _, filesize_bytes = thread._config[ChunkedIndex(index=-1, chunk_index=0)]
+    assert os.path.exists(chunk_filepath)
+    assert os.stat(chunk_filepath).st_size >= filesize_bytes
+    pre_inode = os.stat(chunk_filepath).st_ino
+
+    # Item loader timed out waiting and queued a force-download. The chunk is
+    # actually already on disk by the time the prepare-chunks thread services
+    # the queue.
+    thread._force_download_queue.put(0)
+    thread._force_download()
+
+    assert os.path.exists(chunk_filepath), "force-download deleted a fully-downloaded chunk"
+    assert os.stat(chunk_filepath).st_ino == pre_inode, "force-download replaced a complete chunk file"
+
+
 @pytest.mark.parametrize("on_demand_bytes", [True, False])
 def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
     monkeypatch.setattr(reader, "_LONG_DEFAULT_TIMEOUT", 0.1)
