@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-docs:
-    uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       requirements-file: "requirements/docs.txt"
       python-version: "3.10"
