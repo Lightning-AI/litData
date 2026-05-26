@@ -62,7 +62,7 @@ jobs:
           pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
-              -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+              -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Run processing tests sequentially
         run: |

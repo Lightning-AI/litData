@@ -162,6 +162,18 @@ def _thread_police():
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 
+def pytest_collection_modifyitems(items):
+    """Force tests sharing the global default cache dir onto the same xdist worker.
+
+    Why: ``clean_pq_index_cache`` shutil.rmtree's ``~/.lightning/chunks`` on setup/teardown.
+    Under ``pytest -n>1`` two such tests on different workers race, deleting each other's
+    chunks mid-iteration. Requires the runner to pass ``--dist=loadgroup``.
+    """
+    for item in items:
+        if "clean_pq_index_cache" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.xdist_group("hf_default_cache"))
+
+
 # ==== fixtures for parquet ====
 @pytest.fixture
 def pq_data():
