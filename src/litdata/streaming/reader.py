@@ -242,22 +242,29 @@ class PrepareChunksThread(Thread):
         if chunk_index is None:
             return
 
-        # The chunk may have been fully downloaded by the time this request was
-        # processed, so double check that it still needs downloading before we
-        # delete it.
         chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-        if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+        download_filename = self._config._chunks[chunk_index]["filename"]
+        download_lock_path = os.path.join(self._config._cache_dir, download_filename) + ".lock"
+        try:
+            with FileLock(download_lock_path, timeout=0):
+                # The chunk may have been fully downloaded by the time this
+                # request was processed, so double check that it still needs
+                # downloading before we delete it.
+                if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                    return
+
+                # force apply deletion before redownload
+                self._apply_delete(chunk_index, skip_lock=True)
+                if _DEBUG:
+                    print(
+                        f"[Reader] Requested force download for {chunk_filepath} "
+                        f"by {self._rank} at {datetime.now().isoformat()}"
+                    )
+
+            self._config.download_chunk_from_index(chunk_index, skip_lock=True)
+        except Timeout:
+            # Another worker is actively downloading this chunk. Defer to them.
             return
-
-        # force apply deletion before redownload
-        self._apply_delete(chunk_index, skip_lock=True)
-        if _DEBUG:
-            print(
-                f"[Reader] Requested force download for {chunk_filepath} "
-                f"by {self._rank} at {datetime.now().isoformat()}"
-            )
-
-        self._config.download_chunk_from_index(chunk_index, skip_lock=True)
 
         # Preload item if possible to gain some time but only
         # if this is one of the pre-downloaded chunk
