@@ -305,9 +305,15 @@ def test_force_download_defers_when_download_lock_held(tmpdir):
         thread._force_download()
 
         # Lock was held => we should have deferred, leaving the (partial) file untouched.
-        assert os.path.exists(chunk_filepath), "force-download deleted the chunk while another worker held the download lock"
-        assert os.stat(chunk_filepath).st_ino == pre_inode, "force-download replaced the chunk while another worker held the download lock"
-        assert os.stat(chunk_filepath).st_size < filesize_bytes, "force-download redownloaded the chunk while another worker held the download lock"
+        assert os.path.exists(chunk_filepath), (
+            "force-download deleted the chunk while another worker held the download lock"
+        )
+        assert os.stat(chunk_filepath).st_ino == pre_inode, (
+            "force-download replaced the chunk while another worker held the download lock"
+        )
+        assert os.stat(chunk_filepath).st_size < filesize_bytes, (
+            "force-download redownloaded the chunk while another worker held the download lock"
+        )
     finally:
         holder_release.set()
         holder.join(timeout=5)
