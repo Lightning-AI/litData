@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -67,6 +68,16 @@ def train_test_split(
     subsampled_chunks = [
         _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
     ]
+
+    # Natural-sort chunks and their ROIs together so chunk-2 precedes chunk-10.
+    # Index files written by multiple workers sort lexicographically, which breaks
+    # ordering when chunk indices reach two digits (e.g. chunk-10 < chunk-2).
+    paired = sorted(
+        zip(subsampled_chunks, dummy_subsampled_roi),
+        key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", p[0]["filename"])],
+    )
+    if paired:
+        subsampled_chunks, dummy_subsampled_roi = map(list, zip(*paired))
 
     new_datasets = [deepcopy_dataset(streaming_dataset) for _ in splits]
 
