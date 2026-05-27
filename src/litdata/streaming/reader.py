@@ -243,8 +243,7 @@ class PrepareChunksThread(Thread):
             return
 
         chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-        download_filename = self._config._chunks[chunk_index]["filename"]
-        download_lock_path = os.path.join(self._config._cache_dir, download_filename) + ".lock"
+        download_lock_path = self._config.download_filepath(chunk_index) + ".lock"
         try:
             with FileLock(download_lock_path, timeout=0):
                 # The chunk may have been fully downloaded by the time this

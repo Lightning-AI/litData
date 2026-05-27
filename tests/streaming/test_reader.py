@@ -287,7 +287,7 @@ def test_force_download_defers_when_download_lock_held(tmpdir):
 
     # Hold the downloader's lock from a separate thread to simulate another worker
     # actively downloading the chunk.
-    download_lock_path = os.path.join(cache_dir, thread._config._chunks[0]["filename"]) + ".lock"
+    download_lock_path = thread._config.download_filepath(0) + ".lock"
     holder_acquired = Event()
     holder_release = Event()
 
