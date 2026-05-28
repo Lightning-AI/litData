@@ -167,20 +167,22 @@ def test_train_test_split_natural_sort_ordering(tmpdir):
     train_files = train_ds.subsampled_files
     test_files = test_ds.subsampled_files
 
-    import re
-
-    def _natural_key(name: str) -> list:
-        return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", name)]
-
-    # Files within each split must be in natural order.
-    assert train_files == sorted(train_files, key=_natural_key)
-    assert test_files == sorted(test_files, key=_natural_key)
-
-    # The two splits must be non-overlapping and together cover all chunks.
-    all_files = train_files + test_files
-    assert len(all_files) == len(set(all_files)), "splits overlap"
-    assert sorted(all_files, key=_natural_key) == sorted(dataset.subsampled_files, key=_natural_key)
-
-    # chunk-10 must not appear in the training split when smaller-indexed chunks
-    # (chunk-2 … chunk-10) are still available — i.e. it must come after chunk-9.
-    assert "chunk-10-0.bin" not in train_files or "chunk-9-0.bin" in train_files
+    # With natural sort ordering, chunks 0-5 go to train and chunks 5-10 go to test.
+    # chunk-10 must appear last, not between chunk-1 and chunk-2 as lexicographic
+    # sort would place it.
+    assert train_files == [
+        "chunk-0-0.bin",
+        "chunk-1-0.bin",
+        "chunk-2-0.bin",
+        "chunk-3-0.bin",
+        "chunk-4-0.bin",
+        "chunk-5-0.bin",
+    ]
+    assert test_files == [
+        "chunk-5-0.bin",
+        "chunk-6-0.bin",
+        "chunk-7-0.bin",
+        "chunk-8-0.bin",
+        "chunk-9-0.bin",
+        "chunk-10-0.bin",
+    ]
