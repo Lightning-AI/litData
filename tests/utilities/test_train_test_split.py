@@ -1,10 +1,12 @@
+import json
+import os
 import platform
 import sys
 
 import pytest
 
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
-from litdata.constants import _ZSTD_AVAILABLE
+from litdata.constants import _INDEX_FILENAME, _ZSTD_AVAILABLE
 from litdata.streaming.cache import Cache
 
 IS_WINDOWS = sys.platform.startswith("win") or platform.system() == "Windows"
@@ -151,26 +153,40 @@ def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
 
 
 def test_train_test_split_natural_sort_ordering(tmpdir):
-    """chunk-10 must not be placed between chunk-1 and chunk-2 when shuffle=False."""
-    # 22 items at chunk_size=2 produces 11 chunks (chunk-0-0.bin … chunk-10-0.bin).
-    # Lexicographic sort puts chunk-10-0.bin between chunk-1-0.bin and chunk-2-0.bin,
-    # so a 50 % split would pull chunk-10 into the training set before chunk-2.
+    """chunk-0-10 must not appear before chunk-0-2 in the split when shuffle=False.
+
+    When a dataset is written with 10+ workers, the merge step sorts per-worker
+    index files lexicographically. This places chunk-0-10.bin between chunk-0-1.bin
+    and chunk-0-2.bin in index.json, causing the first half of a 50/50 split to
+    include chunk-0-10 while chunk-0-2 through chunk-0-9 end up in the second half.
+
+    This test reproduces that scenario by rewriting index.json in lexicographic order
+    after the cache is built, then asserts that train_test_split still returns chunks
+    in natural order.
+    """
     cache = Cache(str(tmpdir), chunk_size=2)
     for i in range(22):
         cache[i] = i
     cache.done()
     cache.merge()
 
+    # Rewrite index.json in lexicographic order to reproduce the multi-worker bug.
+    # Lexicographic sort places "chunk-0-10.bin" between "chunk-0-1.bin" and
+    # "chunk-0-2.bin", which is the exact ordering produced when 10+ workers merge.
+    index_path = os.path.join(str(tmpdir), _INDEX_FILENAME)
+    with open(index_path) as f:
+        data = json.load(f)
+    data["chunks"].sort(key=lambda c: c["filename"])  # lexicographic, not natural
+    with open(index_path, "w") as f:
+        json.dump(data, f)
+
     dataset = StreamingDataset(input_dir=str(tmpdir))
     train_ds, test_ds = train_test_split(dataset, splits=[0.5, 0.5], shuffle=False)
 
-    train_files = train_ds.subsampled_files
-    test_files = test_ds.subsampled_files
-
-    # With natural sort ordering, chunks 0-5 go to train and chunks 5-10 go to test.
-    # chunk-10 must appear last, not between chunk-1 and chunk-2 as lexicographic
-    # sort would place it.
-    assert train_files == [
+    # chunk-0-10 must be in the test split (last), not in train.
+    # Without natural-sort in train_test_split it lands in train because lexicographic
+    # order puts it at index 1 (right after chunk-0-0).
+    assert train_ds.subsampled_files == [
         "chunk-0-0.bin",
         "chunk-0-1.bin",
         "chunk-0-2.bin",
@@ -178,7 +194,7 @@ def test_train_test_split_natural_sort_ordering(tmpdir):
         "chunk-0-4.bin",
         "chunk-0-5.bin",
     ]
-    assert test_files == [
+    assert test_ds.subsampled_files == [
         "chunk-0-5.bin",
         "chunk-0-6.bin",
         "chunk-0-7.bin",
