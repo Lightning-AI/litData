@@ -549,6 +549,7 @@ class DummyCombinedDataset(TestCombinedStreamingDataset):
         self.num_workers = 1
 
 
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not testing multiprocessing on windows")
 def test_dataloader_fork_parquet_loader_deadlock_guard():
     from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 
