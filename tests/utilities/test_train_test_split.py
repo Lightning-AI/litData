@@ -172,17 +172,17 @@ def test_train_test_split_natural_sort_ordering(tmpdir):
     # sort would place it.
     assert train_files == [
         "chunk-0-0.bin",
-        "chunk-1-0.bin",
-        "chunk-2-0.bin",
-        "chunk-3-0.bin",
-        "chunk-4-0.bin",
-        "chunk-5-0.bin",
+        "chunk-0-1.bin",
+        "chunk-0-2.bin",
+        "chunk-0-3.bin",
+        "chunk-0-4.bin",
+        "chunk-0-5.bin",
     ]
     assert test_files == [
-        "chunk-5-0.bin",
-        "chunk-6-0.bin",
-        "chunk-7-0.bin",
-        "chunk-8-0.bin",
-        "chunk-9-0.bin",
-        "chunk-10-0.bin",
+        "chunk-0-5.bin",
+        "chunk-0-6.bin",
+        "chunk-0-7.bin",
+        "chunk-0-8.bin",
+        "chunk-0-9.bin",
+        "chunk-0-10.bin",
     ]
