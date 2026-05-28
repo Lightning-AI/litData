@@ -116,8 +116,11 @@ def test_optimize_dataset(
     chunk_bytes,
     chunk_size,
     tmpdir,
+    monkeypatch,
 ):
     data_dir = str(tmpdir / "optimized")
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmpdir / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmpdir / "data"))
 
     optimize(
         fn=_simple_optimize_fn,

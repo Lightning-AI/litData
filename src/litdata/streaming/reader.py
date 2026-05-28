@@ -239,25 +239,39 @@ class PrepareChunksThread(Thread):
 
     def _force_download(self) -> None:
         chunk_index = _get_from_queue(self._force_download_queue)
-        if chunk_index is not None:
-            # force apply deletion before redownload
-            self._apply_delete(chunk_index, skip_lock=True)
-            if _DEBUG:
-                chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                print(
-                    f"[Reader] Requested force download for {chunk_filepath} "
-                    f"by {self._rank} at {datetime.now().isoformat()}"
-                )
+        if chunk_index is None:
+            return
+
+        chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        download_lock_path = self._config.download_filepath(chunk_index) + ".lock"
+        try:
+            with FileLock(download_lock_path, timeout=0):
+                # The chunk may have been fully downloaded by the time this
+                # request was processed, so double check that it still needs
+                # downloading before we delete it.
+                if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                    return
+
+                # force apply deletion before redownload
+                self._apply_delete(chunk_index, skip_lock=True)
+                if _DEBUG:
+                    print(
+                        f"[Reader] Requested force download for {chunk_filepath} "
+                        f"by {self._rank} at {datetime.now().isoformat()}"
+                    )
 
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
+        except Timeout:
+            # Another worker is actively downloading this chunk. Defer to them.
+            return
 
-            # Preload item if possible to gain some time but only
-            # if this is one of the pre-downloaded chunk
-            if self._pre_download_counter > 0:
-                self._pre_load_chunk(chunk_index)
+        # Preload item if possible to gain some time but only
+        # if this is one of the pre-downloaded chunk
+        if self._pre_download_counter > 0:
+            self._pre_load_chunk(chunk_index)
 
-            # Avoid downloading too many chunks in advance at the risk of over using the disk space
-            self._pre_download_counter += 1
+        # Avoid downloading too many chunks in advance at the risk of over using the disk space
+        self._pre_download_counter += 1
 
     def run(self) -> None:
         while True:

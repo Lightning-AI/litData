@@ -642,6 +642,7 @@ class ParquetLoader(BaseItemLoader):
         self._df: dict[int, Any] = {}
         self._chunk_row_groups: dict[int, Any] = {}
         self._chunk_row_group_item_read_count: dict[int, Any] = {}
+        self._chunk_row_group_offsets: dict[int, list[int]] = {}
 
     def generate_intervals(self) -> list[Interval]:
         intervals = []
@@ -712,18 +713,28 @@ class ParquetLoader(BaseItemLoader):
         Returns:
             Any: The dataframe row corresponding to the specified index.
         """
+        import bisect
+
         import polars as pl
         import pyarrow.parquet as pq
 
         # Load the Parquet file metadata if not already loaded
         if chunk_index not in self._df:
-            self._df[chunk_index] = pq.ParquetFile(chunk_filepath)
+            parquet_file = pq.ParquetFile(chunk_filepath)
+            self._df[chunk_index] = parquet_file
+            # Precompute cumulative row offsets as a prefix-sum so lookup works for row groups of any size.
+            offsets = [0]
+            num_row_groups = parquet_file.metadata.num_row_groups
+            for i in range(num_row_groups):
+                num_rows = parquet_file.metadata.row_group(i).num_rows
+                offsets.append(offsets[-1] + num_rows)
+            self._chunk_row_group_offsets[chunk_index] = offsets
 
-        # Determine the row group and the row index within the row group
-        parquet_file = self._df[chunk_index]
-        num_rows_per_row_group = parquet_file.metadata.row_group(0).num_rows
-        row_group_index = row_index // num_rows_per_row_group
-        row_index_within_group = row_index % num_rows_per_row_group
+        # Locate the row group containing row_index and the offset inside it.
+        offsets = self._chunk_row_group_offsets[chunk_index]
+        row_group_index = bisect.bisect_right(offsets, row_index) - 1
+        row_index_within_group = row_index - offsets[row_group_index]
+        row_group_size = offsets[row_group_index + 1] - offsets[row_group_index]
 
         # Check if the row group is already loaded
         if chunk_index in self._chunk_row_groups and row_group_index in self._chunk_row_groups[chunk_index]:
@@ -746,7 +757,7 @@ class ParquetLoader(BaseItemLoader):
 
         # Check if the row group has been fully read and release memory if necessary
         read_count = self._chunk_row_group_item_read_count[chunk_index][row_group_index]
-        if read_count >= num_rows_per_row_group:
+        if read_count >= row_group_size:
             # Release memory for the fully read row group
             del self._chunk_row_groups[chunk_index][row_group_index]
             del self._chunk_row_group_item_read_count[chunk_index][row_group_index]
@@ -797,6 +808,8 @@ class ParquetLoader(BaseItemLoader):
 
         if chunk_index in self._chunk_row_group_item_read_count:
             del self._chunk_row_group_item_read_count[chunk_index]
+        if chunk_index in self._chunk_row_group_offsets:
+            del self._chunk_row_group_offsets[chunk_index]
         if os.path.exists(chunk_filepath):
             os.remove(chunk_filepath)
         logger.debug(
@@ -819,6 +832,9 @@ class ParquetLoader(BaseItemLoader):
 
         if chunk_index in self._chunk_row_group_item_read_count:
             del self._chunk_row_group_item_read_count[chunk_index]
+
+        if chunk_index in self._chunk_row_group_offsets:
+            del self._chunk_row_group_offsets[chunk_index]
 
     def encode_data(self, data: list[bytes], sizes: list[int], flattened: list[Any]) -> Any:
         pass

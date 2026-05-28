@@ -302,6 +302,11 @@ class ChunksConfig:
 
         return local_chunkpath, begin, filesize_bytes
 
+    def download_filepath(self, chunk_index: int) -> str:
+        """The raw on-disk path that the chunk is downloaded to before any decompression."""
+        assert self._chunks is not None
+        return os.path.join(self._cache_dir, self._chunks[chunk_index]["filename"])
+
     def _get_chunk_index_from_filename(self, chunk_filename: str) -> int:
         """Retrieves the associated chunk_index for a given chunk filename."""
         assert self._chunks is not None

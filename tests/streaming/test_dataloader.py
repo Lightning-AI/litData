@@ -505,8 +505,10 @@ def getter(index: int):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 @pytest.mark.parametrize("num_workers", [1, 2])
-def test_dataloader_with_align_chunking(tmp_path, num_workers):
+def test_dataloader_with_align_chunking(tmp_path, num_workers, monkeypatch):
     output_dir = tmp_path / f"output_workers_{num_workers}"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
 
     optimize(
         fn=getter,
