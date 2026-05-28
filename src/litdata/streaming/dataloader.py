@@ -631,7 +631,7 @@ class StreamingDataLoader(DataLoader):
                 "The `ParquetLoader` uses Polars, which is not compatible with the `fork` multiprocessing context "
                 "used by PyTorch's DataLoader on Linux. Using `fork` will cause deadlocks due to Polars' "
                 "internal thread pool. Please pass `multiprocessing_context='spawn'` (or 'forkserver') to "
-                "`StreamingDataLoader`."
+                "`StreamingDataLoader`. Check thread: https://github.com/Lightning-AI/litData/issues/823"
             )
 
         if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
