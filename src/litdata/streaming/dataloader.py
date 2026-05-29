@@ -519,6 +519,43 @@ class StreamingDataLoaderCollateFn:
         return self.collate_fn(items)
 
 
+def _is_fork_context(multiprocessing_context: Any) -> bool:
+    import multiprocessing as mp
+
+    if multiprocessing_context is None:
+        try:
+            return mp.get_start_method(allow_none=False) == "fork"
+        except Exception:
+            return False
+
+    if isinstance(multiprocessing_context, str):
+        return multiprocessing_context == "fork"
+
+    if hasattr(multiprocessing_context, "get_start_method"):
+        try:
+            return multiprocessing_context.get_start_method() == "fork"
+        except Exception:
+            return False
+
+    if hasattr(multiprocessing_context, "start_method"):
+        return multiprocessing_context.start_method == "fork"
+
+    return False
+
+
+def _has_parquet_loader(dataset: Any) -> bool:
+    from litdata.streaming.dataset import StreamingDataset
+    from litdata.streaming.item_loader import ParquetLoader
+
+    if isinstance(dataset, StreamingDataset):
+        return isinstance(dataset.item_loader, ParquetLoader)
+
+    if hasattr(dataset, "_datasets") and isinstance(dataset._datasets, (list, tuple)):
+        return any(_has_parquet_loader(d) for d in dataset._datasets)
+
+    return False
+
+
 class StreamingDataLoader(DataLoader):
     r"""The StreamingDataLoader combines a dataset and a sampler, and provides an iterable over the given dataset.
 
@@ -589,6 +626,14 @@ class StreamingDataLoader(DataLoader):
         collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
+        if num_workers > 0 and _is_fork_context(kwargs.get("multiprocessing_context")) and _has_parquet_loader(dataset):
+            raise RuntimeError(
+                "The `ParquetLoader` uses Polars, which is not compatible with the `fork` multiprocessing context "
+                "used by PyTorch's DataLoader on Linux. Using `fork` will cause deadlocks due to Polars' "
+                "internal thread pool. Please pass `multiprocessing_context='spawn'` (or 'forkserver') to "
+                "`StreamingDataLoader`. Check thread: https://github.com/Lightning-AI/litData/issues/823"
+            )
+
         if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
             raise RuntimeError(
                 "The provided dataset should be either an instance of StreamingDataset, CombinedStreamingDataset or "

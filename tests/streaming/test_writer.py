@@ -290,3 +290,36 @@ def test_writer_save_checkpoint(tmpdir):
     for file in os.listdir(os.path.join(cache_dir, ".checkpoints")):
         assert file.__contains__("checkpoint-0")
         assert file.endswith(".json")
+
+
+def test_merge_natural_sort_order_with_many_workers(tmpdir):
+    # With 11+ workers, index files are named 0.index.json ... 10.index.json.
+    # sorted() puts "10.index.json" before "2.index.json" alphabetically, making
+    # chunk-10-0.bin appear before chunk-2-0.bin in the merged index. Fixes #826.
+    config = {
+        "chunk_bytes": None,
+        "chunk_size": 1,
+        "compression": None,
+        "data_format": ["scalar"],
+        "data_spec": None,
+        "encryption": None,
+        "item_loader": "PyTreeLoader",
+    }
+    from litdata.constants import _INDEX_FILENAME
+
+    n_workers = 11
+    for rank in range(n_workers):
+        chunk = {"chunk_size": 1, "column_sizes": [4], "dim": None, "filename": f"chunk-{rank}-0.bin"}
+        with open(os.path.join(str(tmpdir), f"{rank}.{_INDEX_FILENAME}"), "w") as f:
+            json.dump({"chunks": [chunk], "config": config}, f, sort_keys=True)
+
+    writer = BinaryWriter(str(tmpdir), chunk_size=1)
+    writer._is_done = True
+    writer._rank = 0
+    writer._merge_no_wait()
+
+    with open(os.path.join(str(tmpdir), _INDEX_FILENAME)) as f:
+        data = json.load(f)
+
+    filenames = [c["filename"] for c in data["chunks"]]
+    assert filenames == [f"chunk-{i}-0.bin" for i in range(n_workers)]

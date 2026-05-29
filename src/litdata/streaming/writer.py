@@ -13,6 +13,7 @@
 
 import json
 import os
+import re
 import uuid
 import warnings
 from dataclasses import dataclass
@@ -499,7 +500,10 @@ class BinaryWriter:
             chunks_info.extend(existing_index["chunks"])
             config = existing_index["config"]
 
-        for index_filename in sorted(index_files):
+        def _natural_key(s: str) -> list:
+            return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+
+        for index_filename in sorted(index_files, key=_natural_key):
             chunk_path = os.path.join(self._cache_dir, index_filename)
             with open(chunk_path) as f:
                 data = json.load(f)

@@ -505,8 +505,10 @@ def getter(index: int):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 @pytest.mark.parametrize("num_workers", [1, 2])
-def test_dataloader_with_align_chunking(tmp_path, num_workers):
+def test_dataloader_with_align_chunking(tmp_path, num_workers, monkeypatch):
     output_dir = tmp_path / f"output_workers_{num_workers}"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
 
     optimize(
         fn=getter,
@@ -529,3 +531,51 @@ def test_dataloader_with_align_chunking(tmp_path, num_workers):
         assert max_element_in_batch - min_element_in_batch < 64, (
             f"Batch {i} contains elements from multiple chunks: min {min_element_in_batch}, max {max_element_in_batch}"
         )
+
+
+class DummyStreamingDataset(StreamingDataset):
+    def __init__(self, item_loader):
+        self.item_loader = item_loader
+        self.shuffle = False
+        self.drop_last = False
+        self.batch_size = 1
+        self.num_workers = 1
+
+
+class DummyCombinedDataset(TestCombinedStreamingDataset):
+    def __init__(self, datasets):
+        self._datasets = datasets
+        self.batch_size = 1
+        self.num_workers = 1
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not testing multiprocessing on windows")
+def test_dataloader_fork_parquet_loader_deadlock_guard():
+    from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
+
+    # Create dummy dataset using ParquetLoader
+    dataset_with_parquet = DummyStreamingDataset(item_loader=ParquetLoader())
+    dataset_with_pytree = DummyStreamingDataset(item_loader=PyTreeLoader())
+
+    # 1. No workers should not raise any error, regardless of loader
+    StreamingDataLoader(dataset_with_parquet, num_workers=0)
+    StreamingDataLoader(dataset_with_pytree, num_workers=0)
+
+    # 2. PyTreeLoader with fork and num_workers > 0 should not raise any error
+    StreamingDataLoader(dataset_with_pytree, num_workers=2, multiprocessing_context="fork")
+
+    # 3. ParquetLoader with spawn / forkserver context and num_workers > 0 should not raise any error
+    StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="spawn")
+    StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="forkserver")
+
+    # 4. ParquetLoader with fork context and num_workers > 0 must raise RuntimeError
+    with pytest.raises(RuntimeError, match="The `ParquetLoader` uses Polars, which is not compatible with the `fork`"):
+        StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="fork")
+
+    # 5. Combined dataset wrapping ParquetLoader must also raise RuntimeError with fork context
+    combined_parquet = DummyCombinedDataset([dataset_with_parquet, dataset_with_pytree])
+    with pytest.raises(RuntimeError, match="The `ParquetLoader` uses Polars, which is not compatible with the `fork`"):
+        StreamingDataLoader(combined_parquet, num_workers=2, multiprocessing_context="fork")
+
+    combined_pytree = DummyCombinedDataset([dataset_with_pytree, dataset_with_pytree])
+    StreamingDataLoader(combined_pytree, num_workers=2, multiprocessing_context="fork")
