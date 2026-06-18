@@ -150,7 +150,7 @@ class CloudParquetDir(ParquetDir):
         for provider in _CLOUD_PROVIDER:
             if self.dir.url.startswith(provider):
                 # Initialize the cloud filesystem
-                self.fs = fsspec.filesystem(provider, *self.storage_options)
+                self.fs = fsspec.filesystem(provider, **self.storage_options)
                 print(f"using provider: {provider}")
                 break
 

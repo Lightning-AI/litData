@@ -129,6 +129,20 @@ def test_get_parquet_indexer_cls(pq_url, tmp_path, cls, expectation, monkeypatch
         assert isinstance(indexer_obj, cls)
 
 
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Fails on windows bcoz of urllib.parse")
+def test_cloud_parquet_dir_forwards_storage_options(tmp_path, monkeypatch, fsspec_mock):
+    fsspec_fs_mock = Mock()
+    fsspec_fs_mock.ls = Mock(return_value=[])
+    fsspec_mock.filesystem = Mock(return_value=fsspec_fs_mock)
+
+    monkeypatch.setattr("litdata.utilities.parquet._FSSPEC_AVAILABLE", True)
+
+    storage_options = {"key": "ACCESS_KEY", "secret": "SECRET_KEY", "endpoint_url": "https://s3.example.com"}
+    CloudParquetDir("s3://some_bucket/some_path", tmp_path, storage_options=storage_options)
+
+    fsspec_mock.filesystem.assert_called_once_with("s3", **storage_options)
+
+
 @pytest.mark.usefixtures("clean_pq_index_cache")
 @patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
