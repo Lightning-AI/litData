@@ -78,7 +78,7 @@ class LocalParquetDir(ParquetDir):
         self,
         dir_path: str | Dir | None,
         cache_path: str | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
         if not _PYARROW_AVAILABLE:
@@ -150,7 +150,7 @@ class CloudParquetDir(ParquetDir):
         for provider in _CLOUD_PROVIDER:
             if self.dir.url.startswith(provider):
                 # Initialize the cloud filesystem
-                self.fs = fsspec.filesystem(provider, *self.storage_options)
+                self.fs = fsspec.filesystem(provider, **self.storage_options)
                 print(f"using provider: {provider}")
                 break
 
@@ -304,7 +304,7 @@ class HFParquetDir(ParquetDir):
 def get_parquet_indexer_cls(
     dir_path: str,
     cache_path: str | None = None,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     num_workers: int = 4,
 ) -> ParquetDir:
     """Get the appropriate ParquetDir class based on the directory path scheme.
