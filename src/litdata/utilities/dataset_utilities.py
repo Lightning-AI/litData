@@ -80,18 +80,18 @@ def subsample_streaming_dataset(
     cache_index_filepath = os.path.join(input_dir.path, _INDEX_FILENAME)
 
     # Check if `index.json` file exists in cache path
-    if not os.path.exists(cache_index_filepath) and isinstance(input_dir.url, str):
+    if not os.path.exists(cache_index_filepath) and index_path is not None:
+        # A user-provided `index_path` should be honored for both local and remote `input_dir`.
+        copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
+    elif not os.path.exists(cache_index_filepath) and isinstance(input_dir.url, str):
         assert input_dir.url is not None
-        if index_path is not None:
-            copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
-        else:
-            # Merge data_connection_id from resolved directory into storage_options for R2 connections
-            merged_storage_options = storage_options.copy() if storage_options is not None else {}
-            if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
-                merged_storage_options["data_connection_id"] = input_dir.data_connection_id
+        # Merge data_connection_id from resolved directory into storage_options for R2 connections
+        merged_storage_options = storage_options.copy() if storage_options is not None else {}
+        if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
+            merged_storage_options["data_connection_id"] = input_dir.data_connection_id
 
-            downloader = get_downloader(input_dir.url, input_dir.path, [], merged_storage_options, session_options)
-            downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
+        downloader = get_downloader(input_dir.url, input_dir.path, [], merged_storage_options, session_options)
+        downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
     def path_exists(p: str) -> bool:
         return wait_for_predicate(lambda: os.path.exists(p), timeout=0.5)
