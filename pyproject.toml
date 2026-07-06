@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 [build-system]
 requires = [ "setuptools", "wheel" ]
 
@@ -97,14 +96,14 @@ lint.mccabe.max-complexity = 10
 lint.pydocstyle.convention = "google"
 
 [tool.codespell]
-# Todo: enable also python files in a next step
-#skip = '*.py'
-quiet-level = 3
 # comma separated list of words; waiting for:
 #  https://github.com/codespell-project/codespell/issues/2839#issuecomment-1731601603
 # also adding links until they ignored by its: nature
 #  https://github.com/codespell-project/codespell/issues/2243#issuecomment-1732019960
 ignore-words-list = "cancelation"
+# Todo: enable also python files in a next step
+# skip = "*.py"
+quiet-level = 3
 
 [tool.docformatter]
 recursive = true
@@ -113,63 +112,62 @@ wrap-summaries = 119
 wrap-descriptions = 120
 blank = true
 
-[tool.pytest.ini_options]
-testpaths = [ "tests" ]
-norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
-addopts = [
+[tool.mypy]
+files = [ "src" ]
+# This section is for folders with "-" as they are not valid python modules
+exclude = [
+  "src/litdata/debugger.py",
+  "src/litdata/imports.py",
+  "src/litdata/imports.py",
+  "src/litdata/processing/data_processor.py",
+  "src/litdata/streaming/item_loader.py",
+  "src/litdata/streaming/sampler.py",
+  "src/litdata/streaming/shuffle.py",
+  "src/litdata/utilities/_pytree.py",
+  "src/litdata/utilities/breakpoint.py",
+  "src/litdata/utilities/subsample.py",
+]
+ignore_missing_imports = "True"
+disallow_untyped_defs = "True"
+warn_redundant_casts = "True"
+warn_unused_ignores = "True"
+# style choices
+warn_no_return = "False"
+allow_redefinition = "True"
+# disable this rule as the Trainer attributes are defined in the connectors, not in its __init__
+disable_error_code = "attr-defined"
+warn_unused_configs = "True"
+overrides = [
+  # Ignore mypy errors for these files
+  # TODO: the goal is for this to be empty
+  # the list can be generated with:
+  # mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
+  { module = [], ignore_errors = "True" },
+]
+install_types = "True"
+non_interactive = "True"
+show_error_codes = "True"
+
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]
+ini_options.norecursedirs = [ ".git", ".github", "build", "dist", "docs" ]
+ini_options.addopts = [
   "--strict-markers",
   "--doctest-modules",
   "--color=yes",
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-markers = [ "cloud: Run the cloud tests for example" ]
-filterwarnings = [ "error::FutureWarning" ]
-xfail_strict = true
-junit_duration_report = "call"
+ini_options.markers = [ "cloud: Run the cloud tests for example" ]
+ini_options.xfail_strict = true
+ini_options.filterwarnings = [ "error::FutureWarning" ]
+ini_options.junit_duration_report = "call"
 
-[tool.coverage.report]
-exclude_lines = [
-  "pragma: no cover",
-  "warnings",
+[tool.coverage]
+report.exclude_lines = [
   "pass",
-  "rank_zero_warn",
+  "pragma: no cover",
   "raise NotImplementedError",
+  "rank_zero_warn",
+  "warnings",
 ]
-
-[tool.mypy]
-files = [ "src" ]
-# This section is for folders with "-" as they are not valid python modules
-exclude = [
-  "src/litdata/utilities/_pytree.py",
-  "src/litdata/streaming/item_loader.py",
-  "src/litdata/utilities/breakpoint.py",
-  "src/litdata/utilities/subsample.py",
-  "src/litdata/streaming/sampler.py",
-  "src/litdata/streaming/shuffle.py",
-  "src/litdata/imports.py",
-  "src/litdata/imports.py",
-  "src/litdata/processing/data_processor.py",
-  "src/litdata/debugger.py",
-]
-install_types = "True"
-non_interactive = "True"
-disallow_untyped_defs = "True"
-ignore_missing_imports = "True"
-show_error_codes = "True"
-warn_redundant_casts = "True"
-warn_unused_configs = "True"
-warn_unused_ignores = "True"
-allow_redefinition = "True"
-# disable this rule as the Trainer attributes are defined in the connectors, not in its __init__
-disable_error_code = "attr-defined"
-# style choices
-warn_no_return = "False"
-
-# Ignore mypy errors for these files
-# TODO: the goal is for this to be empty
-[[tool.mypy.overrides]]
-# the list can be generated with:
-# mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
-module = [  ]
-ignore_errors = "True"
