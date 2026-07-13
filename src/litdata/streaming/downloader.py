@@ -268,7 +268,7 @@ class R2Downloader(Downloader):
         if obj.scheme != "r2":
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        if not hasattr(self, "client"):
+        if not hasattr(self, "_client"):
             self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
 
         bucket = obj.netloc

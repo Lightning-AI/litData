@@ -116,6 +116,27 @@ def test_r2_downloader_error_handling(r2_client_mock, tmpdir):
     r2_client_instance.client.download_file.assert_called_once()
 
 
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_downloader_download_bytes_reuses_client(r2_client_mock, tmpdir):
+    r2_client_instance = MagicMock()
+    r2_client_mock.return_value = r2_client_instance
+
+    body = MagicMock()
+    body.read.return_value = b"hello"
+    r2_client_instance.client.get_object.return_value = {"Body": body}
+
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
+
+    assert downloader.download_bytes("r2://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("r2://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    r2_client_mock.assert_called_once_with(storage_options={}, session_options={})
+    assert r2_client_instance.client.get_object.call_args_list == [
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=0-4"),
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=5-9"),
+    ]
+
+
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     # Create mock objects
