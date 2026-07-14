@@ -1,4 +1,4 @@
-torch
+torch >=2.13.0  # experiment: force torch 2.13 to confirm CI hang
 torchvision
 lightning-utilities
 filelock
