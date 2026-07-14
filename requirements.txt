@@ -1,4 +1,4 @@
-torch <2.13.0  # TODO: unpin once the torch 2.13 processing-test hang is resolved
+torch
 torchvision
 lightning-utilities
 filelock
