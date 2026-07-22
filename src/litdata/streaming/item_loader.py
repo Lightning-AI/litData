@@ -532,10 +532,10 @@ class TokensLoader(BaseItemLoader):
 
         if self._serializer_name == "no_header_tensor":
             # count: number of tokens to read from buffer => `self._block_size`
-            data = torch.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset)
+            data = torch.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset).clone()
         else:
             # count: number of tokens to read from buffer => `self._block_size`
-            data = np.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset)  # type: ignore
+            data = np.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset).copy()  # type: ignore
 
         return data
 
