@@ -107,6 +107,63 @@ def test_src_resolver_s3_connections(monkeypatch, lightning_cloud_mock):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
+def test_src_resolver_s3_connections_non_aws_providers(monkeypatch, lightning_cloud_mock):
+    """S3 connections available on non-AWS providers should carry the data_connection_id.
+
+    That id is what makes the S3 client mint temporary project-role credentials (same mechanism
+    as R2 / lightning_storage). AWS-only S3 connections must leave it unset.
+    """
+    auth = login.Auth()
+    auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")
+
+    monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "project_id")
+
+    # Available on non-AWS providers -> data_connection_id is threaded through.
+    resolver._resolve_data_connection.cache_clear()
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(
+                id="data_connection_id",
+                name="imagenet",
+                aws=mock.MagicMock(source="s3://imagenet-bucket", available_in_non_aws_providers=True),
+            )
+        ],
+    )
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    resolved = resolver._resolve_dir("/teamspace/s3_connections/imagenet")
+    assert resolved.url == "s3://imagenet-bucket"
+    assert resolved.data_connection_id == "data_connection_id"
+    assert resolver._resolve_dir("/teamspace/s3_connections/imagenet/train").url == "s3://imagenet-bucket/train"
+
+    # AWS-only (flag unset) -> no data_connection_id, so ambient credentials are used.
+    resolver._resolve_data_connection.cache_clear()
+    client_mock = mock.MagicMock()
+    client_mock.data_connection_service_list_data_connections.return_value = V1ListDataConnectionsResponse(
+        data_connections=[
+            V1DataConnection(
+                id="data_connection_id",
+                name="imagenet",
+                aws=mock.MagicMock(source="s3://imagenet-bucket", available_in_non_aws_providers=False),
+            )
+        ],
+    )
+    client_cls_mock = mock.MagicMock()
+    client_cls_mock.return_value = client_mock
+    lightning_cloud_mock.rest_client.LightningClient = client_cls_mock
+
+    resolved = resolver._resolve_dir("/teamspace/s3_connections/imagenet")
+    assert resolved.url == "s3://imagenet-bucket"
+    assert resolved.data_connection_id is None
+
+    resolver._resolve_data_connection.cache_clear()
+    auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
 def test_src_resolver_studios(monkeypatch, lightning_cloud_mock):
     auth = login.Auth()
     auth.save(user_id="7c8455e3-7c5f-4697-8a6d-105971d6b9bd", api_key="e63fae57-2b50-498b-bc46-d6204cbf330e")

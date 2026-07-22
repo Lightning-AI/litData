@@ -290,6 +290,40 @@ def test_r2_client_create_client_success(monkeypatch):
     )
 
 
+def test_s3_client_uses_temp_credentials_with_data_connection_id(monkeypatch):
+    """S3Client should mint temporary project-role creds when a data_connection_id is provided.
+
+    This is the path for S3 connections marked available on non-AWS providers.
+    """
+    boto3_session = mock.MagicMock()
+    boto3 = mock.MagicMock(Session=boto3_session)
+    monkeypatch.setattr(client, "boto3", boto3)
+
+    botocore = mock.MagicMock()
+    monkeypatch.setattr(client, "botocore", botocore)
+
+    # The S3 temp-credentials response has no accountId (real AWS S3, no custom endpoint).
+    temp_credentials = {
+        "accessKeyId": "test-access-key",
+        "secretAccessKey": "test-secret-key",
+        "sessionToken": "test-session-token",
+    }
+    monkeypatch.setattr(client, "_login_and_get_temp_bucket_credentials", mock.MagicMock(return_value=temp_credentials))
+
+    s3_client = client.S3Client(storage_options={"data_connection_id": "test-connection", "region_name": "us-west-2"})
+    assert s3_client.client
+
+    # data_connection_id is dropped before boto3; temp creds + remaining options are forwarded.
+    boto3_session().client.assert_called_with(
+        "s3",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+        region_name="us-west-2",
+    )
+
+
 def test_r2_client_filters_metadata_from_storage_options(monkeypatch):
     """Test that R2Client filters out metadata keys from storage options."""
     boto3_session = mock.MagicMock()

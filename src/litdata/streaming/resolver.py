@@ -217,7 +217,19 @@ def _resolve_data_connection(dir_path: str) -> "V1DataConnection":
 def _resolve_s3_connections(dir_path: str) -> Dir:
     data_connection = _resolve_data_connection(dir_path)
 
-    return Dir(path=dir_path, url=os.path.join(data_connection.aws.source, *dir_path.split("/")[4:]))
+    # S3 connections flagged available on non-AWS providers can't rely on the FUSE mount or an
+    # instance profile off AWS, so thread the connection id through. That makes the S3 client mint
+    # temporary project-role credentials (same mechanism as R2 / lightning_storage below). Plain
+    # AWS-only S3 connections leave this unset and keep using the ambient credentials.
+    data_connection_id = (
+        data_connection.id if getattr(data_connection.aws, "available_in_non_aws_providers", False) else None
+    )
+
+    return Dir(
+        path=dir_path,
+        url=os.path.join(data_connection.aws.source, *dir_path.split("/")[4:]),
+        data_connection_id=data_connection_id,
+    )
 
 
 def _resolve_gcs_connections(dir_path: str) -> Dir:
