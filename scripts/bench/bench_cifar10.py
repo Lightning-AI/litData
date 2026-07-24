@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""CIFAR-10-shaped decode bench: LitData (process / threaded) vs raw PyTorch.
+"""CIFAR-10-shaped decode bench: LitData process workers vs raw PyTorch.
 
-Builds the **same** synthetic 32×32 RGB PIL samples for all three paths:
+Builds the **same** synthetic 32×32 RGB PIL samples for both paths:
 
   1. ``raw`` — in-memory ``torch.utils.data.Dataset`` + ``DataLoader`` (no LitData)
   2. ``litdata-process`` — ``StreamingDataLoader`` with process workers
-  3. ``litdata-threaded`` — ``StreamingDataLoader(use_threading=True)``
 
 Pass ``--real`` to use official torchvision CIFAR-10 for the LitData optimize
 step and a matching in-memory raw baseline.
 
 Example:
   .venv/bin/python scripts/bench/bench_cifar10.py --limit 2000 --workers 2
-  python3.13t scripts/bench/bench_cifar10.py --limit 5000   # true no-GIL threaded path
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ from PIL import Image  # noqa: E402
 from torch.utils.data import DataLoader, Dataset  # noqa: E402
 
 from litdata import optimize  # noqa: E402
-from litdata.streaming.dataloader import StreamingDataLoader, _is_gil_disabled  # noqa: E402
+from litdata.streaming.dataloader import StreamingDataLoader  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 from litdata.streaming.timing import StreamingTimingStats  # noqa: E402
 
@@ -185,7 +183,6 @@ def _run_raw(dataset: Dataset, *, num_workers: int, batch_size: int, shuffle: bo
 def _run_litdata(
     data_dir: str,
     *,
-    use_threading: bool,
     num_workers: int,
     batch_size: int,
     shuffle: bool,
@@ -204,14 +201,13 @@ def _run_litdata(
             ds,
             batch_size=batch_size,
             num_workers=num_workers,
-            use_threading=use_threading,
-            prefetch_factor=2 if num_workers > 0 or use_threading else None,
+            prefetch_factor=2 if num_workers > 0 else None,
         )
         _consume(loader)
         StreamingTimingStats.reset_instance()
         n_items, n_batches, elapsed = _consume(loader)
         return {
-            "mode": "litdata-threaded" if use_threading else "litdata-process",
+            "mode": "litdata-process",
             "num_workers": num_workers,
             "items": n_items,
             "batches": n_batches,
@@ -233,10 +229,10 @@ def _print_row(row: dict, note: str = "") -> None:
 
 
 def main() -> None:
-    """Compare raw PyTorch vs LitData process vs LitData threaded on CIFAR-shaped data."""
+    """Compare raw PyTorch vs LitData process workers on CIFAR-shaped data."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=2_000, help="Samples to build / optimize")
-    parser.add_argument("--workers", type=int, default=2, help="DataLoader / thread workers")
+    parser.add_argument("--workers", type=int, default=2, help="DataLoader workers")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--optimize-workers", type=int, default=2)
     parser.add_argument(
@@ -250,11 +246,6 @@ def main() -> None:
         "--real",
         action="store_true",
         help="Use official torchvision CIFAR-10 instead of synthetic 32×32 images",
-    )
-    parser.add_argument(
-        "--force-threading-on-gil",
-        action="store_true",
-        help="Measure use_threading even when the GIL is enabled (directional only)",
     )
     args = parser.parse_args()
 
@@ -289,37 +280,12 @@ def main() -> None:
 
     process_row = _run_litdata(
         opt_dir,
-        use_threading=False,
         num_workers=args.workers,
         batch_size=args.batch_size,
         shuffle=args.shuffle,
     )
     results.append(process_row)
     _print_row(process_row, note="StreamingDataLoader process workers")
-
-    gil_disabled = _is_gil_disabled()
-    if gil_disabled or args.force_threading_on_gil:
-        if not gil_disabled:
-            import litdata.streaming.dataloader as dl
-
-            dl._is_gil_disabled = lambda: True  # type: ignore[assignment]
-            note = "use_threading forced on GIL build — directional only"
-        else:
-            note = "free-threaded / no-GIL runtime"
-        threaded_row = _run_litdata(
-            opt_dir,
-            use_threading=True,
-            num_workers=args.workers,
-            batch_size=args.batch_size,
-            shuffle=args.shuffle,
-        )
-        results.append(threaded_row)
-        _print_row(threaded_row, note=note)
-    else:
-        print(
-            "litdata-threaded   skipped "
-            "(needs no-GIL Python, or pass --force-threading-on-gil for a directional GIL run)"
-        )
 
     print("\n=== Relative to raw ===")
     raw_elapsed = results[0]["elapsed_s"]

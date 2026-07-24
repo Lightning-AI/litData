@@ -195,4 +195,4 @@ def test_no_use_asyncio_on_streaming_dataloader():
 
     sig = inspect.signature(StreamingDataLoader.__init__)
     assert "use_asyncio" not in sig.parameters
-    assert "use_threading" in sig.parameters
+    assert "use_threading" not in sig.parameters

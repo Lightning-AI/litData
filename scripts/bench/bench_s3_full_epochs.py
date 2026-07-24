@@ -66,22 +66,22 @@ def main() -> None:
     p.add_argument(
         "--async-prefetch",
         action="store_true",
-        help="Enable LITDATA_ASYNC_CHUNK_PREFETCH (raises max_pre_download floor to 4).",
+        help="Force LITDATA_ASYNC_CHUNK_PREFETCH=1 (raises max_pre_download floor to 4).",
     )
     p.add_argument(
-        "--use-threading",
+        "--no-async-prefetch",
         action="store_true",
-        help="Use StreamingDataLoader(use_threading=True) instead of process workers.",
+        help="Force LITDATA_ASYNC_CHUNK_PREFETCH=0 (remote defaults to on).",
     )
     args = p.parse_args()
 
     import litdata
 
-    os.environ["LITDATA_ASYNC_CHUNK_PREFETCH"] = "1" if args.async_prefetch else "0"
     if args.async_prefetch:
-        # Let the library apply its async floor (default 4).
+        os.environ["LITDATA_ASYNC_CHUNK_PREFETCH"] = "1"
         os.environ.pop("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", None)
-    else:
+    elif args.no_async_prefetch:
+        os.environ["LITDATA_ASYNC_CHUNK_PREFETCH"] = "0"
         os.environ["LITDATA_ASYNC_MIN_PRE_DOWNLOAD"] = "0"
 
     print(
@@ -92,7 +92,7 @@ def main() -> None:
     print(
         f"input={args.input_dir} workers={args.workers} batch_size={args.batch_size} "
         f"epochs={args.epochs} max_pre_download={args.max_pre_download} "
-        f"async_prefetch={args.async_prefetch} use_threading={args.use_threading}",
+        f"async_prefetch={os.environ.get('LITDATA_ASYNC_CHUNK_PREFETCH', 'default')}",
         flush=True,
     )
 
@@ -114,16 +114,12 @@ def main() -> None:
     )
     print(f"dataset_len={len(ds)}", flush=True)
 
-    loader_kwargs: dict = {
-        "dataset": ds,
-        "batch_size": args.batch_size,
-        "num_workers": args.workers,
-    }
-    if args.use_threading:
-        loader_kwargs["use_threading"] = True
-    else:
-        loader_kwargs["prefetch_factor"] = 2 if args.workers > 0 else None
-    loader = StreamingDataLoader(**loader_kwargs)
+    loader = StreamingDataLoader(
+        ds,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        prefetch_factor=2 if args.workers > 0 else None,
+    )
 
     epoch_rows = []
     for epoch in range(args.epochs):

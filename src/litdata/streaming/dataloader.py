@@ -15,7 +15,6 @@ import asyncio
 import inspect
 import logging
 import os
-import sys
 from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
@@ -42,7 +41,6 @@ from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.sampler import CacheBatchSampler
-from litdata.streaming.threaded_loader import iter_threaded_streaming_batches
 from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities._pytree import tree_flatten
 from litdata.utilities.base import (
@@ -54,34 +52,6 @@ from litdata.utilities.base import (
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
-
-
-def _is_gil_disabled() -> bool:
-    """Return True when this CPython process is running without the GIL (PEP 703)."""
-    is_gil_enabled = getattr(sys, "_is_gil_enabled", None)
-    if callable(is_gil_enabled):
-        return not is_gil_enabled()
-    return False
-
-
-def _batch_num_samples(batch: Any, fallback_batch_size: int) -> int:
-    """Best-effort sample count for a collated batch (handles partial last batches)."""
-    if torch.is_tensor(batch):
-        return int(batch.shape[0])
-    if isinstance(batch, dict):
-        for value in batch.values():
-            if torch.is_tensor(value):
-                return int(value.shape[0])
-            if isinstance(value, (list, tuple)):
-                return len(value)
-    if isinstance(batch, (list, tuple)) and batch:
-        first = batch[0]
-        if torch.is_tensor(first):
-            return int(first.shape[0])
-        # Uncollated / custom collate returning a list of samples.
-        if not isinstance(first, (list, tuple, dict)) and not torch.is_tensor(first):
-            return len(batch)
-    return fallback_batch_size
 
 
 def _equal_items(data_1: Any, data_2: Any) -> bool:
@@ -637,12 +607,6 @@ class StreamingDataLoader(DataLoader):
         profile_skip_batches (int): How many batches to skip before recording
         profile_batches (int, bool, optional): Whether to record data loading profile and generate a result.json file.
         profile_dir (int, bool,  optional): Where to store the recorded trace when profile_batches is enabled.
-        use_threading (bool, optional): Experimental. Load batches with in-process threads instead of
-            PyTorch process workers, avoiding pickle/IPC for collated batches. Requires a free-threaded
-            (no-GIL) Python runtime (``sys._is_gil_enabled()`` is False) and ``StreamingDataset``
-            (not Combined/Parallel). When ``True``, ``num_workers`` is the thread count and process
-            workers are disabled. There is no asyncio / ``use_asyncio`` loader mode — see
-            ``threaded_loader`` module docs. (default: ``False``).
 
     """
 
@@ -661,26 +625,10 @@ class StreamingDataLoader(DataLoader):
         shuffle: bool | None = None,
         drop_last: bool | None = None,
         collate_fn: Callable | None = None,
-        use_threading: bool = False,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
-        if use_threading and not _is_gil_disabled():
-            raise RuntimeError(
-                "`use_threading=True` requires a free-threaded (no-GIL) Python runtime "
-                "(PEP 703). The current interpreter has the GIL enabled. Use a free-threaded "
-                "CPython build (e.g. `python3.13t` / `python3.14t`) with the GIL disabled "
-                "(`PYTHON_GIL=0`)."
-            )
-
-        if use_threading and not isinstance(dataset, StreamingDataset):
-            raise RuntimeError(
-                "`use_threading=True` is only supported with StreamingDataset "
-                "(not CombinedStreamingDataset / ParallelStreamingDataset)."
-            )
-
         if (
-            not use_threading
-            and num_workers > 0
+            num_workers > 0
             and _is_fork_context(kwargs.get("multiprocessing_context"))
             and _has_parquet_loader(dataset)
         ):
@@ -704,25 +652,22 @@ class StreamingDataLoader(DataLoader):
             dataset.set_drop_last(drop_last)
 
         dataset.set_batch_size(batch_size)
-        # For threading, ``num_workers`` is the logical shard/thread count used by StreamingDataset.
-        logical_workers = max(num_workers, 1) if use_threading else num_workers
-        dataset.set_num_workers(logical_workers)
+        dataset.set_num_workers(num_workers)
 
         shuffle = None
 
         if profile_batches and not _VIZ_TRACKER_AVAILABLE:
             raise ModuleNotFoundError("To use profile_batches, viztracer is required. Run `pip install viztracer`")
 
-        if profile_batches and num_workers == 0 and not use_threading:
+        if profile_batches and num_workers == 0:
             raise ValueError("Profiling is supported only with num_workers >= 1.")
 
         if collate_fn:
             collate_fn = StreamingDataLoaderCollateFn(collate_fn)
 
-        self.use_threading = use_threading
         self.current_epoch = 0
         self.batch_size = batch_size
-        self.num_workers = logical_workers if use_threading else num_workers
+        self.num_workers = num_workers
         self._profile_batches = profile_batches
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
@@ -734,22 +679,16 @@ class StreamingDataLoader(DataLoader):
         self._worker_idx_iter: Any | None = None
         self._latest_worker_idx = 0
         self.restore = False
-        self._prefetch_factor = (
-            (2 if (num_workers > 0 or use_threading) else None) if prefetch_factor is None else prefetch_factor
-        )
+        self._prefetch_factor = (2 if num_workers > 0 else None) if prefetch_factor is None else prefetch_factor
         super().__init__(
             dataset,
             *args,
             batch_size=batch_size,
-            # Threaded path owns its own workers; keep the torch DataLoader single-process.
-            num_workers=0 if use_threading else num_workers,
-            prefetch_factor=None if use_threading else self._prefetch_factor,
+            num_workers=num_workers,
+            prefetch_factor=self._prefetch_factor,
             collate_fn=collate_fn,
             **kwargs,
         )  # type: ignore
-        if use_threading:
-            # Restore logical worker count used for sharding / resume accounting.
-            self.num_workers = logical_workers
 
     def __iter__(self) -> Any:
         if (
@@ -785,25 +724,10 @@ class StreamingDataLoader(DataLoader):
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
             timing = StreamingTimingStats.instance()
-            batch_iter = (
-                iter_threaded_streaming_batches(
-                    self.dataset,
-                    num_workers=max(self.num_workers, 1),
-                    batch_size=self.batch_size,
-                    collate_fn=self.collate_fn or default_collate,
-                    prefetch_factor=self._prefetch_factor or 2,
-                )
-                if self.use_threading
-                else super().__iter__()
-            )
-            for batch in batch_iter:
+            for batch in super().__iter__():
                 t0 = timing.start()
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                # Threaded path can emit a short final batch; count real samples for resume.
-                if self.use_threading:
-                    self._num_samples_yielded_streaming += _batch_num_samples(batch, self.batch_size)
-                else:
-                    self._num_samples_yielded_streaming += self.batch_size
+                self._num_samples_yielded_streaming += self.batch_size
                 timing.record("dataloader_yield_s", t0)
                 yield batch
         else:

@@ -14,8 +14,8 @@
 """Experimental asyncio helpers for overlapping **remote chunk downloads**.
 
 This is intentionally **not** an async ``StreamingDataLoader``. Training stays on
-the sync ``for batch in loader`` API; decode stays on process workers or
-``use_threading``. Asyncio is only useful where we wait on network IO.
+the sync ``for batch in loader`` API; decode stays on process workers. Asyncio is
+only useful where we wait on network IO.
 
 On by default for remote datasets; force off with ``LITDATA_ASYNC_CHUNK_PREFETCH=0``,
 or force on locally with ``LITDATA_ASYNC_CHUNK_PREFETCH=1``.

@@ -11,10 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for non-threading next-streaming optimizations (deque, timing, cache bytes).
-
-Threaded ``use_threading`` coverage lives in ``test_threaded_dataloader.py``.
-"""
+"""Tests for next-streaming optimizations (deque, timing, cache bytes)."""
 
 from __future__ import annotations
 

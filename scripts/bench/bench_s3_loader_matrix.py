@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-S3 ImageNet matrix matching the historic Studio training bench.
+"""Real-S3 ImageNet matrix: process loader × sync/async chunk download.
 
 Mirrors the old ``stream/lightning_data.py`` loop:
   * ImageNet-optimized chunks from Studio S3 connections
@@ -8,16 +8,9 @@ Mirrors the old ``stream/lightning_data.py`` loop:
   * cold cache under ``/cache/chunks`` (or temp)
   * report images/sec
 
-Matrix (your past learning: async gather ≠ win inside process DataLoader):
-  * process + sync boto3
+Modes:
+  * process + sync
   * process + async chunk prefetch
-  * threaded + sync   (needs free-threaded / cp314t)
-  * threaded + async  (needs free-threaded / cp314t)
-
-Note: ``lightning_data_imagenet/train`` currently fails deserialize (class
-labels stored as 3-byte ASCII, modern ``IntegerSerializer`` expects int64).
-Default input is ``lightning_data_search`` (same optimize path, jpeg + path),
-which exercises the same decode + transform bottleneck.
 
 Example::
 
@@ -114,7 +107,6 @@ def run_once(
     *,
     input_dir: str,
     cache_dir: str,
-    use_threading: bool,
     async_prefetch: bool,
     workers: int,
     batch_size: int,
@@ -142,17 +134,12 @@ def run_once(
             max_cache_size=max_cache_size,
         )
 
-        loader_kwargs: dict = {
-            "dataset": ds,
-            "batch_size": batch_size,
-            "num_workers": workers,
-        }
-        if use_threading:
-            loader_kwargs["use_threading"] = True
-        else:
-            loader_kwargs["prefetch_factor"] = 2 if workers > 0 else None
-
-        loader = StreamingDataLoader(**loader_kwargs)
+        loader = StreamingDataLoader(
+            ds,
+            batch_size=batch_size,
+            num_workers=workers,
+            prefetch_factor=2 if workers > 0 else None,
+        )
 
         for epoch in range(epochs):
             t0 = time.perf_counter()
@@ -189,7 +176,7 @@ def run_once(
     wall = sum(e["elapsed_s"] for e in epoch_stats)
     samples = sum(e["samples"] for e in epoch_stats)
     return {
-        "loader": "threaded" if use_threading else "process",
+        "loader": "process",
         "download": "async" if async_prefetch else "sync",
         "workers": workers,
         "batch_size": batch_size,
@@ -227,8 +214,8 @@ def main() -> None:
     parser.add_argument(
         "--modes",
         nargs="+",
-        default=["process-sync", "process-async", "threaded-sync", "threaded-async"],
-        choices=["process-sync", "process-async", "threaded-sync", "threaded-async"],
+        default=["process-sync", "process-async"],
+        choices=["process-sync", "process-async"],
     )
     args = parser.parse_args()
 
@@ -253,24 +240,11 @@ def main() -> None:
 
     rows: list[dict] = []
     for mode in args.modes:
-        use_threading = mode.startswith("threaded")
         async_prefetch = mode.endswith("async")
         print(f"=== {mode} ===")
-        if use_threading and not _gil_disabled():
-            row = {
-                "loader": "threaded",
-                "download": "async" if async_prefetch else "sync",
-                "skipped": True,
-                "reason": "GIL enabled — need free-threaded CPython (cp314t)",
-            }
-            rows.append(row)
-            print("SKIPPED (GIL enabled; switch to cp314t)\n")
-            continue
-
         row = run_once(
             input_dir=args.input_dir,
             cache_dir=cache_dir,
-            use_threading=use_threading,
             async_prefetch=async_prefetch,
             workers=args.workers,
             batch_size=args.batch_size,
