@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grid-search obstore ``min_chunk_size`` vs download concurrency.
+r"""Grid-search obstore ``min_chunk_size`` vs download concurrency.
 
 Cold-epoch bottleneck is time until the first few chunk files land so workers
 can start reading — not peak MB/s after the pipeline is full.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grid-search obstore stream chunk size × workers on ImageNet epoch 0.
+r"""Grid-search obstore stream chunk size × workers on ImageNet epoch 0.
 
 Uses the real ``bench_s3_full_epochs`` cold epoch (wipe cache each cell).
 Ranks by epoch-0 images/s and ``t_first_batch`` (unblock read).
