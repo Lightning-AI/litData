@@ -13,9 +13,10 @@
 
 """Experimental in-process threaded batch loader for StreamingDataset.
 
-Opt-in via ``StreamingDataLoader(..., use_threading=True)``. Each thread owns an
-isolated dataset clone (distinct ``_forced_worker_env`` rank), collates in-thread,
-and hands batches through ``queue.SimpleQueue`` — no pickle / process IPC.
+Opt-in via ``StreamingDataLoader(..., use_threading=True)`` on a free-threaded
+(no-GIL) Python runtime only. Each thread owns an isolated dataset clone
+(distinct ``_forced_worker_env`` rank), collates in-thread, and hands batches
+through ``queue.SimpleQueue`` — no pickle / process IPC.
 
 This is a spike for comparing against PyTorch process workers; it is not the
 default Lightning/PyTorch loading path.

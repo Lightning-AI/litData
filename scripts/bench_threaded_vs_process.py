@@ -8,8 +8,10 @@ Workloads:
 Exit criterion from the plan: ≥20% step-time win on tensor-centric with equal
 CPU budget, else keep experimental / abandon as default.
 
+Requires a free-threaded (no-GIL) Python runtime for ``use_threading=True``.
+
 Example:
-  LITDATA_TIMING=1 .venv/bin/python scripts/bench_threaded_vs_process.py
+  LITDATA_TIMING=1 python3.13t scripts/bench_threaded_vs_process.py
 """
 
 from __future__ import annotations
@@ -85,6 +87,15 @@ def _run(data_dir: str, *, use_threading: bool, num_workers: int, batch_size: in
 
 def main() -> None:
     """Compare process vs threaded StreamingDataLoader wall times on a local tensor dataset."""
+    from litdata.streaming.dataloader import _is_gil_disabled
+
+    if not _is_gil_disabled():
+        print(
+            "use_threading requires a free-threaded (no-GIL) Python runtime (e.g. python3.13t with PYTHON_GIL=0).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     tmp = tempfile.mkdtemp(prefix="litdata-thread-bench-")
     try:
         data_dir = _build_tokens_dataset(tmp)

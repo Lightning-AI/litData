@@ -15,6 +15,7 @@ import asyncio
 import inspect
 import logging
 import os
+import sys
 from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
@@ -53,6 +54,14 @@ from litdata.utilities.base import (
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
+
+
+def _is_gil_disabled() -> bool:
+    """Return True when this CPython process is running without the GIL (PEP 703)."""
+    is_gil_enabled = getattr(sys, "_is_gil_enabled", None)
+    if callable(is_gil_enabled):
+        return not is_gil_enabled()
+    return False
 
 
 def _equal_items(data_1: Any, data_2: Any) -> bool:
@@ -609,9 +618,10 @@ class StreamingDataLoader(DataLoader):
         profile_batches (int, bool, optional): Whether to record data loading profile and generate a result.json file.
         profile_dir (int, bool,  optional): Where to store the recorded trace when profile_batches is enabled.
         use_threading (bool, optional): Experimental. Load batches with in-process threads instead of
-            PyTorch process workers, avoiding pickle/IPC for collated batches. Only supported with
-            ``StreamingDataset`` (not Combined/Parallel). When ``True``, ``num_workers`` is the
-            thread count and process workers are disabled. (default: ``False``).
+            PyTorch process workers, avoiding pickle/IPC for collated batches. Requires a free-threaded
+            (no-GIL) Python runtime (``sys._is_gil_enabled()`` is False) and ``StreamingDataset``
+            (not Combined/Parallel). When ``True``, ``num_workers`` is the thread count and process
+            workers are disabled. (default: ``False``).
 
     """
 
@@ -633,6 +643,14 @@ class StreamingDataLoader(DataLoader):
         use_threading: bool = False,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
+        if use_threading and not _is_gil_disabled():
+            raise RuntimeError(
+                "`use_threading=True` requires a free-threaded (no-GIL) Python runtime "
+                "(PEP 703). The current interpreter has the GIL enabled. Use a free-threaded "
+                "CPython build (e.g. `python3.13t` / `python3.14t`) with the GIL disabled "
+                "(`PYTHON_GIL=0`)."
+            )
+
         if use_threading and not isinstance(dataset, StreamingDataset):
             raise RuntimeError(
                 "`use_threading=True` is only supported with StreamingDataset "

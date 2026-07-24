@@ -112,7 +112,8 @@ def test_timing_stats_records_when_enabled(monkeypatch):
     assert snap["item_decode_s"]["total_s"] >= 0.0
 
 
-def test_threaded_dataloader_matches_process_items(tmpdir):
+def test_threaded_dataloader_matches_process_items(tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: True)
     cache_dir = _seed_cache(tmpdir, n_items=48, chunk_size=8)
     ds = StreamingDataset(input_dir=cache_dir, shuffle=False)
     loader = StreamingDataLoader(ds, batch_size=4, num_workers=2, use_threading=True)
@@ -122,6 +123,15 @@ def test_threaded_dataloader_matches_process_items(tmpdir):
     assert all(isinstance(b, torch.Tensor) for b in batches)
 
 
-def test_use_threading_rejects_non_streaming_dataset():
+def test_use_threading_requires_nogil(tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: False)
+    cache_dir = _seed_cache(tmpdir, n_items=8, chunk_size=4)
+    ds = StreamingDataset(input_dir=cache_dir, shuffle=False)
+    with pytest.raises(RuntimeError, match="no-GIL"):
+        StreamingDataLoader(ds, batch_size=2, num_workers=2, use_threading=True)
+
+
+def test_use_threading_rejects_non_streaming_dataset(monkeypatch):
+    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: True)
     with pytest.raises(RuntimeError, match="use_threading"):
         StreamingDataLoader(MagicMock(), use_threading=True)  # type: ignore[arg-type]
