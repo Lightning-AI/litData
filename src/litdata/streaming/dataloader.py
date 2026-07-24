@@ -715,37 +715,42 @@ class StreamingDataLoader(DataLoader):
         self.dataset.set_epoch(self.current_epoch)
         logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "B"}))
 
-        if isinstance(self.dataset, StreamingDataset):
-            assert self.batch_size
-            for batch in super().__iter__():
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                self._num_samples_yielded_streaming += self.batch_size
-                yield batch
-        else:
-            self.dataset._set_use_streaming_dataloader(True)
-            assert self.batch_size
-            # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
-            for batch in super().__iter__():
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
-                    self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
-                        sample[-1].item() if self.batch_size > 1 else sample.item()
-                        for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
-                    ]
-
-                    if __NUM_CYCLES_KEY__ in batch:
-                        self._num_cycles[self._latest_worker_idx] = [
-                            cycle[-1].item() if self.batch_size > 1 else cycle.item()
-                            for cycle in batch[__NUM_CYCLES_KEY__]
-                        ]
-                        self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
-
-                    yield batch[__SAMPLES_KEY__]
-                else:
+        # Always clear `restore` when leaving __iter__, including early `break` / GeneratorExit.
+        # Otherwise the next epoch keeps restore=True, skips reset, and
+        # `_StreamingMultiProcessingDataLoaderIter` may only prime a subset of workers — hanging
+        # on `_data_queue.get` (seen with ParallelStreamingDataset length=inf after resume).
+        try:
+            if isinstance(self.dataset, StreamingDataset):
+                assert self.batch_size
+                for batch in super().__iter__():
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    self._num_samples_yielded_streaming += self.batch_size
                     yield batch
+            else:
+                self.dataset._set_use_streaming_dataloader(True)
+                assert self.batch_size
+                # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
+                for batch in super().__iter__():
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
+                        self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
+                            sample[-1].item() if self.batch_size > 1 else sample.item()
+                            for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
+                        ]
 
-        logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
-        self.restore = False
+                        if __NUM_CYCLES_KEY__ in batch:
+                            self._num_cycles[self._latest_worker_idx] = [
+                                cycle[-1].item() if self.batch_size > 1 else cycle.item()
+                                for cycle in batch[__NUM_CYCLES_KEY__]
+                            ]
+                            self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
+
+                        yield batch[__SAMPLES_KEY__]
+                    else:
+                        yield batch
+        finally:
+            logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
+            self.restore = False
 
     def __len__(self) -> int:
         if self._dataset_kind == _DatasetKind.Iterable:
