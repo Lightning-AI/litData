@@ -177,14 +177,13 @@ def test_apply_delete_still_deletes_when_not_protected(tmpdir):
 
     thread._decrement_local_lock(0)
     assert thread._remaining_locks(chunk0_path) == 0
-    assert config.skip_chunk_indexes_deletion is None
 
     thread._apply_delete(0)
     assert not os.path.exists(chunk0_path)
 
 
 def test_apply_delete_skips_when_refcount_positive(tmpdir):
-    """A positive ``.cnt`` refcount blocks deletion regardless of the skip list."""
+    """A positive ``.cnt`` refcount blocks deletion."""
     cache_dir, remote_dir = _build_remote_dataset(tmpdir)
 
     item_loader = PyTreeLoader()

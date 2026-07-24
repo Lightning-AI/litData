@@ -189,6 +189,37 @@ class BaseItemLoader(ABC):
         if self._force_download_queue:
             self._force_download_queue.put(chunk_index)
 
+    def set_chunk_ready_provider(self, provider: Callable[[int], Event] | None) -> None:
+        """Install a provider of per-chunk readiness Events from the prefetch thread."""
+        self._chunk_ready_provider = provider
+
+    def _wait_until_chunk_ready(self, chunk_index: int, chunk_filepath: str, filesize_bytes: int) -> None:
+        """Block until ``chunk_filepath`` exists and is at least ``filesize_bytes`` long.
+
+        Uses an in-process readiness Event when available; otherwise falls back to a short
+        filesystem poll (needed for co-worker downloads and Parquet/Tokens loaders).
+        """
+        start_time = time()
+        requested_force_download = False
+
+        while True:
+            if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                return
+
+            if self._chunk_ready_provider is not None:
+                self._chunk_ready_provider(chunk_index).wait(timeout=0.1)
+            else:
+                sleep(0.1)
+
+            if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
+                if _DEBUG:
+                    print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
+                self.force_download(chunk_index)
+                requested_force_download = True
+
+            if (time() - start_time) > _MAX_WAIT_TIME:
+                raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
+
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
         """Declare which chunks are safe to memory-map (i.e. not shared with another worker).
 
@@ -889,12 +920,7 @@ class ParquetLoader(BaseItemLoader):
             del self._chunk_filepaths[chunk_filepath]
 
         if chunk_filepath not in self._chunk_filepaths:
-            exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
-            while not exists:
-                sleep(0.1)
-                exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
+            self._wait_until_chunk_ready(chunk_index, chunk_filepath, filesize_bytes)
             self._chunk_filepaths[chunk_filepath] = True
 
         # relative index of the desired row within the chunk.

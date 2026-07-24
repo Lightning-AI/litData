@@ -15,6 +15,7 @@ import glob
 import logging
 import os
 import warnings
+from collections import deque
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Queue
@@ -25,11 +26,12 @@ import numpy as np
 from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
-from litdata.debugger import _get_log_msg
+from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
+from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 
@@ -45,6 +47,8 @@ _END_TOKEN = "END"  # noqa: S105
 # querying the queue and consuming too many CPU cycles.
 _DEFAULT_TIMEOUT = 0.1
 _LONG_DEFAULT_TIMEOUT = 5
+# Reconcile the advisory cache-byte counter with a directory scan every N successful deletes.
+_CACHE_SIZE_RECONCILE_EVERY = 8
 
 
 class PrepareChunksThread(Thread):
@@ -67,7 +71,7 @@ class PrepareChunksThread(Thread):
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
 
-        self._chunks_index_to_be_deleted: list[int] = []
+        self._chunks_index_to_be_deleted: deque[int] = deque()
         self._max_cache_size = max_cache_size
         self._parent_cache_dir = os.path.dirname(self._config._cache_dir)
         self._to_download_queue: Queue = Queue()
@@ -91,6 +95,11 @@ class PrepareChunksThread(Thread):
             print(f"Delete chunks when used: {self._delete_chunks_when_processed}")
 
         self._has_exited = False
+        # Advisory cache size for eviction decisions (avoid scanning the dir on every delete).
+        self._approx_cache_bytes = 0
+        self._cache_bytes_initialized = False
+        self._deletes_since_reconcile = 0
+        self._timing = StreamingTimingStats.instance()
 
     def get_ready_event(self, chunk_index: int) -> Event:
         """Return (creating if needed) the readiness event for ``chunk_index``."""
@@ -165,10 +174,45 @@ class PrepareChunksThread(Thread):
             except Exception as e:
                 logger.warning(f"_apply_delete({chunk_index}): unexpected error removing {lock_path}: {e}")
 
+    def _chunk_byte_size(self, chunk_index: int) -> int:
+        """Best-effort decompressed chunk size for advisory cache accounting."""
+        chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        filename = os.path.basename(chunk_filepath)
+        return int(self._config.filename_to_size_map.get(filename, filesize_bytes))
+
+    def _reconcile_cache_bytes(self) -> None:
+        try:
+            self._approx_cache_bytes = _get_folder_size(self._config._cache_dir, self._config)
+            self._cache_bytes_initialized = True
+            self._deletes_since_reconcile = 0
+        except Exception as e:
+            # Advisory only — never fail the prefetch loop because of a size scan.
+            logger.debug(f"_reconcile_cache_bytes failed: {e}")
+
+    def _ensure_cache_bytes(self) -> None:
+        if not self._cache_bytes_initialized:
+            self._reconcile_cache_bytes()
+
+    def _note_chunk_added(self, chunk_index: int) -> None:
+        try:
+            self._ensure_cache_bytes()
+            self._approx_cache_bytes += self._chunk_byte_size(chunk_index)
+        except Exception as e:
+            logger.debug(f"_note_chunk_added({chunk_index}) failed: {e}")
+
+    def _note_chunk_removed(self, chunk_index: int) -> None:
+        try:
+            self._ensure_cache_bytes()
+            self._approx_cache_bytes = max(0, self._approx_cache_bytes - self._chunk_byte_size(chunk_index))
+            self._deletes_since_reconcile += 1
+            if self._deletes_since_reconcile >= _CACHE_SIZE_RECONCILE_EVERY:
+                self._reconcile_cache_bytes()
+        except Exception as e:
+            logger.debug(f"_note_chunk_removed({chunk_index}) failed: {e}")
+
     def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
         logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
-        can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
         # A chunk is deleted only once its reference count reaches zero, i.e. every worker that
@@ -188,10 +232,11 @@ class PrepareChunksThread(Thread):
 
         if _DEBUG:
             with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
-                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}.")
 
         try:
             self._item_loader.delete(chunk_index, chunk_filepath)
+            self._note_chunk_removed(chunk_index)
         except (FileNotFoundError, PermissionError) as e:
             logger.debug(f"_apply_delete({chunk_index}): could not remove data file: {e}")
 
@@ -219,7 +264,7 @@ class PrepareChunksThread(Thread):
         # Get the current cache size and decide whether we need to start cleanup. Otherwise, keep track of it
         while self._max_cache_size and self._chunks_index_to_be_deleted and self._can_delete_chunk():
             # Delete the oldest chunk
-            self._apply_delete(self._chunks_index_to_be_deleted.pop(0))
+            self._apply_delete(self._chunks_index_to_be_deleted.popleft())
         # Decrement the pre-download counter
         self._pre_download_counter -= 1
         return
@@ -227,10 +272,10 @@ class PrepareChunksThread(Thread):
     def _can_delete_chunk(self) -> bool:
         if self._delete_chunks_when_processed:
             return self._pre_download_counter >= self._max_pre_download - 1
-        return (
-            self._max_cache_size is not None
-            and _get_folder_size(self._config._cache_dir, self._config) >= self._max_cache_size
-        )
+        if self._max_cache_size is None:
+            return False
+        self._ensure_cache_bytes()
+        return self._approx_cache_bytes >= self._max_cache_size
 
     def _pre_load_chunk(self, chunk_index: int) -> None:
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
@@ -297,10 +342,34 @@ class PrepareChunksThread(Thread):
                     return
 
                 if chunk_index is not None:
+                    chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+                    existed = os.path.exists(chunk_filepath)
+                    t0 = self._timing.start()
+                    logger.debug(
+                        _get_log_msg(
+                            {
+                                "name": f"prefetch_download_chunk_{chunk_index}",
+                                "ph": "B",
+                                "cname": ChromeTraceColors.TEAL,
+                            }
+                        )
+                    )
                     self._config.download_chunk_from_index(chunk_index)
+                    logger.debug(
+                        _get_log_msg(
+                            {
+                                "name": f"prefetch_download_chunk_{chunk_index}",
+                                "ph": "E",
+                                "cname": ChromeTraceColors.TEAL,
+                            }
+                        )
+                    )
+                    self._timing.record("chunk_download_s", t0)
                     chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
                     if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
                         self.mark_chunk_ready(chunk_index)
+                    if not existed:
+                        self._note_chunk_added(chunk_index)
 
                     # Preload item if possible to gain some time but only
                     # if this is one of the pre-downloaded chunk
@@ -507,6 +576,8 @@ class BinaryReader:
 
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
+        timing = StreamingTimingStats.instance()
+        decode_t0 = timing.start()
 
         if isinstance(self._item_loader, PyTreeLoader):
             if (
@@ -529,6 +600,7 @@ class BinaryReader:
             item = self._item_loader.load_item_from_chunk(
                 index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes
             )
+        timing.record("item_decode_s", decode_t0)
 
         # We need to request deletion after the latest element has been loaded.
         # Otherwise, this could trigger segmentation fault error depending on the item loader used.
