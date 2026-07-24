@@ -64,6 +64,26 @@ def _is_gil_disabled() -> bool:
     return False
 
 
+def _batch_num_samples(batch: Any, fallback_batch_size: int) -> int:
+    """Best-effort sample count for a collated batch (handles partial last batches)."""
+    if torch.is_tensor(batch):
+        return int(batch.shape[0])
+    if isinstance(batch, dict):
+        for value in batch.values():
+            if torch.is_tensor(value):
+                return int(value.shape[0])
+            if isinstance(value, (list, tuple)):
+                return len(value)
+    if isinstance(batch, (list, tuple)) and batch:
+        first = batch[0]
+        if torch.is_tensor(first):
+            return int(first.shape[0])
+        # Uncollated / custom collate returning a list of samples.
+        if not isinstance(first, (list, tuple, dict)) and not torch.is_tensor(first):
+            return len(batch)
+    return fallback_batch_size
+
+
 def _equal_items(data_1: Any, data_2: Any) -> bool:
     data_1_flattened, _ = tree_flatten(data_1)
     data_2_flattened, _ = tree_flatten(data_2)
@@ -778,7 +798,11 @@ class StreamingDataLoader(DataLoader):
             for batch in batch_iter:
                 t0 = timing.start()
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                self._num_samples_yielded_streaming += self.batch_size
+                # Threaded path can emit a short final batch; count real samples for resume.
+                if self.use_threading:
+                    self._num_samples_yielded_streaming += _batch_num_samples(batch, self.batch_size)
+                else:
+                    self._num_samples_yielded_streaming += self.batch_size
                 timing.record("dataloader_yield_s", t0)
                 yield batch
         else:

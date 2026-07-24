@@ -11,18 +11,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Tests for non-threading next-streaming optimizations (deque, timing, cache bytes).
+
+Threaded ``use_threading`` coverage lives in ``test_threaded_dataloader.py``.
+"""
+
 from __future__ import annotations
 
 import os
 from collections import deque
 from unittest.mock import MagicMock
 
-import pytest
-import torch
-
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
-from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import BaseItemLoader, PyTreeLoader
 from litdata.streaming.reader import PrepareChunksThread
@@ -110,28 +111,3 @@ def test_timing_stats_records_when_enabled(monkeypatch):
     snap = stats.snapshot()
     assert snap["item_decode_s"]["count"] == 1
     assert snap["item_decode_s"]["total_s"] >= 0.0
-
-
-def test_threaded_dataloader_matches_process_items(tmpdir, monkeypatch):
-    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: True)
-    cache_dir = _seed_cache(tmpdir, n_items=48, chunk_size=8)
-    ds = StreamingDataset(input_dir=cache_dir, shuffle=False)
-    loader = StreamingDataLoader(ds, batch_size=4, num_workers=2, use_threading=True)
-    batches = list(loader)
-    flat = [int(x) for batch in batches for x in batch]
-    assert sorted(flat) == list(range(48))
-    assert all(isinstance(b, torch.Tensor) for b in batches)
-
-
-def test_use_threading_requires_nogil(tmpdir, monkeypatch):
-    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: False)
-    cache_dir = _seed_cache(tmpdir, n_items=8, chunk_size=4)
-    ds = StreamingDataset(input_dir=cache_dir, shuffle=False)
-    with pytest.raises(RuntimeError, match="no-GIL"):
-        StreamingDataLoader(ds, batch_size=2, num_workers=2, use_threading=True)
-
-
-def test_use_threading_rejects_non_streaming_dataset(monkeypatch):
-    monkeypatch.setattr("litdata.streaming.dataloader._is_gil_disabled", lambda: True)
-    with pytest.raises(RuntimeError, match="use_threading"):
-        StreamingDataLoader(MagicMock(), use_threading=True)  # type: ignore[arg-type]

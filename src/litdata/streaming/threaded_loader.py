@@ -16,10 +16,15 @@
 Opt-in via ``StreamingDataLoader(..., use_threading=True)`` on a free-threaded
 (no-GIL) Python runtime only. Each thread owns an isolated dataset clone
 (distinct ``_forced_worker_env`` rank), collates in-thread, and hands batches
-through ``queue.SimpleQueue`` — no pickle / process IPC.
+through per-worker queues. The consumer round-robins workers so batch order is
+deterministic.
 
-This is a spike for comparing against PyTorch process workers; it is not the
-default Lightning/PyTorch loading path.
+Prefetch is bounded **per worker** (not globally). A global slot count plus
+in-order round-robin can deadlock when later workers fill every slot while the
+consumer waits on an earlier worker — the same class of bug as an undersized
+in-order DataLoader queue.
+
+This is experimental and not the default Lightning/PyTorch loading path.
 
 Learnings from FFCV (https://github.com/libffcv/ffcv) applied / skipped here
 ---------------------------------------------------------------------------
@@ -84,7 +89,7 @@ def _worker_loop(
     try:
         iterator = iter(dataset)
         while not stop_event.is_set():
-            # Bound in-flight batches across workers (mirrors DataLoader prefetch_factor).
+            # Bound this worker's in-flight batches (mirrors DataLoader prefetch_factor).
             while not slot.acquire(timeout=0.05):
                 if stop_event.is_set():
                     out_queue.put((_SENTINEL, None))
@@ -125,18 +130,22 @@ def iter_threaded_streaming_batches(
     collate_fn: Callable[[list[Any]], Any],
     prefetch_factor: int = 2,
 ) -> Iterator[Any]:
-    """Yield collated batches from ``num_workers`` in-process loader threads."""
+    """Yield collated batches from ``num_workers`` in-process loader threads.
+
+    Batches are consumed in round-robin worker order so interleaving is
+    deterministic for a given ``num_workers`` / shuffle seed.
+    """
     if num_workers < 1:
         raise ValueError("num_workers must be >= 1 for threaded loading")
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1 for threaded loading")
 
     stop_event = threading.Event()
-    out_queue: queue.SimpleQueue = queue.SimpleQueue()
-    # Cap total in-flight batches roughly like ``prefetch_factor * num_workers``.
-    slot = threading.Semaphore(max(prefetch_factor, 1) * num_workers)
+    out_queues: list[queue.SimpleQueue] = [queue.SimpleQueue() for _ in range(num_workers)]
+    # Per-worker bound: avoids in-order deadlock from a single global slot pool.
+    slots = [threading.Semaphore(max(prefetch_factor, 1)) for _ in range(num_workers)]
     threads: list[threading.Thread] = []
-    finished = 0
+    finished = [False] * num_workers
     timing = StreamingTimingStats.instance()
 
     for rank in range(num_workers):
@@ -144,27 +153,36 @@ def iter_threaded_streaming_batches(
         t = threading.Thread(
             target=_worker_loop,
             name=f"litdata-thread-worker-{rank}",
-            args=(worker_ds, batch_size, collate_fn, out_queue, stop_event, slot),
+            args=(worker_ds, batch_size, collate_fn, out_queues[rank], stop_event, slots[rank]),
             daemon=True,
         )
         threads.append(t)
         t.start()
 
     try:
-        while finished < num_workers:
+        next_worker = 0
+        while not all(finished):
+            if finished[next_worker]:
+                next_worker = (next_worker + 1) % num_workers
+                continue
+
             t0 = timing.start()
-            tag, payload = out_queue.get()
+            tag, payload = out_queues[next_worker].get()
             timing.record("thread_queue_get_s", t0)
+
             if tag is _SENTINEL:
-                finished += 1
+                finished[next_worker] = True
                 if isinstance(payload, BaseException):
                     stop_event.set()
                     raise payload
+                next_worker = (next_worker + 1) % num_workers
                 continue
+
             try:
                 yield payload
             finally:
-                slot.release()
+                slots[next_worker].release()
+            next_worker = (next_worker + 1) % num_workers
     finally:
         stop_event.set()
         for t in threads:
