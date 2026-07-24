@@ -332,10 +332,12 @@ class PrepareChunksThread(Thread):
         """Shrink per-worker prefetch so workers × chunks fit in ``max_cache_size``."""
         if not self._slot_budget_enabled():
             return
+        max_cache_size = self._max_cache_size
+        assert max_cache_size is not None  # guarded by _slot_budget_enabled
         chunks = self._config._chunks or []
         mean_chunk = max(1, int(self._config.num_bytes // max(1, len(chunks))))
         n_workers = max(1, self._worker_env.world_size)
-        budget_chunks = max(1, int(self._max_cache_size // mean_chunk))
+        budget_chunks = max(1, int(max_cache_size // mean_chunk))
         per_worker = max(1, budget_chunks // n_workers)
         if per_worker < self._max_pre_download:
             logger.info(

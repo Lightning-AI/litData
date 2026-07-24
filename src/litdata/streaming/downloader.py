@@ -19,7 +19,7 @@ import tempfile
 from abc import ABC
 from contextlib import suppress
 from time import time
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib import parse
 
 from filelock import FileLock, Timeout
@@ -35,6 +35,9 @@ from litdata.constants import (
 from litdata.debugger import _get_log_msg
 from litdata.streaming.client import R2Client, S3Client
 
+if TYPE_CHECKING:
+    from obstore.store import ClientConfig
+
 logger = logging.getLogger("litdata.streaming.downloader")
 
 
@@ -49,7 +52,7 @@ def _obstore_stream_min_chunk_size() -> int:
 
 # Obstore default request timeout is 30s; large chunk GETs under worker
 # contention can exceed that. Speed-neutral, avoids spurious retries.
-_OBSTORE_CLIENT_OPTIONS: dict[str, Any] = {"timeout": "200s"}
+_OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
 
 
 class Downloader(ABC):
