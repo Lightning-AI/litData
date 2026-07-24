@@ -17,10 +17,12 @@ import os
 import struct
 from abc import ABC, abstractmethod
 from collections import defaultdict, namedtuple
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
 from io import BytesIO, FileIO
 from multiprocessing import Queue
+from threading import Event
 from time import sleep, time
 from typing import Any
 
@@ -161,6 +163,8 @@ class BaseItemLoader(ABC):
         self._shift_idx = len(self._data_format) * 4  # each item takes 4 bytes
         self.region_of_interest = region_of_interest
         self._force_download_queue = force_download_queue
+        # Optional provider of per-chunk readiness Events from PrepareChunksThread.
+        self._chunk_ready_provider: Callable[[int], Event] | None = getattr(self, "_chunk_ready_provider", None)
 
         # setup the serializers on restart
         for data_format in self._data_format:
@@ -192,6 +196,55 @@ class BaseItemLoader(ABC):
         co-worker may delete/replace while it is mapped can crash with SIGSEGV (see issues #459,
         #756), so only non-shared chunks are mapped.
         """
+
+    def set_chunk_ready_provider(self, provider: Callable[[int], Event] | None) -> None:
+        """Install a provider of per-chunk readiness Events from the prefetch thread."""
+        self._chunk_ready_provider = provider
+
+    def _wait_until_chunk_ready(self, chunk_index: int, chunk_filepath: str, filesize_bytes: int) -> None:
+        """Block until ``chunk_filepath`` exists and is at least ``filesize_bytes``.
+
+        Prefers the in-process readiness Event (set by ``PrepareChunksThread`` after download /
+        decompress) and falls back to a short filesystem poll so co-worker downloads still work.
+
+        If a readiness Event is already set but the file is missing (e.g. the chunk was deleted
+        after a prior download), clear the Event and sleep so we do not busy-spin and starve the
+        prefetch thread under the GIL.
+        """
+        start_time = time()
+        requested_force_download = False
+
+        while True:
+            if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                return
+
+            if self._chunk_ready_provider is not None:
+                event = self._chunk_ready_provider(chunk_index)
+                signaled = event.wait(timeout=0.1)
+                # Stale signal: chunk was ready once, then deleted / not yet re-published.
+                if signaled and not (
+                    os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
+                ):
+                    event.clear()
+                    sleep(0.1)
+            else:
+                sleep(0.1)
+
+            if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
+                if _DEBUG:
+                    print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
+                self.force_download(chunk_index)
+                requested_force_download = True
+
+            if (time() - start_time) > _MAX_WAIT_TIME:
+                raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        # Prefetch-thread handles are process-local and reattached after worker spawn.
+        state["_chunk_ready_provider"] = None
+        state["_force_download_queue"] = None
+        return state
 
     @functools.lru_cache(maxsize=128)
     def _data_format_to_key(self, data_format: str) -> str:
@@ -333,24 +386,7 @@ class PyTreeLoader(BaseItemLoader):
 
         if chunk_filepath != self._chunk_filepath:
             start_time = time()
-            exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-            requested_force_download = False
-
-            while not exists:
-                sleep(0.1)
-                exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
-                if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
-                    if _DEBUG:
-                        print(
-                            f"[ItemLoader] Requested force download for {chunk_filepath} "
-                            f"at {datetime.now().isoformat()}"
-                        )
-                    self.force_download(chunk_index)
-                    requested_force_download = True
-
-                if (time() - start_time) > _MAX_WAIT_TIME:
-                    raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
+            self._wait_until_chunk_ready(chunk_index, chunk_filepath, filesize_bytes)
 
             if _DEBUG and time() - start_time > 5:
                 print("WAIT TIME", time() - start_time)
@@ -566,8 +602,8 @@ class PyTreeLoader(BaseItemLoader):
         body = b"".join(data)
         return head + body, None
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
+    def __getstate__(self) -> dict[str, Any]:
+        state = super().__getstate__()
         # File handle / memory-map are per-process and not picklable; lazily re-created on the
         # first read in the receiving process.
         state["_open_handle"] = None
@@ -684,22 +720,7 @@ class TokensLoader(BaseItemLoader):
             del self._chunk_filepaths[chunk_filepath]
 
         if chunk_filepath not in self._chunk_filepaths:
-            exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size > filesize_bytes
-
-            start_time = time()
-            requested_force_download = False
-
-            while not exists:
-                sleep(0.1)
-                exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
-                if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
-                    self.force_download(chunk_index)
-                    requested_force_download = True
-
-                if (time() - start_time) > _MAX_WAIT_TIME:
-                    raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
-
+            self._wait_until_chunk_ready(chunk_index, chunk_filepath, filesize_bytes)
             self._chunk_filepaths[chunk_filepath] = True
 
         self._load_chunk(chunk_index, chunk_filepath)

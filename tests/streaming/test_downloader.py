@@ -51,6 +51,14 @@ def test_get_downloader(tmpdir):
     unregister_downloader("dummy://")
 
 
+def _write_download_target(*args, **kwargs):
+    """Side effect for mocked cloud downloads that write to a local path argument."""
+    # boto: (bucket, key, filename, ...); gcp blob: (filename,)
+    path = args[2] if len(args) >= 3 else args[0]
+    with open(path, "wb") as f:
+        f.write(b"ok")
+
+
 @mock.patch("litdata.streaming.downloader.R2Client")
 def test_r2_downloader_fast(r2_client_mock, tmpdir):
     # Mock the R2Client
@@ -58,13 +66,16 @@ def test_r2_downloader_fast(r2_client_mock, tmpdir):
     r2_client_mock.return_value = r2_client_instance
 
     # Mock the download_file method to avoid credential errors
-    r2_client_instance.client.download_file = MagicMock()
+    r2_client_instance.client.download_file = MagicMock(side_effect=_write_download_target)
 
     downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
-    downloader.download_file("r2://random_bucket/a.txt", os.path.join(tmpdir, "a.txt"))
+    local_filepath = os.path.join(tmpdir, "a.txt")
+    downloader.download_file("r2://random_bucket/a.txt", local_filepath)
 
-    # Verify R2Client download_file was called
+    # Verify R2Client download_file was called and the final path was published atomically
     r2_client_instance.client.download_file.assert_called_once()
+    assert os.path.exists(local_filepath)
+    assert r2_client_instance.client.download_file.call_args.args[2].startswith(local_filepath + ".tmp.")
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
@@ -76,7 +87,7 @@ def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
     r2_client_mock.return_value = r2_client_instance
 
     # Mock the download_file method to avoid credential errors
-    r2_client_instance.client.download_file = MagicMock()
+    r2_client_instance.client.download_file = MagicMock(side_effect=_write_download_target)
 
     # Initialize the R2Downloader with storage options
     downloader = R2Downloader("r2://random_bucket", str(tmpdir), [], storage_options)
@@ -143,7 +154,12 @@ def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     mock_client = MagicMock()
     mock_bucket = MagicMock()
     mock_blob = MagicMock()
-    mock_blob.download_to_filename = MagicMock()
+
+    def _write_ok(path: str) -> None:
+        with open(path, "wb") as f:
+            f.write(b"ok")
+
+    mock_blob.download_to_filename = MagicMock(side_effect=_write_ok)
 
     # Patch the storage client to return the mock client
     google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
@@ -162,7 +178,8 @@ def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     google_mock.cloud.storage.Client.assert_called_with(**storage_options)
     mock_client.bucket.assert_called_with("random_bucket")
     mock_bucket.blob.assert_called_with("a.txt")
-    mock_blob.download_to_filename.assert_called_with(local_filepath)
+    assert mock_blob.download_to_filename.call_args.args[0].startswith(local_filepath + ".tmp.")
+    assert os.path.exists(local_filepath)
 
 
 @mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)

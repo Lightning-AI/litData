@@ -264,37 +264,58 @@ class ChunksConfig:
         if os.path.exists(target_local_chunkpath):
             return
 
-        # Ensure that the compressed file exists and is fully downloaded
+        # Wait until either the decompressed target appears (another worker finished) or the
+        # compressed source exists. Cloud downloaders publish the compressed path atomically, so
+        # existence of that path means the download is complete — do NOT use chunk_size (item
+        # count) as a byte threshold.
         start_time = time()
-        assert self._chunks is not None
-
-        filename = os.path.basename(local_chunkpath)
-        chunk_index = self._get_chunk_index_from_filename(filename)
-        chunk_bytes = self._chunks[chunk_index]["chunk_size"]
-        exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
-        while not exists:
+        while not os.path.exists(local_chunkpath) and not os.path.exists(target_local_chunkpath):
             sleep(0.1)
-            # Return if the actual file exists
-            if os.path.exists(target_local_chunkpath):
-                return
-            # find the local compressed file
-            exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
-
             if (time() - start_time) > _MAX_WAIT_TIME:
                 raise FileNotFoundError(f"The {local_chunkpath} hasn't been found.")
 
-        with open(local_chunkpath, "rb") as f:
-            data = f.read()
+        if os.path.exists(target_local_chunkpath):
+            return
 
-        # delete the files only if they were downloaded
-        if self._downloader is not None:
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(local_chunkpath)
+        decompress_lock = target_local_chunkpath + ".decompress.lock"
+        try:
+            with FileLock(decompress_lock, timeout=_MAX_WAIT_TIME):
+                if os.path.exists(target_local_chunkpath):
+                    return
 
-        data = self._compressor.decompress(data)
+                with open(local_chunkpath, "rb") as f:
+                    data = f.read()
 
-        with open(target_local_chunkpath, "wb") as f:
-            f.write(data)
+                # delete the compressed file only if it was downloaded
+                if self._downloader is not None:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(local_chunkpath)
+
+                data = self._compressor.decompress(data)
+
+                assert self._chunks is not None
+                filename = os.path.basename(local_chunkpath)
+                chunk_index = self._get_chunk_index_from_filename(filename)
+                expected_bytes = int(self._chunks[chunk_index]["chunk_bytes"])
+
+                tmp_path = f"{target_local_chunkpath}.tmp.{os.getpid()}"
+                try:
+                    with open(tmp_path, "wb") as f:
+                        f.write(data)
+                    if os.stat(tmp_path).st_size < expected_bytes:
+                        raise OSError(
+                            f"Decompressed chunk {target_local_chunkpath} is smaller than expected "
+                            f"({os.stat(tmp_path).st_size} < {expected_bytes})."
+                        )
+                    os.replace(tmp_path, target_local_chunkpath)
+                except Exception:
+                    with contextlib.suppress(FileNotFoundError, PermissionError):
+                        os.remove(tmp_path)
+                    raise
+        finally:
+            # FileLock leaves its lock file behind; remove after release.
+            with contextlib.suppress(Exception):
+                os.remove(decompress_lock)
 
     @property
     def intervals(self) -> list[Interval]:

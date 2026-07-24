@@ -87,6 +87,16 @@ class Downloader(ABC):
     def download_file(self, remote_chunkpath: str, local_chunkpath: str) -> None:
         pass
 
+    @staticmethod
+    def _temp_download_path(local_filepath: str) -> str:
+        """Return a process-unique temp path used for atomic downloads."""
+        return f"{local_filepath}.tmp.{os.getpid()}"
+
+    @staticmethod
+    def _atomic_replace(tmp_path: str, local_filepath: str) -> None:
+        """Publish a completed download by atomically replacing the destination path."""
+        os.replace(tmp_path, local_filepath)
+
     def download_bytes(self, remote_chunkpath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         """Download a specific range of bytes from the remote file.
 
@@ -141,13 +151,22 @@ class S3Downloader(Downloader):
 
             if not os.path.exists(local_filepath):
                 # Issue: https://github.com/boto/boto3/issues/3113
-                self._client.client.download_file(
-                    obj.netloc,
-                    obj.path.lstrip("/"),
-                    local_filepath,
-                    ExtraArgs=extra_args,
-                    Config=TransferConfig(use_threads=False),
-                )
+                # Download to a temp path then atomically replace so co-workers never observe a
+                # partial final file.
+                tmp_path = self._temp_download_path(local_filepath)
+                try:
+                    self._client.client.download_file(
+                        obj.netloc,
+                        obj.path.lstrip("/"),
+                        tmp_path,
+                        ExtraArgs=extra_args,
+                        Config=TransferConfig(use_threads=False),
+                    )
+                    self._atomic_replace(tmp_path, local_filepath)
+                except Exception:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(tmp_path)
+                    raise
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)
@@ -252,13 +271,20 @@ class R2Downloader(Downloader):
             if not os.path.exists(local_filepath):
                 # Issue: https://github.com/boto/boto3/issues/3113
                 t0 = time()
-                self._client.client.download_file(
-                    obj.netloc,
-                    obj.path.lstrip("/"),
-                    local_filepath,
-                    ExtraArgs=extra_args,
-                    Config=TransferConfig(use_threads=False),
-                )
+                tmp_path = self._temp_download_path(local_filepath)
+                try:
+                    self._client.client.download_file(
+                        obj.netloc,
+                        obj.path.lstrip("/"),
+                        tmp_path,
+                        ExtraArgs=extra_args,
+                        Config=TransferConfig(use_threads=False),
+                    )
+                    self._atomic_replace(tmp_path, local_filepath)
+                except Exception:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(tmp_path)
+                    raise
                 if _DEBUG:
                     print("DOWNLOAD TIME", time() - t0)
 
@@ -372,7 +398,14 @@ class GCPDownloader(Downloader):
             client = storage.Client(**self._storage_options)
             bucket = client.bucket(bucket_name)
             blob = bucket.blob(key)
-            blob.download_to_filename(local_filepath)
+            tmp_path = self._temp_download_path(local_filepath)
+            try:
+                blob.download_to_filename(tmp_path)
+                self._atomic_replace(tmp_path, local_filepath)
+            except Exception:
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(tmp_path)
+                raise
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         from google.cloud import storage
@@ -480,9 +513,16 @@ class AzureDownloader(Downloader):
 
             service = BlobServiceClient(**self._storage_options)
             blob_client = service.get_blob_client(container=obj.netloc, blob=obj.path.lstrip("/"))
-            with open(local_filepath, "wb") as download_file:
-                blob_data = blob_client.download_blob()
-                blob_data.readinto(download_file)
+            tmp_path = self._temp_download_path(local_filepath)
+            try:
+                with open(tmp_path, "wb") as download_file:
+                    blob_data = blob_client.download_blob()
+                    blob_data.readinto(download_file)
+                self._atomic_replace(tmp_path, local_filepath)
+            except Exception:
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(tmp_path)
+                raise
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from Azure Blob Storage directly to a file-like object."""

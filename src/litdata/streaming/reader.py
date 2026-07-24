@@ -18,7 +18,7 @@ import warnings
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Any
 
 import numpy as np
@@ -77,6 +77,10 @@ class PrepareChunksThread(Thread):
         # TODO: Find a real fix to this problem
         self._force_download_queue: Queue = Queue()
 
+        # Per-chunk readiness signals for the in-process item-loader wait loop.
+        self._chunk_ready: dict[int, Event] = {}
+        self._chunk_ready_lock = Lock()
+
         self._rank = rank
 
         # Check whether a dataset slice fits on the node
@@ -87,6 +91,26 @@ class PrepareChunksThread(Thread):
             print(f"Delete chunks when used: {self._delete_chunks_when_processed}")
 
         self._has_exited = False
+
+    def get_ready_event(self, chunk_index: int) -> Event:
+        """Return (creating if needed) the readiness event for ``chunk_index``."""
+        with self._chunk_ready_lock:
+            event = self._chunk_ready.get(chunk_index)
+            if event is None:
+                event = Event()
+                self._chunk_ready[chunk_index] = event
+            return event
+
+    def mark_chunk_ready(self, chunk_index: int) -> None:
+        """Signal that ``chunk_index`` is fully downloaded (and decompressed if needed)."""
+        self.get_ready_event(chunk_index).set()
+
+    def clear_chunk_ready(self, chunk_index: int) -> None:
+        """Clear readiness after a chunk is deleted so waiters block for the next download."""
+        with self._chunk_ready_lock:
+            event = self._chunk_ready.get(chunk_index)
+            if event is not None:
+                event.clear()
 
     def download(self, chunk_indexes: list[int]) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
@@ -171,6 +195,7 @@ class PrepareChunksThread(Thread):
         except (FileNotFoundError, PermissionError) as e:
             logger.debug(f"_apply_delete({chunk_index}): could not remove data file: {e}")
 
+        self.clear_chunk_ready(chunk_index)
         self._cleanup_download_locks(chunk_filepath, chunk_index)
 
     def stop(self) -> None:
@@ -180,13 +205,10 @@ class PrepareChunksThread(Thread):
     def force_stop(self) -> None:
         self._force_stop_event.set()
 
-    def _maybe_delete_chunks(self) -> None:
-        reached_pre_download = self._pre_download_counter == self._max_pre_download
-
-        # we have already pre-downloaded some chunks, we just need to wait for them to be processed.
-        chunk_index = _get_from_queue(
-            self._to_delete_queue, timeout=_LONG_DEFAULT_TIMEOUT if reached_pre_download else _DEFAULT_TIMEOUT
-        )
+    def _maybe_delete_chunks(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        # When the prefetch buffer is full we still use a short timeout so force-download
+        # requests are not starved behind a multi-second delete-queue wait.
+        chunk_index = _get_from_queue(self._to_delete_queue, timeout=timeout)
 
         if chunk_index is None:
             return
@@ -214,8 +236,8 @@ class PrepareChunksThread(Thread):
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
         self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
-    def _force_download(self) -> None:
-        chunk_index = _get_from_queue(self._force_download_queue)
+    def _force_download(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        chunk_index = _get_from_queue(self._force_download_queue, timeout=timeout)
         if chunk_index is None:
             return
 
@@ -227,6 +249,7 @@ class PrepareChunksThread(Thread):
                 # request was processed, so double check that it still needs
                 # downloading before we delete it.
                 if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                    self.mark_chunk_ready(chunk_index)
                     return
 
                 # force apply deletion before redownload
@@ -238,6 +261,7 @@ class PrepareChunksThread(Thread):
                     )
 
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
+            self.mark_chunk_ready(chunk_index)
         except Timeout:
             # Another worker is actively downloading this chunk. Defer to them.
             return
@@ -256,18 +280,27 @@ class PrepareChunksThread(Thread):
                 self._has_exited = True
                 return
 
-            self._force_download()
+            can_download_more = self._pre_download_counter < self._max_pre_download
+            # Non-blocking force/delete polls while download work can still proceed, so we do not
+            # pay ~0.2s of empty-queue sleep per chunk. When the prefetch buffer is full, keep a
+            # short timeout so force-download requests are not blocked behind a long delete wait.
+            side_timeout = 0.0 if can_download_more else _DEFAULT_TIMEOUT
 
-            if self._pre_download_counter < self._max_pre_download:
+            self._force_download(timeout=side_timeout)
+
+            if can_download_more:
                 chunk_index = _get_from_queue(self._to_download_queue)
                 if chunk_index == _END_TOKEN:
                     if self._max_cache_size:
-                        self._maybe_delete_chunks()
+                        self._maybe_delete_chunks(timeout=_DEFAULT_TIMEOUT)
                     self._has_exited = True
                     return
 
                 if chunk_index is not None:
                     self._config.download_chunk_from_index(chunk_index)
+                    chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+                    if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+                        self.mark_chunk_ready(chunk_index)
 
                     # Preload item if possible to gain some time but only
                     # if this is one of the pre-downloaded chunk
@@ -278,7 +311,7 @@ class PrepareChunksThread(Thread):
                     self._pre_download_counter += 1
 
             if self._max_cache_size:
-                self._maybe_delete_chunks()
+                self._maybe_delete_chunks(timeout=side_timeout)
 
 
 # The BinaryReader operates as the inverse of the data optimization process:
@@ -428,8 +461,9 @@ class BinaryReader:
                     self._max_pre_download,
                     self._rank,
                 )
-                # Attach the force download queue
+                # Attach the force download queue and readiness signals used by the item loader wait loop.
                 self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
+                self._item_loader.set_chunk_ready_provider(self._prepare_thread.get_ready_event)
                 self._prepare_thread.start()
                 if index.chunk_indexes:
                     self._prepare_thread.download(index.chunk_indexes)
