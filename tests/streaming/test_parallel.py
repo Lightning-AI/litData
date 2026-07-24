@@ -838,7 +838,7 @@ def test_parallel_infinite_restore_cleared_on_early_break(tmp_path_factory):
     Without a ``finally`` around ``StreamingDataLoader.__iter__``, breaking out left
     ``restore=True``. The following epoch then skipped reset and
     ``_StreamingMultiProcessingDataLoaderIter`` could under-prime workers, hanging on
-    ``_data_queue.get`` (CI flake for ``length=inf``, ``resume=False``, ``num_workers>0``).
+    ``_data_queue.get`` (seen in CI for ``length=inf``, ``resume=False``, ``num_workers>0``).
     """
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, parlen=float("inf"), len1=10, len2=10, batch_size=1, num_workers=0, shuffle=True, resume=False
