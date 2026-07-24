@@ -46,62 +46,101 @@ Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx"
 logger = logging.getLogger("litdata.streaming.item_loader")
 
 
+# Module-level unflatten callables (not nested closures) so item loaders remain picklable for
+# DataLoader workers under the ``spawn`` start method.
+
+
+class _LeafUnflatten:
+    __slots__ = ()
+
+    def __call__(self, leaves: list[Any]) -> Any:
+        return leaves[0]
+
+
+class _DictOfLeavesUnflatten:
+    __slots__ = ("keys",)
+
+    def __init__(self, keys: tuple[Any, ...]) -> None:
+        self.keys = keys
+
+    def __call__(self, leaves: list[Any]) -> dict[Any, Any]:
+        return dict(zip(self.keys, leaves))
+
+
+class _ListOfLeavesUnflatten:
+    __slots__ = ()
+
+    def __call__(self, leaves: list[Any]) -> list[Any]:
+        return list(leaves)
+
+
+class _TupleOfLeavesUnflatten:
+    __slots__ = ()
+
+    def __call__(self, leaves: list[Any]) -> tuple[Any, ...]:
+        return tuple(leaves)
+
+
+class _NestedUnflatten:
+    __slots__ = ("child_leaf_counts", "child_runners", "context", "unflatten_fn")
+
+    def __init__(
+        self,
+        unflatten_fn: Any,
+        child_runners: list[Any],
+        child_leaf_counts: list[int],
+        context: Any,
+    ) -> None:
+        self.unflatten_fn = unflatten_fn
+        self.child_runners = child_runners
+        self.child_leaf_counts = child_leaf_counts
+        self.context = context
+
+    def __call__(self, leaves: list[Any]) -> Any:
+        values = []
+        start = 0
+        for runner, count in zip(self.child_runners, self.child_leaf_counts):
+            end = start + count
+            # Children that are themselves leaves can index directly; nested children get a slice.
+            if count == 1 and isinstance(runner, _LeafUnflatten):
+                values.append(leaves[start])
+            else:
+                values.append(runner(leaves[start:end]))
+            start = end
+        return self.unflatten_fn(values, self.context)
+
+
+_LEAF_UNFLATTEN = _LeafUnflatten()
+_LIST_OF_LEAVES_UNFLATTEN = _ListOfLeavesUnflatten()
+_TUPLE_OF_LEAVES_UNFLATTEN = _TupleOfLeavesUnflatten()
+
+
 def _compile_treespec_unflatten(spec: TreeSpec) -> Any:
-    """Compile a ``TreeSpec`` into a fast ``leaves -> tree`` callable.
+    """Compile a ``TreeSpec`` into a fast, picklable ``leaves -> tree`` callable.
 
     The stock ``tree_unflatten`` is recursive and slices the leaves list at every node, which
     dominates the per-item cost for typical nested samples. Compiling once per dataset replaces
     that with a tight index walk over the flat leaf list.
     """
     if spec.is_leaf():
-
-        def _leaf(leaves: list[Any]) -> Any:
-            return leaves[0]
-
-        return _leaf
+        return _LEAF_UNFLATTEN
 
     # Fast paths for the shapes that dominate StreamingDataset workloads.
     children = spec.children_specs
     if all(child.is_leaf() for child in children):
         if spec.type is dict:
-            keys = tuple(spec.context)
-
-            def _dict_of_leaves(leaves: list[Any]) -> dict[Any, Any]:
-                return dict(zip(keys, leaves))
-
-            return _dict_of_leaves
+            return _DictOfLeavesUnflatten(tuple(spec.context))
         if spec.type is list:
-
-            def _list_of_leaves(leaves: list[Any]) -> list[Any]:
-                return list(leaves)
-
-            return _list_of_leaves
+            return _LIST_OF_LEAVES_UNFLATTEN
         if spec.type is tuple:
+            return _TUPLE_OF_LEAVES_UNFLATTEN
 
-            def _tuple_of_leaves(leaves: list[Any]) -> tuple[Any, ...]:
-                return tuple(leaves)
-
-            return _tuple_of_leaves
-
-    unflatten_fn = SUPPORTED_NODES[spec.type].unflatten_fn
-    child_runners = [_compile_treespec_unflatten(child) for child in children]
-    child_leaf_counts = [child.num_leaves for child in children]
-    context = spec.context
-
-    def _nested(leaves: list[Any]) -> Any:
-        values = []
-        start = 0
-        for runner, count in zip(child_runners, child_leaf_counts):
-            end = start + count
-            # Children that are themselves leaves can index directly; nested children get a slice.
-            if count == 1 and runner.__name__ == "_leaf":
-                values.append(leaves[start])
-            else:
-                values.append(runner(leaves[start:end]))
-            start = end
-        return unflatten_fn(values, context)
-
-    return _nested
+    return _NestedUnflatten(
+        SUPPORTED_NODES[spec.type].unflatten_fn,
+        [_compile_treespec_unflatten(child) for child in children],
+        [child.num_leaves for child in children],
+        spec.context,
+    )
 
 
 class BaseItemLoader(ABC):

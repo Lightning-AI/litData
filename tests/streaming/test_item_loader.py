@@ -137,6 +137,25 @@ def test_compiled_unflatten_matches_pytree(tmpdir):
     assert loader._unflatten is not None
 
 
+def test_compiled_unflatten_is_picklable_for_dataloader_workers(tmpdir):
+    """Compiled unflatten must survive spawn pickling (used by DataLoader workers)."""
+    cache = Cache(str(tmpdir), chunk_size=5)
+    for i in range(5):
+        cache[i] = {"i": i, "x": float(i)}
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(str(tmpdir))
+    _ = dataset[0]
+    loader = dataset.cache._reader._item_loader
+    assert loader._unflatten is not None
+
+    restored = pickle.loads(pickle.dumps(loader))  # noqa: S301
+    assert restored._unflatten is not None
+    leaves = [1, 2.0]
+    assert restored._unflatten(leaves) == loader._unflatten(leaves) == {"i": 1, "x": 2.0}
+
+
 def test_pytree_loader_mmap_matches_file_reads(tmpdir):
     """Mmap and unbuffered file reads must deserialize to identical items."""
     data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=7)
