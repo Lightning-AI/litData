@@ -14,6 +14,7 @@ import functools
 import logging
 import mmap
 import os
+import struct
 from abc import ABC, abstractmethod
 from collections import defaultdict, namedtuple
 from copy import deepcopy
@@ -37,12 +38,70 @@ from litdata.constants import (
 )
 from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.serializers import Serializer
-from litdata.utilities._pytree import PyTree, tree_unflatten
+from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 
 Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx", "chunk_end"])
 
 logger = logging.getLogger("litdata.streaming.item_loader")
+
+
+def _compile_treespec_unflatten(spec: TreeSpec) -> Any:
+    """Compile a ``TreeSpec`` into a fast ``leaves -> tree`` callable.
+
+    The stock ``tree_unflatten`` is recursive and slices the leaves list at every node, which
+    dominates the per-item cost for typical nested samples. Compiling once per dataset replaces
+    that with a tight index walk over the flat leaf list.
+    """
+    if spec.is_leaf():
+
+        def _leaf(leaves: list[Any]) -> Any:
+            return leaves[0]
+
+        return _leaf
+
+    # Fast paths for the shapes that dominate StreamingDataset workloads.
+    children = spec.children_specs
+    if all(child.is_leaf() for child in children):
+        if spec.type is dict:
+            keys = tuple(spec.context)
+
+            def _dict_of_leaves(leaves: list[Any]) -> dict[Any, Any]:
+                return dict(zip(keys, leaves))
+
+            return _dict_of_leaves
+        if spec.type is list:
+
+            def _list_of_leaves(leaves: list[Any]) -> list[Any]:
+                return list(leaves)
+
+            return _list_of_leaves
+        if spec.type is tuple:
+
+            def _tuple_of_leaves(leaves: list[Any]) -> tuple[Any, ...]:
+                return tuple(leaves)
+
+            return _tuple_of_leaves
+
+    unflatten_fn = SUPPORTED_NODES[spec.type].unflatten_fn
+    child_runners = [_compile_treespec_unflatten(child) for child in children]
+    child_leaf_counts = [child.num_leaves for child in children]
+    context = spec.context
+
+    def _nested(leaves: list[Any]) -> Any:
+        values = []
+        start = 0
+        for runner, count in zip(child_runners, child_leaf_counts):
+            end = start + count
+            # Children that are themselves leaves can index directly; nested children get a slice.
+            if count == 1 and runner.__name__ == "_leaf":
+                values.append(leaves[start])
+            else:
+                values.append(runner(leaves[start:end]))
+            start = end
+        return unflatten_fn(values, context)
+
+    return _nested
 
 
 class BaseItemLoader(ABC):
@@ -74,6 +133,14 @@ class BaseItemLoader(ABC):
         # hot path avoids a dict lookup per leaf and a config lookup per item.
         self._serializers_list = [self._serializers[data_format] for data_format in self._data_format]
         self._data_spec = self._config["data_spec"]
+        # Compile a specialized unflatten for this dataset's fixed treespec. Falls back to the
+        # stock pytree path only when there is no data_spec (e.g. some parquet/MDS shapes).
+        self._unflatten = (
+            _compile_treespec_unflatten(self._data_spec) if isinstance(self._data_spec, TreeSpec) else None
+        )
+        # Fixed size-header layout: one little-endian uint32 per leaf.
+        # Keep a format string (pickle-friendly) rather than a ``struct.Struct`` instance.
+        self._sizes_fmt = "<" + "I" * len(self._data_format) if self._data_format else None
 
     def force_download(self, chunk_index: int) -> None:
         if self._force_download_queue:
@@ -149,11 +216,11 @@ class PyTreeLoader(BaseItemLoader):
         self._decrypted_chunks: dict[int, bytes] = {}
         self._open_handle: FileIO | None = None
         # Memory-map + cached offset table for the current chunk, used only for chunks that are
-        # safe to map (non-shared, unencrypted). Per-item reads then become memory slices instead
+        # safe to map (non-shared, unencrypted). Per-item reads then become one mmap slice instead
         # of two `seek`+`read` syscalls on the unbuffered handle.
         self._mmap: mmap.mmap | None = None
-        self._mmap_view: memoryview | None = None
-        self._offsets: np.ndarray | None = None
+        # Owned copy of the chunk offset table as plain ints (not a view into the mmap).
+        self._offsets: list[int] | None = None
         self._mmap_allowed_chunks: set[int] = set()
 
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
@@ -264,11 +331,13 @@ class PyTreeLoader(BaseItemLoader):
 
         if self._config.get("encryption"):
             data = self._load_encrypted_data(chunk_filepath, chunk_index, offset, encryption)
-        elif self._mmap_view is not None:
+        elif self._mmap is not None:
             # `offset` points at the item's start entry in the offset table (byte (i+1)*4 holds
             # entry i), so this item's table index is `offset // 4 - 1`.
+            # `mmap[start:end]` returns a fresh `bytes` object directly — no memoryview hop.
+            assert self._offsets is not None
             table_idx = offset // 4 - 1
-            data = bytes(self._mmap_view[int(self._offsets[table_idx]) : int(self._offsets[table_idx + 1])])
+            data = self._mmap[self._offsets[table_idx] : self._offsets[table_idx + 1]]
         else:
             assert self._open_handle
             # load the data from raw bytes using the offset for the item we want to load
@@ -349,31 +418,40 @@ class PyTreeLoader(BaseItemLoader):
     def deserialize(self, raw_item_data: bytes) -> "PyTree":
         """Deserialize the raw bytes into their python equivalent."""
         idx = self._shift_idx
-        sizes = np.frombuffer(raw_item_data[:idx], np.uint32)
+        sizes = struct.unpack_from(self._sizes_fmt, raw_item_data, 0) if self._sizes_fmt is not None else ()
         data = []
         for size, serializer in zip(sizes, self._serializers_list):
             data_bytes = raw_item_data[idx : idx + size]
             data.append(serializer.deserialize(data_bytes))
             idx += size
+        if self._unflatten is not None:
+            return self._unflatten(data)
         return tree_unflatten(data, self._data_spec)
 
     def _open_chunk_mmap(self, chunk_filepath: str, chunk_index: int) -> None:
         """Memory-map a chunk and cache its offset table (``uint32[num_items + 1]``)."""
         handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
         chunk_mmap = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
-        num_items = self._chunks[chunk_index]["chunk_size"]
-        # Offset table follows the 4-byte ``num_items`` header; this is a zero-copy view.
-        self._offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=num_items + 1, offset=4)
+        # Prefer the on-disk header over index.json so a mismatched/stale index cannot
+        # silently over-read the offset table into the item payload.
+        header_num_items = int(np.frombuffer(chunk_mmap, dtype=np.uint32, count=1, offset=0)[0])
+        index_num_items = int(self._chunks[chunk_index]["chunk_size"])
+        if header_num_items != index_num_items:
+            chunk_mmap.close()
+            handle.close()
+            raise RuntimeError(
+                f"Chunk {chunk_index} header item count ({header_num_items}) does not match "
+                f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
+            )
+        # Materialize the offset table as a Python list so per-item indexing is cheap and the
+        # mmap has no exported buffers left (avoids BufferError on close).
+        self._offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
         self._open_handle = handle
         self._mmap = chunk_mmap
-        self._mmap_view = memoryview(chunk_mmap)
 
     def _close_open_chunk(self) -> None:
         """Release the memory-map / file handle for the currently open chunk (if any)."""
         self._offsets = None
-        if self._mmap_view is not None:
-            self._mmap_view.release()
-            self._mmap_view = None
         if self._mmap is not None:
             self._mmap.close()
             self._mmap = None
@@ -456,9 +534,16 @@ class PyTreeLoader(BaseItemLoader):
         state["_open_handle"] = None
         state["_chunk_filepath"] = None
         state["_mmap"] = None
-        state["_mmap_view"] = None
         state["_offsets"] = None
+        # Compiled unflatten closures aren't picklable; rebuild after unpickle.
+        state["_unflatten"] = None
         return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        data_spec = getattr(self, "_data_spec", None)
+        if isinstance(data_spec, TreeSpec):
+            self._unflatten = _compile_treespec_unflatten(data_spec)
 
 
 class TokensLoader(BaseItemLoader):

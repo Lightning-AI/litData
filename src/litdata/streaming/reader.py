@@ -522,7 +522,10 @@ class BinaryReader:
             # 2. Log the "Begin" event for the NEW chunk.
             logger.debug(_get_log_msg({"name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}", "ph": "B"}))
 
-            # Close the memory-mapped file for the last chunk index
+            # Close the memory-mapped file for the last chunk index.
+            # PyTreeLoader is intentionally excluded: it keeps only one open chunk and already
+            # unmaps the previous one inside `load_item_from_chunk` before this point. Calling
+            # `close` here would unmap the newly opened chunk (its `close` ignores chunk_index).
             if isinstance(self._item_loader, (TokensLoader, ParquetLoader)) and self._last_chunk_index is not None:
                 self._item_loader.close(self._last_chunk_index)
 

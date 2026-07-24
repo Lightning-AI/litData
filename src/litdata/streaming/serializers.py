@@ -469,11 +469,22 @@ class NumericSerializer:
     def __init__(self, dtype: type) -> None:
         self.dtype = dtype
         self.size = self.dtype().nbytes
+        # Prefer ``struct`` on the hot deserialize path — it avoids a numpy array allocation
+        # for every scalar leaf. Store the format string (not a ``struct.Struct``) so the
+        # serializer stays deepcopy/pickle friendly for DataLoader workers.
+        if dtype is np.int64:
+            self._struct_fmt = "<q"
+        elif dtype is np.float64:
+            self._struct_fmt = "<d"
+        else:
+            self._struct_fmt = None
 
     def serialize(self, obj: Any) -> tuple[bytes, str | None]:
         return self.dtype(obj).tobytes(), None
 
     def deserialize(self, data: bytes) -> Any:
+        if self._struct_fmt is not None:
+            return struct.unpack(self._struct_fmt, data)[0]
         return np.frombuffer(data, self.dtype)[0]
 
 
