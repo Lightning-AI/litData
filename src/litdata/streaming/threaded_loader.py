@@ -26,6 +26,21 @@ in-order DataLoader queue.
 
 This is experimental and not the default Lightning/PyTorch loading path.
 
+Why not asyncio for this loader
+-------------------------------
+Asyncio is a poor fit as a replacement for ``use_threading``:
+
+* Training loops are synchronous (``for batch in loader``); a fully async
+  stack would need a second API or a sync façade that hides the event loop.
+* The win here is avoiding **process IPC** while parallelizing CPU decode /
+  collate. On free-threaded CPython, OS threads already do that; under the
+  GIL, ``asyncio.to_thread`` collapses back to threads with extra scheduling.
+* Most of the read path (item loaders, mmap, FileLock, serializers) is sync.
+
+IO concurrency belongs in chunk prefetch (see ``async_prefetch`` /
+``PrepareChunksThread``), not in a fully async DataLoader.
+asyncio is **not** exposed as ``use_asyncio=`` on ``StreamingDataLoader``.
+
 Learnings from FFCV (https://github.com/libffcv/ffcv) applied / skipped here
 ---------------------------------------------------------------------------
 Adopted (lightweight):

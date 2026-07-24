@@ -641,7 +641,8 @@ class StreamingDataLoader(DataLoader):
             PyTorch process workers, avoiding pickle/IPC for collated batches. Requires a free-threaded
             (no-GIL) Python runtime (``sys._is_gil_enabled()`` is False) and ``StreamingDataset``
             (not Combined/Parallel). When ``True``, ``num_workers`` is the thread count and process
-            workers are disabled. (default: ``False``).
+            workers are disabled. There is no asyncio / ``use_asyncio`` loader mode — see
+            ``threaded_loader`` module docs. (default: ``False``).
 
     """
 

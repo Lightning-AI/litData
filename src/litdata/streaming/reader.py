@@ -27,6 +27,7 @@ from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
 from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.streaming.async_prefetch import async_chunk_prefetch_enabled, download_chunk_indexes_concurrently
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
@@ -52,7 +53,17 @@ _CACHE_SIZE_RECONCILE_EVERY = 8
 
 
 class PrepareChunksThread(Thread):
-    """This thread is responsible to download the chunks associated to a given worker."""
+    """Download chunks for a worker ahead of the reader.
+
+    Default path downloads one chunk at a time (sync). With
+    ``LITDATA_ASYNC_CHUNK_PREFETCH=1``, pending indexes are drained up to the
+    prefetch budget and downloaded concurrently via
+    :mod:`litdata.streaming.async_prefetch` (``asyncio.gather`` on
+    ``adownload_fileobj`` or ``asyncio.to_thread`` around sync downloads).
+
+    Asyncio is scoped to **remote chunk IO overlap** only — not a fully async
+    ``StreamingDataLoader`` / training loop.
+    """
 
     def __init__(
         self,
@@ -319,6 +330,54 @@ class PrepareChunksThread(Thread):
         # Avoid downloading too many chunks in advance at the risk of over using the disk space
         self._pre_download_counter += 1
 
+    def _finalize_downloaded_chunk(self, chunk_index: int, *, existed: bool) -> None:
+        """Mark ready / account cache / optionally pre-load after a chunk download."""
+        chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+            self.mark_chunk_ready(chunk_index)
+        if not existed:
+            self._note_chunk_added(chunk_index)
+        if self._pre_download_counter > 0:
+            self._pre_load_chunk(chunk_index)
+        self._pre_download_counter += 1
+
+    def _download_chunk_indexes(self, chunk_indexes: list[int]) -> None:
+        """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
+        if not chunk_indexes:
+            return
+        existed = {
+            idx: os.path.exists(self._config[ChunkedIndex(index=-1, chunk_index=idx)][0]) for idx in chunk_indexes
+        }
+        t0 = self._timing.start()
+        for chunk_index in chunk_indexes:
+            logger.debug(
+                _get_log_msg(
+                    {
+                        "name": f"prefetch_download_chunk_{chunk_index}",
+                        "ph": "B",
+                        "cname": ChromeTraceColors.TEAL,
+                    }
+                )
+            )
+        if async_chunk_prefetch_enabled() and len(chunk_indexes) > 1:
+            download_chunk_indexes_concurrently(self._config, chunk_indexes)
+        else:
+            for chunk_index in chunk_indexes:
+                self._config.download_chunk_from_index(chunk_index)
+        for chunk_index in chunk_indexes:
+            logger.debug(
+                _get_log_msg(
+                    {
+                        "name": f"prefetch_download_chunk_{chunk_index}",
+                        "ph": "E",
+                        "cname": ChromeTraceColors.TEAL,
+                    }
+                )
+            )
+        self._timing.record("chunk_download_s", t0)
+        for chunk_index in chunk_indexes:
+            self._finalize_downloaded_chunk(chunk_index, existed=existed[chunk_index])
+
     def run(self) -> None:
         while True:
             if self._force_stop_event.is_set():
@@ -342,42 +401,22 @@ class PrepareChunksThread(Thread):
                     return
 
                 if chunk_index is not None:
-                    chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                    existed = os.path.exists(chunk_filepath)
-                    t0 = self._timing.start()
-                    logger.debug(
-                        _get_log_msg(
-                            {
-                                "name": f"prefetch_download_chunk_{chunk_index}",
-                                "ph": "B",
-                                "cname": ChromeTraceColors.TEAL,
-                            }
-                        )
-                    )
-                    self._config.download_chunk_from_index(chunk_index)
-                    logger.debug(
-                        _get_log_msg(
-                            {
-                                "name": f"prefetch_download_chunk_{chunk_index}",
-                                "ph": "E",
-                                "cname": ChromeTraceColors.TEAL,
-                            }
-                        )
-                    )
-                    self._timing.record("chunk_download_s", t0)
-                    chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                    if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
-                        self.mark_chunk_ready(chunk_index)
-                    if not existed:
-                        self._note_chunk_added(chunk_index)
-
-                    # Preload item if possible to gain some time but only
-                    # if this is one of the pre-downloaded chunk
-                    if self._pre_download_counter > 0:
-                        self._pre_load_chunk(chunk_index)
-
-                    # Avoid downloading too many chunks in advance at the risk of over using the disk space
-                    self._pre_download_counter += 1
+                    batch = [chunk_index]
+                    # Optionally drain more pending indexes up to the prefetch budget so
+                    # asyncio.gather can overlap remote downloads (LITDATA_ASYNC_CHUNK_PREFETCH=1).
+                    if async_chunk_prefetch_enabled():
+                        slots_left = self._max_pre_download - self._pre_download_counter - 1
+                        while slots_left > 0:
+                            nxt = _get_from_queue(self._to_download_queue)
+                            if nxt is None:
+                                break
+                            if nxt == _END_TOKEN:
+                                # Put END back so the next loop iteration exits cleanly.
+                                self._to_download_queue.put(_END_TOKEN)
+                                break
+                            batch.append(nxt)
+                            slots_left -= 1
+                    self._download_chunk_indexes(batch)
 
             if self._max_cache_size:
                 self._maybe_delete_chunks(timeout=side_timeout)

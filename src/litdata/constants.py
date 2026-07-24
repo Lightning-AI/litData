@@ -59,6 +59,8 @@ _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
 _LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0"))
+# Experimental async chunk prefetch: set env ``LITDATA_ASYNC_CHUNK_PREFETCH=1``
+# (see ``litdata.streaming.async_prefetch``). Off by default.
 
 # DON'T CHANGE ORDER
 _TORCH_DTYPES_MAPPING = {
