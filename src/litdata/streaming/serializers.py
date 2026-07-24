@@ -472,6 +472,7 @@ class NumericSerializer:
         # Prefer ``struct`` on the hot deserialize path — it avoids a numpy array allocation
         # for every scalar leaf. Store the format string (not a ``struct.Struct``) so the
         # serializer stays deepcopy/pickle friendly for DataLoader workers.
+        self._struct_fmt: str | None
         if dtype is np.int64:
             self._struct_fmt = "<q"
         elif dtype is np.float64:
