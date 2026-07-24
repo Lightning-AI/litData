@@ -58,13 +58,12 @@ def _open_chunk_file(chunk_filepath: str) -> FileIO:
     last_err: PermissionError | None = None
     for attempt in range(20):
         try:
-            return open(chunk_filepath, "rb", 0)  # noqa: SIM115
+            return open(chunk_filepath, "rb", 0)
         except PermissionError as e:
             last_err = e
             sleep(0.05)
     assert last_err is not None
     raise last_err
-
 
 
 # Module-level unflatten callables (not nested closures) so item loaders remain picklable for
