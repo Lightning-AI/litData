@@ -99,7 +99,8 @@ def main() -> None:
     print(f"speedup         {serial_s / async_s:.2f}x" if async_s else "speedup n/a")
     print(
         "\nNote: enable in PrepareChunksThread with LITDATA_ASYNC_CHUNK_PREFETCH=1. "
-        "Measure on real S3/R2 — local CIFAR-in-RAM is the wrong workload."
+        "For real S3/R2 (Studio connections), use scripts/bench_s3_remote.py — "
+        "local CIFAR-in-RAM is the wrong workload."
     )
 
 

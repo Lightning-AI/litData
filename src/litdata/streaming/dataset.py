@@ -163,12 +163,17 @@ class StreamingDataset(IterableDataset):
         max_cache_size_in_bytes = int(
             _convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
         )
+        # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
+        # For ~64MB chunks and a full machine (e.g. 48 workers × prefetch 2–4), that
+        # is already ~5–12GB before in-flight downloads. Warn below 25GB so limited
+        # budgets leave headroom instead of thrashing under multi-worker streaming.
         min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
         if max_cache_size_in_bytes < min_cache_size_in_bytes:
             logger.warning(
                 "The provided `max_cache_size` is less than 25GB. "
-                "This may lead to performance issues during the training process. "
-                "Consider increasing the `max_cache_size` to at least 25GB to avoid potential performance degradation."
+                "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
+                "`num_workers * max_pre_download * chunk_size` (often 5–12GB). "
+                "Consider increasing `max_cache_size` to at least 25GB to avoid eviction thrash."
             )
 
         self.cache: Cache | None = None

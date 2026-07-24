@@ -92,6 +92,25 @@ def test_advisory_cache_bytes_updated_on_remove(tmpdir):
     assert thread._approx_cache_bytes < baseline
 
 
+def test_can_delete_chunk_respects_size_budget_when_delete_when_processed(tmpdir):
+    """Even with delete-when-processed, over-budget must allow eviction.
+
+    Otherwise multi-worker prefetch ignores ``max_cache_size`` until each
+    worker's local prefetch window fills.
+    """
+    cache_dir = _seed_cache(tmpdir, n_items=32, chunk_size=4)
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
+    assert cfg is not None
+    # Tiny budget -> delete_chunks_when_processed=True
+    thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_cache_size=1)
+    assert thread._delete_chunks_when_processed
+    thread._reconcile_cache_bytes()
+    assert thread._approx_cache_bytes > 1
+    thread._pre_download_counter = 0  # prefetch window NOT full
+    assert thread._can_delete_chunk() is True
+    assert thread._cache_over_budget() is True
+
+
 def test_timing_stats_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LITDATA_TIMING", raising=False)
     stats = StreamingTimingStats.reset_instance()

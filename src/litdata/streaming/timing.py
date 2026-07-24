@@ -14,8 +14,10 @@
 """Lightweight streaming timing counters for prefetch / decode / yield analysis.
 
 Enable with ``LITDATA_TIMING=1``. Counters are process-local and cheap (``time.perf_counter``
-deltas aggregated under a lock). Use :meth:`StreamingTimingStats.snapshot` from benches or
-debug sessions; chrome-trace spans remain in :mod:`litdata.debugger`.
+deltas aggregated under a lock). With ``num_workers > 0``, each DataLoader worker has its
+own singleton — the parent process snapshot will not include worker download/decode time.
+Use :meth:`StreamingTimingStats.snapshot` from benches (prefer ``num_workers=0`` for a
+single-process view) or debug sessions; chrome-trace spans remain in :mod:`litdata.debugger`.
 """
 
 from __future__ import annotations

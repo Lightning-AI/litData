@@ -23,7 +23,9 @@ from unittest.mock import MagicMock
 from litdata.streaming import Cache
 from litdata.streaming.async_prefetch import (
     adownload_chunk_indexes,
+    apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
+    async_prefetch_min_pre_download,
     download_chunk_indexes_concurrently,
     downloader_supports_adownload,
 )
@@ -67,14 +69,37 @@ def _seed_local_chunks(tmpdir, n_chunks: int = 4, chunk_size: int = 4) -> str:
     return cache_dir
 
 
-def test_async_chunk_prefetch_disabled_by_default(monkeypatch):
+def test_async_chunk_prefetch_disabled_by_default_for_local(monkeypatch):
     monkeypatch.delenv("LITDATA_ASYNC_CHUNK_PREFETCH", raising=False)
     assert async_chunk_prefetch_enabled() is False
+    assert async_chunk_prefetch_enabled(remote_dir=None) is False
 
 
-def test_async_chunk_prefetch_enabled_via_env(monkeypatch):
+def test_async_chunk_prefetch_default_on_for_remote(monkeypatch):
+    monkeypatch.delenv("LITDATA_ASYNC_CHUNK_PREFETCH", raising=False)
+    assert async_chunk_prefetch_enabled(remote_dir="s3://bucket/data") is True
+
+
+def test_async_chunk_prefetch_env_overrides_remote_default(monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "0")
+    assert async_chunk_prefetch_enabled(remote_dir="s3://bucket/data") is False
     monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
-    assert async_chunk_prefetch_enabled() is True
+    assert async_chunk_prefetch_enabled(remote_dir=None) is True
+
+
+def test_apply_async_pre_download_floor(monkeypatch):
+    monkeypatch.delenv("LITDATA_ASYNC_CHUNK_PREFETCH", raising=False)
+    assert apply_async_pre_download_floor(2) == 2
+    assert apply_async_pre_download_floor(2, remote_dir="s3://b/x") == 4
+
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.delenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", raising=False)
+    assert async_prefetch_min_pre_download() == 4
+    assert apply_async_pre_download_floor(2) == 4
+    assert apply_async_pre_download_floor(8) == 8
+
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    assert apply_async_pre_download_floor(2) == 2
 
 
 def test_downloader_supports_adownload_detects_override():
@@ -127,8 +152,20 @@ def test_download_chunk_indexes_concurrently_single_uses_sync(tmpdir, monkeypatc
     download_chunk_indexes_concurrently(cfg, [0])
 
 
+def test_prepare_chunks_thread_applies_async_floor(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.delenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", raising=False)
+    cache_dir = _seed_local_chunks(tmpdir, n_chunks=2, chunk_size=2)
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
+    assert cfg is not None
+    thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=2)
+    assert thread._max_pre_download == 4
+
+
 def test_prepare_chunks_thread_batches_when_async_enabled(tmpdir, monkeypatch):
     monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    # Keep the caller's value when already above the floor.
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
     cache_dir = _seed_local_chunks(tmpdir, n_chunks=4, chunk_size=2)
     cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
     assert cfg is not None

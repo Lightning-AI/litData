@@ -117,6 +117,33 @@ class Downloader(ABC):
         """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Async download of ``remote_filepath`` straight to ``local_filepath``.
+
+        Subclasses that can stream should override this to avoid buffering the
+        entire object in memory (important for large chunks under
+        ``LITDATA_ASYNC_CHUNK_PREFETCH``). The base implementation falls back to
+        :meth:`adownload_fileobj` + an atomic write.
+        """
+        if os.path.exists(local_filepath):
+            return
+        data = await self.adownload_fileobj(remote_filepath)
+        if data is None:
+            raise NotImplementedError(
+                f"{type(self).__name__}.adownload_fileobj returned None; "
+                "override adownload_file or adownload_fileobj for async prefetch."
+            )
+        tmp_path = self._temp_download_path(local_filepath)
+        try:
+            os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            self._atomic_replace(tmp_path, local_filepath)
+        except Exception:
+            with contextlib.suppress(FileNotFoundError, PermissionError):
+                os.remove(tmp_path)
+            raise
+
 
 class S3Downloader(Downloader):
     def __init__(
@@ -220,7 +247,7 @@ class S3Downloader(Downloader):
         return self._store
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        """Download a file from S3 directly to a file-like object asynchronously."""
+        """Download a file from S3 into memory asynchronously (prefer :meth:`adownload_file`)."""
         import obstore as obs
 
         obj = parse.urlparse(remote_filepath)
@@ -235,6 +262,34 @@ class S3Downloader(Downloader):
         resp = await obs.get_async(store, key)
         bytes_object = await resp.bytes_async()
         return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Stream an S3 object to ``local_filepath`` without buffering the full body."""
+        import obstore as obs
+
+        if os.path.exists(local_filepath):
+            return
+
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        bucket = obj.netloc
+        key = obj.path.lstrip("/")
+        store = self._get_store(bucket)
+        tmp_path = self._temp_download_path(local_filepath)
+        try:
+            os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+            resp = await obs.get_async(store, key)
+            # Large chunk writes (~64MB): 1MB buffer cuts syscall spam vs default.
+            with open(tmp_path, "wb", buffering=1024 * 1024) as f:
+                async for chunk in resp.stream():
+                    f.write(chunk)
+            self._atomic_replace(tmp_path, local_filepath)
+        except Exception:
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(tmp_path)
+            raise
 
 
 class R2Downloader(Downloader):
