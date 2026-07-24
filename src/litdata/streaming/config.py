@@ -110,6 +110,7 @@ class ChunksConfig:
                 )
             self._compressor = _COMPRESSORS[self._compressor_name]
 
+        self._skip_chunk_indexes_deletion: list[int] | None = None
         # Chunk indexes that are shared across workers on this node. Shared chunks are
         # reference-counted *eagerly* (incremented at iteration start by the reader), so their
         # lazy download-time increment is skipped to keep the count balanced. See reader.py.
@@ -123,6 +124,11 @@ class ChunksConfig:
             # since files downloaded while reading will be decompressed, we need to store the name without compression
             filename_without_compression = cnk["filename"].replace(f".{self._compressor_name}", "")
             self.filename_to_size_map[filename_without_compression] = cnk["chunk_bytes"]
+
+    def can_delete(self, chunk_index: int) -> bool:
+        if self._skip_chunk_indexes_deletion is None:
+            return True
+        return chunk_index not in self._skip_chunk_indexes_deletion
 
     def _chunk_lock_filepath(self, chunk_index: int) -> str:
         """The (decompressed) local chunk path whose ``.cnt``/``.lock`` files hold the refcount."""
@@ -184,6 +190,14 @@ class ChunksConfig:
             with suppress(FileNotFoundError, PermissionError):
                 os.remove(lock_path)
         return curr_count
+
+    @property
+    def skip_chunk_indexes_deletion(self) -> list[int] | None:
+        return self._skip_chunk_indexes_deletion
+
+    @skip_chunk_indexes_deletion.setter
+    def skip_chunk_indexes_deletion(self, skip_chunk_indexes_deletion: list[int]) -> None:
+        self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
         assert self._chunks is not None
