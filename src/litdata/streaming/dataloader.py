@@ -749,6 +749,13 @@ class StreamingDataLoader(DataLoader):
                 else:
                     yield batch
 
+        # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
+        # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
+        # the last `yield`) must leave `restore` untouched: callers that explicitly resumed from a
+        # checkpoint (`load_state_dict`) rely on `restore` staying `True` across such early exits so
+        # that the *next* `__iter__` call keeps skipping `reset_state_dict()` and replays from the
+        # loaded state (see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). `restore` is
+        # only toggled back to `False` here, once the loop above completes a full epoch normally.
         logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
         self.restore = False
 
