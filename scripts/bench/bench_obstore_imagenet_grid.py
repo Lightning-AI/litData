@@ -67,8 +67,7 @@ def main() -> None:
     rows: list[dict] = []
 
     print(
-        f"grid workers={workers} chunk_sizes_mib={sizes} "
-        f"max_pre={args.max_pre_download} batch={args.batch_size}",
+        f"grid workers={workers} chunk_sizes_mib={sizes} max_pre={args.max_pre_download} batch={args.batch_size}",
         flush=True,
     )
 

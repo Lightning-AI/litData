@@ -34,9 +34,7 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-DEFAULT_INPUT = (
-    "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
-)
+DEFAULT_INPUT = "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
 
 
 def _load_keys(input_dir: str, n: int) -> tuple[str, list[str]]:
@@ -60,9 +58,7 @@ def _load_keys(input_dir: str, n: int) -> tuple[str, list[str]]:
     parsed = urlparse(remote)
     bucket = parsed.netloc
     prefix = parsed.path.lstrip("/")
-    keys = [
-        f"{prefix}/{c['filename']}" if prefix else c["filename"] for c in chunks[:n]
-    ]
+    keys = [f"{prefix}/{c['filename']}" if prefix else c["filename"] for c in chunks[:n]]
     return bucket, keys
 
 
@@ -169,16 +165,11 @@ def main() -> None:
     print()
 
     if args.warmup:
-        asyncio.run(
-            _run_cell(store, keys, concurrency=2, min_chunk_size=8 << 20, ready_count=1)
-        )
+        asyncio.run(_run_cell(store, keys, concurrency=2, min_chunk_size=8 << 20, ready_count=1))
 
     rows: list[dict] = []
     # Header: emphasize t_ready (unblock) then t_first.
-    print(
-        f"{'conc':>5} {'mcs_MiB':>8} {'t_first':>8} {'t_ready':>8} {'t_all':>8}  "
-        f"(median of {args.reps})"
-    )
+    print(f"{'conc':>5} {'mcs_MiB':>8} {'t_first':>8} {'t_ready':>8} {'t_all':>8}  (median of {args.reps})")
     print("-" * 52)
 
     for conc in concs:
@@ -196,10 +187,7 @@ def main() -> None:
                         )
                     )
                 )
-            med = {
-                k: statistics.median([s[k] for s in samples])
-                for k in ("t_first", "t_ready", "t_all")
-            }
+            med = {k: statistics.median([s[k] for s in samples]) for k in ("t_first", "t_ready", "t_all")}
             row = {
                 "concurrency": conc,
                 "min_chunk_mib": mib,
@@ -207,10 +195,7 @@ def main() -> None:
                 "reps": args.reps,
             }
             rows.append(row)
-            print(
-                f"{conc:5d} {mib:8d} {med['t_first']:8.3f} {med['t_ready']:8.3f} "
-                f"{med['t_all']:8.3f}"
-            )
+            print(f"{conc:5d} {mib:8d} {med['t_first']:8.3f} {med['t_ready']:8.3f} {med['t_all']:8.3f}")
 
     # Best per concurrency by t_ready, then overall.
     print("\n=== best min_chunk_size per concurrency (by t_ready) ===")

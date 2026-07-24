@@ -28,9 +28,7 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-DEFAULT_INPUT = (
-    "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
-)
+DEFAULT_INPUT = "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
 
 
 def _load_remote_and_chunks(input_dir: str) -> tuple[str, list[dict]]:
@@ -44,11 +42,7 @@ def _load_remote_and_chunks(input_dir: str) -> tuple[str, list[dict]]:
     else:
         # Prefer mount mirror for index.json
         parts = remote[len("s3://") :].split("/", 1)
-        index_path = (
-            f"/teamspace/s3_connections/{parts[0]}/{parts[1]}/index.json"
-            if len(parts) == 2
-            else ""
-        )
+        index_path = f"/teamspace/s3_connections/{parts[0]}/{parts[1]}/index.json" if len(parts) == 2 else ""
         if not os.path.exists(index_path):
             index_path = os.path.join(resolved.path or "", "index.json")
 

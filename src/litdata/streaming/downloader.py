@@ -37,6 +37,7 @@ from litdata.streaming.client import R2Client, S3Client
 
 logger = logging.getLogger("litdata.streaming.downloader")
 
+
 # Obstore stream yield size. Default matches boto3 multipart chunksize (8MB).
 # Override with LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB (integer MiB) for benches.
 def _obstore_stream_min_chunk_size() -> int:
