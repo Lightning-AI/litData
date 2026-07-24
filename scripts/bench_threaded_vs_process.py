@@ -96,7 +96,8 @@ def main() -> None:
             results.append(row)
             print(
                 f"{row['mode']:<9} workers={row['num_workers']} "
-                f"elapsed={row['elapsed_s']:.3f}s items/s={row['items_per_s']:.1f}"
+                f"elapsed={row['elapsed_s']:.3f}s items/s={row['items_per_s']:.1f} "
+                f"items={row['items']} batches={row['batches']}"
             )
 
         process, threaded = results[0], results[1]
