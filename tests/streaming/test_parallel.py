@@ -832,6 +832,48 @@ def test_parallel_dataset_with_dataloader_2_epochs(
     assert not dataloader.restore
 
 
+def test_parallel_infinite_restore_cleared_on_early_break(tmp_path_factory):
+    """Early `break` must clear `restore` so the next epoch resets worker state.
+
+    Without a ``finally`` around ``StreamingDataLoader.__iter__``, breaking out left
+    ``restore=True``. The following epoch then skipped reset and
+    ``_StreamingMultiProcessingDataLoaderIter`` could under-prime workers, hanging on
+    ``_data_queue.get`` (CI flake for ``length=inf``, ``resume=False``, ``num_workers>0``).
+    """
+    _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory, parlen=float("inf"), len1=10, len2=10, batch_size=1, num_workers=0, shuffle=True, resume=False
+    )
+    assert pardset.is_infinite()
+    for i, _ in enumerate(dloader):
+        if i == 2:
+            break
+    state = dloader.state_dict()
+
+    _, _, _, dloader, _ = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory,
+        parlen=float("inf"),
+        len1=10,
+        len2=10,
+        batch_size=1,
+        num_workers=0,
+        shuffle=True,
+        resume=False,
+        tmpdir=tmpdir,
+    )
+    dloader.load_state_dict(state)
+    assert dloader.restore
+    for i, _ in enumerate(dloader):
+        if i == 2:
+            break
+    assert not dloader.restore
+    # Next epoch must not stay in restore mode (would skip reset_state_dict).
+    for i, _ in enumerate(dloader):
+        assert not dloader.restore
+        if i == 2:
+            break
+    assert not dloader.restore
+
+
 @pytest.mark.parametrize("length", [None, 16, float("inf")])
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("shuffle", [False, True])
