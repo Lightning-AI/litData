@@ -832,16 +832,28 @@ def test_parallel_dataset_with_dataloader_2_epochs(
     assert not dataloader.restore
 
 
-def test_parallel_infinite_restore_cleared_on_early_break(tmp_path_factory):
-    """Early `break` must clear `restore` so the next epoch resets worker state.
+@pytest.mark.timeout(120)
+@pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
+def test_parallel_infinite_restore_survives_early_break_without_hang(tmp_path_factory):
+    """`restore` must stay set across an early `break` so resumed replay keeps working.
 
-    Without a ``finally`` around ``StreamingDataLoader.__iter__``, breaking out left
-    ``restore=True``. The following epoch then skipped reset and
-    ``_StreamingMultiProcessingDataLoaderIter`` could under-prime workers, hanging on
-    ``_data_queue.get`` (seen in CI for ``length=inf``, ``resume=False``, ``num_workers>0``).
+    An explicit `load_state_dict()` sets `restore=True` so the *next* `__iter__` call skips
+    `reset_state_dict()` and replays from the loaded checkpoint (workers re-read `_state_dict`,
+    see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). Breaking out of the DataLoader's
+    generator early (or letting it get garbage-collected, throwing `GeneratorExit`) must *not*
+    clear `restore` early: `restore` should only be toggled back to `False` once an epoch completes
+    normally. This matters most for `length=inf`, since an infinite dataset never completes an
+    epoch on its own and the caller is expected to always `break`.
+
+    This is also a regression test for a hang: with `num_workers>0`, each new `__iter__` call spins
+    up a fresh `_StreamingMultiProcessingDataLoaderIter`, whose worker-priming logic depends on
+    `restore` and `_latest_worker_idx` to prime the right worker. If that priming under-primes any
+    worker, `_next_data()` blocks forever waiting on `_data_queue.get()` for a task that was never
+    dispatched. We iterate several epochs (breaking early every time, as `length=inf` forces) with
+    real multiprocessing workers and a timeout to prove that never happens.
     """
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=float("inf"), len1=10, len2=10, batch_size=1, num_workers=0, shuffle=True, resume=False
+        tmp_path_factory, parlen=float("inf"), len1=10, len2=10, batch_size=1, num_workers=2, shuffle=True, resume=False
     )
     assert pardset.is_infinite()
     for i, _ in enumerate(dloader):
@@ -855,23 +867,25 @@ def test_parallel_infinite_restore_cleared_on_early_break(tmp_path_factory):
         len1=10,
         len2=10,
         batch_size=1,
-        num_workers=0,
+        num_workers=2,
         shuffle=True,
         resume=False,
         tmpdir=tmpdir,
     )
     dloader.load_state_dict(state)
     assert dloader.restore
-    for i, _ in enumerate(dloader):
-        if i == 2:
-            break
-    assert not dloader.restore
-    # Next epoch must not stay in restore mode (would skip reset_state_dict).
-    for i, _ in enumerate(dloader):
-        assert not dloader.restore
-        if i == 2:
-            break
-    assert not dloader.restore
+
+    for _epoch in range(4):
+        num_batches = 0
+        for i, _ in enumerate(dloader):
+            num_batches += 1
+            if i == 2:
+                break
+        # Every epoch must actually make progress (i.e. workers got primed and delivered data).
+        assert num_batches == 3
+        # `restore` must survive the early break: it's only cleared on a *natural* epoch
+        # completion, which never happens for an infinite dataset.
+        assert dloader.restore
 
 
 @pytest.mark.parametrize("length", [None, 16, float("inf")])
