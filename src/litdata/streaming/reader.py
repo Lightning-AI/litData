@@ -109,40 +109,12 @@ class PrepareChunksThread(Thread):
                 return 1
 
     def _decrement_local_lock(self, chunk_index: int) -> int:
-        """Remove a count from the local lock, return the remaining count."""
-        chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        """Remove a count from the local lock, return the remaining count.
 
-        countpath = chunk_filepath + ".cnt"
-        lock_path = countpath + ".lock"
-        curr_count = 0
-        remove_lock = False
-        with suppress(Timeout, FileNotFoundError), FileLock(lock_path, timeout=3):
-            if os.path.exists(countpath):
-                with open(countpath) as count_f:
-                    try:
-                        curr_count = int(count_f.read().strip())
-                    except Exception:
-                        curr_count = 1
-                curr_count -= 1
-                if curr_count <= 0:
-                    with suppress(FileNotFoundError, PermissionError):
-                        os.remove(countpath)
-                    remove_lock = True
-                else:
-                    with open(countpath, "w+") as count_f:
-                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
-                        count_f.write(str(curr_count))
-                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
-            else:
-                remove_lock = True
-        # FileLock doesn't delete its lock file on release — we clean it up manually.
-        # This must happen after release (Windows can't delete open files) and after the
-        # work is done (on Linux, deleting an in-use lock file lets other processes lock
-        # on a new inode, bypassing mutual exclusion).
-        if remove_lock:
-            with suppress(FileNotFoundError, PermissionError):
-                os.remove(lock_path)
-        return curr_count
+        Delegates to ``ChunksConfig`` so the reader can also release eagerly-acquired locks during
+        teardown without the prefetch thread.
+        """
+        return self._config.decrement_local_lock(chunk_index)
 
     def _cleanup_download_locks(self, chunk_filepath: str, chunk_index: int) -> None:
         """Remove stale download lock files for a chunk.
@@ -172,10 +144,15 @@ class PrepareChunksThread(Thread):
     def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
         """Inform the item loader of the chunk to delete."""
         logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
-        # TODO: Fix the can_delete method
         can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
+        # A chunk is deleted only once its reference count reaches zero, i.e. every worker that
+        # will read it has finished with it. Shared chunks are reference-counted *eagerly* (the
+        # reader increments them before any reading begins, see BinaryReader._acquire_shared_locks),
+        # so a zero count here reliably means "no worker still needs this chunk" — closing the race
+        # where a fast worker deleted a shared chunk a slower co-worker had not yet incremented.
+        # `skip_lock` is the force-redownload path (a worker re-fetching its own chunk).
         if not skip_lock:
             remaining_locks = self._remaining_locks(chunk_filepath)
             if remaining_locks > 0:  # Can't delete this, something has it
@@ -368,6 +345,10 @@ class BinaryReader:
         self._last_chunk_index: int | None = None
         self._last_chunk_size: int | None = None
         self._chunks_queued_for_download = False
+        # Shared chunks this worker reference-counts eagerly (before any reading), and the ones it
+        # still holds. See `acquire_shared_locks` / `_release_shared_locks`.
+        self._shared_chunk_indexes: set[int] = set()
+        self._held_shared: set[int] = set()
         self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
         self._storage_options = storage_options
         self._session_options = session_options
@@ -394,6 +375,38 @@ class BinaryReader:
             self._session_options,
         )
         return self._config
+
+    def acquire_shared_locks(self, shared_chunk_indexes: set[int]) -> None:
+        """Eagerly reference-count the chunks this worker shares with other workers.
+
+        Called once per epoch, before any item is read. Incrementing the shared chunks' reference
+        counts up-front guarantees that every worker which will read a shared chunk has incremented
+        its count before any worker can finish and delete it — closing the increment-lag race where
+        a fast worker deletes a shared chunk a slower co-worker has not yet claimed. The matching
+        decrements happen as each chunk is finished in `read`, and any still-held locks are released
+        in `_release_shared_locks` on teardown (so early / partial iteration cannot leak counts).
+        """
+        if self._config is None and self._try_load_config() is None:
+            return
+        assert self._config is not None
+        # Release anything left over from a previous epoch on this reader before re-acquiring.
+        self._release_shared_locks()
+        self._shared_chunk_indexes = set(shared_chunk_indexes)
+        self._config._shared_chunk_indexes = self._shared_chunk_indexes
+        for chunk_index in self._shared_chunk_indexes:
+            self._config.increment_local_lock(chunk_index)
+            self._held_shared.add(chunk_index)
+
+    def _release_shared_locks(self) -> None:
+        """Release any eagerly-acquired shared-chunk locks this worker still holds."""
+        if not self._held_shared:
+            return
+        if self._config is None:
+            self._held_shared.clear()
+            return
+        for chunk_index in list(self._held_shared):
+            self._config.decrement_local_lock(chunk_index)
+            self._held_shared.discard(chunk_index)
 
     def setup_thread_and_download_chunk(self, index: ChunkedIndex) -> None:
         if self._config and (self._config._remote_dir or self._config._compressor):
@@ -486,6 +499,7 @@ class BinaryReader:
         ):
             # inform the chunk has been completely consumed
             self._prepare_thread._decrement_local_lock(self._last_chunk_index)
+            self._held_shared.discard(self._last_chunk_index)
             self._prepare_thread.delete([self._last_chunk_index])
 
         if index.chunk_index != self._last_chunk_index:
@@ -515,7 +529,10 @@ class BinaryReader:
 
             # inform the thread it is time to stop
             self._prepare_thread._decrement_local_lock(index.chunk_index)
+            self._held_shared.discard(index.chunk_index)
             self._prepare_thread.delete([index.chunk_index])
+            # Release any shared-chunk locks still held (e.g. chunks assigned but never reached).
+            self._release_shared_locks()
             self._prepare_thread.stop()
             if self._max_cache_size and self._prepare_thread.is_alive():
                 try:
@@ -573,6 +590,11 @@ class BinaryReader:
         return state
 
     def __del__(self) -> None:
+        # Release eagerly-acquired shared-chunk locks that were never released (e.g. the loop was
+        # broken out of before the last item). Without this, an aborted epoch would leak reference
+        # counts and prevent those chunks from ever being deleted.
+        with suppress(Exception):
+            self._release_shared_locks()
         if self._prepare_thread and not self._prepare_thread._has_exited:
             self._prepare_thread.force_stop()
             self._prepare_thread = None

@@ -15,10 +15,14 @@ import contextlib
 import logging
 import os
 from collections import defaultdict
+from contextlib import suppress
 from time import sleep, time
 from typing import Any, Optional
 
+from filelock import FileLock, Timeout
+
 from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
+from litdata.debugger import _get_log_msg
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -107,6 +111,10 @@ class ChunksConfig:
             self._compressor = _COMPRESSORS[self._compressor_name]
 
         self._skip_chunk_indexes_deletion: list[int] | None = None
+        # Chunk indexes that are shared across workers on this node. Shared chunks are
+        # reference-counted *eagerly* (incremented at iteration start by the reader), so their
+        # lazy download-time increment is skipped to keep the count balanced. See reader.py.
+        self._shared_chunk_indexes: set[int] = set()
         self.zero_based_roi: list[tuple[int, int]] | None = None
         self.filename_to_size_map: dict[str, int] = {}
         for cnk in _original_chunks:
@@ -118,6 +126,67 @@ class ChunksConfig:
         if self._skip_chunk_indexes_deletion is None:
             return True
         return chunk_index not in self._skip_chunk_indexes_deletion
+
+    def _chunk_lock_filepath(self, chunk_index: int) -> str:
+        """The (decompressed) local chunk path whose ``.cnt``/``.lock`` files hold the refcount."""
+        chunk_filepath, _, _ = self[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        return chunk_filepath
+
+    def remaining_locks(self, chunk_index: int) -> int:
+        """Return the current reference count held on a chunk (0 if none)."""
+        countpath = self._chunk_lock_filepath(chunk_index) + ".cnt"
+        if not os.path.exists(countpath):
+            return 0
+        with suppress(FileNotFoundError), open(countpath) as count_f:
+            try:
+                return int(count_f.read().strip())
+            except Exception:
+                return 1
+        return 0
+
+    def increment_local_lock(self, chunk_index: int) -> None:
+        """Add one reference to a chunk's local lock (a co-reader intends to use it)."""
+        if self._downloader is None:
+            return
+        self._downloader._increment_local_lock(self._chunk_lock_filepath(chunk_index), chunk_index)
+
+    def decrement_local_lock(self, chunk_index: int) -> int:
+        """Remove one reference from a chunk's local lock; return the remaining count.
+
+        Moved here (from ``PrepareChunksThread``) so the reader can release eagerly-acquired locks
+        during teardown without depending on the prefetch thread still being alive.
+        """
+        countpath = self._chunk_lock_filepath(chunk_index) + ".cnt"
+        lock_path = countpath + ".lock"
+        curr_count = 0
+        remove_lock = False
+        with suppress(Timeout, FileNotFoundError), FileLock(lock_path, timeout=3):
+            if os.path.exists(countpath):
+                with open(countpath) as count_f:
+                    try:
+                        curr_count = int(count_f.read().strip())
+                    except Exception:
+                        curr_count = 1
+                curr_count -= 1
+                if curr_count <= 0:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(countpath)
+                    remove_lock = True
+                else:
+                    with open(countpath, "w+") as count_f:
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
+                        count_f.write(str(curr_count))
+                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
+            else:
+                remove_lock = True
+        # FileLock doesn't delete its lock file on release — we clean it up manually.
+        # This must happen after release (Windows can't delete open files) and after the
+        # work is done (on Linux, deleting an in-use lock file lets other processes lock
+        # on a new inode, bypassing mutual exclusion).
+        if remove_lock:
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(lock_path)
+        return curr_count
 
     @property
     def skip_chunk_indexes_deletion(self) -> list[int] | None:
@@ -133,22 +202,26 @@ class ChunksConfig:
 
         local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
 
+        # Shared chunks are reference-counted eagerly by the reader (before any reading), so their
+        # download-time increment is skipped here to avoid double-counting. Non-shared chunks keep
+        # the original pay-as-you-download refcounting.
+        lazily_ref_counted = chunk_index not in self._shared_chunk_indexes
+
         if os.path.exists(local_chunkpath):
             self.try_decompress(local_chunkpath)
 
-            if self._downloader is not None and not skip_lock:
+            if self._downloader is not None and not skip_lock and lazily_ref_counted:
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
                 self._downloader._increment_local_lock(
                     local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
                 )
-                pass
             return
 
         if self._downloader is None:
             return
 
-        if not skip_lock:
+        if not skip_lock and lazily_ref_counted:
             self._downloader._increment_local_lock(
                 local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
             )
