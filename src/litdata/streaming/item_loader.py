@@ -12,6 +12,7 @@
 # limitations under the License.
 import functools
 import logging
+import mmap
 import os
 from abc import ABC, abstractmethod
 from collections import defaultdict, namedtuple
@@ -78,6 +79,14 @@ class BaseItemLoader(ABC):
         if self._force_download_queue:
             self._force_download_queue.put(chunk_index)
 
+    def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
+        """Declare which chunks are safe to memory-map (i.e. not shared with another worker).
+
+        Only ``PyTreeLoader`` acts on this; other loaders ignore it. Memory-mapping a chunk that a
+        co-worker may delete/replace while it is mapped can crash with SIGSEGV (see issues #459,
+        #756), so only non-shared chunks are mapped.
+        """
+
     @functools.lru_cache(maxsize=128)
     def _data_format_to_key(self, data_format: str) -> str:
         if ":" in data_format:
@@ -139,6 +148,16 @@ class PyTreeLoader(BaseItemLoader):
         self._chunk_filepath: str | None = None
         self._decrypted_chunks: dict[int, bytes] = {}
         self._open_handle: FileIO | None = None
+        # Memory-map + cached offset table for the current chunk, used only for chunks that are
+        # safe to map (non-shared, unencrypted). Per-item reads then become memory slices instead
+        # of two `seek`+`read` syscalls on the unbuffered handle.
+        self._mmap: mmap.mmap | None = None
+        self._mmap_view: memoryview | None = None
+        self._offsets: np.ndarray | None = None
+        self._mmap_allowed_chunks: set[int] = set()
+
+    def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
+        self._mmap_allowed_chunks = chunk_indexes
 
     def generate_intervals(self) -> list[Interval]:
         intervals = []
@@ -232,13 +251,24 @@ class PyTreeLoader(BaseItemLoader):
 
             self._chunk_filepath = chunk_filepath
 
-            if self._open_handle is not None:
-                self._open_handle.close()
+            # Release the previous chunk's handle / memory-map before opening the new one.
+            self._close_open_chunk()
 
-            self._open_handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
+            # Only memory-map chunks that are safe: not encrypted (encrypted chunks are read and
+            # decrypted whole) and not shared with another worker (a shared chunk can be
+            # deleted/replaced by a co-worker while mapped -> SIGSEGV; see issues #459, #756).
+            if self._config.get("encryption") or chunk_index not in self._mmap_allowed_chunks:
+                self._open_handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
+            else:
+                self._open_chunk_mmap(chunk_filepath, chunk_index)
 
         if self._config.get("encryption"):
             data = self._load_encrypted_data(chunk_filepath, chunk_index, offset, encryption)
+        elif self._mmap_view is not None:
+            # `offset` points at the item's start entry in the offset table (byte (i+1)*4 holds
+            # entry i), so this item's table index is `offset // 4 - 1`.
+            table_idx = offset // 4 - 1
+            data = bytes(self._mmap_view[int(self._offsets[table_idx]) : int(self._offsets[table_idx + 1])])
         else:
             assert self._open_handle
             # load the data from raw bytes using the offset for the item we want to load
@@ -327,11 +357,34 @@ class PyTreeLoader(BaseItemLoader):
             idx += size
         return tree_unflatten(data, self._data_spec)
 
-    def close(self, chunk_index: int) -> None:
-        """Close the open file handle."""
+    def _open_chunk_mmap(self, chunk_filepath: str, chunk_index: int) -> None:
+        """Memory-map a chunk and cache its offset table (``uint32[num_items + 1]``)."""
+        handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
+        chunk_mmap = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+        num_items = self._chunks[chunk_index]["chunk_size"]
+        # Offset table follows the 4-byte ``num_items`` header; this is a zero-copy view.
+        self._offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=num_items + 1, offset=4)
+        self._open_handle = handle
+        self._mmap = chunk_mmap
+        self._mmap_view = memoryview(chunk_mmap)
+
+    def _close_open_chunk(self) -> None:
+        """Release the memory-map / file handle for the currently open chunk (if any)."""
+        self._offsets = None
+        if self._mmap_view is not None:
+            self._mmap_view.release()
+            self._mmap_view = None
+        if self._mmap is not None:
+            self._mmap.close()
+            self._mmap = None
         if self._open_handle is not None:
             self._open_handle.close()
             self._open_handle = None
+
+    def close(self, chunk_index: int) -> None:
+        """Close the open file handle / memory-map for the current chunk."""
+        self._close_open_chunk()
+        self._chunk_filepath = None
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         logger.debug(
@@ -398,8 +451,13 @@ class PyTreeLoader(BaseItemLoader):
 
     def __getstate__(self):
         state = self.__dict__.copy()
+        # File handle / memory-map are per-process and not picklable; lazily re-created on the
+        # first read in the receiving process.
         state["_open_handle"] = None
         state["_chunk_filepath"] = None
+        state["_mmap"] = None
+        state["_mmap_view"] = None
+        state["_offsets"] = None
         return state
 
 

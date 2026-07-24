@@ -397,6 +397,11 @@ class StreamingDataset(IterableDataset):
         my_shared_chunks = {chunk_index for chunk_index in self.worker_chunks if chunk_index in shared_chunks}
         self.cache._reader.acquire_shared_locks(my_shared_chunks)
 
+        # Chunks this worker owns exclusively are safe to memory-map for faster reads; shared chunks
+        # are not (a co-worker could delete/replace one while it is mapped -> SIGSEGV).
+        my_nonshared_chunks = {chunk_index for chunk_index in self.worker_chunks if chunk_index not in shared_chunks}
+        self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
+
         # Handle restart
         if self._state_dict:
             self._resume(workers_chunks, workers_intervals)

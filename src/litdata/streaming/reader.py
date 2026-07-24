@@ -397,6 +397,14 @@ class BinaryReader:
             self._config.increment_local_lock(chunk_index)
             self._held_shared.add(chunk_index)
 
+    def enable_mmap_for_chunks(self, chunk_indexes: set[int]) -> None:
+        """Tell the item loader which chunks are safe to memory-map (non-shared ones).
+
+        Shared chunks are deliberately excluded: a co-worker could delete/replace a shared chunk
+        while it is mapped, which crashes with SIGSEGV rather than a recoverable error.
+        """
+        self._item_loader.set_mmap_allowed_chunks(chunk_indexes)
+
     def _release_shared_locks(self) -> None:
         """Release any eagerly-acquired shared-chunk locks this worker still holds."""
         if not self._held_shared:
