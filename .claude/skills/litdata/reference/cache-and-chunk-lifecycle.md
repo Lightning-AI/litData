@@ -16,6 +16,7 @@ The chunk binary format (`[num_items:uint32][offset:uint32[N+1]][data]`, `writer
 ## BinaryReader.read — the per-item hot path
 
 `BinaryReader.read(index)` (`reader.py:438`):
+
 1. Lazily loads `ChunksConfig` (`_try_load_config`) — downloads `index.json` on first call.
 2. `config[index]` (`config.py:289`) → `(local_chunkpath, begin, filesize_bytes)`. For compressed data `local_chunkpath` is the **decompressed** `.bin` path.
 3. If remote/compressed: `setup_thread_and_download_chunk` starts (once) the per-worker `PrepareChunksThread` and enqueues this worker's chunks for download.
@@ -48,15 +49,19 @@ Covered in depth in [streaming.md](streaming.md) ("Shuffling & sharding"). The e
 Because a chunk can be shared by multiple workers on a node (all pointing at the same cache file), **one worker deleting a chunk after it finishes can pull the file out from under another worker that still needs it** → `FileNotFoundError: chunk-N-M.bin hasn't been found` raised at `item_loader.py:223` (PyTree) / `:515` (Tokens). Three mechanisms exist to prevent this:
 
 ### 1. Static skip-deletion list (`skip_chunk_indexes_deletion` / `can_delete`)
+
 Computed in `dataset.__iter__` via `_find_chunks_per_workers_on_which_to_skip_deletion` (`utilities/shuffle.py:147`): for each shared chunk it determines the single worker that reads it **last in consumption order**, and tells every *other* sharing worker to skip deleting it. Stored on `ChunksConfig.skip_chunk_indexes_deletion`; queried via `config.can_delete(chunk_index)` (`config.py:117`). This is the primary, race-free guard (it is derived from the deterministic shuffle assignment, not from wall-clock state). **It must be consulted in `reader._apply_delete`** — historically it was computed but ignored (see the bug note below).
 
 ### 2. Cross-worker reference counting (`.cnt` + `.cnt.lock` files)
+
 `downloader._increment_local_lock` (`downloader.py:55`) bumps `<chunk>.bin.cnt` under a `FileLock` when a worker will read a chunk; `reader._decrement_local_lock` (`reader.py:111`) decrements when a worker finishes it and removes the file at zero. `_apply_delete` refuses to delete while `_remaining_locks > 0` (`reader.py:180`). This is the dynamic guard. **Its correctness depends on every sharing worker incrementing before any sharer decrements to zero** — see the increment-lag hazard below.
 
 ### 3. Priority force-redownload (`_force_download_queue`)
+
 When a reader blocks on a missing `.bin` for `FORCE_DOWNLOAD_TIME`, `item_loader.force_download` enqueues the chunk onto its own thread's `_force_download_queue`; `_force_download` (`reader.py:240`) deletes any stale copy and re-downloads under `FileLock(..., timeout=0)`. This is a last-resort recovery, not prevention.
 
 ### Failure modes / invariants to preserve
+
 - **`can_delete` must gate `_apply_delete`.** If its result is computed but unused, mechanism 1 is dead and only the racy refcount protects shared chunks.
 - **Increment-lag:** increments happen lazily in the prefetch thread (bounded by `max_pre_download`), while decrement+delete happen when a worker finishes a chunk. If a fast worker finishes a shared chunk before a slow co-worker has prefetched (incremented) it, the count is 0 and the chunk is deleted prematurely. Mechanism 1 (static list) is what actually closes this hole; the refcount alone does not.
 - **The skip list must be set on resume too.** It is computed in `dataset.__iter__`; if it is only set on the fresh-epoch branch, resumed runs have no mechanism-1 protection.
@@ -65,6 +70,7 @@ When a reader blocks on a missing `.bin` for `FORCE_DOWNLOAD_TIME`, `item_loader
 - **s3transfer temp files:** boto3 downloads to `chunk-*.zstd.bin.<random>` then renames. Leftover `<random>`-suffixed files in the cache are interrupted/duplicated downloads — a symptom of delete/redownload churn, not the root cause. `_get_folder_size` counts `.bin`-containing temp files but ignores `.zstd.bin`.
 
 ### Debugging this class of failure
+
 1. Reproduce with `num_workers` > 1 and `max_cache_size` set small enough to force eviction (that's when deletion runs).
 2. `enable_tracer()` — the `increment_lock_*` / `decrement_lock_*` / `delete_chunk_*` events show the refcount timeline per chunk; a `delete_chunk_X` with a later `read_chunk_X` on another worker is the race.
 3. `DEBUG_LITDATA=1` writes `<chunk>.tmb` tombstones recording which rank deleted a chunk and its `can_delete` verdict.
