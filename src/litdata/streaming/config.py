@@ -108,6 +108,9 @@ class ChunksConfig:
 
         self._skip_chunk_indexes_deletion: list[int] | None = None
         self.zero_based_roi: list[tuple[int, int]] | None = None
+        # Memoizes ``__getitem__`` results per chunk_index (invariant once the config is loaded);
+        # avoids rebuilding the chunk path on every item read.
+        self._chunk_meta_cache: dict[int, tuple[str, int, int]] = {}
         self.filename_to_size_map: dict[str, int] = {}
         for cnk in _original_chunks:
             # since files downloaded while reading will be decompressed, we need to store the name without compression
@@ -287,7 +290,17 @@ class ChunksConfig:
         )
 
     def __getitem__(self, index: ChunkedIndex) -> tuple[str, int, int]:
-        """Find the associated chunk metadata."""
+        """Find the associated chunk metadata.
+
+        This is called once per item on the read hot path, but its result depends only on
+        ``index.chunk_index`` (the local path, the chunk's begin offset and its byte size are all
+        fixed once the config is loaded). The per-chunk tuple is therefore memoized to avoid
+        rebuilding the path (``os.path.join`` + decompression-suffix stripping) on every item.
+        """
+        cached = self._chunk_meta_cache.get(index.chunk_index)
+        if cached is not None:
+            return cached
+
         assert self._chunks is not None
         chunk = self._chunks[index.chunk_index]
 
@@ -300,7 +313,9 @@ class ChunksConfig:
 
         filesize_bytes = chunk["chunk_bytes"]
 
-        return local_chunkpath, begin, filesize_bytes
+        meta = (local_chunkpath, begin, filesize_bytes)
+        self._chunk_meta_cache[index.chunk_index] = meta
+        return meta
 
     def download_filepath(self, chunk_index: int) -> str:
         """The raw on-disk path that the chunk is downloaded to before any decompression."""

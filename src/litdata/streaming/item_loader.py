@@ -69,6 +69,11 @@ class BaseItemLoader(ABC):
             serializer.setup(data_format)
             self._serializers[data_format] = serializer
 
+        # Precompute the per-leaf serializer list and the data spec so the per-item `deserialize`
+        # hot path avoids a dict lookup per leaf and a config lookup per item.
+        self._serializers_list = [self._serializers[data_format] for data_format in self._data_format]
+        self._data_spec = self._config["data_spec"]
+
     def force_download(self, chunk_index: int) -> None:
         if self._force_download_queue:
             self._force_download_queue.put(chunk_index)
@@ -316,12 +321,11 @@ class PyTreeLoader(BaseItemLoader):
         idx = self._shift_idx
         sizes = np.frombuffer(raw_item_data[:idx], np.uint32)
         data = []
-        for size, data_format in zip(sizes, self._data_format):
-            serializer = self._serializers[data_format]
+        for size, serializer in zip(sizes, self._serializers_list):
             data_bytes = raw_item_data[idx : idx + size]
             data.append(serializer.deserialize(data_bytes))
             idx += size
-        return tree_unflatten(data, self._config["data_spec"])
+        return tree_unflatten(data, self._data_spec)
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle."""
