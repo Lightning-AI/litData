@@ -627,11 +627,7 @@ class StreamingDataLoader(DataLoader):
         collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
-        if (
-            num_workers > 0
-            and _is_fork_context(kwargs.get("multiprocessing_context"))
-            and _has_parquet_loader(dataset)
-        ):
+        if num_workers > 0 and _is_fork_context(kwargs.get("multiprocessing_context")) and _has_parquet_loader(dataset):
             raise RuntimeError(
                 "The `ParquetLoader` uses Polars, which is not compatible with the `fork` multiprocessing context "
                 "used by PyTorch's DataLoader on Linux. Using `fork` will cause deadlocks due to Polars' "
