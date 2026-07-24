@@ -11,7 +11,7 @@ CPU budget, else keep experimental / abandon as default.
 Requires a free-threaded (no-GIL) Python runtime for ``use_threading=True``.
 
 Example:
-  LITDATA_TIMING=1 python3.13t scripts/bench_threaded_vs_process.py
+  LITDATA_TIMING=1 python3.13t scripts/bench/bench_threaded_vs_process.py
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 os.environ.setdefault("LITDATA_TIMING", "1")

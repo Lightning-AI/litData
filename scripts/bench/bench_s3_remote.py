@@ -12,10 +12,10 @@ Defaults to the Studio-mounted ImageNet template validation set::
 
 Examples::
 
-    python scripts/bench_s3_remote.py
-    python scripts/bench_s3_remote.py --input-dir /teamspace/s3_connections/imagenet-1m-template/optimized/val
-    python scripts/bench_s3_remote.py --mode download --chunks 6
-    python scripts/bench_s3_remote.py --mode e2e --batches 40 --workers 4
+    python scripts/bench/bench_s3_remote.py
+    python scripts/bench/bench_s3_remote.py --input-dir /teamspace/s3_connections/imagenet-1m-template/optimized/val
+    python scripts/bench/bench_s3_remote.py --mode download --chunks 6
+    python scripts/bench/bench_s3_remote.py --mode e2e --batches 40 --workers 4
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from litdata.streaming.async_prefetch import (  # noqa: E402

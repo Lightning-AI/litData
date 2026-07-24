@@ -2,7 +2,7 @@
 """Microbench: list.pop(0) vs deque.popleft for upcoming_indexes consumption.
 
 Example:
-  .venv/bin/python scripts/bench_upcoming_indexes.py
+  .venv/bin/python scripts/bench/bench_upcoming_indexes.py
 """
 
 from __future__ import annotations

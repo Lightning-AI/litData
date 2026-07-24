@@ -11,8 +11,8 @@ Pass ``--real`` to use official torchvision CIFAR-10 for the LitData optimize
 step and a matching in-memory raw baseline.
 
 Example:
-  .venv/bin/python scripts/bench_cifar10.py --limit 2000 --workers 2
-  python3.13t scripts/bench_cifar10.py --limit 5000   # true no-GIL threaded path
+  .venv/bin/python scripts/bench/bench_cifar10.py --limit 2000 --workers 2
+  python3.13t scripts/bench/bench_cifar10.py --limit 5000   # true no-GIL threaded path
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 os.environ.setdefault("LITDATA_TIMING", "1")

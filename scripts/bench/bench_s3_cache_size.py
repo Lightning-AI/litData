@@ -10,8 +10,8 @@ Cache is wiped at the start of each size (``rm -rf /cache/chunks/*``).
 
 Example::
 
-    PYTHON_GIL=0 python scripts/bench_s3_cache_size.py
-    PYTHON_GIL=0 python scripts/bench_s3_cache_size.py --sizes 25GB --epochs 1
+    PYTHON_GIL=0 python scripts/bench/bench_s3_cache_size.py
+    PYTHON_GIL=0 python scripts/bench/bench_s3_cache_size.py --sizes 25GB --epochs 1
 
 With ~58–64MB ImageNet chunks and 48 workers × ``max_pre_download=2–4``, the
 steady-state working set is already ~5–12GB. Default sweep is 25GB only.
@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import torch  # noqa: E402

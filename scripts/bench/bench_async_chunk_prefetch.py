@@ -5,8 +5,8 @@ This measures **chunk prefetch IO overlap**, not an async StreamingDataLoader.
 Use a downloader with simulated latency (default) or point at real remote data.
 
 Example:
-  .venv/bin/python scripts/bench_async_chunk_prefetch.py
-  LITDATA_ASYNC_CHUNK_PREFETCH=1 .venv/bin/python scripts/bench_async_chunk_prefetch.py --chunks 8 --delay-ms 100
+  .venv/bin/python scripts/bench/bench_async_chunk_prefetch.py
+  LITDATA_ASYNC_CHUNK_PREFETCH=1 .venv/bin/python scripts/bench/bench_async_chunk_prefetch.py --chunks 8 --delay-ms 100
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from litdata.streaming.async_prefetch import (  # noqa: E402
@@ -99,7 +99,7 @@ def main() -> None:
     print(f"speedup         {serial_s / async_s:.2f}x" if async_s else "speedup n/a")
     print(
         "\nNote: enable in PrepareChunksThread with LITDATA_ASYNC_CHUNK_PREFETCH=1. "
-        "For real S3/R2 (Studio connections), use scripts/bench_s3_remote.py — "
+        "For real S3/R2 (Studio connections), use scripts/bench/bench_s3_remote.py — "
         "local CIFAR-in-RAM is the wrong workload."
     )
 

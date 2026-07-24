@@ -21,8 +21,8 @@ which exercises the same decode + transform bottleneck.
 
 Example::
 
-    python scripts/bench_s3_loader_matrix.py
-    python scripts/bench_s3_loader_matrix.py --epochs 1 --limit-batches 200
+    python scripts/bench/bench_s3_loader_matrix.py
+    python scripts/bench/bench_s3_loader_matrix.py --epochs 1 --limit-batches 200
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import torch  # noqa: E402

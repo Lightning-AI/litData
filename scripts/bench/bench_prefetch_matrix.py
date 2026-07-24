@@ -7,7 +7,7 @@ multiprocessing SHM. Chunk prefetch still runs on ``PrepareChunksThread``.
 Enable timing with ``LITDATA_TIMING=1``.
 
 Example:
-  LITDATA_TIMING=1 .venv/bin/python scripts/bench_prefetch_matrix.py
+  LITDATA_TIMING=1 .venv/bin/python scripts/bench/bench_prefetch_matrix.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 os.environ.setdefault("LITDATA_TIMING", "1")
