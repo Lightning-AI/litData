@@ -31,6 +31,7 @@ from litdata.debugger import ChromeTraceColors, _get_log_msg
 from litdata.streaming.async_prefetch import (
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
+    close_thread_event_loop,
     download_chunk_indexes_concurrently,
 )
 from litdata.streaming.config import ChunksConfig, Interval
@@ -617,6 +618,14 @@ class PrepareChunksThread(Thread):
                 self._to_download_queue.put(chunk_index)
 
     def run(self) -> None:
+        try:
+            self._run_loop()
+        finally:
+            # Drop thread-local asyncio loop + default-executor workers
+            # (``asyncio_N``) created by async chunk prefetch / to_thread.
+            close_thread_event_loop()
+
+    def _run_loop(self) -> None:
         while True:
             if self._force_stop_event.is_set():
                 self._has_exited = True

@@ -191,6 +191,30 @@ def _thread_event_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
+def close_thread_event_loop() -> None:
+    """Shut down the thread-local loop and its default executor.
+
+    ``asyncio.to_thread`` (used when a downloader has no native async path) parks
+    workers named ``asyncio_N`` on the loop's default executor. Leaving the loop
+    open leaks those daemon threads and trips the session thread-police on Windows.
+    """
+    loop = getattr(_THREAD_LOOPS, "loop", None)
+    _THREAD_LOOPS.loop = None
+    if loop is None or loop.is_closed():
+        return
+    try:
+        if not loop.is_running():
+            with contextlib.suppress(Exception):
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            # Python 3.9+: wait for to_thread / run_in_executor workers.
+            if hasattr(loop, "shutdown_default_executor"):
+                with contextlib.suppress(Exception):
+                    loop.run_until_complete(loop.shutdown_default_executor())
+    finally:
+        with contextlib.suppress(Exception):
+            loop.close()
+
+
 def download_chunk_indexes_concurrently(config: ChunksConfig, chunk_indexes: list[int]) -> None:
     """Sync entry point for ``PrepareChunksThread``: run ``adownload_chunk_indexes``."""
     if not chunk_indexes:
@@ -209,7 +233,10 @@ def download_chunk_indexes_concurrently(config: ChunksConfig, chunk_indexes: lis
         import concurrent.futures
 
         def _run() -> None:
-            _thread_event_loop().run_until_complete(adownload_chunk_indexes(config, chunk_indexes))
+            try:
+                _thread_event_loop().run_until_complete(adownload_chunk_indexes(config, chunk_indexes))
+            finally:
+                close_thread_event_loop()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(_run).result()

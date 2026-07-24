@@ -159,6 +159,9 @@ def _thread_police():
         else:
             if thread.name.startswith("pytest_timeout"):
                 continue
+            # asyncio.to_thread / run_in_executor default-executor workers.
+            if thread.daemon and thread.name.startswith("asyncio_"):
+                continue
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 
