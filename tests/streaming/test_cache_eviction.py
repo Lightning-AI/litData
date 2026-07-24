@@ -100,6 +100,27 @@ def test_slot_budget_disabled_for_tiny_max_cache_size(tmpdir):
     assert thread._slot_budget_enabled() is False
 
 
+def test_tiny_budget_still_caps_async_pre_download_floor(tmpdir, monkeypatch):
+    """Async floor must not defeat tiny max_cache_size (e.g. reader eviction tests)."""
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    cache_dir = _seed_cache(tmpdir, n_items=64, chunk_size=4)
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
+    assert cfg is not None
+    # Pretend remote so the async max_pre_download floor (default 4) applies.
+    cfg._remote_dir = "s3://bucket/prefix"
+    thread = PrepareChunksThread(
+        cfg,
+        MagicMock(),
+        _DistributedEnv(1, 0, 1),
+        max_cache_size=90,  # ~2 mean chunks for this fixture
+        max_pre_download=2,
+    )
+    assert thread._delete_chunks_when_processed
+    assert thread._slot_budget_enabled() is False
+    # Floor would raise to 4; budget cap must pull it back toward ~2.
+    assert thread._max_pre_download <= 2
+
+
 def test_slot_acquire_and_release_roundtrip(tmpdir):
     cache_dir = _seed_cache(tmpdir, n_items=16, chunk_size=4)
     thread = _make_thread(cache_dir, max_cache_size=20 * 1024 * 1024)

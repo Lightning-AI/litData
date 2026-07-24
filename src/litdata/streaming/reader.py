@@ -330,11 +330,16 @@ class PrepareChunksThread(Thread):
                 break
 
     def _cap_pre_download_for_cache_budget(self) -> None:
-        """Shrink per-worker prefetch so workers × chunks fit in ``max_cache_size``."""
-        if not self._slot_budget_enabled():
+        """Shrink per-worker prefetch so workers × chunks fit in ``max_cache_size``.
+
+        Applies whenever delete-when-processed is on — including tiny unit-test
+        budgets where the shared slot gate is disabled. Otherwise the async
+        ``max_pre_download`` floor (4) can keep more chunks on disk than the
+        budget allows (see ``test_reader_chunk_removal``).
+        """
+        if not self._max_cache_size or not self._delete_chunks_when_processed:
             return
         max_cache_size = self._max_cache_size
-        assert max_cache_size is not None  # guarded by _slot_budget_enabled
         chunks = self._config._chunks or []
         mean_chunk = max(1, int(self._config.num_bytes // max(1, len(chunks))))
         n_workers = max(1, self._worker_env.world_size)
