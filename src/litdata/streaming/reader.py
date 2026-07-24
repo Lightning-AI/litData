@@ -336,6 +336,10 @@ class PrepareChunksThread(Thread):
         budgets where the shared slot gate is disabled. Otherwise the async
         ``max_pre_download`` floor (4) can keep more chunks on disk than the
         budget allows (see ``test_reader_chunk_removal``).
+
+        Never caps below 2: ``max_pre_download == 1`` deadlocks delete-when-processed
+        gating (``_can_download_more`` needs a free slot while ``_can_delete_chunk``
+        and refcount skips can leave ``pre_download_counter`` stuck at 1).
         """
         if not self._max_cache_size or not self._delete_chunks_when_processed:
             return
@@ -345,16 +349,18 @@ class PrepareChunksThread(Thread):
         n_workers = max(1, self._worker_env.world_size)
         budget_chunks = max(1, int(max_cache_size // mean_chunk))
         per_worker = max(1, budget_chunks // n_workers)
-        if per_worker < self._max_pre_download:
+        # Floor at 2 so tiny budgets still allow one in-flight + one retained chunk.
+        capped = max(2, per_worker)
+        if capped < self._max_pre_download:
             logger.info(
                 "max_cache_size=%s (~%d chunks) with %d workers: capping max_pre_download %d → %d to limit peak disk",
                 self._max_cache_size,
                 budget_chunks,
                 n_workers,
                 self._max_pre_download,
-                per_worker,
+                capped,
             )
-            self._max_pre_download = per_worker
+            self._max_pre_download = capped
 
     def _cache_over_budget(self, *, reconcile: bool = False, extra_bytes: int = 0) -> bool:
         """True when on-disk cache is at/over ``max_cache_size`` (node-wide folder)."""

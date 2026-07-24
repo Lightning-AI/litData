@@ -202,8 +202,9 @@ def test_cap_pre_download_under_shared_budget(tmpdir, monkeypatch):
     assert thread._slot_budget_enabled()
     thread._max_pre_download = 8
     thread._cap_pre_download_for_cache_budget()
-    # 20MB / 4MB mean = 5 chunks / 16 workers → per_worker 1.
-    assert thread._max_pre_download == 1
+    # 20MB / 4MB mean = 5 chunks / 16 workers → per_worker 1, floored to 2
+    # (max_pre=1 deadlocks delete-when-processed gating).
+    assert thread._max_pre_download == 2
 
 
 def test_max_chunk_slots_includes_five_percent_headroom(tmpdir):

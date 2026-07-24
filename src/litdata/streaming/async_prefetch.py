@@ -197,6 +197,9 @@ def close_thread_event_loop() -> None:
     ``asyncio.to_thread`` (used when a downloader has no native async path) parks
     workers named ``asyncio_N`` on the loop's default executor. Leaving the loop
     open leaks those daemon threads and trips the session thread-police on Windows.
+
+    Executor shutdown is ``wait=False`` so prepare-thread ``finally`` never blocks
+    forever if a worker is stuck (``thread.join`` / pytest-timeout).
     """
     loop = getattr(_THREAD_LOOPS, "loop", None)
     _THREAD_LOOPS.loop = None
@@ -206,10 +209,13 @@ def close_thread_event_loop() -> None:
         if not loop.is_running():
             with contextlib.suppress(Exception):
                 loop.run_until_complete(loop.shutdown_asyncgens())
-            # Python 3.9+: wait for to_thread / run_in_executor workers.
-            if hasattr(loop, "shutdown_default_executor"):
+            # Prefer non-blocking teardown over ``shutdown_default_executor()``,
+            # which joins executor threads and can hang prepare-thread exit.
+            executor = getattr(loop, "_default_executor", None)
+            if executor is not None:
                 with contextlib.suppress(Exception):
-                    loop.run_until_complete(loop.shutdown_default_executor())
+                    loop._default_executor = None
+                    executor.shutdown(wait=False)
     finally:
         with contextlib.suppress(Exception):
             loop.close()
