@@ -38,9 +38,7 @@ from litdata.streaming.dataloader import StreamingDataLoader  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 from litdata.utilities.format import _convert_bytes_to_int  # noqa: E402
 
-DEFAULT_INPUT = (
-    "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
-)
+DEFAULT_INPUT = "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
 DEFAULT_CACHE = "/cache/chunks"
 
 
@@ -190,7 +188,7 @@ def run_one(
                 except Exception:
                     pass
         del loader, ds
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
         print(f"  FAIL max_cache_size={max_cache_size}: {err}", flush=True)
 

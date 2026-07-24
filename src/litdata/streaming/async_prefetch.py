@@ -104,8 +104,7 @@ def downloader_supports_adownload(downloader: Downloader | None) -> bool:
         return False
     cls = type(downloader)
     return (
-        cls.adownload_file is not Downloader.adownload_file
-        or cls.adownload_fileobj is not Downloader.adownload_fileobj
+        cls.adownload_file is not Downloader.adownload_file or cls.adownload_fileobj is not Downloader.adownload_fileobj
     )
 
 

@@ -96,10 +96,7 @@ def bench_download(input_dir: str, n_chunks: int, drop_page_cache: bool = False)
     try:
         serial_dl = get_downloader(remote + "/", serial_cache, selected, {}, {})
         async_dl = get_downloader(remote + "/", async_cache, selected, {}, {})
-        print(
-            f"downloader={type(serial_dl).__name__} "
-            f"native_adownload={downloader_supports_adownload(serial_dl)}"
-        )
+        print(f"downloader={type(serial_dl).__name__} native_adownload={downloader_supports_adownload(serial_dl)}")
 
         t0 = time.perf_counter()
         for idx in indexes:

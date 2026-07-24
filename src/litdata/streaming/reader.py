@@ -84,9 +84,7 @@ class PrepareChunksThread(Thread):
         self._item_loader = item_loader
         # Async gather needs enough in-flight slots to overlap RTT; raise the
         # floor when async prefetch is active (real-S3 benches: 2→4).
-        self._max_pre_download = apply_async_pre_download_floor(
-            max_pre_download, remote_dir=config._remote_dir
-        )
+        self._max_pre_download = apply_async_pre_download_floor(max_pre_download, remote_dir=config._remote_dir)
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
@@ -237,9 +235,7 @@ class PrepareChunksThread(Thread):
         except Exception as e:
             logger.debug(f"_note_chunk_removed({chunk_index}) failed: {e}")
 
-    def _apply_delete(
-        self, chunk_index: int, skip_lock: bool = False, *, release_slot: bool = True
-    ) -> None:
+    def _apply_delete(self, chunk_index: int, skip_lock: bool = False, *, release_slot: bool = True) -> None:
         """Inform the item loader of the chunk to delete.
 
         ``release_slot=False`` keeps the shared disk-slot reservation (used by
@@ -318,8 +314,7 @@ class PrepareChunksThread(Thread):
         per_worker = max(1, budget_chunks // n_workers)
         if per_worker < self._max_pre_download:
             logger.info(
-                "max_cache_size=%s (~%d chunks) with %d workers: "
-                "capping max_pre_download %d → %d to limit peak disk",
+                "max_cache_size=%s (~%d chunks) with %d workers: capping max_pre_download %d → %d to limit peak disk",
                 self._max_cache_size,
                 budget_chunks,
                 n_workers,
@@ -368,9 +363,7 @@ class PrepareChunksThread(Thread):
                 return sum(
                     1
                     for e in entries
-                    if e.is_file(follow_symlinks=False)
-                    and e.name.startswith("chunk-")
-                    and e.name.endswith(".bin")
+                    if e.is_file(follow_symlinks=False) and e.name.startswith("chunk-") and e.name.endswith(".bin")
                 )
         except OSError:
             return 0

@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import resource
-import shutil
 import sys
 import tempfile
 import time
@@ -47,9 +46,7 @@ from litdata.streaming.dataloader import StreamingDataLoader  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 from litdata.streaming.resolver import _resolve_dir  # noqa: E402
 
-DEFAULT_INPUT = (
-    "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
-)
+DEFAULT_INPUT = "/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search"
 DEFAULT_CACHE = "/cache/chunks"
 
 
@@ -186,7 +183,7 @@ def run_once(
                 except Exception:
                     pass
         del loader, ds
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
 
     wall = sum(e["elapsed_s"] for e in epoch_stats)

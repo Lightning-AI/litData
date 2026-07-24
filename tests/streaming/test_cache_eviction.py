@@ -197,10 +197,6 @@ def test_max_chunk_slots_includes_five_percent_headroom(tmpdir):
 def test_on_disk_chunk_count_matches_bin_files(tmpdir):
     cache_dir = _seed_cache(tmpdir, n_items=24, chunk_size=4)
     thread = _make_thread(cache_dir, max_cache_size=10**9)
-    n_bins = sum(
-        1
-        for name in os.listdir(cache_dir)
-        if name.startswith("chunk-") and name.endswith(".bin")
-    )
+    n_bins = sum(1 for name in os.listdir(cache_dir) if name.startswith("chunk-") and name.endswith(".bin"))
     assert thread._on_disk_chunk_count() == n_bins
     assert n_bins > 0
