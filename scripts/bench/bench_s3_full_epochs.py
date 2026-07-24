@@ -124,8 +124,11 @@ def main() -> None:
     epoch_rows = []
     for epoch in range(args.epochs):
         num_samples = 0
+        t_first_batch = None
         t0 = time.time()
         for data in tqdm(loader, smoothing=0, mininterval=1, desc=f"{args.label} epoch{epoch}"):
+            if t_first_batch is None:
+                t_first_batch = time.time() - t0
             num_samples += int(data[0].shape[0])
         elapsed = time.time() - t0
         ips = num_samples / elapsed if elapsed else float("nan")
@@ -135,11 +138,13 @@ def main() -> None:
             "samples": num_samples,
             "elapsed_s": elapsed,
             "images_per_s": ips,
+            "t_first_batch_s": t_first_batch,
         }
         epoch_rows.append(row)
         print(
             f"For {args.label} on epoch {epoch}, streamed over {num_samples} samples "
-            f"in {elapsed:.3f}s or {ips:.1f} images/sec.",
+            f"in {elapsed:.3f}s or {ips:.1f} images/sec "
+            f"(t_first_batch={t_first_batch:.3f}s).",
             flush=True,
         )
 

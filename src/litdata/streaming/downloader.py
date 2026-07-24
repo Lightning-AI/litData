@@ -37,6 +37,19 @@ from litdata.streaming.client import R2Client, S3Client
 
 logger = logging.getLogger("litdata.streaming.downloader")
 
+# Obstore stream yield size. Default matches boto3 multipart chunksize (8MB).
+# Override with LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB (integer MiB) for benches.
+def _obstore_stream_min_chunk_size() -> int:
+    raw = os.getenv("LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB")
+    if raw:
+        return max(1, int(raw)) * 1024 * 1024
+    return 8 * 1024 * 1024
+
+
+# Obstore default request timeout is 30s; large chunk GETs under worker
+# contention can exceed that. Speed-neutral, avoids spurious retries.
+_OBSTORE_CLIENT_OPTIONS: dict[str, Any] = {"timeout": "200s"}
+
 
 class Downloader(ABC):
     def __init__(
@@ -172,28 +185,35 @@ class S3Downloader(Downloader):
             suppress(Timeout, FileNotFoundError),
             FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
-            from boto3.s3.transfer import TransferConfig
+            if os.path.exists(local_filepath):
+                return
+            # Prefer obstore for sync downloads too (Studio: often faster than
+            # boto3 serial on ~64MB chunks). Fall back to boto3 if unavailable.
+            tmp_path = self._temp_download_path(local_filepath)
+            try:
+                os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+                if _OBSTORE_AVAILABLE:
+                    import obstore as obs
 
-            extra_args: dict[str, Any] = {}
+                    store = self._get_store(obj.netloc)
+                    resp = obs.get(store, obj.path.lstrip("/"))
+                    with open(tmp_path, "wb", buffering=1024 * 1024) as f:
+                        for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
+                            f.write(chunk)
+                else:
+                    from boto3.s3.transfer import TransferConfig
 
-            if not os.path.exists(local_filepath):
-                # Issue: https://github.com/boto/boto3/issues/3113
-                # Download to a temp path then atomically replace so co-workers never observe a
-                # partial final file.
-                tmp_path = self._temp_download_path(local_filepath)
-                try:
                     self._client.client.download_file(
                         obj.netloc,
                         obj.path.lstrip("/"),
                         tmp_path,
-                        ExtraArgs=extra_args,
                         Config=TransferConfig(use_threads=False),
                     )
-                    self._atomic_replace(tmp_path, local_filepath)
-                except Exception:
-                    with suppress(FileNotFoundError, PermissionError):
-                        os.remove(tmp_path)
-                    raise
+                self._atomic_replace(tmp_path, local_filepath)
+            except Exception:
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(tmp_path)
+                raise
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)
@@ -243,7 +263,11 @@ class S3Downloader(Downloader):
 
             session = boto3.Session(**self._storage_options, **self.session_options)
             credential_provider = Boto3CredentialProvider(session)
-            self._store = S3Store(bucket, credential_provider=credential_provider)
+            self._store = S3Store(
+                bucket,
+                credential_provider=credential_provider,
+                client_options=_OBSTORE_CLIENT_OPTIONS,
+            )
         return self._store
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
@@ -281,9 +305,8 @@ class S3Downloader(Downloader):
         try:
             os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
             resp = await obs.get_async(store, key)
-            # Large chunk writes (~64MB): 1MB buffer cuts syscall spam vs default.
             with open(tmp_path, "wb", buffering=1024 * 1024) as f:
-                async for chunk in resp.stream():
+                async for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
                     f.write(chunk)
             self._atomic_replace(tmp_path, local_filepath)
         except Exception:

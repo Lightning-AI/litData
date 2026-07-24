@@ -149,7 +149,11 @@ def test_binary_writer_with_jpeg_and_int(tmpdir):
     reader = BinaryReader(cache_dir, max_cache_size=10 ^ 9)
     for i in range(100):
         data = reader.read(ChunkedIndex(i, chunk_index=i // 4))
-        np.testing.assert_array_equal(np.asarray(data["x"]).squeeze(0), imgs[i])
+        # JPEG deserialize uses ImageReadMode.RGB (CHW), including grayscale sources.
+        got = np.asarray(data["x"])
+        assert got.shape == (3, 28, 28)
+        expected = np.asarray(imgs[i].convert("RGB")).transpose(2, 0, 1)
+        np.testing.assert_array_equal(got, expected)
         assert data["y"] == i
 
 

@@ -303,6 +303,31 @@ class PrepareChunksThread(Thread):
         self._pre_download_counter -= 1
         return
 
+    def _drain_and_flush_deletes(self) -> None:
+        """Drain the delete queue and remove pending chunks before thread exit.
+
+        Normal ``_maybe_delete_chunks`` only pulls one queue item per call. At
+        END_TOKEN several indexes can still be queued (or stuck behind the
+        prefetch-window gate), which leaked the last chunk files / ``.lock``s.
+        """
+        while True:
+            chunk_index = _get_from_queue(self._to_delete_queue, timeout=0.0)
+            if chunk_index is None:
+                break
+            self._chunks_index_to_be_deleted.append(chunk_index)
+            self._pre_download_counter -= 1
+
+        if not self._max_cache_size:
+            return
+
+        # Shutdown: drop prefetch-window gating so delete-when-processed /
+        # over-budget caches actually empty.
+        while self._chunks_index_to_be_deleted:
+            if self._delete_chunks_when_processed or self._cache_over_budget():
+                self._apply_delete(self._chunks_index_to_be_deleted.popleft())
+            else:
+                break
+
     def _cap_pre_download_for_cache_budget(self) -> None:
         """Shrink per-worker prefetch so workers × chunks fit in ``max_cache_size``."""
         if not self._slot_budget_enabled():
@@ -615,7 +640,7 @@ class PrepareChunksThread(Thread):
                 chunk_index = _get_from_queue(self._to_download_queue)
                 if chunk_index == _END_TOKEN:
                     if self._max_cache_size:
-                        self._maybe_delete_chunks(timeout=_DEFAULT_TIMEOUT)
+                        self._drain_and_flush_deletes()
                     self._has_exited = True
                     return
 

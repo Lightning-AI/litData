@@ -26,6 +26,7 @@ def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkey
     config = MagicMock(spec=ChunksConfig)
     config.num_bytes = 1024
     config._cache_dir = cache_dir
+    config._remote_dir = None
     config.download_chunk_from_index = MagicMock()
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
@@ -57,6 +58,7 @@ def test_prefetch_side_polls_use_short_timeout_when_buffer_full(monkeypatch, tmp
     config = MagicMock(spec=ChunksConfig)
     config.num_bytes = 1024
     config._cache_dir = cache_dir
+    config._remote_dir = None
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
 
