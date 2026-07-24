@@ -70,13 +70,13 @@ lint.per-file-ignores."scripts/bench/**" = [
   "D105",
   "D107",
   "D205",
-  "D301", # raw docstring escapes in CLI examples
+  "D301",   # raw docstring escapes in CLI examples
   "D401",
   "D404",
-  "S110", # teardown best-effort
+  "S110",   # teardown best-effort
   "S311",
-  "S603", # trusted local subprocess for bench orchestration
-  "S605", # historic cache wipe via shell glob
+  "S603",   # trusted local subprocess for bench orchestration
+  "S605",   # historic cache wipe via shell glob
   "SIM105",
 ]
 lint.per-file-ignores."setup.py" = [ "D100", "SIM115" ]
