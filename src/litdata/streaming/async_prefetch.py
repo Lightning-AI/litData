@@ -196,10 +196,12 @@ def close_thread_event_loop() -> None:
 
     ``asyncio.to_thread`` (used when a downloader has no native async path) parks
     workers named ``asyncio_N`` on the loop's default executor. Leaving the loop
-    open leaks those daemon threads and trips the session thread-police on Windows.
+    open leaks those threads and trips the session thread-police on Windows.
 
-    Executor shutdown is ``wait=False`` so prepare-thread ``finally`` never blocks
-    forever if a worker is stuck (``thread.join`` / pytest-timeout).
+    Executor shutdown is non-blocking (``wait=False``) so prepare-thread ``finally``
+    never joins forever if a download worker is stuck. Threads are marked daemon and
+    futures cancelled so orphans cannot keep the process alive or poison later
+    DataLoader forks under pytest-xdist.
     """
     loop = getattr(_THREAD_LOOPS, "loop", None)
     _THREAD_LOOPS.loop = None
@@ -215,7 +217,10 @@ def close_thread_event_loop() -> None:
             if executor is not None:
                 with contextlib.suppress(Exception):
                     loop._default_executor = None
-                    executor.shutdown(wait=False)
+                    for thread in getattr(executor, "_threads", set()):
+                        thread.daemon = True
+                    # cancel_futures is 3.9+; litdata already requires newer Python.
+                    executor.shutdown(wait=False, cancel_futures=True)
     finally:
         with contextlib.suppress(Exception):
             loop.close()
