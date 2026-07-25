@@ -6,13 +6,13 @@ Studio path / credential background: [lightning-studio.md](lightning-studio.md).
 
 ## Canonical Studio dataset & runner
 
-| Item          | Value                                                                                   |
-| ------------- | --------------------------------------------------------------------------------------- |
-| Dataset       | `/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search` (~64 MB chunks) |
-| Cache         | `/cache/chunks` — **wipe before every cold ep0** (`rm -rf /cache/chunks/*`)             |
-| Runner        | `scripts/bench/bench_s3_full_epochs.py`                                                 |
+| Item          | Value                                                                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dataset       | `/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search` (~64 MB chunks)                                                                                              |
+| Cache         | `/cache/chunks` — **wipe before every cold ep0** (`rm -rf /cache/chunks/*`)                                                                                                          |
+| Runner        | `scripts/bench/bench_s3_full_epochs.py`                                                                                                                                              |
 | Python        | Studio default is **GIL on**. Nogil needs a free-threading conda/Studio env first — see [lightning-studio.md](lightning-studio.md). `PYTHON_GIL=0` / `-Xgil=0` alone are not enough. |
-| Typical knobs | `--workers 48 --batch-size 256 --max-pre-download 4 --max-cache-size 200GB --epochs 1`  |
+| Typical knobs | `--workers 48 --batch-size 256 --max-pre-download 4 --max-cache-size 200GB --epochs 1`                                                                                               |
 
 ```bash
 cd /path/to/litData
