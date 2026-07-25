@@ -24,15 +24,15 @@ s3://bucket/prefix                 Direct URL (boto3/obstore; no Studio resolver
 
 ## Teamspace path prefixes
 
-| Prefix | Role |
-| ------ | ---- |
-| `/teamspace/studios/this_studio/` | This Studio’s workspace (local) |
-| `/teamspace/studios/<other>/` | Another Studio’s code/content (resolved to cluster bucket URL) |
-| `/teamspace/s3_connections/<conn>/` | Named S3 data connection → bucket URL + `data_connection_id` |
-| `/teamspace/gcs_connections/<conn>/` | Named GCS data connection |
-| `/teamspace/s3_folders/`, `/teamspace/gcs_folders/` | Folder-style connections |
-| `/teamspace/lightning_storage/` | Lightning-managed object storage (often R2-style creds) |
-| `/teamspace/datasets/` | Dataset mounts (path may be rewritten for cache identity) |
+| Prefix                                                                                    | Role                                                                                |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `/teamspace/studios/this_studio/`                                                         | This Studio’s workspace (local)                                                     |
+| `/teamspace/studios/<other>/`                                                             | Another Studio’s code/content (resolved to cluster bucket URL)                      |
+| `/teamspace/s3_connections/<conn>/`                                                       | Named S3 data connection → bucket URL + `data_connection_id`                        |
+| `/teamspace/gcs_connections/<conn>/`                                                      | Named GCS data connection                                                           |
+| `/teamspace/s3_folders/`, `/teamspace/gcs_folders/`                                       | Folder-style connections                                                            |
+| `/teamspace/lightning_storage/`                                                           | Lightning-managed object storage (often R2-style creds)                             |
+| `/teamspace/datasets/`                                                                    | Dataset mounts (path may be rewritten for cache identity)                           |
 | `/teamspace/efs_connections/`, `/teamspace/efs_folders/`, `/teamspace/filestore_folders/` | POSIX / EFS-style stores (filestore path rewrite helpers in `dataset_utilities.py`) |
 
 Connection name is path segment `[3]` (e.g. `/teamspace/s3_connections/optimized-imagenet-1m/...` → connection `optimized-imagenet-1m`). Lookup: `LightningClient.data_connection_service_list_data_connections(project_id)`.
@@ -41,12 +41,12 @@ Connection name is path segment `[3]` (e.g. `/teamspace/s3_connections/optimized
 
 Required for resolving non–`this_studio` teamspace paths / minting temp creds:
 
-| Env | Purpose |
-| --- | ------- |
-| `LIGHTNING_CLOUD_PROJECT_ID` | Project for API list/mint calls |
-| `LIGHTNING_CLUSTER_ID` | Cluster (Studio resolve, some APIs) |
-| `LIGHTNING_CLOUD_URL` | Control-plane base URL (temp credentials) |
-| `LIGHTNING_CLOUD_PROVIDER` | `aws` / GCP (bucket scheme for Studio content) |
+| Env                          | Purpose                                        |
+| ---------------------------- | ---------------------------------------------- |
+| `LIGHTNING_CLOUD_PROJECT_ID` | Project for API list/mint calls                |
+| `LIGHTNING_CLUSTER_ID`       | Cluster (Studio resolve, some APIs)            |
+| `LIGHTNING_CLOUD_URL`        | Control-plane base URL (temp credentials)      |
+| `LIGHTNING_CLOUD_PROVIDER`   | `aws` / GCP (bucket scheme for Studio content) |
 
 If these are missing outside Studio, `/teamspace/s3_connections/…` resolution fails with a clear `RuntimeError` / `ValueError`. Local CI and laptops usually use `s3://…` + normal AWS creds, or `local:` fakes in tests.
 
