@@ -18,7 +18,7 @@ import random
 import shutil
 import sys
 from functools import partial
-from time import sleep
+from time import perf_counter, sleep
 from typing import Any
 from unittest import mock
 from unittest.mock import patch
@@ -132,7 +132,13 @@ def test_optimize_dataset(
         keep_data_ordered=keep_data_ordered,
     )
 
-    sleep(2)  # wait for the cache to be created
+    # optimize writes index.json when the dataset is ready; poll instead of a fixed sleep.
+    index_path = os.path.join(data_dir, "index.json")
+    deadline = perf_counter() + 5.0
+    while not os.path.exists(index_path):
+        if perf_counter() > deadline:
+            raise TimeoutError(f"Timed out waiting for {index_path}")
+        sleep(0.05)
 
     ds = StreamingDataset(input_dir=data_dir)
 
@@ -1187,8 +1193,6 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
     dataloader_iter = iter(dataloader)
     next(dataloader_iter)
 
-    sleep(1)
-
     state_dict = dataset.state_dict(0, 1, 2)
 
     dataset.load_state_dict(state_dict)
@@ -1323,8 +1327,6 @@ def test_dataset_valid_state_override(tmpdir, monkeypatch):
     dataloader = DataLoader(dataset, num_workers=1, batch_size=2)
     dataloader_iter = iter(dataloader)
     next(dataloader_iter)
-
-    sleep(1)
 
     state_dict = dataset.state_dict(0, 1, 2)
 

@@ -1,5 +1,5 @@
 import sys
-from time import sleep, time
+from time import time
 from unittest import mock
 
 import pytest
@@ -92,11 +92,12 @@ def test_s3_client_with_cloud_space_id(use_shared_credentials, monkeypatch):
     assert s3.client
     assert s3.client
     boto3_session().client.assert_called_once()
-    sleep(1 - (time() - s3._last_time))
+    # Backdate last fetch so the next property access refreshes without sleeping.
+    s3._last_time = time() - s3._refetch_interval - 0.01
     assert s3.client
     assert s3.client
     assert len(boto3_session().client._mock_mock_calls) == 6
-    sleep(1 - (time() - s3._last_time))
+    s3._last_time = time() - s3._refetch_interval - 0.01
     assert s3.client
     assert s3.client
     assert len(boto3_session().client._mock_mock_calls) == 9
@@ -422,8 +423,8 @@ def test_r2_client_property_refreshes_expired_credentials(monkeypatch):
     r2_client.client
     first_call_count = boto3_session().client.call_count
 
-    # Wait for credentials to expire
-    sleep(1.1)
+    # Expire credentials without sleeping through the refetch interval.
+    r2_client._last_time = time() - r2_client._refetch_interval - 0.01
 
     # Second access should refresh credentials
     r2_client.client

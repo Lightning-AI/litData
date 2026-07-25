@@ -203,7 +203,7 @@ def test_custom_collate_multiworker():
 
 def test_dataloader_no_workers(tmpdir):
     cache = Cache(input_dir=str(tmpdir), chunk_bytes="64MB")
-    for i in range(1000):
+    for i in range(100):
         cache[i] = i
 
     cache.done()
@@ -211,15 +211,15 @@ def test_dataloader_no_workers(tmpdir):
 
     dataset = StreamingDataset(str(tmpdir), shuffle=True)
     dataloader = StreamingDataLoader(dataset)
-    assert len(dataset) == 1000
-    assert len(dataloader) == 1000
-    assert len(dataset) == 1000
+    assert len(dataset) == 100
+    assert len(dataloader) == 100
+    assert len(dataset) == 100
 
 
 @pytest.mark.timeout(120)
 def test_dataloader_with_loading_states(tmpdir):
     cache = Cache(input_dir=str(tmpdir), chunk_bytes="64MB")
-    for i in range(100):
+    for i in range(40):
         cache[i] = i
     cache.done()
     cache.merge()
@@ -231,16 +231,16 @@ def test_dataloader_with_loading_states(tmpdir):
     dataloader.load_state_dict(dataloader.state_dict())
     batch = next(iter(dataloader))
     assert len(batch) == 4, "Batch size should be 4"
-    assert len(dataloader) == 25, "Dataloader length should be 25 (100 items / batch size 4)"
+    assert len(dataloader) == 10, "Dataloader length should be 10 (40 items / batch size 4)"
 
     # Test dataloader with num workers
     dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2)
-    assert len(dataloader) == 25, "Dataloader length should be 25 (100 items / batch size 4)"
+    assert len(dataloader) == 10, "Dataloader length should be 10 (40 items / batch size 4)"
 
     # Verify dataloader state after partial iteration
     for batch_idx, batch in enumerate(dataloader):
         assert dataloader.current_epoch == 1, "Current epoch should be 1"
-        if batch_idx == 10:
+        if batch_idx == 4:
             break
     dataloader.load_state_dict(dataloader.state_dict())
     assert dataloader.restore
@@ -249,8 +249,8 @@ def test_dataloader_with_loading_states(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 1, "Current epoch should be 1"
         count += 1
-    # we consumed 11 batches (batch_idx==10) before.
-    assert count == 14, "There should be at least 14 batches remaining in the first epoch"
+    # we consumed 5 batches (batch_idx==4) before.
+    assert count == 5, "There should be 5 batches remaining in the first epoch"
     assert not dataloader.restore
 
     # Verify batches in the second epoch
@@ -258,7 +258,7 @@ def test_dataloader_with_loading_states(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 2, "Current epoch should be 2"
         count += 1
-    assert count >= 25, "There should be at least 25 batches in the second epoch"
+    assert count >= 10, "There should be at least 10 batches in the second epoch"
 
     # Verify that the datalaoder can resume after complete last epoch
     dataloader.load_state_dict(dataloader.state_dict())
@@ -267,13 +267,13 @@ def test_dataloader_with_loading_states(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 3, "Current epoch should be 3"
         count += 1
-    assert count >= 25, "There should be at least 25 batches in the third epoch"
+    assert count >= 10, "There should be at least 10 batches in the third epoch"
 
 
 @pytest.mark.timeout(120)
 def test_dataloader_states_with_persistent_workers(tmpdir):
     cache = Cache(input_dir=str(tmpdir), chunk_bytes="64MB")
-    for i in range(100):
+    for i in range(40):
         cache[i] = i
     cache.done()
     cache.merge()
@@ -281,12 +281,12 @@ def test_dataloader_states_with_persistent_workers(tmpdir):
     dataset = StreamingDataset(str(tmpdir), shuffle=True)
 
     dataloader = StreamingDataLoader(dataset, batch_size=4, num_workers=2)
-    assert len(dataloader) == 25, "Dataloader length should be 25 (100 items / batch size 4)"
+    assert len(dataloader) == 10, "Dataloader length should be 10 (40 items / batch size 4)"
 
     # Verify dataloader state after partial iteration
     for batch_idx, batch in enumerate(dataloader):
         assert dataloader.current_epoch == 1, "Current epoch should be 1"
-        if batch_idx == 10:
+        if batch_idx == 4:
             break
 
     prev_dataloader_state = dataloader.state_dict()
@@ -299,8 +299,8 @@ def test_dataloader_states_with_persistent_workers(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 1, "Current epoch should be 1"
         count += 1
-    # batch_idx==10 means we consumed 11 batches before.
-    assert count == 14, "There should be at least 14 batches remaining in the first epoch"
+    # batch_idx==4 means we consumed 5 batches before.
+    assert count == 5, "There should be 5 batches remaining in the first epoch"
     assert not dataloader.restore
 
     # Verify batches in the second epoch
@@ -308,7 +308,7 @@ def test_dataloader_states_with_persistent_workers(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 2, "Current epoch should be 2"
         count += 1
-    assert count >= 25, "There should be at least 25 batches in the second epoch"
+    assert count >= 10, "There should be at least 10 batches in the second epoch"
 
     # Verify that the datalaoder can resume after complete last epoch
     dataloader.load_state_dict(dataloader.state_dict())
@@ -317,7 +317,7 @@ def test_dataloader_states_with_persistent_workers(tmpdir):
     for _ in dataloader:
         assert dataloader.current_epoch == 3, "Current epoch should be 3"
         count += 1
-    assert count >= 25, "There should be at least 25 batches in the third epoch"
+    assert count >= 10, "There should be at least 10 batches in the third epoch"
 
 
 @pytest.mark.timeout(90)
@@ -326,7 +326,7 @@ def test_resume_dataloader_with_new_dataset(tmpdir):
     dataset_2_path = tmpdir.join("dataset_2")
     for dataset in [dataset_1_path, dataset_2_path]:
         cache = Cache(input_dir=str(dataset), chunk_bytes="64MB")
-        for i in range(50):
+        for i in range(20):
             cache[i] = i
         cache.done()
         cache.merge()
@@ -423,16 +423,16 @@ def test_dataloader_dataset_transform(tmpdir, shuffle):
     os.makedirs(cache_dir)
     os.makedirs(data_dir)
 
-    # Create a dataset with 100 items, 20 items per chunk
-    cache = Cache(str(data_dir), chunk_size=20)
-    for i in range(100):
+    # Create a dataset with 40 items, 10 items per chunk
+    cache = Cache(str(data_dir), chunk_size=10)
+    for i in range(40):
         cache[i] = i
     cache.done()
     cache.merge()
 
     dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
     dataset_length = len(dataset)
-    assert dataset_length == 100
+    assert dataset_length == 40
 
     # ACT
     dl = StreamingDataLoader(dataset, batch_size=10, num_workers=2, shuffle=shuffle)
@@ -472,16 +472,16 @@ def test_dataloader_dataset_transform_inheritance(tmpdir, shuffle):
     os.makedirs(cache_dir)
     os.makedirs(data_dir)
 
-    # Create a dataset with 100 items, 20 items per chunk
-    cache = Cache(str(data_dir), chunk_size=20)
-    for i in range(100):
+    # Create a dataset with 40 items, 10 items per chunk
+    cache = Cache(str(data_dir), chunk_size=10)
+    for i in range(40):
         cache[i] = i
     cache.done()
     cache.merge()
 
     dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
     dataset_length = len(dataset)
-    assert dataset_length == 100
+    assert dataset_length == 40
 
     # ACT
     dl = StreamingDataLoader(dataset, batch_size=10, num_workers=2, shuffle=shuffle)

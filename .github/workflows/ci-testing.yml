@@ -61,10 +61,17 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
+          # Ubuntu runners can take more xdist workers; keep macOS/Windows at 2 to
+          # avoid spawn/resource pressure from DataLoader multiprocessing tests.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            XDIST_WORKERS=4
+          else
+            XDIST_WORKERS=2
+          fi
           pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
-              -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+              -n "${XDIST_WORKERS}" --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Run processing tests sequentially
         run: |
