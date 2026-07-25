@@ -2,6 +2,8 @@
 
 Use this when comparing download backends, `max_pre_download`, async prefetch, or cache sizes on a real ImageNet-scale dataset. Microbenches lie; cold epoch-0 with a wiped cache is the truth for S3.
 
+Studio path / credential background: [lightning-studio.md](lightning-studio.md).
+
 ## Canonical Studio dataset & runner
 
 | Item | Value |

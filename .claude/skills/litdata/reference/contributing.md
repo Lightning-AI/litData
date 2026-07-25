@@ -6,6 +6,8 @@ Full reference: `CONTRIBUTING.md`. This is the fast path.
 
 Requires Python ≥ 3.10 and `make`. LitData uses `uv` for installs.
 
+On **Lightning Studio**, the checkout often lives under `/teamspace/studios/this_studio/…`, with datasets attached as `/teamspace/s3_connections/…`. See [lightning-studio.md](lightning-studio.md) before assuming paths are plain local disks.
+
 ```bash
 make setup            # install-dependencies + install-pre-commit (recommended one-shot)
 ```

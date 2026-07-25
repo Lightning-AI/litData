@@ -1,6 +1,6 @@
 ---
 name: litdata
-description: Work on the LitData codebase — understand its architecture, contribute code, write/run tests, and debug/profile runtime issues. Use when navigating or editing src/litdata, answering "how does X work / where does X live", getting a change merge-ready, adding or running tests, or diagnosing a slow/hanging/nondeterministic StreamingDataset or optimize/map run. Covers streaming (read) and processing (write) pipelines, cloud backends, chunk format, shuffling, CLI, tests, CI, and tracing.
+description: Work on the LitData codebase — understand its architecture, contribute code, write/run tests, and debug/profile runtime issues. Use when navigating or editing src/litdata, answering "how does X work / where does X live", getting a change merge-ready, adding or running tests, diagnosing a slow/hanging/nondeterministic StreamingDataset or optimize/map run, or working inside Lightning Studio (/teamspace paths, data connections, free-threaded benches). Covers streaming (read) and processing (write) pipelines, cloud backends, Studio resolution, chunk format, shuffling, CLI, tests, CI, and tracing.
 ---
 
 # LitData
@@ -22,6 +22,7 @@ Keep this SKILL.md as the map; load a `reference/` file only for the task at han
 | Cache↔Writer/Reader, PrepareChunksThread, shared-chunk deletion races   | `reference/cache-and-chunk-lifecycle.md` |
 | Prefetch/`max_pre_download`, eviction deadlocks, async+obstore knobs    | `reference/cache-and-chunk-lifecycle.md` (Prefetch & eviction) + `reference/debugging.md` |
 | Studio ImageNet cold-epoch benches, fair async vs boto3 comparisons     | `reference/benchmarking.md`              |
+| Lightning Studio: `/teamspace` paths, data connections, credentials     | `reference/lightning-studio.md`          |
 | Understand the write path (`optimize`/`map`), worker model, raw indexer | `reference/processing.md`                |
 | Set up dev env, coding style, branch/PR flow, lint/type/CI gates        | `reference/contributing.md`              |
 | Write or run tests, fixtures, mocking cloud, gating                     | `reference/testing.md`                   |
@@ -59,6 +60,10 @@ Keep this SKILL.md as the map; load a `reference/` file only for the task at han
 - **Distribution is env-var driven, not networked** — rank read from `_DistributedEnv`/`_WorkerEnv` (read) or `DATA_OPTIMIZER_*` (write).
 - **Determinism**: read-path shuffling is seeded by `seed`+`epoch`+`num_chunks`+`chunk_index`; same inputs ⇒ same order ⇒ resumable.
 - **Pluggable registries**: `Downloader` (read, by URL prefix, `downloader.py`), `FsProvider` (write/management, `fs_provider.py`), serializers (`serializers.py`), compressors (`compression.py`). `resolver.py` turns a path/URL/teamspace path into a `Dir`.
+
+## Lightning Studio (short)
+
+Much of LitData development and S3 benchmarking happens in **Lightning Studio**. Paths like `/teamspace/s3_connections/<name>/…` are resolved by `streaming/resolver.py` into a `Dir(path, url, data_connection_id)` — downloads use the cloud URL + temp credentials from the Lightning API, while `/teamspace/studios/this_studio` stays local workspace disk. Cache for benches is often `/cache/chunks`. Details: [reference/lightning-studio.md](reference/lightning-studio.md).
 
 ## Design principles (CONTRIBUTING.md) — honor when editing
 
