@@ -336,20 +336,10 @@ def rng_transform(_, rngs, which):
     return rngs[which].random()
 
 
-@pytest.mark.parametrize(
-    ("length", "num_workers", "which", "reset_rngs"),
-    [
-        # Combinatorial coverage stays on the cheap single-process path.
-        *[
-            (length, 0, which, reset_rngs)
-            for length in (None, 7)
-            for which in ("random", "numpy", "torch")
-            for reset_rngs in (False, True)
-        ],
-        # One multi-worker cell proves spawn + RNG seeding still works.
-        (None, 2, "torch", True),
-    ],
-)
+@pytest.mark.parametrize("length", [None, 7])
+@pytest.mark.parametrize("num_workers", [0, 2])
+@pytest.mark.parametrize("which", ["random", "numpy", "torch"])
+@pytest.mark.parametrize("reset_rngs", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_rng(length, num_workers, which, reset_rngs):
     transform = functools.partial(rng_transform, which=which)
@@ -507,15 +497,8 @@ def test_parallel_dataset_dataloader_states_without_any_iterations(tmp_path_fact
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize(
-    ("length", "num_workers"),
-    [
-        (None, 0),
-        (24, 0),
-        # One multi-worker cell covers spawn + multi-epoch state transitions.
-        (24, 2),
-    ],
-)
+@pytest.mark.parametrize("length", [None, 24])
+@pytest.mark.parametrize("num_workers", [0, 2])
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_dataloader_states_complete_iterations(tmp_path_factory, length, num_workers, batch_size):
@@ -575,17 +558,10 @@ def test_parallel_dataset_dataloader_states_complete_iterations(tmp_path_factory
 
 
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize(
-    ("length", "num_workers", "break_at"),
-    [
-        (None, 0, 3),
-        (48, 0, 3),
-        (48, 0, 7),
-        # One multi-worker cell covers restore after early break under spawn.
-        (None, 2, 3),
-    ],
-)
+@pytest.mark.parametrize("length", [None, 20, 48])
+@pytest.mark.parametrize("num_workers", [0, 2])
 @pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("break_at", [3, 7])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_dataloader_states_partial_iterations(
     tmp_path_factory, length, num_workers, batch_size, break_at
@@ -954,22 +930,13 @@ def test_parallel_infinite_restore_survives_early_break_without_hang(tmp_path_fa
         assert dloader.restore
 
 
-@pytest.mark.parametrize(
-    ("length", "resume", "shuffle", "num_workers"),
-    [
-        *[
-            (length, resume, shuffle, 0)
-            for length in (None, 16)
-            for resume in (False, True)
-            for shuffle in (False, True)
-        ],
-        # Multi-worker coverage (float("inf") is covered by the dedicated infinite restore test).
-        (16, True, False, 2),
-        (None, False, True, 2),
-    ],
-)
+@pytest.mark.parametrize("length", [None, 16, float("inf")])
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
-def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, resume, shuffle, num_workers):
+def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, resume, shuffle):
+    # Keep num_workers=2 for every cell: resume + worker priming is the regression surface.
+    num_workers = 2
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory,
         parlen=length,
@@ -1075,21 +1042,13 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
             break
 
 
-@pytest.mark.parametrize(
-    ("length", "resume", "shuffle", "num_workers"),
-    [
-        *[
-            (length, resume, shuffle, 0)
-            for length in (None, 4)
-            for resume in (False, True)
-            for shuffle in (False, True)
-        ],
-        (4, True, False, 2),
-        (None, False, True, 2),
-    ],
-)
+@pytest.mark.parametrize("length", [None, 4])
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
-def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, resume, shuffle, num_workers):
+def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, resume, shuffle):
+    # Keep num_workers=2 for every cell: full-epoch resume under spawn is the regression surface.
+    num_workers = 2
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory,
         parlen=length,
