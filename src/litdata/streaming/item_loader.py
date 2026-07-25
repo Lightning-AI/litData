@@ -204,8 +204,9 @@ class BaseItemLoader(ABC):
         self._sizes_fmt = "<" + "I" * len(self._data_format) if self._data_format else None
 
     def force_download(self, chunk_index: int) -> None:
-        if self._force_download_queue:
-            self._force_download_queue.put(chunk_index)
+        force_download_queue = getattr(self, "_force_download_queue", None)
+        if force_download_queue:
+            force_download_queue.put(chunk_index)
 
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
         """Declare which chunks are safe to memory-map (i.e. not shared with another worker).
@@ -232,18 +233,27 @@ class BaseItemLoader(ABC):
         Without a prefetch thread / force-download queue (local uncompressed caches), the chunk
         should already be on disk — fail fast instead of polling for ``_MAX_WAIT_TIME`` (often the
         same as the test timeout), which otherwise looks like a DataLoader worker hang.
+
+        Attributes are read via ``getattr`` because some loaders (e.g. ``ParquetLoader``) do not
+        call ``BaseItemLoader.setup``, and unit tests may invoke this helper before setup.
         """
         start_time = time()
         requested_force_download = False
-        can_request_download = self._chunk_ready_provider is not None or self._force_download_queue is not None
-        max_wait = _MAX_WAIT_TIME if can_request_download else min(2.0, float(_MAX_WAIT_TIME))
+        chunk_ready_provider = getattr(self, "_chunk_ready_provider", None)
+        force_download_queue = getattr(self, "_force_download_queue", None)
+        # Remote/prefetch path keeps the long timeout; local-only missing files fail quickly.
+        max_wait = (
+            _MAX_WAIT_TIME
+            if chunk_ready_provider is not None or force_download_queue is not None
+            else min(2.0, float(_MAX_WAIT_TIME))
+        )
 
         while True:
             if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
                 return
 
-            if self._chunk_ready_provider is not None:
-                event = self._chunk_ready_provider(chunk_index)
+            if chunk_ready_provider is not None:
+                event = chunk_ready_provider(chunk_index)
                 signaled = event.wait(timeout=0.1)
                 # Stale signal: chunk was ready once, then deleted / not yet re-published.
                 if signaled and not (
@@ -254,7 +264,9 @@ class BaseItemLoader(ABC):
             else:
                 sleep(0.1)
 
-            if can_request_download and not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
+            # Always attempt force-download after the grace period (no-op without a queue).
+            # Tests override ``force_download`` to assert this path is reached.
+            if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
                 if _DEBUG:
                     print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
                 self.force_download(chunk_index)
@@ -870,6 +882,9 @@ class ParquetLoader(BaseItemLoader):
         self._data_format = self._config["data_format"]
         self._shift_idx = len(self._data_format) * 4
         self.region_of_interest = region_of_interest
+        # ParquetLoader does not call ``BaseItemLoader.setup``; keep wait/force-download attrs defined.
+        self._force_download_queue = None
+        self._chunk_ready_provider = getattr(self, "_chunk_ready_provider", None)
         self._df: dict[int, Any] = {}
         self._chunk_row_groups: dict[int, Any] = {}
         self._chunk_row_group_item_read_count: dict[int, Any] = {}
