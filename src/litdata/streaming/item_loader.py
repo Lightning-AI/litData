@@ -228,9 +228,15 @@ class BaseItemLoader(ABC):
         If a readiness Event is already set but the file is missing (e.g. the chunk was deleted
         after a prior download), clear the Event and sleep so we do not busy-spin and starve the
         prefetch thread under the GIL.
+
+        Without a prefetch thread / force-download queue (local uncompressed caches), the chunk
+        should already be on disk — fail fast instead of polling for ``_MAX_WAIT_TIME`` (often the
+        same as the test timeout), which otherwise looks like a DataLoader worker hang.
         """
         start_time = time()
         requested_force_download = False
+        can_request_download = self._chunk_ready_provider is not None or self._force_download_queue is not None
+        max_wait = _MAX_WAIT_TIME if can_request_download else min(2.0, float(_MAX_WAIT_TIME))
 
         while True:
             if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
@@ -248,13 +254,13 @@ class BaseItemLoader(ABC):
             else:
                 sleep(0.1)
 
-            if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
+            if can_request_download and not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
                 if _DEBUG:
                     print(f"[ItemLoader] Requested force download for {chunk_filepath} at {datetime.now().isoformat()}")
                 self.force_download(chunk_index)
                 requested_force_download = True
 
-            if (time() - start_time) > _MAX_WAIT_TIME:
+            if (time() - start_time) > max_wait:
                 raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
 
     def __getstate__(self) -> dict[str, Any]:
