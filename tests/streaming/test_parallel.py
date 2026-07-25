@@ -1,13 +1,16 @@
 import functools
+import os
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
 import pytest
 import torch
 from torch.utils.data import IterableDataset
 
+from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.cache import Cache
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
@@ -422,17 +425,60 @@ def test_dataloader_shuffle(tmp_path, shuffle):
     assert shuffle ^ all(torch.equal(x, y) for x, y in zip(epoch_1_batches[:3], epoch_2_batches[-3:]))
 
 
-def prepare_parallel_dataset_and_dataloder(
-    tmp_path_factory, parlen, len1=48, len2=56, num_workers=0, batch_size=4, shuffle=True, resume=True, tmpdir=None
-):
-    tmpdir = tmp_path_factory.mktemp("data") if tmpdir is None else tmpdir
+def _ensure_parallel_cache_pair(tmpdir: Path, len1: int, len2: int) -> list[str]:
+    """Build (or reuse) two Cache datasets under ``tmpdir`` for parallel-dataset tests."""
     datasets = [str(tmpdir / f"dataset_{i}") for i in range(2)]
     for dataset, num_items in zip(datasets, [len1, len2]):
+        if os.path.exists(os.path.join(dataset, _INDEX_FILENAME)):
+            continue
+        os.makedirs(dataset, exist_ok=True)
         cache = Cache(input_dir=dataset, chunk_size=10)
         for i in range(num_items):
             cache[i] = i
         cache.done()
         cache.merge()
+    return datasets
+
+
+def _parallel_sample_order(n_items: int, num_workers: int) -> list[int]:
+    """Return the sample index order for equal-sized shards under ``num_workers``.
+
+    With ``num_workers<=1`` this is sequential. With multiple workers, LitData/PyTorch
+    assigns contiguous shards then the DataLoader round-robins worker results
+    (e.g. ``n=10, workers=2`` → ``[0, 5, 1, 6, ...]``).
+    """
+    if num_workers <= 1:
+        return list(range(n_items))
+    sizes = [n_items // num_workers + (1 if i < n_items % num_workers else 0) for i in range(num_workers)]
+    parts: list[list[int]] = []
+    start = 0
+    for size in sizes:
+        parts.append(list(range(start, start + size)))
+        start += size
+    order: list[int] = []
+    for i in range(max(len(p) for p in parts)):
+        for part in parts:
+            if i < len(part):
+                order.append(part[i])
+    return order
+
+
+def _pair_batches(order: list[int]) -> list[list[torch.Tensor]]:
+    return [[torch.tensor([i]), torch.tensor([i])] for i in order]
+
+
+def prepare_parallel_dataset_and_dataloder(
+    tmp_path_factory, parlen, len1=48, len2=56, num_workers=0, batch_size=4, shuffle=True, resume=True, tmpdir=None
+):
+    # Reuse a shared cache root per (len1, len2) within this xdist worker so parametrized
+    # cells do not pay Cache write/merge cost on every case.
+    if tmpdir is None:
+        shared = Path(tmp_path_factory.getbasetemp()) / "parallel_shared_caches" / f"l{len1}_{len2}"
+        shared.mkdir(parents=True, exist_ok=True)
+        tmpdir = shared
+    else:
+        tmpdir = Path(tmpdir)
+    datasets = _ensure_parallel_cache_pair(tmpdir, len1, len2)
     dset1 = StreamingDataset(datasets[0], shuffle=shuffle)
     dset2 = StreamingDataset(datasets[1], shuffle=shuffle)
     pardset = ParallelStreamingDataset(datasets=[dset1, dset2], length=parlen, resume=resume)
@@ -456,8 +502,6 @@ def test_parallel_dataset_dataloader_states_without_any_iterations(tmp_path_fact
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_dataloader_states_complete_iterations(tmp_path_factory, length, num_workers, batch_size):
-    print(f"Testing with num_workers={num_workers}")
-
     _, _, parallel_dataset, dataloader, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory,
         length,
@@ -522,8 +566,6 @@ def test_parallel_dataset_dataloader_states_complete_iterations(tmp_path_factory
 def test_parallel_dataset_dataloader_states_partial_iterations(
     tmp_path_factory, length, num_workers, batch_size, break_at
 ):
-    print(f"Testing with num_workers={num_workers}, break_at={break_at}")
-
     _, _, parallel_dataset, dataloader, _ = prepare_parallel_dataset_and_dataloder(
         tmp_path_factory, length, batch_size=batch_size, num_workers=num_workers, shuffle=True
     )
@@ -893,17 +935,28 @@ def test_parallel_infinite_restore_survives_early_break_without_hang(tmp_path_fa
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, resume, shuffle):
+    # Keep num_workers=2 for every cell: resume + worker priming is the regression surface.
+    num_workers = 2
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=length, len1=10, len2=10, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
+        tmp_path_factory,
+        parlen=length,
+        len1=10,
+        len2=10,
+        batch_size=1,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        resume=resume,
     )
     assert pardset.is_cycling() or length is None
     break_at = 3
-    expected_1 = [
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([5]), torch.tensor([5])],
-        [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([6]), torch.tensor([6])],
-    ]
+    order = _parallel_sample_order(10, num_workers)
+    # Three partial windows of 4 batches each along the epoch order (and wrap when cycling).
+    window = _pair_batches(order)
+    expected_1 = window[:4]
+    expected_2 = window[4:8]
+    expected_3 = window[8:10] + window[:2]
+    expected_4 = window[2:6]
+    expected_5 = window[6:10]
     batches_1 = []
     for i, batch in enumerate(dloader):
         if not shuffle:
@@ -911,12 +964,6 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
         batches_1.append(batch)
         if i == break_at:
             break
-    expected_2 = [
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([7]), torch.tensor([7])],
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([8]), torch.tensor([8])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -928,12 +975,6 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
         if i == break_at:
             break
     state_dict_after_2 = dloader.state_dict()
-    expected_3 = [
-        [torch.tensor([4]), torch.tensor([4])],
-        [torch.tensor([9]), torch.tensor([9])],
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([5]), torch.tensor([5])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -952,7 +993,7 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
         len1=10,
         len2=10,
         batch_size=1,
-        num_workers=2,
+        num_workers=num_workers,
         shuffle=shuffle,
         resume=resume,
         tmpdir=tmpdir,
@@ -976,14 +1017,9 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
     # worker index assignment may differ from the previous session. This is expected PyTorch behavior:
     # each worker processes a subset of indices, but the order workers deliver batches can vary.
     # We adjust expected values to match the actual (deterministic but different) worker ordering.
-    expected_2 = [expected_2[i + 1] if i % 2 == 0 else expected_2[i - 1] for i in range(len(expected_2))]
-    batches_2 = [batches_2[i + 1] if i % 2 == 0 else batches_2[i - 1] for i in range(len(batches_2))]
-    expected_4 = [
-        [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([6]), torch.tensor([6])],
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([7]), torch.tensor([7])],
-    ]
+    if num_workers > 1:
+        expected_2 = [expected_2[i + 1] if i % 2 == 0 else expected_2[i - 1] for i in range(len(expected_2))]
+        batches_2 = [batches_2[i + 1] if i % 2 == 0 else batches_2[i - 1] for i in range(len(batches_2))]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -994,12 +1030,6 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_2[i]))
         if i == break_at:
             break
-    expected_5 = [
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([8]), torch.tensor([8])],
-        [torch.tensor([4]), torch.tensor([4])],
-        [torch.tensor([9]), torch.tensor([9])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -1017,29 +1047,39 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, resume, shuffle):
+    # Keep num_workers=2 for every cell: full-epoch resume under spawn is the regression surface.
+    num_workers = 2
     _, _, pardset, dloader, tmpdir = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=length, len1=6, len2=6, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
+        tmp_path_factory,
+        parlen=length,
+        len1=6,
+        len2=6,
+        batch_size=1,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        resume=resume,
     )
     assert pardset.is_cycling() or length is None
-    expected_1 = [
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([4]), torch.tensor([4])],
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([5]), torch.tensor([5])],
-    ]
+    order = _parallel_sample_order(6, num_workers)
+    n = len(order)
+
+    def _window(start: int, window: int) -> list[list[torch.Tensor]]:
+        return _pair_batches([order[(start + i) % n] for i in range(window)])
+
+    if length is None:
+        expected_1 = _pair_batches(order)
+        expected_2 = expected_3 = expected_4 = expected_5 = expected_1
+    else:
+        expected_1 = _window(0, length)
+        expected_2 = _window(length, length)
+        expected_3 = _window(2 * length, length)
+        expected_4 = _window(3 * length, length)
+        expected_5 = _window(4 * length, length)
     batches_1 = []
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(torch.equal(x, y) for x, y in zip(batch, expected_1[i]))
         batches_1.append(batch)
-    expected_2 = [
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([5]), torch.tensor([5])],
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([3]), torch.tensor([3])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -1049,12 +1089,6 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
     state_dict_after_2 = dloader.state_dict()
-    expected_3 = [
-        [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([4]), torch.tensor([4])],
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([5]), torch.tensor([5])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -1070,7 +1104,7 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
         len1=6,
         len2=6,
         batch_size=1,
-        num_workers=2,
+        num_workers=num_workers,
         shuffle=shuffle,
         resume=resume,
         tmpdir=tmpdir,
@@ -1088,12 +1122,6 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
             )
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
-    expected_4 = [
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([3]), torch.tensor([3])],
-        [torch.tensor([1]), torch.tensor([1])],
-        [torch.tensor([4]), torch.tensor([4])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -1102,12 +1130,6 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
             )
         elif not resume and length is not None:
             assert all(torch.equal(x, y) for x, y in zip(batch, batches_1[i]))
-    expected_5 = [
-        [torch.tensor([2]), torch.tensor([2])],
-        [torch.tensor([5]), torch.tensor([5])],
-        [torch.tensor([0]), torch.tensor([0])],
-        [torch.tensor([3]), torch.tensor([3])],
-    ]
     for i, batch in enumerate(dloader):
         if not shuffle:
             assert all(
@@ -1123,8 +1145,9 @@ def test_parallel_dataset_complete_iteration_resume(tmp_path_factory, length, re
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_partial_iteration_resume_without_dataloader(tmp_path_factory, length, resume, shuffle):
+    # Dataset-only iteration: no DataLoader workers are used, so keep num_workers=0.
     _, _, pardset, _, _ = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=length, len1=10, len2=10, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
+        tmp_path_factory, parlen=length, len1=10, len2=10, batch_size=1, num_workers=0, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None
     break_at = 3
@@ -1155,8 +1178,9 @@ def test_parallel_dataset_partial_iteration_resume_without_dataloader(tmp_path_f
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="too slow in CI")
 def test_parallel_dataset_complete_iteration_resume_without_dataloader(tmp_path_factory, length, resume, shuffle):
+    # Dataset-only iteration: no DataLoader workers are used, so keep num_workers=0.
     _, _, pardset, _, _ = prepare_parallel_dataset_and_dataloder(
-        tmp_path_factory, parlen=length, len1=4, len2=4, batch_size=1, num_workers=2, shuffle=shuffle, resume=resume
+        tmp_path_factory, parlen=length, len1=4, len2=4, batch_size=1, num_workers=0, shuffle=shuffle, resume=resume
     )
     assert pardset.is_cycling() or length is None
     expected = [
