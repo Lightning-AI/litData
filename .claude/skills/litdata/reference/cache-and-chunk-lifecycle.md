@@ -36,6 +36,34 @@ The chunk binary format (`[num_items:uint32][offset:uint32[N+1]][data]`, `writer
 
 **Eviction is only active when `max_cache_size` is set** (or `MAX_CACHE_SIZE` env). `_delete_chunks_when_processed` (`reader.py:84`) is true when a node's slice doesn't fit in the cache; then chunks are deleted aggressively as they're consumed. Otherwise deletion waits until the folder exceeds `max_cache_size` (`_get_folder_size`, `reader.py:581`, which is deliberately robust to deletion races and ignores `.cnt`/`.lock`/`.zstd.bin`).
 
+## Prefetch & eviction — `max_pre_download` invariants (load-bearing)
+
+`PrepareChunksThread` keeps at most `max_pre_download` chunks "in flight" via `_pre_download_counter` (incremented on finalize, decremented on successful delete).
+
+### Async floor vs cache-budget cap
+
+1. **Async floor** (`async_prefetch.apply_async_pre_download_floor`): when `LITDATA_ASYNC_CHUNK_PREFETCH` is on (default for **remote**), raise `max_pre_download` to at least 4 so `asyncio.gather` can overlap S3 RTT. Override floor with `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` (`0` disables).
+2. **Budget cap** (`_cap_pre_download_for_cache_budget`): when delete-when-processed is on, shrink per-worker prefetch so `workers × max_pre × mean_chunk` stays near `max_cache_size`. Applies even for tiny unit-test budgets where the shared slot gate is off (sub-10MB).
+
+### Never leave live `max_pre_download == 1` via the budget cap
+
+With `_max_pre_download == 1`:
+
+- `_can_download_more` → `pre_counter < 1` (only one download in flight)
+- delete-when-processed watermark → historically `pre_counter >= max_pre - 1` ⇒ `>= 0` (always true) or, after safety floor, still needs careful pairing with download gating
+
+If a delete is skipped (in-use / positive `.cnt`) while `pre_counter` stays at 1, the prepare thread never downloads the next chunk → readers hang in `_wait_until_chunk_ready` until pytest-timeout (120s). **Tiny-budget CI tests** (`max_cache_size=1` / `512` / `2000`) hit this immediately.
+
+**Invariant:** `_cap_pre_download_for_cache_budget` floors the capped value at **2**. Do not "fix" thrash by allowing cap→1 without also redesigning download/delete coupling.
+
+### Prepare-thread teardown must not hang
+
+`run()` wraps `_run_loop()` and calls `close_thread_event_loop()` in `finally`. That loop's default executor hosts `asyncio.to_thread` workers (`asyncio_N`). **Do not** `await loop.shutdown_default_executor()` in teardown — it joins stuck workers and blocks `thread.join()` (seen as 120s hangs in `test_prepare_chunks_thread_eviction`). Prefer clearing `_default_executor` and `executor.shutdown(wait=False)`.
+
+### Two-phase cold `max_pre` — tried, not shipped
+
+Idea: start each remote worker at `max_pre=1` for first-chunk bandwidth fairness, then promote to the async/budget target. Studio ep0 ImageNet (48w, same target=4): cold=1 slightly higher ips in one run but **worse `t_first_batch`**; cold=2 middle; results within S3 noise. **Do not re-enable by default** without multi-run evidence that both ips and `t_first` improve. Opt-in research knobs (if reintroduced): `LITDATA_PREFETCH_TWO_PHASE`, `LITDATA_COLD_START_MAX_PRE`, `LITDATA_COLD_START_PROMOTE_AFTER`. Default should stay **remote-only** if revived — local compressed paths must not get cold `max_pre=1` (Windows file-open races).
+
 ## Distributed sampling — how workers get disjoint (mostly) chunk slices
 
 Covered in depth in [streaming.md](streaming.md) ("Shuffling & sharding"). The essentials that matter for the lifecycle:
@@ -75,3 +103,8 @@ When a reader blocks on a missing `.bin` for `FORCE_DOWNLOAD_TIME`, `item_loader
 2. `enable_tracer()` — the `increment_lock_*` / `decrement_lock_*` / `delete_chunk_*` events show the refcount timeline per chunk; a `delete_chunk_X` with a later `read_chunk_X` on another worker is the race.
 3. `DEBUG_LITDATA=1` writes `<chunk>.tmb` tombstones recording which rank deleted a chunk and its `can_delete` verdict.
 4. Inspect the cache dir: leftover `.zstd.bin.<random>` + missing `.bin` for a low-numbered chunk = premature deletion + failed redownload.
+5. **Hang (not FileNotFoundError):** if tests timeout in `_wait_until_chunk_ready` / `PrepareChunksThread.join` under tiny `max_cache_size`, check logs for `capping max_pre_download … → 1` and verify the budget-cap floor (≥2) and non-blocking event-loop teardown still hold.
+
+### Windows open races after decompress
+
+`ChunksConfig.try_decompress` writes via temp + `os.replace`. On Windows, `open(chunk.bin)` can raise `PermissionError` briefly even after size-ready (AV / replace). `item_loader._open_chunk_file` retries; do not "fix" by skipping close-before-delete — Windows still cannot `os.remove` an open handle.

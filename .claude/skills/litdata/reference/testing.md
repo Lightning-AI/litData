@@ -83,6 +83,9 @@ Local idiom: most files define their own `seed_everything(seed)`. CLI tests use 
 ## When tests hang or flake
 
 - Processing/worker tests spawn real subprocesses — run **serially** (why CI separates `tests/processing`). Use `--timeout=120`.
-- A leaked thread → `_thread_police` `AssertionError: Test left zombie thread`. Ensure background threads (`PrepareChunksThread`) are stopped.
+- A leaked thread → `_thread_police` `AssertionError: Test left zombie thread`. Ensure background threads (`PrepareChunksThread`) are stopped. Ignore leftover `asyncio_N` daemons from async prefetch teardown (see `tests/conftest.py`).
+- **Tiny `max_cache_size` + delete-when-processed timeouts** (`_wait_until_chunk_ready` / `thread.join`): usually `max_pre_download` capped to 1 or blocking `shutdown_default_executor`. See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) § Prefetch & eviction.
+- **Windows `PermissionError` on `.bin` open** after zstd decompress: expect retry via `_open_chunk_file`; close handles before delete.
+- To force the boto3 download path in a unit test when obstore is installed: `monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", False)`.
 - `spawn` requires picklable args; a test failing only under spawn usually means an unpicklable closure.
 - To debug inside a worker: `from litdata.utilities.breakpoint import breakpoint; breakpoint()` (see debugging.md).

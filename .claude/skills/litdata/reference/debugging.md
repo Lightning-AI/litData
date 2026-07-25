@@ -40,20 +40,24 @@ litracer litdata_debug.log -o litdata_trace.json -w 100
 
 ## Environment-variable knobs (`constants.py` + `debugger.py`)
 
-| Env var                         | Effect                                           | Default               |
-| ------------------------------- | ------------------------------------------------ | --------------------- |
-| `LITDATA_CACHE_DIR`             | Override the chunk cache directory               | `~/.lightning/chunks` |
-| `DEBUG_LITDATA`                 | Enable internal debug behavior (`_DEBUG`)        | `0`                   |
-| `PRINT_DEBUG_LOGS`              | Print debug logs to stdout                       | `0`                   |
-| `MAX_WAIT_TIME`                 | Max seconds to wait for a chunk download         | `120`                 |
-| `FORCE_DOWNLOAD_TIME`           | Force re-download threshold (s)                  | `30`                  |
-| `LITDATA_LOG_FILE`              | Trace log file path                              | `litdata_debug.log`   |
-| `LITDATA_LOG_LEVEL`             | Trace log level                                  | `DEBUG`               |
-| `LITDATA_LOG_ITERATING_DATASET` | Include `iterating_dataset` events               | `True`                |
-| `LITDATA_LOG_GETITEM`           | Include `getitem_dataset_for_chunk_index` events | `True`                |
-| `LITDATA_LOG_ITEM_LOADER`       | Include `item_loader` events                     | `True`                |
-| `LITDATA_DISABLE_VERSION_CHECK` | Skip the upgrade prompt                          | `0`                   |
-| `ENABLE_STATUS_REPORT`          | Emit status reports                              | `0`                   |
+| Env var                              | Effect                                                                 | Default               |
+| ------------------------------------ | ---------------------------------------------------------------------- | --------------------- |
+| `LITDATA_CACHE_DIR`                  | Override the chunk cache directory                                     | `~/.lightning/chunks` |
+| `DEBUG_LITDATA`                      | Enable internal debug behavior (`_DEBUG`)                              | `0`                   |
+| `PRINT_DEBUG_LOGS`                   | Print debug logs to stdout                                             | `0`                   |
+| `MAX_WAIT_TIME`                      | Max seconds to wait for a chunk download                               | `120`                 |
+| `FORCE_DOWNLOAD_TIME`                | Force re-download threshold (s)                                        | `30`                  |
+| `LITDATA_ASYNC_CHUNK_PREFETCH`       | `1`/`0` force async chunk gather on/off; unset = on for remote         | unset                 |
+| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`     | Floor for `max_pre_download` when async on (`0` = no floor)            | `4`                   |
+| `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | obstore `stream(min_chunk_size=…)` in MiB                            | `8`                   |
+| `LITDATA_TIMING`                     | Enable `StreamingTimingStats`                                          | unset                 |
+| `LITDATA_LOG_FILE`                   | Trace log file path                                                    | `litdata_debug.log`   |
+| `LITDATA_LOG_LEVEL`                  | Trace log level                                                        | `DEBUG`               |
+| `LITDATA_LOG_ITERATING_DATASET`      | Include `iterating_dataset` events                                     | `True`                |
+| `LITDATA_LOG_GETITEM`                | Include `getitem_dataset_for_chunk_index` events                       | `True`                |
+| `LITDATA_LOG_ITEM_LOADER`            | Include `item_loader` events                                           | `True`                |
+| `LITDATA_DISABLE_VERSION_CHECK`      | Skip the upgrade prompt                                                | `0`                   |
+| `ENABLE_STATUS_REPORT`               | Emit status reports                                                    | `0`                   |
 
 `optimize`/`map` cross-node coordination: `DATA_OPTIMIZER_NODE_RANK`, `DATA_OPTIMIZER_NUM_NODES`, `DATA_OPTIMIZER_GLOBAL_RANK`, `DATA_OPTIMIZER_NUM_WORKERS`.
 
@@ -65,11 +69,15 @@ Cache CLI: `litdata cache path` (print dir) · `litdata cache clear` (rmtree it)
 
 - **"did you optimize?" / `FileNotFoundError`** → no `index.json` at the path (`dataset.py:322`); the data wasn't optimized, or you pointed at raw files (use `StreamingRawDataset`).
 - **Hang/timeout on chunk download** → raise `MAX_WAIT_TIME`; check credentials/`storage_options`; confirm the URL prefix matches a registered `Downloader`.
-- **Cache grows without bound** → set `max_cache_size` (default `"100GB"`); eviction is gated by `.cnt` refcount + `FileLock`. Stale `.lock`/`.cnt` files from a crash can block deletion — `litdata cache clear`.
+- **Hang under tiny `max_cache_size` (CI 120s)** → often `max_pre_download` capped to 1 + delete-when-processed deadlock, or prepare-thread stuck in `shutdown_default_executor`. See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) § Prefetch & eviction. Look for log `capping max_pre_download … → 1`.
+- **Cache grows without bound** → set `max_cache_size` (default `"100GB"`); eviction is gated by `.cnt` refcount + `FileLock`. Stale `.lock`/`.cnt` files from a crash can block deletion — `litdata cache clear`. Peak disk ≈ `num_workers × max_pre_download × chunk_size` (async floor often makes `max_pre` 4).
 - **Deadlock: parquet + workers** → `ParquetLoader` under `fork` with `num_workers>0` raises by design (`dataloader.py:629`); use `spawn`/`forkserver`.
+- **Windows `PermissionError` opening `.bin`** → decompress `os.replace` race; should retry via `_open_chunk_file`. Still close handles before delete.
 - **Nondeterministic / wrong order after resume** → shuffling is seeded by `seed`+`epoch`+`num_chunks`+`chunk_index`; `_validate_state_dict` (`dataset.py:607`) hard-fails if `shuffle`/`num_workers`/`seed`/`input_dir`/`item_loader`/`drop_last` changed between save and resume (override with `force_override_state_dict`).
 - **`state_dict()` raises** → must be called in the main process, not a worker (`dataset.py:574`).
 - **Uneven batches across ranks** → `drop_last` defaults to `True` in distributed for a reason; don't force `False` there.
+
+For Studio cold-epoch ImageNet methodology and fair obstore vs boto3 comparisons, see [benchmarking.md](benchmarking.md).
 
 **Processing (write) — see processing.md**
 
