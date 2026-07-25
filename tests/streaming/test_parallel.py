@@ -1078,7 +1078,12 @@ def test_parallel_dataset_partial_iteration_resume(tmp_path_factory, length, res
 @pytest.mark.parametrize(
     ("length", "resume", "shuffle", "num_workers"),
     [
-        *[(length, resume, shuffle, 0) for length in (None, 4) for resume in (False, True) for shuffle in (False, True)],
+        *[
+            (length, resume, shuffle, 0)
+            for length in (None, 4)
+            for resume in (False, True)
+            for shuffle in (False, True)
+        ],
         (4, True, False, 2),
         (None, False, True, 2),
     ],
