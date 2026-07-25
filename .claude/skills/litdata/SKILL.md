@@ -16,17 +16,17 @@ A lighter path, `StreamingRawDataset` (`src/litdata/raw/`), streams *un-optimize
 
 Keep this SKILL.md as the map; load a `reference/` file only for the task at hand.
 
-| Your task                                                               | Read                                     |
-| ----------------------------------------------------------------------- | ---------------------------------------- |
-| Understand the read path, chunk format, shuffling, resume, item loaders | `reference/streaming.md`                 |
-| Cache↔Writer/Reader, PrepareChunksThread, shared-chunk deletion races   | `reference/cache-and-chunk-lifecycle.md` |
+| Your task                                                               | Read                                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Understand the read path, chunk format, shuffling, resume, item loaders | `reference/streaming.md`                                                                  |
+| Cache↔Writer/Reader, PrepareChunksThread, shared-chunk deletion races   | `reference/cache-and-chunk-lifecycle.md`                                                  |
 | Prefetch/`max_pre_download`, eviction deadlocks, async+obstore knobs    | `reference/cache-and-chunk-lifecycle.md` (Prefetch & eviction) + `reference/debugging.md` |
-| Studio ImageNet cold-epoch benches, fair async vs boto3 comparisons     | `reference/benchmarking.md`              |
-| Lightning Studio: `/teamspace` paths, data connections, credentials     | `reference/lightning-studio.md`          |
-| Understand the write path (`optimize`/`map`), worker model, raw indexer | `reference/processing.md`                |
-| Set up dev env, coding style, branch/PR flow, lint/type/CI gates        | `reference/contributing.md`              |
-| Write or run tests, fixtures, mocking cloud, gating                     | `reference/testing.md`                   |
-| Trace/profile, set worker breakpoints, env knobs, diagnose failures     | `reference/debugging.md`                 |
+| Studio ImageNet cold-epoch benches, fair async vs boto3 comparisons     | `reference/benchmarking.md`                                                               |
+| Lightning Studio: `/teamspace` paths, data connections, credentials     | `reference/lightning-studio.md`                                                           |
+| Understand the write path (`optimize`/`map`), worker model, raw indexer | `reference/processing.md`                                                                 |
+| Set up dev env, coding style, branch/PR flow, lint/type/CI gates        | `reference/contributing.md`                                                               |
+| Write or run tests, fixtures, mocking cloud, gating                     | `reference/testing.md`                                                                    |
+| Trace/profile, set worker breakpoints, env knobs, diagnose failures     | `reference/debugging.md`                                                                  |
 
 ## Public API (`src/litdata/__init__.py`)
 

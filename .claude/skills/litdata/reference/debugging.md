@@ -40,24 +40,24 @@ litracer litdata_debug.log -o litdata_trace.json -w 100
 
 ## Environment-variable knobs (`constants.py` + `debugger.py`)
 
-| Env var                              | Effect                                                                 | Default               |
-| ------------------------------------ | ---------------------------------------------------------------------- | --------------------- |
-| `LITDATA_CACHE_DIR`                  | Override the chunk cache directory                                     | `~/.lightning/chunks` |
-| `DEBUG_LITDATA`                      | Enable internal debug behavior (`_DEBUG`)                              | `0`                   |
-| `PRINT_DEBUG_LOGS`                   | Print debug logs to stdout                                             | `0`                   |
-| `MAX_WAIT_TIME`                      | Max seconds to wait for a chunk download                               | `120`                 |
-| `FORCE_DOWNLOAD_TIME`                | Force re-download threshold (s)                                        | `30`                  |
-| `LITDATA_ASYNC_CHUNK_PREFETCH`       | `1`/`0` force async chunk gather on/off; unset = on for remote         | unset                 |
-| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`     | Floor for `max_pre_download` when async on (`0` = no floor)            | `4`                   |
-| `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | obstore `stream(min_chunk_size=…)` in MiB                            | `8`                   |
-| `LITDATA_TIMING`                     | Enable `StreamingTimingStats`                                          | unset                 |
-| `LITDATA_LOG_FILE`                   | Trace log file path                                                    | `litdata_debug.log`   |
-| `LITDATA_LOG_LEVEL`                  | Trace log level                                                        | `DEBUG`               |
-| `LITDATA_LOG_ITERATING_DATASET`      | Include `iterating_dataset` events                                     | `True`                |
-| `LITDATA_LOG_GETITEM`                | Include `getitem_dataset_for_chunk_index` events                       | `True`                |
-| `LITDATA_LOG_ITEM_LOADER`            | Include `item_loader` events                                           | `True`                |
-| `LITDATA_DISABLE_VERSION_CHECK`      | Skip the upgrade prompt                                                | `0`                   |
-| `ENABLE_STATUS_REPORT`               | Emit status reports                                                    | `0`                   |
+| Env var                                | Effect                                                         | Default               |
+| -------------------------------------- | -------------------------------------------------------------- | --------------------- |
+| `LITDATA_CACHE_DIR`                    | Override the chunk cache directory                             | `~/.lightning/chunks` |
+| `DEBUG_LITDATA`                        | Enable internal debug behavior (`_DEBUG`)                      | `0`                   |
+| `PRINT_DEBUG_LOGS`                     | Print debug logs to stdout                                     | `0`                   |
+| `MAX_WAIT_TIME`                        | Max seconds to wait for a chunk download                       | `120`                 |
+| `FORCE_DOWNLOAD_TIME`                  | Force re-download threshold (s)                                | `30`                  |
+| `LITDATA_ASYNC_CHUNK_PREFETCH`         | `1`/`0` force async chunk gather on/off; unset = on for remote | unset                 |
+| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`       | Floor for `max_pre_download` when async on (`0` = no floor)    | `4`                   |
+| `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | obstore `stream(min_chunk_size=…)` in MiB                      | `8`                   |
+| `LITDATA_TIMING`                       | Enable `StreamingTimingStats`                                  | unset                 |
+| `LITDATA_LOG_FILE`                     | Trace log file path                                            | `litdata_debug.log`   |
+| `LITDATA_LOG_LEVEL`                    | Trace log level                                                | `DEBUG`               |
+| `LITDATA_LOG_ITERATING_DATASET`        | Include `iterating_dataset` events                             | `True`                |
+| `LITDATA_LOG_GETITEM`                  | Include `getitem_dataset_for_chunk_index` events               | `True`                |
+| `LITDATA_LOG_ITEM_LOADER`              | Include `item_loader` events                                   | `True`                |
+| `LITDATA_DISABLE_VERSION_CHECK`        | Skip the upgrade prompt                                        | `0`                   |
+| `ENABLE_STATUS_REPORT`                 | Emit status reports                                            | `0`                   |
 
 `optimize`/`map` cross-node coordination: `DATA_OPTIMIZER_NODE_RANK`, `DATA_OPTIMIZER_NUM_NODES`, `DATA_OPTIMIZER_GLOBAL_RANK`, `DATA_OPTIMIZER_NUM_WORKERS`.
 
