@@ -57,15 +57,26 @@ If these are missing outside Studio, `/teamspace/s3_connections/…` resolution 
 - Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size` (async floor often forces `max_pre≥4` on remote).
 - Stale `.lock` / `.cnt` after crashes → `litdata cache clear` or wipe the bench cache dir.
 
-## Free-threaded Python (Studio 3.14t)
+## Free-threaded Python (not the Studio default)
 
-Studios may ship free-threaded CPython. For streaming benches that stress download + decode:
+**Default Studio Python is a normal GIL build.** `PYTHON_GIL=0` / `python -Xgil=0` do **nothing useful** unless the interpreter itself is a free-threading (nogil) build — those flags only control whether a freethreading binary enables the GIL at runtime.
+
+To run without the GIL you must **switch the environment** (conda / Studio image / dedicated freethreading Python), not just set env vars. On Lightning Studio, conda is typically limited to **one** env per Studio (`cloudspace`); creating a freethreading env often means **starting a Studio configured for free-threaded Python** (or otherwise replacing that env), not `conda create` beside the default.
+
+Verify before benchmarking:
+
+```bash
+python -c 'import sys; print(sys.version); print("gil_enabled", getattr(sys, "_is_gil_enabled", lambda: "n/a")())'
+# Freethreading build + GIL off → version mentions "free-threading"; gil_enabled False
+```
+
+Only then:
 
 ```bash
 PYTHON_GIL=0 python -Xgil=0 scripts/bench/…
 ```
 
-GIL-disabled runs are the interesting Studio baseline for “how fast can LitData feed training,” not the only supported mode.
+GIL-disabled Studio runs are a useful high-throughput baseline for “how fast can LitData feed training,” not the default developer setup.
 
 ## How agents should work in a Studio checkout
 
