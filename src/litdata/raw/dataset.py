@@ -54,7 +54,7 @@ import statistics
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -93,7 +93,7 @@ _WRITE_BEHIND_FUTURES: set[asyncio.Future[Any]] = set()
 
 
 def _loop_backend_name() -> str:
-    """Return ``\"uvloop\"`` when the package is importable, else ``\"asyncio\"``."""
+    """Return ``uvloop`` when the package is importable, else ``asyncio``."""
     try:
         import uvloop  # noqa: F401
     except ImportError:
@@ -149,11 +149,13 @@ def _drain_write_behind_futures() -> None:
         return
     deadline = time.monotonic() + 0.5
     for fut in pending:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
+        while not fut.done():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.01, remaining))
         with contextlib.suppress(Exception):
-            fut.result(timeout=remaining)
+            fut.result()
 
 
 atexit.register(_drain_write_behind_futures)
@@ -358,10 +360,7 @@ def _looks_sequential(indices: list[int]) -> bool:
     """Return True if indices are a contiguous ascending range (typical DataLoader batch)."""
     if len(indices) <= 1:
         return True
-    for i in range(1, len(indices)):
-        if indices[i] != indices[i - 1] + 1:
-            return False
-    return True
+    return all(indices[i] == indices[i - 1] + 1 for i in range(1, len(indices)))
 
 
 def _consume_prefetch_exception(task: asyncio.Task) -> None:
@@ -1420,17 +1419,24 @@ class StreamingRawDataset(Dataset):
             return await self._download_and_process_group(file_paths, sizes=sizes)
         raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
 
-    async def _download_and_process_group(self, file_paths: list[str], sizes: list[int | None] | None = None) -> Any:
+    async def _download_and_process_group(
+        self, file_paths: list[str], sizes: Sequence[int | None] | None = None
+    ) -> Any:
         """Download all files in a group, then apply the transform."""
-        if sizes is None:
-            sizes = [None] * len(file_paths)
+        resolved_sizes: list[int | None] = list(sizes) if sizes is not None else [None] * len(file_paths)
         if self.item_type == "path":
             group_data: list[Any] = await asyncio.gather(
-                *[self.cache_manager.ensure_file_async(path, size=sz) for path, sz in zip(file_paths, sizes)]
+                *[
+                    self.cache_manager.ensure_file_async(path, size=sz)
+                    for path, sz in zip(file_paths, resolved_sizes)
+                ]
             )
         else:
             group_data = await asyncio.gather(
-                *[self.cache_manager.download_file_async(path, size=sz) for path, sz in zip(file_paths, sizes)]
+                *[
+                    self.cache_manager.download_file_async(path, size=sz)
+                    for path, sz in zip(file_paths, resolved_sizes)
+                ]
             )
 
         if self.transform:
