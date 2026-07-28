@@ -21,9 +21,9 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from bench_raw_before_vs_after import git_sha, unique_result_path
 from torch.utils.data import DataLoader
 
-from bench_raw_before_vs_after import git_sha, unique_result_path
 from litdata import StreamingRawDataset
 from litdata.raw import dataset as raw_dataset
 

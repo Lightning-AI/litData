@@ -21,10 +21,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from bench_raw_before_vs_after import git_sha, unique_result_path
 from torch.utils.data import DataLoader
 from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
-from bench_raw_before_vs_after import git_sha, unique_result_path
 from litdata import StreamingRawDataset
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
