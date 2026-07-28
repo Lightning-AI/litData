@@ -1426,17 +1426,11 @@ class StreamingRawDataset(Dataset):
         resolved_sizes: list[int | None] = list(sizes) if sizes is not None else [None] * len(file_paths)
         if self.item_type == "path":
             group_data: list[Any] = await asyncio.gather(
-                *[
-                    self.cache_manager.ensure_file_async(path, size=sz)
-                    for path, sz in zip(file_paths, resolved_sizes)
-                ]
+                *[self.cache_manager.ensure_file_async(path, size=sz) for path, sz in zip(file_paths, resolved_sizes)]
             )
         else:
             group_data = await asyncio.gather(
-                *[
-                    self.cache_manager.download_file_async(path, size=sz)
-                    for path, sz in zip(file_paths, resolved_sizes)
-                ]
+                *[self.cache_manager.download_file_async(path, size=sz) for path, sz in zip(file_paths, resolved_sizes)]
             )
 
         if self.transform:
