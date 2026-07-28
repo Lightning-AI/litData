@@ -21,10 +21,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from torch.utils.data import DataLoader
+from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
 from litdata import StreamingRawDataset
-
-from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path("/tmp/litdata-raw-worker-sweep")
@@ -192,8 +191,7 @@ def main() -> None:
         print_matrix(results)
         best = max(results, key=lambda r: r["ips"])
         log(
-            f"\nBest: {best['label']} → {best['ips']:.1f} samples/s "
-            f"({best['ips'] / OLD_FUSE:.1f}x vs FUSE ~{OLD_FUSE})"
+            f"\nBest: {best['label']} → {best['ips']:.1f} samples/s ({best['ips'] / OLD_FUSE:.1f}x vs FUSE ~{OLD_FUSE})"
         )
 
         payload = {

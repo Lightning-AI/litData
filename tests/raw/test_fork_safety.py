@@ -16,10 +16,10 @@ import pytest
 from torch.utils.data import DataLoader
 
 from litdata.raw.dataset import (
-    CacheManager,
-    StreamingRawDataset,
     _HEDGE_ASSUMED_BANDWIDTH_BPS,
     _LOCK_SUFFIX,
+    CacheManager,
+    StreamingRawDataset,
     _create_event_loop,
     _effective_hedge_delay,
     _get_loop_runner,
@@ -120,14 +120,14 @@ def test_os_fork_clears_runner_and_lock(tmp_path: Path) -> None:
             assert raw_dataset._RUNNER is None
             assert raw_dataset._RUNNER_LOCK is not parent_lock
             assert raw_dataset._WRITE_BEHIND_LOCK is not parent_wb_lock
-            assert raw_dataset._WRITE_BEHIND_FUTURES == set()
+            assert set() == raw_dataset._WRITE_BEHIND_FUTURES
             child_runner = _get_loop_runner()
             assert child_runner.pid == os.getpid()
             assert child_runner is not parent_runner
             val = ds[0]
             os.write(wfd, b"ok:" + val)
             code = 0
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             os.write(wfd, f"err:{exc!r}".encode())
             code = 1
         finally:
@@ -383,7 +383,7 @@ def test_two_threads_same_file_cache_publish(tmp_path: Path) -> None:
         try:
             path = _run_async(cm.ensure_file_async(remote))
             results.append(Path(path).read_bytes())
-        except BaseException as exc:  # noqa: BLE001 — collect for main-thread assert
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(2)]

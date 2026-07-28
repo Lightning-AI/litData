@@ -1,4 +1,5 @@
 """Focused ranged vs whole-object compare on fixed StreamingRawDataset tree."""
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from torch.utils.data import DataLoader
-from litdata import StreamingRawDataset
 from uvloop_status import log_loop_runner_backend, uvloop_package_status
+
+from litdata import StreamingRawDataset
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path("/tmp/litdata-raw-ranged-vs-whole")
@@ -160,7 +162,7 @@ def main() -> None:
         if sizes:
             log(
                 f"sample sizes (n={len(sizes)}): "
-                f"min={min(sizes)} avg={sum(sizes)//len(sizes)} max={max(sizes)} "
+                f"min={min(sizes)} avg={sum(sizes) // len(sizes)} max={max(sizes)} "
                 f"(<< 32MiB → default threshold uses whole-object)"
             )
         log_loop_runner_backend(log, prefix="after index seed")
@@ -170,9 +172,7 @@ def main() -> None:
         for mode_name, thr in MODES:
             for w, pf in CONFIGS:
                 label = f"{mode_name}_w{w}_p{pf}"
-                results.append(
-                    run(label, num_workers=w, max_prefetch=pf, threshold=thr, seed=seed, wd=wd)
-                )
+                results.append(run(label, num_workers=w, max_prefetch=pf, threshold=thr, seed=seed, wd=wd))
 
         log("\n=== Comparison table (samples/s) ===")
         header = (
@@ -216,10 +216,7 @@ def main() -> None:
             a = by[(0, w, pf)]["ips"]
             c = by[(1, w, pf)]["ips"]
             winner = "force_ranged" if c > a else ("whole_object" if a > c else "tie")
-            log(
-                f"w={w} pf={pf}: whole={a:.1f} vs force_ranged={c:.1f} → {winner} "
-                f"({max(a, c) / min(a, c):.2f}x)"
-            )
+            log(f"w={w} pf={pf}: whole={a:.1f} vs force_ranged={c:.1f} → {winner} ({max(a, c) / min(a, c):.2f}x)")
 
         payload = {
             "meta": {

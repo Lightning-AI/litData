@@ -30,8 +30,9 @@ logging.basicConfig(
 )
 
 from torch.utils.data import DataLoader  # noqa: E402
-from litdata import StreamingRawDataset  # noqa: E402
 from uvloop_status import log_loop_runner_backend, uvloop_package_status  # noqa: E402
+
+from litdata import StreamingRawDataset  # noqa: E402
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path("/tmp/litdata-raw-bench-debug")

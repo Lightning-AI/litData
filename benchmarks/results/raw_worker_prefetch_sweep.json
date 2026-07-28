@@ -10,25 +10,8 @@
     "max_concurrent_downloads": 64,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32,
-      48
-    ],
-    "prefetch": [
-      0,
-      16,
-      32,
-      64,
-      96,
-      128
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32, 48],
+    "prefetch": [0, 16, 32, 64, 96, 128],
     "range_parallel_threshold": null
   },
   "results": [

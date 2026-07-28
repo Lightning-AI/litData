@@ -319,18 +319,18 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob                       | Default         | Notes                                                                                         |
-| -------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
-| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                   |
-| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                            |
-| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                      |
-| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                     |
-| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                           |
-| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                          |
-| `storage_options`          | `{}`            | Cloud creds                                                                                   |
-| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                            |
-| `max_prefetch`             | `0`             | Sequential look-ahead after each batch (`0` = off)                                            |
-| `hedge_delay`              | `1.0`           | Seconds before hedged duplicate GET (`0` = off)                                               |
+| Knob                       | Default         | Notes                                                                                            |
+| -------------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                      |
+| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                               |
+| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                         |
+| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                        |
+| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                              |
+| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                             |
+| `storage_options`          | `{}`            | Cloud creds                                                                                      |
+| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                               |
+| `max_prefetch`             | `0`             | Sequential look-ahead after each batch (`0` = off)                                               |
+| `hedge_delay`              | `1.0`           | Seconds before hedged duplicate GET (`0` = off)                                                  |
 | `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs) |
 
 **Tuning / DataLoader**

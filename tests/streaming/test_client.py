@@ -469,7 +469,7 @@ def test_s3_client_refresh_is_serialized_under_threads(monkeypatch):
             barrier.wait(timeout=5)
             for _ in range(3):
                 assert s3.client is not None
-        except BaseException as exc:  # noqa: BLE001 — collect for main thread
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(8)]

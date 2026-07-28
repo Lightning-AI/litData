@@ -845,8 +845,7 @@ class CacheManager:
                         )
                     if len(data) != length:
                         raise RuntimeError(
-                            f"Ranged GET short read for {file_path}: offset={offset} "
-                            f"expected={length} got={len(data)}"
+                            f"Ranged GET short read for {file_path}: offset={offset} expected={length} got={len(data)}"
                         )
                     return data
                 finally:
@@ -863,9 +862,7 @@ class CacheManager:
         parts.sort(key=lambda x: x[0])
         joined = b"".join(data for _, data in parts)
         if len(joined) != size:
-            raise RuntimeError(
-                f"Ranged download size mismatch for {file_path}: expected={size} got={len(joined)}"
-            )
+            raise RuntimeError(f"Ranged download size mismatch for {file_path}: expected={size} got={len(joined)}")
         return joined
 
     async def _fetch_bytes(self, file_path: str, size: int | None = None, *, gated: bool = True) -> bytes:
@@ -886,11 +883,7 @@ class CacheManager:
             async with self._permit(gated):
                 return await self.downloader.adownload_fileobj(file_path)
 
-        delay = (
-            _effective_hedge_delay(self.hedge_delay, size)
-            if self._is_remote_object(file_path)
-            else None
-        )
+        delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
         if delay is not None:
             return await self._with_timeout(self._hedged(once, delay), size=size)
         return await self._with_timeout(once(), size=size)
@@ -1422,9 +1415,7 @@ class StreamingRawDataset(Dataset):
             return await self._download_and_process_group(file_paths, sizes=sizes)
         raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
 
-    async def _download_and_process_group(
-        self, file_paths: list[str], sizes: list[int] | None = None
-    ) -> Any:
+    async def _download_and_process_group(self, file_paths: list[str], sizes: list[int] | None = None) -> Any:
         """Download all files in a group, then apply the transform."""
         if sizes is None:
             sizes = [None] * len(file_paths)  # type: ignore[list-item]
