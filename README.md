@@ -177,7 +177,7 @@ if __name__ == "__main__":
         inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
         output_dir="fast_data",             # optimized data is stored here
         num_workers=4,                      # the number of workers on the same machine
-        chunk_bytes="64MB"                  # size of each chunk
+        chunk_bytes="64MB"                  # default; see FAQ for larger samples
     )
 ```
 
@@ -336,7 +336,7 @@ for batch in loader:
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
 | `max_concurrent_downloads` | `64` | Max in-flight downloads per worker |
-| `max_prefetch` | `0` | Sequential look-ahead after each batch (`0` = off). Try `2 * batch_size` when access is mostly sequential |
+| `max_prefetch` | `16` | Sequential look-ahead after each batch (default on; ~`2×` a typical batch). Pass `0` to disable |
 | `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
 | `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |
 | `range_parallel_threshold` | `0` | Objects ≥ this many bytes use parallel ranged GETs (`0` = whole-object only; opt-in) |
@@ -409,7 +409,7 @@ raw: bytes = dataset[0]
 
 - Prefer `num_workers > 0` so worker processes overlap async batch downloads with training. Scale workers toward host vCPUs for network-bound JPEG-sized objects (see matrix below — avoid saturating every vCPU).
 - On Linux, after any parent-process dataset I/O, use `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)` — default `fork` can hang S3 clients in workers.
-- Tune `max_prefetch` for sequential loaders; shuffled access disables look-ahead. Prefetch helps most at low worker counts.
+- Default `max_prefetch=16` enables sequential look-ahead; shuffled access disables it. Pass `0` to turn off. Prefetch helps most at low–mid worker counts.
 - Prefer an `s3://` / `gs://` URL or `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)) — avoid reading through FUSE.
 - Leave `range_parallel_threshold=0` (default) for typical JPEGs; raise it only for large objects where parallel ranged GETs help.
 - Best for medium/large files. Tiny objects (≲100 KB) are request-overhead bound — pack with [`optimize`](#speed-up-model-training) → `StreamingDataset` when I/O plateaus.
@@ -753,6 +753,29 @@ loader = StreamingDataLoader(train, batch_size=64, shuffle=True, drop_last=True)
 - Val/test: usually `shuffle=False`, `drop_last=False`.
 - If `drop_last=False` under multi-GPU, LitData warns — collectives can hang when ranks see different lengths.
 - Resume with `loader.state_dict()` / `load_state_dict()`. To deliberately ignore checkpointed shuffle settings, set `force_override_state_dict=True` on the dataset.
+
+</details>
+
+<details>
+  <summary> ✅ FAQ: chunk size &amp; shuffle before optimize <a id="faq-chunk-shuffle" href="#faq-chunk-shuffle">🔗</a> </summary>
+&nbsp;
+
+### What `chunk_bytes` should I use?
+
+Default is **64MB** — a good starting point for typical small/medium samples.
+
+When each datapoint is large (e.g. a few MB), prefer a **larger chunk** (practical range often **256–512MB**) so each chunk holds more samples and **intra-chunk batch randomization** has a bigger pool. Tradeoff: larger chunks take **longer to download** before they can be used.
+
+This is expert guidance (recommended-range mindset), not a published chunk-size sweep.
+
+### Is StreamingDataset shuffle enough if my source data is ordered?
+
+**Not always.** LitData handles **distributed sampling** and **bucket sampling within chunks** automatically (`shuffle=True` randomizes chunk order and item order inside each chunk). That is **not** a substitute for a fully shuffled file-level DataLoader when the source has strong structure (same subject/set contiguous, class blocks, etc.).
+
+If ordered data would make chunked sampling problematic and you cannot embed the grouping as the sample unit:
+
+- Shuffle or repartition **before** `optimize` so chunks mix well, **or**
+- Use [`StreamingRawDataset`](#stream-raw) (per-file random access via a standard PyTorch `DataLoader` with `shuffle=True`) instead of optimize → `StreamingDataset`.
 
 </details>
 
@@ -2254,7 +2277,7 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `output_dir` | `"optimized_data"` | Local or cloud ([resolver](#resolve-paths)); version remote prefixes |
 | `input_dir` | `None` | Remote input root for background download |
 | `weights` | `None` | Per-input weights to balance workers |
-| `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`) |
+| `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`; see [FAQ](#faq-chunk-shuffle) for larger samples) |
 | `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
 | `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
 | `compression` | `None` | `"zstd"` today |

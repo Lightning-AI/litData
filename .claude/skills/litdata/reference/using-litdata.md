@@ -12,6 +12,7 @@ ______________________________________________________________________
 | --------------------------------------------- | ------------------------------------------------------- |
 | Stream files as-is (no preprocess)            | **`StreamingRawDataset`** + torch `DataLoader`          |
 | Fastest training I/O                          | `optimize` → `StreamingDataset` + `StreamingDataLoader` |
+| Strong source ordering / need file-level shuffle | Prefer **`StreamingRawDataset`** + `DataLoader(shuffle=True)`, **or** shuffle/repartition **before** `optimize` |
 | Parallel side effects (resize, scrape, embed) | `map`                                                   |
 | Weighted mix                                  | `CombinedStreamingDataset`                              |
 | One sample from each dataset / cycle length   | `ParallelStreamingDataset`                              |
@@ -20,7 +21,9 @@ ______________________________________________________________________
 
 **Rule:** `StreamingRawDataset` = zero prep, native files (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
 
-Full raw API → §10. README: `#stream-raw`.
+**Ordered sources:** intra-chunk randomization + randomizing chunk order is **not** a full file-level shuffle. If same subject/class blocks are contiguous and that would bias batches, shuffle before `optimize` or stay on raw (§5 / FAQ below).
+
+Full raw API → §10. README: `#stream-raw`. README FAQ: `#faq-chunk-shuffle`.
 
 ______________________________________________________________________
 
@@ -116,10 +119,16 @@ ______________________________________________________________________
 ## 5. Shuffle, seed, drop_last, resume
 
 - `shuffle=True` → deterministic **chunk assignment then in-chunk item order** from `seed` + epoch (+ chunk index).
+- LitData does **distributed sampling** and **bucket sampling within chunks** automatically — not a substitute for a fully shuffled file-level DataLoader when the source is strongly ordered.
 - Default `seed=42`. Keep it fixed across ranks and when resuming.
 - `drop_last=None` → **True under DDP**, else False. Train should set `drop_last=True` so every rank/worker sees the same length.
 - `StreamingDataLoader(shuffle=..., drop_last=...)` **overrides** the dataset.
 - Resume: `torch.save(loader.state_dict(), ...)`; `loader.load_state_dict(...)`. Matching `seed` / shuffle / `num_workers` required unless `force_override_state_dict=True`.
+
+**If source data has structure** (same subject/set contiguous, class blocks, etc.) and you cannot embed that grouping as the sample unit:
+
+1. Shuffle / repartition **before** `optimize` so chunks mix well, **or**
+2. Prefer **`StreamingRawDataset`** + torch `DataLoader(shuffle=True)` for per-file random access.
 
 ______________________________________________________________________
 
@@ -205,6 +214,13 @@ ______________________________________________________________________
 
 **Always:** `if __name__ == "__main__"` · optimize needs **exactly one** of `chunk_bytes` | `chunk_size`.
 
+### Chunk size (`chunk_bytes`) — practical guidance
+
+- Default / typical: **`"64MB"`** for small/medium samples.
+- Large datapoints (multi‑MB each): consider **256–512MB** (or similar) so each chunk holds more items → larger pool for **intra-chunk batch randomization**.
+- Tradeoff: larger chunks take **longer to download** before use.
+- Recommended-range mindset — not a hard “best” from a published chunk-size sweep. README: `#faq-chunk-shuffle`.
+
 ### `optimize`
 
 | Arg                                 | Default         | Use                                                                                             |
@@ -213,7 +229,7 @@ ______________________________________________________________________
 | `queue`                             | `None`          | Live inputs; one `ALL_DONE` sentinel (`from litdata.processing.data_processor import ALL_DONE`) |
 | `input_dir`                         | `None`          | Background download of remote inputs                                                            |
 | `weights`                           | `None`          | Balance workers by input weight/size                                                            |
-| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count                                                   |
+| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count; see chunk-size guidance above                    |
 | `align_chunking`                    | `False`         | Single-worker chunk boundaries (needs `chunk_size`; uneven load)                                |
 | `compression`                       | `None`          | `"zstd"`                                                                                        |
 | `encryption`                        | `None`          | Fernet / RSA / custom; `level="sample"` or `"chunk"`                                            |
@@ -298,9 +314,10 @@ Map-style `torch.utils.data.Dataset` in `raw/dataset.py`. Streams **original fil
 - User already has a folder of images/audio/text and wants to train **today**
 - Full control over decoding; grouping (image+mask) via `setup`
 - Prototype transforms before a costly `optimize`
-- Later upgrade: same files → `optimize` → `StreamingDataset` if I/O-bound
+- Source data is **strongly ordered** (subject/class blocks) and they need true file-level `DataLoader` shuffle — or they cannot shuffle/repartition before optimize
+- Later upgrade: same files → `optimize` → `StreamingDataset` if I/O-bound (shuffle inputs first if order matters)
 
-**When to prefer optimized instead:** multi-GPU sustained throughput, resume/`state_dict`, chunk shuffle, compression/encryption.
+**When to prefer optimized instead:** multi-GPU sustained throughput, resume/`state_dict`, chunk shuffle, compression/encryption — after ensuring build-time mix if the source is ordered.
 
 ```python
 from torch.utils.data import DataLoader
@@ -329,7 +346,7 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 | `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                             |
 | `storage_options`          | `{}`            | Cloud creds                                                                                      |
 | `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                               |
-| `max_prefetch`             | `0`             | Sequential look-ahead after each batch (`0` = off)                                               |
+| `max_prefetch`             | `16`            | Sequential look-ahead after each batch (default on; ~`2×` typical batch). Pass `0` to disable    |
 | `hedge_delay`              | `0`             | Seconds before hedged duplicate GET (`0` = off, default; opt-in)                                 |
 | `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs) |
 
@@ -337,7 +354,7 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 
 - After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
 - Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
-- Throughput: README `#stream-raw` is source of truth. Prefer long-window A/B (`bench_raw_before_vs_after.py --trust`); short-window Δ% and high-w cells can disagree ~2×. After-only sweep matrix is single-run / not A/B (`raw_worker_prefetch_sweep.json`). Defaults: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+- Throughput: README `#stream-raw` is source of truth — long-window Before vs After matrix (`bench_raw_before_vs_after.py`, ≥300 batches after warm drain). Default `max_prefetch=16`. Also: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
 - Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
@@ -473,3 +490,9 @@ ______________________________________________________________________
 5. Disk/slow stream → §8 + cache doc; or suggest upgrading raw → optimize.
 6. Paths/Studio → §4 + [lightning-studio.md](lightning-studio.md).
 7. Internals / races / benches → sibling reference files.
+
+### FAQ bullets (chunk size & ordered data)
+
+- **`chunk_bytes`?** Default **64MB**. Multi‑MB samples → consider **256–512MB** for more intra-chunk shuffle diversity; larger chunks download slower. Guidance, not a published sweep.
+- **Ordered source + optimize?** Intra-chunk + chunk-order shuffle ≠ full file-level shuffle. Shuffle/repartition before `optimize`, or use **`StreamingRawDataset`** + `DataLoader(shuffle=True)`. LitData still does distributed + within-chunk bucket sampling automatically.
+- README: `#faq-chunk-shuffle`.
