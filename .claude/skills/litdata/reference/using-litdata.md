@@ -341,19 +341,19 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob                       | Default         | Notes                                                                                            |
-| -------------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
-| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                      |
-| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                               |
-| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                         |
-| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                        |
-| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                              |
-| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                             |
-| `storage_options`          | `{}`            | Cloud creds                                                                                      |
-| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                               |
+| Knob                       | Default         | Notes                                                                                                                                 |
+| -------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                                                           |
+| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                                                                    |
+| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                                                              |
+| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                                                             |
+| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                   |
+| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                                                                  |
+| `storage_options`          | `{}`            | Cloud creds                                                                                                                           |
+| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                                                                    |
 | `max_prefetch`             | `16`            | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable |
-| `hedge_delay`              | `0`             | Seconds before hedged duplicate GET (`0` = off, default; opt-in)                                 |
-| `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs) |
+| `hedge_delay`              | `0`             | Seconds before hedged duplicate GET (`0` = off, default; opt-in)                                                                      |
+| `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                      |
 
 **Tuning / DataLoader**
 
