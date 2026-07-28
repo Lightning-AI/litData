@@ -8,8 +8,10 @@ description: >-
   merge_datasets, index_parquet_dataset, index_hf_dataset), answering how-to
   questions, choosing raw vs optimize vs parquet/HF/MDS, tuning cache/prefetch/
   shuffle/seed, resolving paths (s3/gs/r2/azure/hf/local:/teamspace via
-  resolver.py), or when navigating/editing src/litdata, tests, CI, or debugging
-  streaming / optimize / map.
+  resolver.py), documenting or debugging optimize/map downloaders/uploaders/
+  removers, FsProvider vs Downloader, FUSE s3_connections/s3_folders, or
+  multi-node DATA_OPTIMIZER_* / num_nodes jobs, or when navigating/editing
+  src/litdata, tests, CI, or debugging streaming / optimize / map.
 ---
 
 # LitData
@@ -36,18 +38,20 @@ Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interac
 
 Before writing examples or answering how-tos, read the cookbook. Highlights:
 
-| Topic          | Remember                                                                                                                                                                                                                                                                                                                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Raw files**  | `StreamingRawDataset` + torch `DataLoader` — `#stream-raw` / §10. Prefer cloud URL / connection path over FUSE. Defaults: `max_concurrent_downloads=None` (adaptive Stage 1), `max_prefetch=16` (worker-aware ~64 aggregate), `hedge_delay=0`, `download_timeout=120` (**batch-level**), `range_parallel_threshold=0`. Explicit `int` concurrency = exact permits. |
-| Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                                                                                                                                                                                                                                                    |
-| Train stream   | Optimized: `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                                                                                                                                                                                                                                          |
-| Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`. Default **64MB**; multi‑MB samples → consider **256–512MB**. **Shuffle the sample list before `optimize()`** when source order matters — README `#faq-chunk-shuffle`                                                                                                                    |
-| Ordered data   | Chunk/item shuffle ≠ file-level shuffle. Shuffle before `optimize`, or use `StreamingRawDataset` + `DataLoader(shuffle=True)`. LitData does distributed + within-chunk bucket sampling automatically                                                                                                                                                               |
-| Cache          | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                                                                                                                                                                                                                                                        |
-| Async prefetch | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`                                                                                                                                                                                                                                         |
-| **Paths**      | Studio `/teamspace/s3_connections` & co are **FUSE** (convenience only — slow, can crash under load). LitData resolves them and talks **directly** to S3/GCS/**R2** with retries/prefetch. Never recommend reading the mount by hand. `reference/resolver.md`                                                                                                      |
-| Throughput     | Rough ImageNet Studio order-of-magnitude (not guarantees): FUSE ~**600**/s · Raw (right tuning) ~**6–7k**/s · Optimized 64MB chunks ~**11k**/s — `using-litdata.md` FAQ. Raw benches: medians + provenance SHAs; never cite short-window n=1 against Stage 0 medians.                                                                                              |
-| Parquet / HF   | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                                                                                                                                                                                                                                                    |
+| Topic            | Remember                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Raw files**    | `StreamingRawDataset` + torch `DataLoader` — `#stream-raw` / §10. Prefer cloud URL / connection path over FUSE. Defaults: `max_concurrent_downloads=None` (adaptive Stage 1), `max_prefetch=16` (worker-aware ~64 aggregate), `hedge_delay=0`, `download_timeout=120` (**batch-level**), `range_parallel_threshold=0`. Explicit `int` concurrency = exact permits. |
+| Images           | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                                                                                                                                                                                                                                                   |
+| Train stream     | Optimized: `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                                                                                                                                                                                                                                         |
+| Optimize         | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`. Default **64MB**; multi‑MB samples → consider **256–512MB**. **Shuffle the sample list before `optimize()`** when source order matters — README `#faq-chunk-shuffle`                                                                                                                   |
+| Ordered data     | Chunk/item shuffle ≠ file-level shuffle. Shuffle before `optimize`, or use `StreamingRawDataset` + `DataLoader(shuffle=True)`. LitData does distributed + within-chunk bucket sampling automatically                                                                                                                                                              |
+| Cache            | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                                                                                                                                                                                                                                                       |
+| Async prefetch   | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`                                                                                                                                                                                                                                        |
+| **Paths**        | Studio `/teamspace/s3_connections` & co are **FUSE** (convenience only — slow, can crash under load). LitData resolves them and talks **directly** to S3/GCS/**R2**. Never read the mount by hand. `reference/resolver.md` + `reference/data-movement.md`                                                                                                         |
+| **Optimize I/O** | Processing downloaders/uploaders/removers are **processes** in `data_processor.py` using **FsProvider** — not the streaming `Downloader` ABC. FUSE → `Dir.url` → `/cache/data`. Load `reference/data-movement.md`.                                                                                                                                               |
+| **Multi-node**   | `num_nodes=` = Lightning Studio job (`_execute`), not torchrun/SLURM. Shard by `DATA_OPTIMIZER_*`; all ranks upload chunks; **last node** merges `{node}-index.json` → `index.json`. Load `reference/multi-node.md`.                                                                                                                                              |
+| Throughput       | Rough ImageNet Studio order-of-magnitude (not guarantees): FUSE ~**600**/s · Raw (right tuning) ~**6–7k**/s · Optimized 64MB chunks ~**11k**/s — `using-litdata.md` FAQ. Raw benches: medians + provenance SHAs; never cite short-window n=1 against Stage 0 medians.                                                                                            |
+| Parquet / HF     | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                                                                                                                                                                                                                                                   |
 
 ## Reference map
 
@@ -55,6 +59,8 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | ----------------------------------------------------------------------------- | --------------------------------------------------- |
 | **Use the library** (raw, optimize/stream, parquet/HF, serializers, shuffle)  | `reference/using-litdata.md`                        |
 | **Paths / URLs / Studio mounts / `Dir` / time templates**                     | `reference/resolver.md` (+ README `#resolve-paths`) |
+| **Downloaders / uploaders / removers / FUSE→cloud / optimize I/O**            | `reference/data-movement.md` (+ `processing.md`)    |
+| **Multi-node optimize/map** (`num_nodes`, `DATA_OPTIMIZER_*`, index merge)    | `reference/multi-node.md` (+ `processing.md`)       |
 | Read path, shuffle math, item loaders, Combined/Parallel                      | `reference/streaming.md`                            |
 | **Cache / BinaryWriter / BinaryReader / `index.json` / FsProvider / sampler** | `reference/storage-format.md`                       |
 | Cache / prefetch / eviction / shared-chunk deletion                           | `reference/cache-and-chunk-lifecycle.md`            |
@@ -62,7 +68,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Fair streaming benchmarks (`benchmarks/` suite)                               | `reference/benchmarking.md`                         |
 | **Raw adaptive concurrency / look-ahead stages** (clients own rate)           | repo `benchmarks/ADAPTIVE_CONCURRENCY.md`           |
 | Lightning Studio env, credentials, free-threading                             | `reference/lightning-studio.md`                     |
-| Write path / **multi-node** `num_nodes` job launch; raw internals             | `reference/processing.md`                           |
+| Write path orchestration; raw internals; pointers to I/O + multi-node         | `reference/processing.md`                           |
 | Dev env, PR/CI style                                                          | `reference/contributing.md`                         |
 | Tests & fixtures                                                              | `reference/testing.md`                              |
 | Tracing, breakpoints, env knobs                                               | `reference/debugging.md`                            |
@@ -93,7 +99,7 @@ Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook
 
 - Chunk: `[num_items][offsets][data]`; `index.json` holds chunks + config (`data_format`, `item_loader`, …) — [storage-format.md](reference/storage-format.md).
 - Item loaders own layout + intervals (`PyTreeLoader`, `TokensLoader`, `ParquetLoader`).
-- Write/management I/O = `FsProvider` (s3/gs/r2); training downloads = `Downloader`. Sampler `ChunkedIndex` is read-path; `CacheBatchSampler` is `CacheDataLoader` only.
+- Write/management I/O = `FsProvider` (s3/gs/r2); training downloads = `Downloader`. Optimize worker pools use FsProvider via `_download_data_target` / `_upload_fn` — see `data-movement.md`. Sampler `ChunkedIndex` is read-path; `CacheBatchSampler` is `CacheDataLoader` only.
 - Ranks from env (`_DistributedEnv` / `DATA_OPTIMIZER_*`), not a custom network.
 - Shuffle deterministic from `seed`+epoch+chunk → resumable (`shuffle.py`, not `sampler.py`).
 - Design: one less thing to remember; pure PyTorch; backward compatible; test-driven.

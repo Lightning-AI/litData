@@ -212,6 +212,8 @@ Any API that takes an input/output directory goes through `_resolve_dir`, includ
 - Index helpers that accept cloud URIs
 - Cache identity / downloaders / uploaders that consume `Dir`
 
+**After resolve, who moves bytes?** Optimize/map worker downloaders/uploaders/removers (FsProvider) → [data-movement.md](data-movement.md). Multi-node index merge → [multi-node.md](multi-node.md). Streaming/raw chunk/file GETs → `Downloader` in [storage-format.md](storage-format.md) / [streaming.md](streaming.md).
+
 ______________________________________________________________________
 
 ## Agent / expert checklist

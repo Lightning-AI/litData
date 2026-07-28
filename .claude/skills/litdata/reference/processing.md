@@ -1,58 +1,30 @@
 # The processing (write) pipeline — `optimize` / `map`
 
-All paths under `src/litdata/`. This pipeline fans work across workers (and machines) to transform raw data, and for `optimize` writes it into the litdata chunk format that the streaming pipeline reads. Chunk / `index.json` / `BinaryWriter` / `FsProvider` details → [storage-format.md](storage-format.md).
+All paths under `src/litdata/`. This pipeline fans work across workers (and machines) to transform raw data, and for `optimize` writes it into the litdata chunk format that the streaming pipeline reads.
+
+**Load these when the task touches I/O or scale:**
+
+| Topic | Doc |
+| ----- | --- |
+| Downloaders / uploaders / removers, FUSE→URL, cache dirs, FsProvider vs `Downloader` | **[data-movement.md](data-movement.md)** (exhaustive) |
+| Multi-node Studio jobs, sharding, index merge, checkpoints, pitfalls | **[multi-node.md](multi-node.md)** (exhaustive) |
+| Chunk / `index.json` / `BinaryWriter` / `FsProvider` | [storage-format.md](storage-format.md) |
+| Path URI tables | [resolver.md](resolver.md) |
 
 ## Public API (`processing/functions.py`)
 
 User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `#optimize-kwargs` / `#map` / `#walk`.
 
-- **`optimize(...)`** — `functions.py:387`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `weights`/`input_dir`, `num_nodes`/`machine`. → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`.
-- **`map(...)`** — `functions.py:242`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty`. → `LambdaMapRecipe`.
-- **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — `functions.py:675`. Copy chunks + concat `index.json`; matching `data_format`/compression required.
-- **`walk(folder, max_workers=...)`** — `functions.py:621`. Threaded cloud `os.walk` (Studio-optimized); yield order is **not** depth-first.
+- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`. → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`.
+- **`map(...)`** — `functions.py` `map`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty`. → `LambdaMapRecipe`.
+- **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — Copy chunks + concat `index.json`; matching `data_format`/compression required.
+- **`walk(folder, max_workers=...)`** — Threaded cloud `os.walk` (Studio-optimized); yield order is **not** depth-first.
 
-## Multi-node launch (`num_nodes` / `machine`) — read this first
+## Multi-node & data movement — start here
 
-`num_nodes` is **not** local multiprocessing. It only works inside **Lightning Studio** (`_IS_IN_STUDIO`; else `ValueError` in `functions.py`). Dual path for both `map` and `optimize`:
-
-```
-if num_nodes is None OR DATA_OPTIMIZER_NUM_NODES > 0:
-    → run DataProcessor on this machine (single-node OR a job worker)
-else:
-    → _execute(...)   # resolver.py:461 — create Studio data-prep job, block until done
-```
-
-1. User calls `optimize(..., num_nodes=N, machine=Machine.DATA_PREP)` on a Studio.
-2. `_execute` starts a multi-instance job that re-runs `python {' '.join(sys.argv)}` on **N** machines (`resolver.py:483–492`). `machine=None` → current Studio machine. (`interruptible` exists on `_execute` but **optimize/map never pass it** — always `False`; do not document as a public knob.)
-3. Platform injects `DATA_OPTIMIZER_NUM_NODES`, `DATA_OPTIMIZER_NODE_RANK`, etc. on each instance.
-4. The same script hits the **local** branch (gate sees `DATA_OPTIMIZER_NUM_NODES > 0`) and each node processes only its shard.
-5. Caller blocks until the job completes or fails (`FAILED` → `RuntimeError`). Job URL is printed to the Studio Runs UI.
-
-**Prefer durable `output_dir`:** `/teamspace/s3_connections/...`, `/teamspace/datasets/...`, or `s3://...`.
-If optimize’s `output_dir` is under `/teamspace/studios/this_studio` **and** workers are multi-node, LitData rewrites it to the job artifacts bucket via `_get_work_dir()` (`functions.py:515–524` → `utilities.py:196–205` → `s3://{LIGHTNING_BUCKET_NAME}/projects/.../artifacts/{work_id}/content/...`). **`map` does not apply this remap.** Paths like `/teamspace/jobs/...` are the Studio job mount UI — LitData does not construct that string itself. Rejects outputs whose URL contains `cloudspaces` (use connections/datasets instead).
-
-### Env vars (multi-node / workers)
-
-| Var                                                                                                        | Role                                                                          |
-| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `DATA_OPTIMIZER_NUM_NODES`                                                                                 | Launch gate + world size; `>0` means “I’m a job worker / already distributed” |
-| `DATA_OPTIMIZER_NODE_RANK`                                                                                 | This node’s rank `[0, num_nodes)`                                             |
-| `DATA_OPTIMIZER_GLOBAL_RANK` / `DATA_OPTIMIZER_NUM_WORKERS`                                                | Set inside workers for chunk filenames / writer rank                          |
-| `DATA_OPTIMIZER_CACHE_FOLDER` / `DATA_CACHE_FOLDER`                                                        | Cache roots (Studio often `/cache/...`)                                       |
-| `DATA_OPTIMIZER_TIMEOUT`                                                                                   | Queue get timeout (default 300s; shared-queue ~200s)                          |
-| `DATA_OPTIMIZER_FAST_DEV_RUN`                                                                              | Related to `fast_dev_run` defaults                                            |
-| `LIGHTNING_SKIP_INSTALL` / `LIGHTNING_BRANCH`                                                              | Injected into remote job command                                              |
-| `LIGHTNING_BUCKET_NAME`, `LIGHTNING_CLOUD_PROJECT_ID`, `LIGHTNING_CLOUD_APP_ID`, `LIGHTNING_CLOUD_WORK_ID` | `_get_work_dir()` artifacts URL                                               |
-| `ENABLE_STATUS_REPORT`                                                                                     | Extra progress reporting                                                      |
-
-### Sharding & index merge (`data_processor.py`)
-
-- `world_size = num_nodes * num_workers`. Items packed across **all** ranks, then each node keeps only its worker slice. **No cross-node RPC** — pure env coordination.
-- Each node writes per-rank chunk files + `{rank}-index.json` (node-local).
-- **Last node** (`num_nodes == node_rank + 1`) waits for peer index files, merges into final `index.json`, and uploads. Peer wait can **hang** if a node never writes its index.
-- Every node needs credentials for inputs/outputs (connections → temp creds; raw `s3://` → keys on all instances).
-
-User cookbook: [using-litdata.md](using-litdata.md) §9. Studio UX: [lightning-studio.md](lightning-studio.md).
+- **`num_nodes` is not local multiprocessing** and is **not** torch.distributed/SLURM. Studio-only job launch via `_execute` (`resolver.py`). Full launch gate, env vars, sharding, who uploads chunks vs who merges `index.json`, checkpoints/append, and hang modes → **[multi-node.md](multi-node.md)**.
+- **Per-worker I/O children** (`_download_data_target`, `_upload_fn`, `_remove_target`), resolver FUSE→`s3://`/`gs://`/`r2://`, cache folders, and streaming `Downloader` distinction → **[data-movement.md](data-movement.md)**.
+- Quick rule: pass `/teamspace/s3_connections/…` or cloud URLs into LitData so resolve+FsProvider bypass FUSE; prefer durable remote `output_dir` on multi-node.
 
 ## Orchestration (`processing/data_processor.py`)
 
@@ -63,7 +35,7 @@ User cookbook: [using-litdata.md](using-litdata.md) §9. Studio UX: [lightning-s
    - `_map_items_to_workers_weighted` (`:377`) — default when `reorder_files` + `input_dir` exist, or when `weights` given. Bin-packs by file size (`_pack_greedily`) across `world_size = num_nodes * num_workers`, then permutes.
    - `_map_items_to_workers_sequentially` (`:303`) — contiguous slices; `align_chunking` packs full chunks.
    - Queue mode — no static assignment; `shared_queue` is set.
-3. **Multi-node slicing** via `_get_node_rank()`/`_get_num_nodes()` — see section above.
+3. **Multi-node slicing** via `_get_node_rank()`/`_get_num_nodes()` — [multi-node.md](multi-node.md).
 4. **Checkpointing** (`:1297`) trims each worker's list to resume from `checkpoint_next_index`; `fast_dev_run` trims to N items.
 5. **`_create_process_workers`** (`:1462`) spawns one `DataWorkerProcess` per worker.
 6. **Progress loop** (`:1376`) polls `error_queue` (re-raises via `_exit_on_error`, which `terminate()`s all workers) and `progress_queue` (tqdm). Exits when the counter equals `num_items` or all workers die.
@@ -81,27 +53,34 @@ User cookbook: [using-litdata.md](using-litdata.md) §9. Studio UX: [lightning-s
 
 ## Producer/consumer model (inside each worker)
 
-Each `BaseWorker` runs a local pipeline of child processes (spawned in `_setup`, `:580`):
+Each `BaseWorker` runs a local pipeline of child processes (spawned in `_setup`):
 
-- **Downloaders** (`_start_downloaders`, `:797`; target `_download_data_target`, `:128`): `num_downloaders` procs pull `(index, item, paths)` off `to_download_queues`, fetch remote files into cache, push ready tuples onto `ready_to_process_queue`.
-- **Worker main loop** (`_loop`, `:601`) — the **consumer**: `ready_to_process_queue.get()` → `_handle_data_chunk_recipe` (optimize) or `_handle_data_transform_recipe` (map). Reports progress ~1/s.
-- **Uploaders** (`_start_uploaders`, `:839`; target `_upload_fn`, `:232`): push finished chunks/files to `output_dir`.
-- **Remover** (`_start_remover`, `:825`; target `_remove_target`, `:190`): deletes processed source files when `remove=True`.
+| Child | Start | Target | Default count | Role |
+| ----- | ----- | ------ | ------------- | ---- |
+| Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2` | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via **FsProvider** (not `Downloader` ABC) |
+| Uploaders | `_start_uploaders` | `_upload_fn` | `num_uploaders or 1` | Push chunks / map outputs to `output_dir` |
+| Remover | `_start_remover` | `_remove_target` | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files |
 
-When `no_downloaders` (no `input_dir`, or a `reader` is set), `ready_to_process_queue` is a `FakeQueue` and `_collect_paths` (`:743`) pushes items directly.
+Worker main loop (`_loop`): `ready_to_process_queue.get()` → `_handle_data_chunk_recipe` or `_handle_data_transform_recipe`.
 
-**Ordered vs shared-queue** (`keep_data_ordered`): `True` (default) → each worker consumes its static slice in order. `False` → all workers share one `Queue` for dynamic load balancing; termination uses the `ALL_DONE` sentinel (`:64`), which each worker re-inserts so peers also stop (`:621`).
+**`no_downloaders`** when `input_dir.path is None` **or** a `reader` is set — including pure `s3://` `Dir(path=None, url=…)` (downloaders need a FUSE/local `path` to rewrite). Studio connections set both `path` and `url`.
+
+**`remove` flag** = `DataProcessor.delete_cached_files` (default True); not exposed on public `optimize()`/`map()`.
+
+Exhaustive I/O (path rewrite, disk wait 25 GB, index upload vs chunk uploaders, error modes) → **[data-movement.md](data-movement.md)**.
+
+**Ordered vs shared-queue** (`keep_data_ordered`): `True` (default) → each worker consumes its static slice in order. `False` → all workers share one `Queue`; termination uses `ALL_DONE` (re-inserted so peers stop). Multi-node: shared queue is **per node**, not global — [multi-node.md](multi-node.md).
 
 ## Cross-process queues
 
-| Queue                                                      | Direction         | Purpose                           |
-| ---------------------------------------------------------- | ----------------- | --------------------------------- |
-| `error_queue`                                              | worker→main       | tracebacks; triggers global abort |
-| `progress_queue`                                           | worker→main       | `(index, counter)` for tqdm       |
-| `msg_queue`                                                | worker→main       | log lines routed around tqdm      |
-| `stop_queues`                                              | main→worker       | SIGINT graceful stop              |
-| `ready_to_process_queue` / `shared_queue`                  | downloader→worker | core work items                   |
-| `to_download_queues` / `to_upload_queues` / `remove_queue` | worker→child      | I/O offload                       |
+| Queue | Direction | Purpose |
+| ----- | --------- | ------- |
+| `error_queue` | worker→main | tracebacks; `_exit_on_error` `terminate()`s siblings |
+| `progress_queue` | worker→main | `(index, counter)` for tqdm |
+| `msg_queue` | worker→main | log lines routed around tqdm |
+| `stop_queues` | main→worker | SIGINT graceful stop |
+| `ready_to_process_queue` / `shared_queue` | downloader→worker | core work items |
+| `to_download_queues` / `to_upload_queues` / `remove_queue` | worker→child | I/O offload |
 
 ## `raw/` — `StreamingRawDataset` (first-class; no optimize)
 

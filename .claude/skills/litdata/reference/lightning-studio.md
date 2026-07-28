@@ -144,7 +144,7 @@ Passing `num_nodes=N` (optionally `machine=Machine.DATA_PREP`) from a Studio:
 
 **Output tip:** write to `/teamspace/s3_connections/...`, `/teamspace/datasets/...`, or `s3://...` so results land in a durable bucket. Optimize may remap `/teamspace/studios/this_studio/...` outputs to the job artifacts S3 URL; the Studio UI may expose them under `/teamspace/jobs/...`. Ensure **every** node can read inputs and write outputs (attached connections or cloud credentials).
 
-Full launch/env/sharding → [processing.md](processing.md). User recipe → [using-litdata.md](using-litdata.md) §9.
+Full launch/env/sharding/index merge → [multi-node.md](multi-node.md). Optimize I/O (downloaders/uploaders) → [data-movement.md](data-movement.md). Orchestration overview → [processing.md](processing.md). User recipe → [using-litdata.md](using-litdata.md) §9.
 
 ## Quick Studio smoke
 
