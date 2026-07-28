@@ -8,12 +8,13 @@
 &nbsp;
 
 <pre>
-Transform                              Optimize
+Transform                              Optimize / Stream
   
-✅ Parallelize data processing       ✅ Stream large cloud datasets          
-✅ Create vector embeddings          ✅ Accelerate training by 20x           
-✅ Run distributed inference         ✅ Pause and resume data streaming      
-✅ Scrape websites at scale          ✅ Use remote data without local loading
+✅ Parallelize data processing       ✅ Stream raw files with no prep
+✅ Create vector embeddings          ✅ Stream large cloud datasets          
+✅ Run distributed inference         ✅ Accelerate training by 20x           
+✅ Scrape websites at scale          ✅ Pause and resume data streaming      
+                                     ✅ Use remote data without local loading
 </pre>
 
 ---
@@ -29,6 +30,7 @@ Transform                              Optimize
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#key-features">Features</a> •
+  <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#start-from-a-template">Templates</a> •
@@ -105,29 +107,38 @@ Source: [`.claude/skills/litdata/`](.claude/skills/litdata/) in this repository 
 # Speed up model training
 Stream datasets directly from cloud storage without local downloads. Choose the approach that fits your workflow:
 
-## Option 1: Start immediately with existing data ⚡⚡
-Stream raw files directly from cloud storage - no pre-optimization needed.
+## Option 1: Stream existing files as-is ⚡⚡ — `StreamingRawDataset`
+
+**No optimize step.** Point LitData at a folder of images, audio, text, or any files (local or cloud) and train with a normal PyTorch `DataLoader`. Downloads are **fully asynchronous** and **batched**; cloud clients include **built-in retries**. You receive **raw `bytes`** — decode, parse, or transform however you want.
+
+Details → [Stream raw files](#stream-raw).
 
 ```python
 from litdata import StreamingRawDataset
 from torch.utils.data import DataLoader
+from PIL import Image
+import io
 
-# Point to your existing cloud data
-dataset = StreamingRawDataset("s3://my-bucket/raw-data/")
-dataloader = DataLoader(dataset, batch_size=32)
+dataset = StreamingRawDataset(
+    "s3://my-bucket/raw-images/",          # or gs://, azure://, /teamspace/s3_connections/..., local path
+    transform=lambda b: Image.open(io.BytesIO(b)).convert("RGB"),  # optional — default is raw bytes
+)
+loader = DataLoader(dataset, batch_size=32, num_workers=8)
 
-for batch in dataloader:
-    # Process raw bytes on-the-fly
-    pass
+for batch in loader:
+    train_step(batch)
 ```
 
 **Key benefits:**
 
-✅ **Instant access:**         Start streaming immediately without preprocessing.    
-✅ **Zero setup time:**        No data conversion or optimization required.    
-✅ **Native format:**          Work with original file formats (images, text, etc.).    
-✅ **Flexible processing:**    Apply transformations on-the-fly during streaming.    
-✅ **Cloud-native:**           Stream directly from S3, GCS, or Azure storage.    
+✅ **Zero preprocess:**     No chunking job — use the files you already have.    
+✅ **Raw bytes, your rules:** Each sample is file `bytes`; decode with PIL, torchaudio, json, or any custom logic (`transform=` optional).    
+✅ **Fully async + batched:** Concurrent downloads via `asyncio` / `__getitems__` (not one-file-at-a-time).    
+✅ **Built-in retries:**     Cloud downloads retry transient failures (adaptive client retries).    
+✅ **Cloud-native:**        S3 / GCS / Azure / Studio connections; same path resolver as optimized streaming.    
+✅ **Grouped samples:**     Override `setup()` to yield image+mask, audio+transcript, etc.    
+✅ **Indexed once:**        `index.json.zstd` cached locally and on the bucket for fast restarts.    
+✅ **Upgrade path:**        When I/O becomes the bottleneck, `optimize` → `StreamingDataset` for max throughput.    
 
 ## Option 2: Optimize for maximum performance ⚡⚡⚡  
 Accelerate model training (20x faster) by optimizing datasets for streaming directly from cloud storage. Work with remote data without local downloads with features like loading data subsets, accessing individual samples, and resumable streaming.
@@ -262,78 +273,135 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary> ✅ Stream raw datasets from cloud storage (beta) <a id="stream-raw" href="#stream-raw">🔗</a> </summary>
+  <summary> ✅ Stream raw files as-is (no optimize) — StreamingRawDataset <a id="stream-raw" href="#stream-raw">🔗</a> </summary>
   &nbsp;
 
-Effortlessly stream raw files (images, text, etc.) directly from S3, GCS, and Azure cloud storage without any optimization or conversion. Ideal for workflows requiring instant access to original data in its native format.
+`StreamingRawDataset` streams **your existing files** from local disk or cloud storage with **no conversion step**. It is a map-style `torch.utils.data.Dataset`: use a standard PyTorch `DataLoader` (not `StreamingDataLoader`).
 
-**Prerequisites:**
+**You get raw `bytes`.** LitData does not impose a sample schema — open images with PIL, parse JSONL, decode audio, run your own tokenizer, or pass a `transform=` if you prefer. Grouped items yield `list[bytes]` (e.g. image + mask).
 
-Install the required dependencies to stream raw datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+Downloads are **fully asynchronous** and **batched**: when the DataLoader requests a batch, `__getitems__` fetches those files concurrently with `asyncio.gather`. Cloud clients include **built-in retries** for transient network errors.
+
+Use it when you want to train or prototype on JPEGs, masks, audio, JSONL, etc. **immediately**. Switch to [`optimize` → `StreamingDataset`](#speed-up-model-training) later if you need maximum cloud training throughput.
+
+| | `StreamingRawDataset` | `StreamingDataset` (optimized) |
+|--|----------------------|--------------------------------|
+| Prep | None — point at a folder | One-time `optimize` → `chunk-*.bin` + `index.json` |
+| Item | **Raw file `bytes`** (you decide how to decode) | Deserialized samples (dict/tensor/…) |
+| I/O | Fully async, batched downloads + retries | Chunk prefetch / cache pipeline |
+| Loader | `torch.utils.data.DataLoader` | Prefer `StreamingDataLoader` (shuffle, resume) |
+| Best for | Instant start, full control over bytes | Highest sustained training I/O |
+
+### Install (cloud)
 
 ```bash
-# for aws s3
-pip install "litdata[extra]" s3fs
-
-# for gcloud storage
-pip install "litdata[extra]" gcsfs
+pip install "litdata[extra]" s3fs    # Amazon S3
+pip install "litdata[extra]" gcsfs  # Google Cloud Storage
+# Azure / Studio connections: see Paths & cloud URLs
 ```
 
-**Usage Example:**
+### Quick start
+
 ```python
 from torch.utils.data import DataLoader
 from litdata import StreamingRawDataset
+from PIL import Image
+import io
 
-dataset = StreamingRawDataset("s3://bucket/files/")
+def to_image(data: bytes):
+    return Image.open(io.BytesIO(data)).convert("RGB")
 
-# Use with PyTorch DataLoader
-loader = DataLoader(dataset, batch_size=32)
+dataset = StreamingRawDataset(
+    "s3://my-bucket/images/",   # also: gs://, azure://, /teamspace/s3_connections/..., local path
+    transform=to_image,         # optional; default yields raw bytes
+    storage_options={},         # optional cloud credentials / endpoint
+)
+loader = DataLoader(dataset, batch_size=32, num_workers=8)
+
 for batch in loader:
-    # Each item is raw bytes
-    pass
+    train_step(batch)
 ```
 
-> Use `StreamingRawDataset` to stream your data as-is. Use `StreamingDataset` for fastest streaming after optimizing your data.
+### Constructor knobs
 
+| Arg | Default | Purpose |
+|-----|---------|---------|
+| `input_dir` | required | Folder URL/path (same [resolver](#resolve-paths) as optimized streaming) |
+| `cache_dir` | LitData default cache | Where the file index (and optional file cache) live |
+| `cache_files` | `False` | If `True`, keep downloaded files on disk under `cache_dir` (mirror remote layout) |
+| `recompute_index` | `False` | Force re-scan when remote files changed |
+| `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
+| `storage_options` | `{}` | Cloud client options |
+| `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
 
-You can also customize how files are grouped by subclassing `StreamingRawDataset` and overriding the `setup` method. This is useful for pairing related files (e.g., image and mask, audio and transcript) or any custom grouping logic.
+### Group related files (`setup`)
+
+Default: **one file = one sample**. Override `setup` to filter or group (image + mask, audio + transcript, …). Return either a list of `FileMetadata` or a list of groups (`list[list[FileMetadata]]`).
 
 ```python
-from typing import Union
+from collections import defaultdict
 from torch.utils.data import DataLoader
 from litdata import StreamingRawDataset
 from litdata.raw.indexer import FileMetadata
 
 class SegmentationRawDataset(StreamingRawDataset):
-    def setup(self, files: list[FileMetadata]) -> Union[list[FileMetadata], list[list[FileMetadata]]]:
-        # TODO: Implement your custom grouping logic here.
-        # For example, group files by prefix, extension, or any rule you need.
-        # Return a list of groups, where each group is a list of FileMetadata.
-        # Example:
-        #   return [[image, mask], ...]
-        pass
+    def setup(self, files: list[FileMetadata]) -> list[list[FileMetadata]]:
+        # Pair img_001.jpg with img_001.png (mask) by stem
+        by_stem: dict[str, dict[str, FileMetadata]] = defaultdict(dict)
+        for f in files:
+            name = f.path.rsplit("/", 1)[-1]
+            stem, _, ext = name.rpartition(".")
+            by_stem[stem][ext.lower()] = f
+        items = []
+        for stem, parts in sorted(by_stem.items()):
+            if "jpg" in parts and "png" in parts:
+                items.append([parts["jpg"], parts["png"]])
+        return items
 
-# Initialize the custom dataset
-dataset = SegmentationRawDataset("s3://bucket/files/")
-loader = DataLoader(dataset, batch_size=32)
-for item in loader:
-    # Each item in the batch is a pair: [image_bytes, mask_bytes]
-    pass
+dataset = SegmentationRawDataset(
+    "s3://bucket/seg/",
+    transform=lambda pair: (pair[0], pair[1]),  # list[bytes]: [image, mask]
+)
+loader = DataLoader(dataset, batch_size=16, num_workers=4)
+for images, masks in loader:
+    ...
 ```
 
-**Smart Index Caching**
+### Index caching (`index.json.zstd`)
 
-`StreamingRawDataset` automatically caches the file index for instant startup. Initial scan, builds and caches the index, then subsequent runs load instantly.
+First open scans the tree and writes a compressed file list:
 
-**Two-Level Cache:**
-- **Local:** Stored in your cache directory for instant access
-- **Remote:** Automatically saved to cloud storage (e.g., `s3://bucket/files/index.json.zstd`) for reuse
+- **Local cache** under your LitData cache dir (fast restart on the same machine)
+- **Remote copy** next to the data when possible (e.g. `s3://bucket/files/index.json.zstd`) so every machine skips the scan
 
-**Force Rebuild:**
 ```python
-# When dataset files have changed
+# After adding/removing files on the bucket:
 dataset = StreamingRawDataset("s3://bucket/files/", recompute_index=True)
 ```
+
+Do **not** confuse this with optimized LitData’s `index.json` (chunk metadata). Raw indexing only lists files.
+
+### How downloads work
+
+1. DataLoader asks for a batch of indices → `__getitems__`.
+2. LitData **asynchronously** downloads those files **in parallel** (`asyncio.gather` + `adownload_fileobj`).
+3. Cloud SDKs apply **retries** on transient failures (e.g. S3 adaptive retries).
+4. Each item is returned as **`bytes`** (or `list[bytes]` if `setup` grouped files), then optional `transform`.
+
+Your training loop stays normal PyTorch — no async/`await` in user code.
+
+```python
+# Default: you own the bytes
+dataset = StreamingRawDataset("s3://bucket/files/")
+raw: bytes = dataset[0]
+# e.g. Image.open(io.BytesIO(raw)), json.loads(raw), np.frombuffer(raw), ...
+```
+
+### Tips
+
+- Prefer `num_workers > 0` so worker processes overlap async batch downloads with training.
+- Studio: pass `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)).
+- When throughput plateaus, run a one-time [`optimize`](#speed-up-model-training) and switch to `StreamingDataset` + `StreamingDataLoader`.
 
 </details>
 
@@ -2253,8 +2321,7 @@ Speed to stream raw Imagenet 1.2M from different cloud storage providers:
 | AWS S3  | ~6400 +/- 100     | ~3200 +/- 100  |
 | Google Cloud Storage | ~5650 +/- 100     | ~3100 +/- 100  |
 
-> **Note:**
-> Use `StreamingRawDataset` if you want to stream your data as-is. Use `StreamingDataset` if you want the fastest streaming and are okay with optimizing your data first.
+> **Also see:** [`StreamingRawDataset`](#stream-raw) streams existing files with **no optimize step** (great default to start). Use `StreamingDataset` after `optimize` when you need the highest sustained training throughput.
 
 &nbsp;
 

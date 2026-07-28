@@ -103,11 +103,30 @@ When `no_downloaders` (no `input_dir`, or a `reader` is set), `ready_to_process_
 | `ready_to_process_queue` / `shared_queue`                  | downloader→worker | core work items                   |
 | `to_download_queues` / `to_upload_queues` / `remove_queue` | worker→child      | I/O offload                       |
 
-## `raw/` — `StreamingRawDataset` and the indexer
+## `raw/` — `StreamingRawDataset` (first-class; no optimize)
 
-`StreamingRawDataset` (`raw/dataset.py:95`) is a plain `torch.utils.data.Dataset` streaming **original files** (no optimize step). Item structure is user-defined via `setup(files)` (`:151`) returning `list[FileMetadata]` or `list[list[FileMetadata]]` (grouped items). Uses async batched downloads (`__getitems__`/`_download_batch`, `asyncio.gather`). `CacheManager` (`:32`) mirrors remote structure into a local cache (opt-in). Pass `recompute_index=True` to force a rebuild (`indexer.py:58`).
+User cookbook → [using-litdata.md](using-litdata.md) §10. README → `#stream-raw`.
 
-The **indexer** (`raw/indexer.py`) replaces the optimize pass: `BaseIndexer.build_or_load_index` (`:53`) tries a local cached index, then a remote one (`input_dir/index.json.zstd`), rebuilding via `discover_files` only if neither exists or `recompute_index=True`. `FileIndexer` (`:217`) recursively lists files (fsspec `fs.find` / `Path.rglob`). Note the index filename `index.json.zstd` differs from the optimized `index.json` — don't conflate them.
+`StreamingRawDataset` (`raw/dataset.py`) is a **map-style** `torch.utils.data.Dataset` that streams **original files** (JPEG, audio, …) from local or cloud paths. It does **not** use LitData chunks, `BinaryReader`, or `StreamingDataLoader`.
+
+```
+input_dir → FileIndexer (index.json.zstd) → setup(files) → items
+         → CacheManager + Downloader (fully async) → raw bytes [/ transform]
+```
+
+| Piece                                            | Role                                                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `FileIndexer` / `BaseIndexer` (`raw/indexer.py`) | Discover files; cache `index.json.zstd` locally + upload beside remote data                     |
+| `CacheManager`                                   | Optional on-disk file cache (`cache_files=True`); always holds index cache dir                  |
+| `setup(files)`                                   | Default identity; override to filter/group → `list[FileMetadata]` or `list[list[FileMetadata]]` |
+| `__getitem__` / `__getitems__`                   | **Fully async** download; batches use `asyncio.gather` over `adownload_fileobj`                 |
+| Cloud clients                                    | **Built-in retries** (e.g. S3 adaptive `max_attempts`) for transient failures                   |
+| Default item                                     | **`bytes`** (or `list[bytes]` if grouped) — caller decodes however they want                    |
+| `transform`                                      | Optional post-download; signature matches item shape (`bytes` vs `list[bytes]`)                 |
+
+**Do not conflate indexes:** raw = `index.json.zstd` (file list). Optimized = `index.json` (chunk metadata).
+
+**Agent guidance:** lead with `StreamingRawDataset` when the user has an existing file tree and has not asked for max throughput / resume. Stress: raw bytes + async batched downloads + retries; upgrade path `optimize` + `StreamingDataset`. Same path resolver as streaming (`/teamspace/s3_connections/…`, `s3://`, …).
 
 ## Gotchas (read before editing the engine)
 

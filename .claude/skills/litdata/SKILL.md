@@ -38,8 +38,9 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 
 | Topic          | Remember                                                                                                                                  |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Raw files**  | `StreamingRawDataset`: raw `bytes`, fully async + batched downloads, retries; torch `DataLoader` — `#stream-raw` / `using-litdata.md` §10 |
 | Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                           |
-| Train stream   | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                            |
+| Train stream   | Optimized: `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
 | Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                                 |
 | Cache          | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                               |
 | Async prefetch | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`                |
@@ -50,7 +51,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 
 | Task                                                                          | Read                                                |
 | ----------------------------------------------------------------------------- | --------------------------------------------------- |
-| **Use the library** (APIs, parquet/HF, optimize/map, serializers, shuffle)    | `reference/using-litdata.md`                        |
+| **Use the library** (raw, optimize/stream, parquet/HF, serializers, shuffle)  | `reference/using-litdata.md`                        |
 | **Paths / URLs / Studio mounts / `Dir` / time templates**                     | `reference/resolver.md` (+ README `#resolve-paths`) |
 | Read path, shuffle math, item loaders, Combined/Parallel                      | `reference/streaming.md`                            |
 | **Cache / BinaryWriter / BinaryReader / `index.json` / FsProvider / sampler** | `reference/storage-format.md`                       |

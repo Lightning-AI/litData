@@ -10,7 +10,7 @@ ______________________________________________________________________
 
 | Goal                                          | API                                                     |
 | --------------------------------------------- | ------------------------------------------------------- |
-| Stream files as-is (no preprocess)            | `StreamingRawDataset` + torch `DataLoader`              |
+| Stream files as-is (no preprocess)            | **`StreamingRawDataset`** + torch `DataLoader`          |
 | Fastest training I/O                          | `optimize` → `StreamingDataset` + `StreamingDataLoader` |
 | Parallel side effects (resize, scrape, embed) | `map`                                                   |
 | Weighted mix                                  | `CombinedStreamingDataset`                              |
@@ -18,7 +18,9 @@ ______________________________________________________________________
 | Existing MDS / Parquet / HF parquet           | `StreamingDataset` (+ `ParquetLoader` when needed)      |
 | LLM token windows                             | `TokensLoader` on optimize **and** stream               |
 
-**Rule:** raw = instant native files. Optimized = chunk once, then stream fastest.
+**Rule:** `StreamingRawDataset` = zero prep, native files (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
+
+Full raw API → §10. README: `#stream-raw`.
 
 ______________________________________________________________________
 
@@ -280,9 +282,60 @@ ______________________________________________________________________
 
 ## 10. Format-specific streaming
 
-**Raw** — `StreamingRawDataset(url, recompute_index=True?, cache_files=?, transform=?, indexer=?)`; override `setup` to group files.
+### StreamingRawDataset (no optimize — first-class)
 
-**MDS** — point at Mosaic shards + `index.json`; auto `format=mds`. No encryption.
+Map-style `torch.utils.data.Dataset` in `raw/dataset.py`. Streams **original files** from local/cloud. Use a **plain** `DataLoader` (not `StreamingDataLoader`). README: `#stream-raw`. Internals: [processing.md](processing.md) (`raw/`).
+
+**Pitch to users / agents**
+
+- **Raw `bytes`** — LitData does not decode for you. PIL, torchaudio, `json`, custom parsers, or `transform=` — your choice.
+- **Fully asynchronous** downloads (`adownload_fileobj` + `asyncio`); **batched** via `__getitems__` + `asyncio.gather` (whole DataLoader batch in flight).
+- **Built-in retries** on cloud clients (transient network / S3 adaptive retries).
+- Training loop stays sync PyTorch — no user-facing `async`/`await`.
+
+**When to recommend it**
+
+- User already has a folder of images/audio/text and wants to train **today**
+- Full control over decoding; grouping (image+mask) via `setup`
+- Prototype transforms before a costly `optimize`
+- Later upgrade: same files → `optimize` → `StreamingDataset` if I/O-bound
+
+**When to prefer optimized instead:** multi-GPU sustained throughput, resume/`state_dict`, chunk shuffle, compression/encryption.
+
+```python
+from torch.utils.data import DataLoader
+from litdata import StreamingRawDataset
+from PIL import Image
+import io
+
+ds = StreamingRawDataset(
+    "s3://bucket/images/",  # gs://, azure://, /teamspace/s3_connections/..., local
+    # omit transform → each item is raw bytes; or:
+    transform=lambda b: Image.open(io.BytesIO(b)).convert("RGB"),
+    cache_files=False,       # True → keep downloaded files under cache_dir
+    recompute_index=False,   # True after remote tree changes
+    storage_options={},
+)
+loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
+```
+
+| Knob              | Default         | Notes                                                               |
+| ----------------- | --------------- | ------------------------------------------------------------------- |
+| `input_dir`       | —               | Resolver paths ([resolver.md](resolver.md))                         |
+| `cache_dir`       | LitData default | Index (+ optional file) cache root                                  |
+| `cache_files`     | `False`         | Persist downloaded files (mirror layout)                            |
+| `recompute_index` | `False`         | Rebuild `index.json.zstd`                                           |
+| `transform`       | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped) |
+| `indexer`         | `FileIndexer`   | Custom `BaseIndexer`                                                |
+| `storage_options` | `{}`            | Cloud creds                                                         |
+
+**`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
+
+**Index:** `index.json.zstd` (local cache + remote beside data). **Not** optimized `index.json`.
+
+### Mosaic MDS
+
+Point at Mosaic shards + `index.json`; auto `format=mds`. No encryption.
 
 ### Parquet & Hugging Face (exhaustive)
 
@@ -402,10 +455,10 @@ ______________________________________________________________________
 
 ## 14. Answering “how do I…?”
 
-1. Pick §1 workflow.
-2. Minimal recipe; add only needed knobs from §6–9.
-3. Images → §3 (JPEG ~95, not PIL RAW).
-4. Train → `StreamingDataLoader` + `shuffle`/`drop_last`/`seed`.
-5. Disk/slow stream → §8 + cache doc.
+1. Pick §1 workflow — if they have a file tree and want to start now → **§10 `StreamingRawDataset`** (not optimize-first).
+2. Minimal recipe; add only needed knobs from §6–9 (or §10 for raw).
+3. Images → §3 for **optimize** (JPEG ~95). Raw path: `transform=` decode bytes.
+4. Train optimized → `StreamingDataLoader` + `shuffle`/`drop_last`/`seed`. Train raw → torch `DataLoader`.
+5. Disk/slow stream → §8 + cache doc; or suggest upgrading raw → optimize.
 6. Paths/Studio → §4 + [lightning-studio.md](lightning-studio.md).
 7. Internals / races / benches → sibling reference files.
