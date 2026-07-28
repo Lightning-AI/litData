@@ -750,6 +750,56 @@ def test_download_batch_applies_timeout_once(tmp_path: Path, monkeypatch: pytest
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
+def test_batch_timeout_cancels_hung_inflight_for_recovery(tmp_path: Path) -> None:
+    """Batch timeout must cancel poisoned ``_inflight`` so a retry can succeed promptly."""
+    for i in range(4):
+        (tmp_path / f"f{i}.bin").write_bytes(f"val-{i}".encode())
+
+    ds = StreamingRawDataset(
+        str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=False,
+        max_prefetch=0,
+        hedge_delay=0,
+        download_timeout=0.25,
+    )
+    ds.items = sorted(ds.items, key=lambda m: m.path)
+
+    hang = {"enabled": True}
+    real = ds.cache_manager.download_file_async
+
+    async def stub(file_path: str, size: int | None = None) -> bytes:
+        if hang["enabled"] and file_path.endswith("f1.bin"):
+            await asyncio.sleep(3600)
+            return b"never"
+        return await real(file_path, size=size)
+
+    ds.cache_manager.download_file_async = stub  # type: ignore[method-assign]
+
+    async def run() -> None:
+        # Seed a hung prefetch entry whose download sleeps forever.
+        task = asyncio.create_task(ds._prefetch_index(1))
+        ds._inflight[1] = task
+        ds._inflight_loop = asyncio.get_running_loop()
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(TimeoutError, match="Batch download timed out"):
+            await ds._download_batch([1])
+
+        # Without cancelling _inflight, retry would await the same hung task and
+        # pay the full budget again. Healthy stub + prompt success is the recovery.
+        hang["enabled"] = False
+        t0 = time.perf_counter()
+        result = await ds._download_batch([1])
+        elapsed = time.perf_counter() - t0
+        assert result[0] == b"val-1"
+        assert elapsed < 1.0
+        assert 1 not in ds._inflight
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
 def test_download_budget_scales_with_size(tmp_path: Path) -> None:
     """Sized objects use download_timeout as a floor, not a hard cap."""
     src = tmp_path / "src"

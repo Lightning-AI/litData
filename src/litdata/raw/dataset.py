@@ -1343,13 +1343,22 @@ class StreamingRawDataset(Dataset):
 
         Uses the max per-item size-aware floor so large objects are not cut off, while
         keeping a single ``wait_for`` around the gather (not per object).
+
+        Note: ``max(per-item)`` assumes the batch fits under the download semaphore in
+        one wave; multiple waves and a shared NIC can still false-trigger timeouts.
+        ``sum(sizes) / bandwidth * 3`` raises the floor when aggregate transfer time
+        exceeds that single-item budget.
         """
         base = self.cache_manager.download_timeout
         if base is None:
             return None
         budgets = [self.cache_manager._download_budget(self._item_size(i)) for i in indices]
         sized = [b for b in budgets if b is not None]
-        return max(sized) if sized else base
+        per_item = max(sized) if sized else base
+        total_size = sum(self._item_size(i) for i in indices)
+        if total_size > 0:
+            return max(per_item, total_size / _HEDGE_ASSUMED_BANDWIDTH_BPS * 3.0)
+        return per_item
 
     async def _resolve_index(self, index: int) -> Any:
         """Return a cached/inflight/materialized item for ``index``."""
@@ -1411,14 +1420,24 @@ class StreamingRawDataset(Dataset):
                 else:
                     # One wait_for for the whole batch — hang protection without per-item tax.
                     fetched = await asyncio.wait_for(asyncio.gather(*tasks), timeout=budget)
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                # Plain gather (download_timeout=0): item-level TimeoutError — do not rewrite.
+                if budget is None:
+                    raise
                 for task in tasks:
                     if not task.done():
                         task.cancel()
+                # Cancelling _resolve_index wrappers does not cancel awaited _inflight
+                # download tasks; hung prefetch entries would otherwise poison retries.
+                for idx in unique_pending:
+                    inflight = self._inflight.pop(idx, None)
+                    if inflight is not None and not inflight.done():
+                        inflight.cancel()
+                        inflight.add_done_callback(_consume_task_exception)
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise TimeoutError(
                     f"Batch download timed out after {budget:.1f}s ({len(unique_pending)} pending indices)"
-                ) from None
+                ) from exc
             for index, value in zip(unique_pending, fetched):
                 for pos in pending_positions[index]:
                     results[pos] = value
