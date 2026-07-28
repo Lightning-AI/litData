@@ -61,6 +61,8 @@ TRUST_WORKERS = [0, 2, 4, 8, 16]
 AFTER_PREFETCH = [0, 16, 32]
 TIMEOUT = 600.0
 OLD_FUSE = 75.2
+# Overridable via --after-prefetch (also used for before when it has max_prefetch).
+_PREFETCH_LEVELS: list[int] = list(AFTER_PREFETCH)
 
 
 def effective_min_seconds(num_workers: int, min_seconds: float) -> float:
@@ -120,9 +122,16 @@ def unique_result_path(stem: str, *, sha: str | None = None, ts: float | None = 
     return path
 
 
-def input_for(side: str) -> str:
-    """Return dataset input path for ``before`` (s3 URL) or ``after`` (mount)."""
-    return S3_INPUT if side == "before" else MOUNT_INPUT
+def input_for(side: str, *, before_cloud_native: bool = False) -> str:
+    """Return dataset input path.
+
+    Stock main ``before`` needs ``s3://`` (FUSE path→LocalDownloader lacks
+    ``adownload_fileobj``). Pre-Stage-1 / cloud-native ``before`` trees share
+    mount→s3 remapping with ``after``, so both use the mount for a fair A/B.
+    """
+    if side == "after" or before_cloud_native:
+        return MOUNT_INPUT
+    return S3_INPUT
 
 
 def log(msg: str) -> None:
@@ -226,23 +235,41 @@ def make_dataset(
     max_prefetch: int,
     hedge_delay: float | None = None,
     download_timeout: float | None = None,
+    before_cloud_native: bool = False,
 ):
     """Construct StreamingRawDataset with side-appropriate kwargs."""
+    import inspect
+
     from litdata import StreamingRawDataset
 
-    kwargs: dict = {"cache_dir": cache, "cache_files": False}
-    if side == "after":
+    params = set(inspect.signature(StreamingRawDataset.__init__).parameters)
+    kwargs: dict = {
+        "cache_dir": cache,
+        "cache_files": False,
+        "input_dir": input_for(side, before_cloud_native=before_cloud_native),
+    }
+    if "max_prefetch" in params:
         kwargs["max_prefetch"] = max_prefetch
+    if side == "after":
         # Default None → Stage 1 adaptive permits (do not pass 64: that bypasses clamp).
-        kwargs["range_parallel_threshold"] = 0
+        if "range_parallel_threshold" in params:
+            kwargs["range_parallel_threshold"] = 0
         # Match new defaults: hedging opt-in (0). Explicit for older trees / clarity.
-        kwargs["hedge_delay"] = 0.0 if hedge_delay is None else hedge_delay
-        if download_timeout is not None:
+        if "hedge_delay" in params:
+            kwargs["hedge_delay"] = 0.0 if hedge_delay is None else hedge_delay
+        if download_timeout is not None and "download_timeout" in params:
             kwargs["download_timeout"] = download_timeout
-    elif hedge_delay is not None or download_timeout is not None:
-        # before tree has no these knobs — ignore for stock main.
-        pass
-    return StreamingRawDataset(input_for(side), **kwargs)
+    elif before_cloud_native:
+        # Pre-Stage-1 baseline: fixed 64 permits/worker (no adaptive clamp).
+        if "max_concurrent_downloads" in params:
+            kwargs["max_concurrent_downloads"] = 64
+        if "range_parallel_threshold" in params:
+            kwargs["range_parallel_threshold"] = 0
+        if "hedge_delay" in params:
+            kwargs["hedge_delay"] = 0.0 if hedge_delay is None else hedge_delay
+        if download_timeout is not None and "download_timeout" in params:
+            kwargs["download_timeout"] = download_timeout
+    return StreamingRawDataset(**kwargs)
 
 
 def append_jsonl(path: Path, record: dict) -> None:
@@ -269,6 +296,7 @@ def run_one(
     sha: str = "",
     jsonl: Path | None = None,
     repeat: int = 0,
+    before_cloud_native: bool = False,
 ) -> dict:
     """Run one worker/prefetch trial and return timing stats.
 
@@ -284,6 +312,7 @@ def run_one(
         max_prefetch=max_prefetch,
         hedge_delay=hedge_delay,
         download_timeout=download_timeout,
+        before_cloud_native=before_cloud_native,
     )
     kwargs: dict = {"batch_size": BS, "num_workers": num_workers, "shuffle": False}
     if num_workers > 0:
@@ -369,12 +398,21 @@ def _reap_zombie_children() -> None:
                 break
 
 
-def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tuple]:
+def configs_for(
+    side: str,
+    workers: list[int],
+    *,
+    safety_grid: bool,
+    before_cloud_native: bool = False,
+    prefetch_levels: list[int] | None = None,
+) -> list[tuple]:
     """Return trial configs.
 
     Normal: (workers, prefetch, hedge_delay|None, download_timeout|None)
     safety_grid (after only): hedge_delay × download_timeout at p0 for w∈{2,4,8}.
+    Pre-Stage-1 ``before`` (cloud-native) sweeps the same prefetch levels as after.
     """
+    levels = list(prefetch_levels if prefetch_levels is not None else _PREFETCH_LEVELS)
     if safety_grid:
         if side != "after":
             raise SystemExit("--safety-grid is only meaningful with --side after")
@@ -384,9 +422,9 @@ def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tup
                 for dt in (0.0, 120.0):
                     out.append((w, 0, hd, dt))
         return out
-    if side == "before":
+    if side == "before" and not before_cloud_native:
         return [(w, 0, None, None) for w in workers]
-    return [(w, pf, 0.0, None) for w in workers for pf in AFTER_PREFETCH]
+    return [(w, pf, 0.0, None) for w in workers for pf in levels]
 
 
 def partial_path(side: str, *, sha: str | None = None, ts: float | None = None) -> Path:
@@ -441,13 +479,20 @@ def run_side(
     prefetch_factor: int,
     safety_grid: bool,
     repeats: int = 1,
+    prefetch_levels: list[int] | None = None,
 ) -> None:
     """Index once and sweep configs for ``before`` or ``after``."""
     caps = detect_side_capabilities()
     if side == "after" and not caps["has_max_prefetch"]:
         raise SystemExit("PYTHONPATH points at main tree but --side after requested")
-    if side == "before" and caps["has_max_prefetch"]:
-        raise SystemExit(f"PYTHONPATH points at optimized tree but --side before requested (params={caps['params']})")
+    # Stock main has no max_prefetch. Pre-Stage-1 feature trees do — allow them as
+    # a cloud-native baseline for Stage 1 clamp A/B (fixed 64 vs adaptive).
+    before_cloud_native = bool(side == "before" and caps["has_max_prefetch"])
+    if before_cloud_native:
+        log(
+            "before tree has max_prefetch/LoopRunner — treating as pre-Stage-1 "
+            "baseline (fixed max_concurrent_downloads=64), not stock main"
+        )
 
     side_root = ROOT / side
     if side_root.exists():
@@ -457,19 +502,27 @@ def run_side(
     sha = git_sha()
     run_ts = time.time()
     jpath = jsonl_path(side, sha=sha, ts=run_ts)
+    levels = list(prefetch_levels if prefetch_levels is not None else _PREFETCH_LEVELS)
 
     wd = HangWatchdog(TIMEOUT)
     wd.start()
     ncpu = os.cpu_count() or 0
-    cfgs = configs_for(side, workers, safety_grid=safety_grid)
-    inp = input_for(side)
+    cfgs = configs_for(
+        side,
+        workers,
+        safety_grid=safety_grid,
+        before_cloud_native=before_cloud_native,
+        prefetch_levels=levels,
+    )
+    inp = input_for(side, before_cloud_native=before_cloud_native)
     log(f"=== side={side} ===")
     log(f"capabilities: {json.dumps(caps)}")
     log(
         f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches>={batches} "
         f"min_seconds>={min_seconds} (high-w≥{HIGH_WORKER_THRESHOLD} → "
         f"≥{HIGH_WORKER_MIN_SECONDS}s) warm=max(1,w*{prefetch_factor}) "
-        f"repeats={repeats} cpus={ncpu} configs={len(cfgs)} sha={sha or '?'}"
+        f"repeats={repeats} cpus={ncpu} configs={len(cfgs)} sha={sha or '?'} "
+        f"prefetch_levels={levels if side == 'after' or before_cloud_native else [0]}"
     )
     log("protocol: stop when batches AND min_seconds both met (max window)")
     log(f"PYTHONPATH[0]={sys.path[0]!r}")
@@ -478,7 +531,12 @@ def run_side(
         wd.beat("index seed")
         seed = side_root / "seed"
         t0 = time.perf_counter()
-        ds = make_dataset(str(seed), side=side, max_prefetch=0)
+        ds = make_dataset(
+            str(seed),
+            side=side,
+            max_prefetch=0,
+            before_cloud_native=before_cloud_native,
+        )
         n_files = len(ds)
         storage = storage_path_of(ds)
         index_s = time.perf_counter() - t0
@@ -517,6 +575,7 @@ def run_side(
                         sha=sha,
                         jsonl=jpath,
                         repeat=rep,
+                        before_cloud_native=before_cloud_native,
                     )
                 )
 
@@ -559,20 +618,25 @@ def run_side(
                 "cpus": ncpu,
                 "fuse_baseline_samples_per_s": OLD_FUSE,
                 "workers": workers,
-                "prefetch": [0] if side == "before" else list(AFTER_PREFETCH),
-                "range_parallel_threshold": 0 if side == "after" else None,
-                "max_concurrent_downloads": None,  # after default: Stage 1 adaptive; before: N/A
-                "hedge_delay": 0.0 if side == "after" else None,
+                "prefetch": (list(levels) if side == "after" or before_cloud_native else [0]),
+                "range_parallel_threshold": (0 if side == "after" or before_cloud_native else None),
+                "max_concurrent_downloads": (None if side == "after" else (64 if before_cloud_native else None)),
+                "hedge_delay": (0.0 if side == "after" or before_cloud_native else None),
+                "before_cloud_native": before_cloud_native,
                 "safety_grid": safety_grid,
                 "capabilities": caps,
                 "git_sha": sha,
                 "git_hint": os.environ.get("LITDATA_BENCH_GIT", ""),
                 "jsonl": str(jpath),
                 "input_note": (
-                    "before uses s3:// directly: main prefers FUSE path→LocalDownloader "
-                    "which lacks adownload_fileobj; after uses mount and remaps to s3://"
-                    if side == "before"
-                    else "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0"
+                    "pre-Stage-1 before: mount→s3:// like after; fixed max_concurrent_downloads=64"
+                    if before_cloud_native
+                    else (
+                        "before uses s3:// directly: main prefers FUSE path→LocalDownloader "
+                        "which lacks adownload_fileobj; after uses mount and remaps to s3://"
+                        if side == "before"
+                        else "after uses mount path; Stage 1 adaptive concurrency (None); hedge_delay=0"
+                    )
                 ),
                 "caveat": (
                     "Use --repeats ≥5 and medians for publish claims. "
@@ -601,6 +665,7 @@ def run_interleaved(
     min_seconds: float,
     prefetch_factor: int,
     repeats: int,
+    prefetch_levels: list[int] | None = None,
 ) -> None:
     """Alternate before/after subprocesses (main, head, main, head, …) into one partial each."""
     script = str(Path(__file__).resolve())
@@ -608,6 +673,7 @@ def run_interleaved(
     n_rep = max(1, repeats)
     sha = git_sha()
     run_ts = time.time()
+    levels = list(prefetch_levels if prefetch_levels is not None else _PREFETCH_LEVELS)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     outs = {
         "before": partial_path("before", sha=sha, ts=run_ts),
@@ -616,6 +682,7 @@ def run_interleaved(
     log(f"=== interleaved A/B repeats={n_rep} workers={workers} batches>={batches} min_seconds>={min_seconds} ===")
     log(f"before PYTHONPATH={before_pythonpath} → {outs['before'].name}")
     log(f"after  PYTHONPATH={after_pythonpath} → {outs['after'].name}")
+    log(f"prefetch_levels={levels}")
     for rep in range(n_rep):
         for side, pypath in (("before", before_pythonpath), ("after", after_pythonpath)):
             env = os.environ.copy()
@@ -637,6 +704,8 @@ def run_interleaved(
                 str(prefetch_factor),
                 "--repeats",
                 "1",
+                "--after-prefetch",
+                ",".join(str(p) for p in levels),
             ]
             log(f"interleave rep={rep} side={side}: {' '.join(cmd)}")
             subprocess.check_call(cmd, env=env)  # noqa: S603
@@ -666,25 +735,32 @@ def merge() -> None:
     after_reps = _representative_runs(after)
 
     workers = sorted({r["workers"] for r in before_reps} | {r["workers"] for r in after_reps})
-    before_by_w = {r["workers"]: r for r in before_reps if r["prefetch"] == 0}
+    # Pair same-(w, prefetch) when before swept prefetch (pre-Stage-1 A/B);
+    # else fall back to before@p0 vs each after prefetch (stock-main A/B).
+    before_by_wp: dict[tuple[int, int], dict] = {}
+    for r in before_reps:
+        before_by_wp[(r["workers"], r["prefetch"])] = r
+    before_by_w_p0 = {r["workers"]: r for r in before_reps if r["prefetch"] == 0}
     after_by_pf: dict[int, dict[int, dict]] = {}
     for r in after_reps:
         after_by_pf.setdefault(r["prefetch"], {})[r["workers"]] = r
     prefetch_levels = sorted(after_by_pf)
+    paired_prefetch = any(pf != 0 for _, pf in before_by_wp)
 
     rows = []
     cells = []
     for w in workers:
-        b = before_by_w.get(w)
+        b0 = before_by_w_p0.get(w)
         row: dict = {
             "workers": w,
-            "before_ips": b["ips"] if b else None,
-            "before_n": b.get("n") if b else None,
-            "before_spread_pct": b.get("ips_spread_pct") if b else None,
+            "before_ips": b0["ips"] if b0 else None,
+            "before_n": b0.get("n") if b0 else None,
+            "before_spread_pct": b0.get("ips_spread_pct") if b0 else None,
         }
         after_best = None
         for pf in prefetch_levels:
             a = after_by_pf.get(pf, {}).get(w)
+            b = before_by_wp.get((w, pf)) if paired_prefetch else b0
             row[f"after_prefetch{pf}_ips"] = a["ips"] if a else None
             row[f"after_prefetch{pf}_spread_pct"] = a.get("ips_spread_pct") if a else None
             if b and a and b["ips"] and a["ips"]:
@@ -692,17 +768,17 @@ def merge() -> None:
                 row[f"delta_pct_prefetch{pf}"] = ((a["ips"] - b["ips"]) / b["ips"]) * 100.0
             if a and (after_best is None or (a["ips"] or 0) > (after_best["ips"] or 0)):
                 after_best = a
-        if b and after_best and b["ips"] and after_best["ips"]:
+        b_best = before_by_wp.get((w, after_best["prefetch"])) if after_best and paired_prefetch else b0
+        if b_best and after_best and b_best["ips"] and after_best["ips"]:
             row["after_best_ips"] = after_best["ips"]
             row["after_best_prefetch"] = after_best["prefetch"]
-            row["speedup_best"] = after_best["ips"] / b["ips"]
-            row["delta_pct_best"] = ((after_best["ips"] - b["ips"]) / b["ips"]) * 100.0
+            row["speedup_best"] = after_best["ips"] / b_best["ips"]
+            row["delta_pct_best"] = ((after_best["ips"] - b_best["ips"]) / b_best["ips"]) * 100.0
         rows.append(row)
-        if not b:
-            continue
         for pf in prefetch_levels:
             a = after_by_pf.get(pf, {}).get(w)
-            if a is None:
+            b = before_by_wp.get((w, pf)) if paired_prefetch else b0
+            if a is None or b is None:
                 continue  # omit missing/crashed
             cells.append(
                 {
@@ -735,14 +811,15 @@ def merge() -> None:
             "after": after["meta"],
             "delta_definition": (
                 "delta_pct = ((after_median - before_median) / before_median) * 100; "
-                "before is stock main (no max_prefetch API, measured at prefetch=0)"
+                "paired same-(w,prefetch) when before swept prefetch (pre-Stage-1 A/B); "
+                "else before@p0 vs each after prefetch (stock-main A/B)"
             ),
+            "paired_prefetch": paired_prefetch,
             "note": (
-                "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / "
-                "LoopRunner; FUSE mount path on main selects LocalDownloader and is broken "
-                "for async reads); after = feature/raw-streaming-perf "
-                "(default max_prefetch=16, range_parallel_threshold=0, hedge_delay=0, mount→s3://). "
-                "Publish table emphasizes after prefetch≥16; prefetch=0 kept in JSON for honesty."
+                "before = pre-Stage-1 feature tree (fixed max_concurrent_downloads=64) when "
+                "before_cloud_native; else stock main via s3://. after = Stage 1 adaptive "
+                "(max_concurrent_downloads=None). Both cloud-native arms use mount→s3://. "
+                "Publish table emphasizes prefetch≥16; prefetch=0 kept in JSON for honesty."
             ),
             "caveat": (
                 "Protocol: max(≥300 batches, ≥30s) timed window; prefer --repeats ≥5 with "
@@ -767,21 +844,34 @@ def merge() -> None:
 
     publish = [c for c in cells if c["prefetch"] >= 16]
     print()
-    print("Published matrix (prefetch ≥ 16):")
-    print(f"{'w':>4}  {'before':>10}  {'after@16':>10}  {'after@32':>10}  {'Δ%@16':>8}  {'best Δ%':>8}")
-    print("-" * 68)
+    print("Published matrix (prefetch ≥ 16; before paired by prefetch when available):")
+    print(
+        f"{'w':>4}  {'before@16':>10}  {'after@16':>10}  {'Δ%@16':>8}  "
+        f"{'before@best':>11}  {'after@best':>10}  {'best Δ%':>8}"
+    )
+    print("-" * 80)
     for w in workers:
-        b = before_by_w.get(w)
         a16 = after_by_pf.get(16, {}).get(w)
-        a32 = after_by_pf.get(32, {}).get(w)
-        if not b:
+        b16 = before_by_wp.get((w, 16)) if paired_prefetch else before_by_w_p0.get(w)
+        if not a16 and not before_by_w_p0.get(w):
             continue
-        ips16 = a16["ips"] if a16 else float("nan")
-        ips32 = a32["ips"] if a32 else float("nan")
-        d16 = ((ips16 - b["ips"]) / b["ips"]) * 100.0 if a16 and b["ips"] else float("nan")
-        best = max((x for x in (a16, a32) if x), key=lambda x: x["ips"], default=None)
-        db = ((best["ips"] - b["ips"]) / b["ips"]) * 100.0 if best and b["ips"] else float("nan")
-        print(f"{w:>4}  {b['ips']:>10.1f}  {ips16:>10.1f}  {ips32:>10.1f}  {d16:>+7.1f}%  {db:>+7.1f}%")
+        ips_b16 = b16["ips"] if b16 else float("nan")
+        ips_a16 = a16["ips"] if a16 else float("nan")
+        d16 = ((ips_a16 - ips_b16) / ips_b16) * 100.0 if b16 and a16 and ips_b16 else float("nan")
+        after_candidates = [after_by_pf.get(pf, {}).get(w) for pf in prefetch_levels]
+        after_candidates = [x for x in after_candidates if x is not None]
+        best_a = max(after_candidates, key=lambda x: x["ips"] or 0) if after_candidates else None
+        best_b = before_by_wp.get((w, best_a["prefetch"])) if best_a and paired_prefetch else before_by_w_p0.get(w)
+        db = (
+            ((best_a["ips"] - best_b["ips"]) / best_b["ips"]) * 100.0
+            if best_a and best_b and best_b["ips"]
+            else float("nan")
+        )
+        ips_bb = best_b["ips"] if best_b else float("nan")
+        ips_ba = best_a["ips"] if best_a else float("nan")
+        print(
+            f"{w:>4}  {ips_b16:>10.1f}  {ips_a16:>10.1f}  {d16:>+7.1f}%  {ips_bb:>11.1f}  {ips_ba:>10.1f}  {db:>+7.1f}%"
+        )
     print()
     print("Full cells (includes prefetch=0):")
     print(f"{'w':>4}  {'pf':>4}  {'before':>10}  {'after':>10}  {'Δ%':>8}  {'×':>6}  {'after_s':>8}")
@@ -850,7 +940,13 @@ def main() -> None:
         "--before-pythonpath",
         type=str,
         default="",
-        help="PYTHONPATH for stock main tree when using --interleave",
+        help="PYTHONPATH for stock main or pre-Stage-1 tree when using --interleave",
+    )
+    parser.add_argument(
+        "--after-prefetch",
+        type=str,
+        default="",
+        help=f"comma-separated prefetch levels for after (and cloud-native before); default {AFTER_PREFETCH}",
     )
     parser.add_argument(
         "--workers",
@@ -878,6 +974,10 @@ def main() -> None:
         workers = [int(x) for x in args.workers.split(",") if x.strip()]
     else:
         workers = WORKERS
+    if args.after_prefetch.strip():
+        prefetch_levels = [int(x) for x in args.after_prefetch.split(",") if x.strip()]
+    else:
+        prefetch_levels = None
     if args.interleave:
         if not args.before_pythonpath.strip():
             parser.error("--interleave requires --before-pythonpath")
@@ -888,6 +988,7 @@ def main() -> None:
             min_seconds=args.min_seconds,
             prefetch_factor=args.prefetch_factor,
             repeats=args.repeats,
+            prefetch_levels=prefetch_levels,
         )
         return
     if not args.side:
@@ -900,6 +1001,7 @@ def main() -> None:
         prefetch_factor=args.prefetch_factor,
         safety_grid=args.safety_grid,
         repeats=args.repeats,
+        prefetch_levels=prefetch_levels,
     )
 
 
