@@ -324,9 +324,7 @@ def map(
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
-        should_broadcast_paths = (
-            broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
-        )
+        should_broadcast_paths = broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
         _output_dir: Dir = _resolve_dir(output_dir)
 
         if _output_dir.url and "cloudspaces" in _output_dir.url:
@@ -525,9 +523,7 @@ def optimize(
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         DATA_OPTIMIZER_NUM_NODES = int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0))
         # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
-        should_broadcast_paths = (
-            broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
-        )
+        should_broadcast_paths = broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
         _output_dir: Dir = _resolve_dir(output_dir)
 
         if (

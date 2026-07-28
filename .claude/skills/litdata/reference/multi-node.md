@@ -8,13 +8,13 @@ ______________________________________________________________________
 
 ## 0. What “multi-node” means here (and what it is not)
 
-| Mechanism                                                       | Used for                                                                                                                                        | Symbols / env                                                                |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **Lightning Studio job** (`num_nodes=N`)                        | Distributed **optimize/map**                                                                                                                    | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
-| **`DATA_OPTIMIZER_*` env**                                      | Rank / world inside each job instance                                                                                                           | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK`      |
-| **`broadcast_object`**                                          | Align dirs when `broadcast_paths` is on (or auto for `{%strftime}` paths) and Lightning app URL present                                         | `utilities/broadcast.py`                                                     |
-| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched                                                    | `utilities/env.py`                                                           |
-| **SLURM**                                                       | **Not** a first-class optimize launcher in this repo                                                                                            | Do not document SLURM as supported for `num_nodes`                           |
+| Mechanism                                                       | Used for                                                                                                | Symbols / env                                                                |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Lightning Studio job** (`num_nodes=N`)                        | Distributed **optimize/map**                                                                            | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
+| **`DATA_OPTIMIZER_*` env**                                      | Rank / world inside each job instance                                                                   | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK`      |
+| **`broadcast_object`**                                          | Align dirs when `broadcast_paths` is on (or auto for `{%strftime}` paths) and Lightning app URL present | `utilities/broadcast.py`                                                     |
+| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched            | `utilities/env.py`                                                           |
+| **SLURM**                                                       | **Not** a first-class optimize launcher in this repo                                                    | Do not document SLURM as supported for `num_nodes`                           |
 
 If `num_nodes` / `machine` are set **outside** Studio (`_IS_IN_STUDIO` false) → `ValueError` (“Only https://lightning.ai/ supports multiple nodes…”).
 
@@ -132,11 +132,11 @@ if self.broadcast_paths:
     self.output_dir = broadcast_object("output_dir", self.output_dir, rank=_get_node_rank())
 ```
 
-| Case | Behavior |
-| ---- | -------- |
+| Case                                 | Behavior                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | Default (`False`), no `{%…}` in path | **Skip** broadcast — each rank keeps its locally resolved `Dir` (fine for stable `s3://` / connection paths) |
-| Path has `{%Y-%m-%d}` (etc.) | **Auto-enable** — ranks must share one expanded timestamp |
-| `broadcast_paths=True` | Always broadcast after resolve |
+| Path has `{%Y-%m-%d}` (etc.)         | **Auto-enable** — ranks must share one expanded timestamp                                                    |
+| `broadcast_paths=True`               | Always broadcast after resolve                                                                               |
 
 - If `LIGHTNING_APP_EXTERNAL_URL` is set and broadcast runs: HTTP broadcast until all ranks agree.
 - Else `broadcast_object` returns the local `obj` unchanged.

@@ -1788,7 +1788,7 @@ def test_data_processor_broadcast_paths_default_false(tmpdir, monkeypatch):
 
 
 def test_optimize_broadcast_paths_auto_on_for_time_template(tmpdir, monkeypatch):
-    """optimize detects `{%strftime}` on the unresolved path before `_resolve_dir`."""
+    """Optimize detects `{%strftime}` on the unresolved path before `_resolve_dir`."""
     captured: dict[str, Any] = {}
 
     class CaptureDataProcessor(DataProcessor):
