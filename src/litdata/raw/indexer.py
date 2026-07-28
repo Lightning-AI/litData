@@ -32,7 +32,7 @@ _UPLOAD_DENIED_WARNED_PIDS: set[int] = set()
 
 
 def _is_windows_drive_scheme(scheme: str) -> bool:
-    """True when ``urlparse`` mistook a Windows drive letter for a URI scheme.
+    r"""True when ``urlparse`` mistook a Windows drive letter for a URI scheme.
 
     Paths like ``C:\\Users\\...`` parse with ``scheme='c'``. A single-letter scheme is
     never a valid URI scheme (RFC 3986 requires >=2 chars), so treat it as local.

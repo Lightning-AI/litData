@@ -207,7 +207,7 @@ def test_discover_files_unsupported_scheme():
 
 
 def test_windows_drive_scheme_treated_as_local():
-    """urlparse('C:\\\\Users\\\\...') yields scheme='c'; treat as local, not remote."""
+    r"""urlparse('C:\\\\Users\\\\...') yields scheme='c'; treat as local, not remote."""
     assert _is_windows_drive_scheme("c")
     assert _is_windows_drive_scheme("C")
     assert not _is_windows_drive_scheme("s3")
