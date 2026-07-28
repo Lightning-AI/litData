@@ -18,6 +18,7 @@ After measures prefetch in ``[0, 16, 32]`` (publish ≥16; p0 kept in JSON).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -287,35 +288,23 @@ def run_one(
 
 def _reap_zombie_children() -> None:
     """Best-effort reap of leftover DataLoader worker zombies."""
-    try:
+    with contextlib.suppress(Exception):
         import multiprocessing as mp
 
         for p in mp.active_children():
-            try:
+            with contextlib.suppress(Exception):
                 p.join(timeout=2.0)
-            except Exception:
-                pass
             if p.is_alive():
-                try:
+                with contextlib.suppress(Exception):
                     p.kill()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     p.join(timeout=1.0)
-                except Exception:
-                    pass
-    except Exception:
-        pass
     # Non-blocking waitpid sweep for any unreaped children.
-    try:
+    with contextlib.suppress(ChildProcessError, Exception):
         while True:
             pid, _ = os.waitpid(-1, os.WNOHANG)
             if pid <= 0:
                 break
-    except ChildProcessError:
-        pass
-    except Exception:
-        pass
 
 
 def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tuple]:

@@ -1128,7 +1128,11 @@ class StreamingRawDataset(Dataset):
                 Prefer C-level / GIL-releasing transforms, or decode in ``collate_fn``.
             max_concurrent_downloads: Max in-flight downloads per worker (default: 64).
             max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
-                roughly ``2×`` a typical batch). Pass ``0`` to disable.
+                roughly ``2×`` a typical batch). Pass ``0`` to disable. Look-ahead is per
+                DataLoader worker (see ``_schedule_prefetch``); effective total budget ≈
+                ``num_workers × max_prefetch``. At high worker counts (e.g. 16–32), a smaller
+                value (e.g. 8) can ease RAM/connection pressure; at low workers, 16–32 is
+                usually fine.
             prefetch_cache_size: LRU entry cap for prefetched items. Defaults to
                 ``max(max_prefetch * 2, max_prefetch)`` when prefetch is enabled.
             item_type: ``"bytes"`` (default) buffers each object in RAM; ``"path"`` downloads to
@@ -1392,6 +1396,8 @@ class StreamingRawDataset(Dataset):
 
         With ``DataLoader(num_workers>1)``, each worker receives every N-th batch, so the
         next indices for *this* worker start at ``indices[0] + num_workers * batch_len``.
+        ``max_prefetch`` is therefore a per-worker budget; aggregate in-flight cost scales
+        roughly with ``num_workers × max_prefetch``.
         """
         if self.max_prefetch <= 0 or not indices or not _looks_sequential(indices):
             return
