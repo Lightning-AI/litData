@@ -335,7 +335,7 @@ for batch in loader:
 | `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
-| `max_concurrent_downloads` | `None` (adaptive) | Per-worker in-flight downloads. `None` = Stage 1 size-aware budget (bandwidth + Little’s-law) split across workers; an explicit `int` is used exactly (no silent clamp) |
+| `max_concurrent_downloads` | `None` (adaptive at w≥16) | Per-worker in-flight downloads. `None` = 64 when `num_workers < 16`; at w≥16 a size-aware budget (bandwidth + Little’s-law) is split across workers. An explicit `int` is used exactly (no silent clamp) |
 | `max_prefetch` | `16` | Per-worker sequential look-ahead after each batch (default on). When `num_workers > 1`, effective look-ahead is `min(max_prefetch, 64 // num_workers)` so aggregate stays ~64 items. Pass `0` to disable |
 | `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
 | `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |

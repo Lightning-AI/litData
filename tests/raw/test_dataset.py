@@ -80,19 +80,22 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
         (24, 64, 100_000, 64),
         (32, 64, 100_000, 64),
         (2, 4, 100_000, 4),
-        # Adaptive (None): ~100KB JPEG → bandwidth≈524 → cap 512
-        (0, None, 100_000, 512),  # n≤1 → full budget
-        (1, None, 100_000, 512),
-        (2, None, 100_000, 256),  # 512//2
-        (4, None, 100_000, 128),  # 512//4
-        (8, None, 100_000, 64),  # 512//8 — healthy mid-w aggregate
+        # Adaptive (None) gated to num_workers >= 16; below gate → historical 64
+        (0, None, 100_000, 64),
+        (1, None, 100_000, 64),
+        (2, None, 100_000, 64),
+        (4, None, 100_000, 64),
+        (8, None, 100_000, 64),  # A/B: always-on clamp hurt w8 p0; stay at 64
+        (15, None, 100_000, 64),
+        # ~100KB JPEG → bandwidth≈524 → cap 512; clamp active at w>=16
         (16, None, 100_000, 32),  # 512//16
         (24, None, 100_000, 21),  # 512//24
         (32, None, 100_000, 16),  # 512//32
-        # Large objects: bandwidth small, Little's-law arm (~240) wins
-        (4, None, 10 * 1024 * 1024, 60),  # max(8, 240//4)
-        # Unknown size uses default median (256KiB) → max(200, 240)=240
-        (8, None, None, 30),  # 240//8
+        # Below gate: large/unknown median still yield historical 64
+        (4, None, 10 * 1024 * 1024, 64),
+        (8, None, None, 64),
+        # At gate: Little's-law arm (~240) for large objects
+        (16, None, 10 * 1024 * 1024, 15),  # max(8, 240//16)
     ],
 )
 def test_effective_concurrency_vs_num_workers(num_workers, max_concurrent, median_bytes, expected):
@@ -131,12 +134,12 @@ def test_effective_download_permits_cached_per_pid(tmp_path):
     ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
     cm = ds.cache_manager
     with patch("litdata.raw.dataset._num_dataloader_workers", side_effect=[8, 16]) as mock_w:
-        assert cm._effective_download_permits() == 64  # adaptive: 512//8
+        assert cm._effective_download_permits() == 64  # gated: w<16 → historical 64
         assert cm._effective_download_permits() == 64  # cached — ignores worker change
         assert mock_w.call_count == 1
     cm.reset_runtime_state()
     with patch("litdata.raw.dataset._num_dataloader_workers", return_value=16):
-        assert cm._effective_download_permits() == 32  # recomputed: 512//16
+        assert cm._effective_download_permits() == 32  # recomputed: clamp active, 512//16
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")

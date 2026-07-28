@@ -102,6 +102,11 @@ _AGGREGATE_CONCURRENCY_BUDGET_FLOOR = 32
 # ImageNet cells to ~128 aggregate (which capped winning w=4/w=8 configs).
 _AGGREGATE_CONCURRENCY_BUDGET_CAP = 512
 _MIN_CONCURRENCY_PER_WORKER = 8
+# Historical per-worker default when adaptive clamp is not applied (w < gate).
+_DEFAULT_CONCURRENCY_PER_WORKER = 64
+# Stage 1 A/B: mid-w (esp. w=8 p0) lost ~23% under always-on clamp; high-w
+# (16/24) won +40–55%. Gate adaptive split to high worker counts only.
+_ADAPTIVE_CONCURRENCY_MIN_WORKERS = 16
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
@@ -434,18 +439,20 @@ def _effective_concurrency(
 ) -> int:
     """Per-worker download permits for the Stage 1 static clamp.
 
-    - ``max_concurrent_downloads is None`` (default): adaptive — ``max(floor,
-      budget // num_workers)`` with ``budget`` from
-      :func:`_aggregate_concurrency_budget`. When ``num_workers <= 1``, returns
-      the full aggregate budget.
+    - ``max_concurrent_downloads is None`` (default): adaptive only when
+      ``num_workers >= _ADAPTIVE_CONCURRENCY_MIN_WORKERS`` (16) — then
+      ``max(floor, budget // num_workers)`` with ``budget`` from
+      :func:`_aggregate_concurrency_budget`. Below the gate, returns the
+      historical ``_DEFAULT_CONCURRENCY_PER_WORKER`` (64) so mid-w cells are
+      not compressed.
     - Explicit ``int``: **exactly** that many permits (no silent clamp). ``<= 0``
       collapses to 1.
     """
     if max_concurrent_downloads is not None:
         return 1 if max_concurrent_downloads <= 0 else max_concurrent_downloads
+    if num_workers < _ADAPTIVE_CONCURRENCY_MIN_WORKERS:
+        return _DEFAULT_CONCURRENCY_PER_WORKER
     budget = _aggregate_concurrency_budget(median_file_bytes)
-    if num_workers <= 1:
-        return budget
     return max(_MIN_CONCURRENCY_PER_WORKER, budget // num_workers)
 
 
@@ -1251,11 +1258,12 @@ class StreamingRawDataset(Dataset):
                 when ``item_type="bytes"``, or ``str`` / ``list[str]`` paths when ``item_type="path"``.
                 Prefer C-level / GIL-releasing transforms, or decode in ``collate_fn``.
             max_concurrent_downloads: Per-worker in-flight download permits.
-                ``None`` (default) applies the Stage 1 adaptive formula (size-aware
-                aggregate budget from median file size + Little's-law floor, split
-                across workers with a per-worker floor of 8). An explicit ``int``
-                sets **exactly** that many permits with no silent clamp — pass
-                ``64`` to keep the historical fixed cap.
+                ``None`` (default) uses 64 permits/worker when ``num_workers < 16``;
+                at ``num_workers >= 16`` applies the Stage 1 adaptive formula
+                (size-aware aggregate budget from median file size + Little's-law
+                floor, split across workers with a per-worker floor of 8). An
+                explicit ``int`` sets **exactly** that many permits with no silent
+                clamp — pass ``64`` to force the historical fixed cap at any w.
             max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
                 roughly ``2×`` a typical batch). Pass ``0`` to disable. Look-ahead is per
                 DataLoader worker, but when ``num_workers > 1`` the scheduled amount is
