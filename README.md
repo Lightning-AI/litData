@@ -774,8 +774,14 @@ This is expert guidance (recommended-range mindset), not a published chunk-size 
 
 If ordered data would make chunked sampling problematic and you cannot embed the grouping as the sample unit:
 
-- Shuffle or repartition **before** `optimize` so chunks mix well, **or**
+- Shuffle the list of samples **before** `optimize` so chunks mix well, **or**
 - Use [`StreamingRawDataset`](#stream-raw) (per-file random access via a standard PyTorch `DataLoader` with `shuffle=True`) instead of optimize → `StreamingDataset`.
+
+### FUSE vs LitData (Lightning Studios)
+
+`/teamspace/s3_connections` (and related mounts) are **FUSE** — fine for browsing, not for training I/O. Under load they are very slow and can crash. Pass the same path into LitData (`StreamingRawDataset` / `StreamingDataset` / `optimize`): LitData resolves it and talks **directly** to the bucket ([Resolve any path](#resolve-paths)).
+
+Rough ImageNet order-of-magnitude on a Studio (not hard guarantees; right tuning for raw): FUSE hand-read ~**600** images/s · [`StreamingRawDataset`](#stream-raw) ~**6–7k** · optimized [`StreamingDataset`](#speed-up-model-training) (64MB chunks) ~**11k**.
 
 </details>
 
