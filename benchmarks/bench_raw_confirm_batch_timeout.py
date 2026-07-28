@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench_raw_before_vs_after import (  # noqa: E402
+from bench_raw_before_vs_after import (
     OUT_DIR,
     ROOT,
     TIMEOUT,

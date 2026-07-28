@@ -14,7 +14,6 @@ import shutil
 import sys
 import tempfile
 import time
-from collections import defaultdict
 from pathlib import Path
 
 os.environ["LITDATA_RAW_DEBUG"] = "1"
@@ -22,10 +21,10 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from torch.utils.data import DataLoader  # noqa: E402
+from torch.utils.data import DataLoader
 
-from litdata import StreamingRawDataset  # noqa: E402
-from litdata.raw import dataset as raw_dataset  # noqa: E402
+from litdata import StreamingRawDataset
+from litdata.raw import dataset as raw_dataset
 
 raw_dataset._RAW_DEBUG = True
 
@@ -192,8 +191,6 @@ def main() -> None:
     class _Info:
         num_workers = 8
         id = 0
-
-    import litdata.raw.dataset as ds_mod
 
     real_schedule = ds_w._schedule_prefetch
 
