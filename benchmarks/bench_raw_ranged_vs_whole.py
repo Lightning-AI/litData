@@ -1,4 +1,8 @@
-"""Focused ranged vs whole-object compare on fixed StreamingRawDataset tree."""
+"""Focused ranged vs whole-object compare on fixed StreamingRawDataset tree.
+
+Protocol: timed window is max(BATCHES, MIN_SECONDS) — both floors required.
+Artifacts use SHA/ts-suffixed paths (never overwrite).
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench_raw_before_vs_after import git_sha, unique_result_path
+from bench_raw_before_vs_after import effective_min_seconds, git_sha, unique_result_path
 from torch.utils.data import DataLoader
 from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
@@ -23,8 +27,9 @@ INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path(tempfile.gettempdir()) / "litdata-raw-ranged-vs-whole"
 OUT_DIR = Path(__file__).resolve().parent / "results"
 BS = 64
-BATCHES = 30
-TIMEOUT = 180.0
+BATCHES = 300
+MIN_SECONDS = 30.0
+TIMEOUT = 600.0
 CONFIGS = [(4, 0), (4, 128), (8, 0), (8, 128)]
 MODES = [
     ("whole_object", 0),
@@ -109,19 +114,25 @@ def run(label: str, *, num_workers: int, max_prefetch: int, threshold: int, seed
     _ = next(it)
     warm_s = time.perf_counter() - t0
 
+    min_s = effective_min_seconds(num_workers, MIN_SECONDS)
     samples = 0
+    timed_batches = 0
     wd.beat(f"{label}: timed")
     t0 = time.perf_counter()
-    for i, batch in enumerate(it):
+    while True:
+        batch = next(it)
         samples += len(batch)
-        wd.beat(f"{label}: batch {i + 1}")
-        if i + 1 >= BATCHES:
+        timed_batches += 1
+        wd.beat(f"{label}: batch {timed_batches}")
+        elapsed = time.perf_counter() - t0
+        if timed_batches >= BATCHES and elapsed >= min_s:
             break
     elapsed = time.perf_counter() - t0
     ips = samples / elapsed if elapsed else 0.0
     log(
         f"[{label}] thr={threshold} w={num_workers} pf={max_prefetch} "
-        f"warm={warm_s:.2f}s | {BATCHES} batches/{samples} in {elapsed:.2f}s → {ips:.1f} samples/s"
+        f"warm={warm_s:.2f}s | {timed_batches} batches/{samples} in {elapsed:.2f}s "
+        f"(need ≥{BATCHES} & ≥{min_s:.0f}s) → {ips:.1f} samples/s"
     )
     del it, loader, ds
     return {
@@ -130,6 +141,8 @@ def run(label: str, *, num_workers: int, max_prefetch: int, threshold: int, seed
         "range_parallel_threshold": threshold,
         "workers": num_workers,
         "prefetch": max_prefetch,
+        "batches": timed_batches,
+        "min_seconds_effective": min_s,
         "ips": ips,
         "warm_s": warm_s,
         "elapsed": elapsed,

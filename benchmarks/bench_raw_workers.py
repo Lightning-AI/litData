@@ -2,6 +2,9 @@
 
 Uses spawn + persistent_workers after a warm index. Writes a JSON summary for docs.
 
+Protocol: timed window is max(BATCHES, MIN_SECONDS) — both floors required.
+High-worker cells (w≥16) always run ≥30s. Artifacts use SHA/ts-suffixed paths.
+
 Ranged vs whole-object compare (optional):
   LITDATA_RAW_RANGE_PARALLEL_THRESHOLD=0         # whole-object GETs (also the dataset default)
   LITDATA_RAW_RANGE_PARALLEL_THRESHOLD=1         # force ranged for any sized object
@@ -21,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench_raw_before_vs_after import git_sha, unique_result_path
+from bench_raw_before_vs_after import effective_min_seconds, git_sha, unique_result_path
 from torch.utils.data import DataLoader
 from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
@@ -31,11 +34,12 @@ INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path(tempfile.gettempdir()) / "litdata-raw-worker-sweep"
 OUT_DIR = Path(__file__).resolve().parent / "results"
 BS = 64
-BATCHES = 30  # after 1 warm batch
+BATCHES = 300
+MIN_SECONDS = 30.0
 # Up to host vCPUs (4×L4 Studio = 48).
 WORKERS = [0, 1, 2, 4, 8, 16, 24, 32, 48]
 PREFETCH = [0, 16, 32, 64, 96, 128]
-TIMEOUT = 180.0
+TIMEOUT = 600.0
 OLD_FUSE = 75.2
 
 # Optional override for ranged-vs-whole compare; None → dataset default (0 = opt-in off).
@@ -117,26 +121,33 @@ def run(label: str, *, num_workers: int, max_prefetch: int, seed: Path, wd: Hang
     next(it)
     warm_s = time.perf_counter() - t0
 
+    min_s = effective_min_seconds(num_workers, MIN_SECONDS)
     samples = 0
+    timed_batches = 0
     wd.beat(f"{label}: timed")
     t0 = time.perf_counter()
-    for i, batch in enumerate(it):
+    while True:
+        batch = next(it)
         samples += len(batch)
-        wd.beat(f"{label}: batch {i + 1}")
-        if i + 1 >= BATCHES:
+        timed_batches += 1
+        wd.beat(f"{label}: batch {timed_batches}")
+        elapsed = time.perf_counter() - t0
+        if timed_batches >= BATCHES and elapsed >= min_s:
             break
     elapsed = time.perf_counter() - t0
     ips = samples / elapsed if elapsed else 0.0
     log(
         f"[{label}] w={num_workers} pf={max_prefetch} "
-        f"warm={warm_s:.2f}s | {BATCHES}×{samples // max(BATCHES, 1)} in {elapsed:.2f}s "
-        f"→ {ips:.1f} samples/s ({ips / OLD_FUSE:.1f}x FUSE)"
+        f"warm={warm_s:.2f}s | {timed_batches}×{samples // max(timed_batches, 1)} in {elapsed:.2f}s "
+        f"(need ≥{BATCHES} batches & ≥{min_s:.0f}s) → {ips:.1f} samples/s ({ips / OLD_FUSE:.1f}x FUSE)"
     )
     del it, loader, ds
     return {
         "label": label,
         "workers": num_workers,
         "prefetch": max_prefetch,
+        "batches": timed_batches,
+        "min_seconds_effective": min_s,
         "ips": ips,
         "warm_s": warm_s,
         "elapsed": elapsed,

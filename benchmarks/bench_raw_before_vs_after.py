@@ -10,9 +10,19 @@ Run twice with different PYTHONPATH / --side, then merge:
 
   python benchmarks/bench_raw_before_vs_after.py --merge
 
-Defaults aim for trustworthy windows: >=300 batches (or use --min-seconds),
-and warm ``max(1, num_workers * prefetch_factor)`` batches before timing starts.
+Protocol (trustworthy windows)
+------------------------------
+- Timed window: continue until **both** ``--batches`` **and** ``--min-seconds``
+  are met (``max(N batches, T seconds)``). Defaults: 300 batches and 30s.
+  High-worker cells (``num_workers >= 16``) always enforce ≥30s.
+- Repeats: ``--repeats N`` (use ≥5 for publish). Each cell stores all runs;
+  merge reports **median** ips + min/max spread.
+- Interleave: ``--interleave --before-pythonpath PATH`` alternates
+  before/after per cell (main, head, main, head, …) via subprocesses.
+- Artifacts: append-only SHA/ts JSON (+ JSONL); never overwrite prior results.
+
 After measures prefetch in ``[0, 16, 32]`` (publish ≥16; p0 kept in JSON).
+Warm ``max(1, num_workers * prefetch_factor)`` batches before timing starts.
 """
 
 from __future__ import annotations
@@ -41,13 +51,44 @@ OUT_DIR = Path(__file__).resolve().parent / "results"
 OUT = OUT_DIR / "raw_before_vs_after.json"  # legacy fixed name; writers use unique_result_path
 BS = 64
 DEFAULT_BATCHES = 300
-DEFAULT_MIN_SECONDS = 10.0
+DEFAULT_MIN_SECONDS = 30.0
+HIGH_WORKER_MIN_SECONDS = 30.0
+HIGH_WORKER_THRESHOLD = 16
 DEFAULT_PREFETCH_FACTOR = 2
+DEFAULT_REPEATS = 1
 WORKERS = [0, 1, 2, 4, 8, 16, 24, 32]
 TRUST_WORKERS = [0, 2, 4, 8, 16]
 AFTER_PREFETCH = [0, 16, 32]
 TIMEOUT = 600.0
 OLD_FUSE = 75.2
+
+
+def effective_min_seconds(num_workers: int, min_seconds: float) -> float:
+    """Enforce ≥30s timed windows at high worker counts."""
+    if num_workers >= HIGH_WORKER_THRESHOLD:
+        return max(min_seconds, HIGH_WORKER_MIN_SECONDS)
+    return min_seconds
+
+
+def summarize_ips(values: list[float]) -> dict:
+    """Return median + spread stats for a list of samples/s measurements."""
+    if not values:
+        return {"ips_median": None, "ips_min": None, "ips_max": None, "ips_spread_pct": None, "n": 0}
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        median = ordered[mid]
+    else:
+        median = 0.5 * (ordered[mid - 1] + ordered[mid])
+    lo, hi = ordered[0], ordered[-1]
+    spread = ((hi - lo) / median) * 100.0 if median else None
+    return {
+        "ips_median": median,
+        "ips_min": lo,
+        "ips_max": hi,
+        "ips_spread_pct": spread,
+        "n": len(values),
+    }
 
 
 def git_sha() -> str:
@@ -230,10 +271,15 @@ def run_one(
     download_timeout: float | None = None,
     sha: str = "",
     jsonl: Path | None = None,
+    repeat: int = 0,
 ) -> dict:
-    """Run one worker/prefetch trial and return timing stats."""
-    cache = ROOT / side / label
-    wd.beat(f"{label}: setup")
+    """Run one worker/prefetch trial and return timing stats.
+
+    Timing stops only when **both** ``batches`` and the effective min-seconds
+    floor are met (``max(N batches, T seconds)``).
+    """
+    cache = ROOT / side / f"{label}_r{repeat}"
+    wd.beat(f"{label}:r{repeat} setup")
     copy_index(seed, cache)
     ds = make_dataset(
         str(cache),
@@ -252,36 +298,38 @@ def run_one(
 
     # Drain pipeline buffer before timing (≥ workers×prefetch_factor).
     warm_batches = max(1, num_workers * prefetch_factor if num_workers > 0 else 1)
-    wd.beat(f"{label}: warm({warm_batches})")
+    wd.beat(f"{label}:r{repeat} warm({warm_batches})")
     t0 = time.perf_counter()
     for i in range(warm_batches):
         next(it)
-        wd.beat(f"{label}: warm {i + 1}/{warm_batches}")
+        wd.beat(f"{label}:r{repeat} warm {i + 1}/{warm_batches}")
     warm_s = time.perf_counter() - t0
 
+    min_s = effective_min_seconds(num_workers, min_seconds)
     samples = 0
     timed_batches = 0
-    wd.beat(f"{label}: timed")
+    wd.beat(f"{label}:r{repeat} timed")
     t0 = time.perf_counter()
     while True:
         batch = next(it)
         samples += len(batch)
         timed_batches += 1
-        wd.beat(f"{label}: batch {timed_batches}")
+        wd.beat(f"{label}:r{repeat} batch {timed_batches}")
         elapsed = time.perf_counter() - t0
-        # Stop once either floor is met (recommend ≥300 batches OR ≥10s).
-        if timed_batches >= batches or elapsed >= min_seconds:
+        # max(N batches, T seconds): require both floors (not either/or).
+        if timed_batches >= batches and elapsed >= min_s:
             break
     elapsed = time.perf_counter() - t0
     ips = samples / elapsed if elapsed else 0.0
     log(
-        f"[{side}/{label}] w={num_workers} pf={max_prefetch} "
+        f"[{side}/{label}] r={repeat} w={num_workers} pf={max_prefetch} "
         f"warm={warm_batches}@{warm_s:.2f}s | {timed_batches}×{samples // max(timed_batches, 1)} "
-        f"in {elapsed:.2f}s → {ips:.1f} samples/s"
+        f"in {elapsed:.2f}s (need ≥{batches} batches & ≥{min_s:.0f}s) → {ips:.1f} samples/s"
     )
     result = {
         "side": side,
         "label": label,
+        "repeat": repeat,
         "workers": num_workers,
         "prefetch": max_prefetch,
         "ips": ips,
@@ -290,6 +338,7 @@ def run_one(
         "elapsed": elapsed,
         "samples": samples,
         "batches": timed_batches,
+        "min_seconds_effective": min_s,
         "hedge_delay": hedge_delay if side == "after" else None,
         "download_timeout": download_timeout if side == "after" else None,
         "git_sha": sha,
@@ -366,6 +415,26 @@ def latest_partial(side: str) -> Path:
     raise FileNotFoundError(f"no raw_before_vs_after.{side}.* result under {OUT_DIR}")
 
 
+def cell_summaries(results: list[dict]) -> dict[str, dict]:
+    """Group raw runs by label and attach median/spread ips."""
+    by_label: dict[str, list[dict]] = {}
+    for r in results:
+        by_label.setdefault(r["label"], []).append(r)
+    out: dict[str, dict] = {}
+    for label, runs in by_label.items():
+        stats = summarize_ips([float(r["ips"]) for r in runs])
+        head = runs[0]
+        out[label] = {
+            "label": label,
+            "workers": head["workers"],
+            "prefetch": head["prefetch"],
+            "ips": stats["ips_median"],
+            **stats,
+            "runs": runs,
+        }
+    return out
+
+
 def run_side(
     side: str,
     *,
@@ -374,6 +443,7 @@ def run_side(
     min_seconds: float,
     prefetch_factor: int,
     safety_grid: bool,
+    repeats: int = 1,
 ) -> None:
     """Index once and sweep configs for ``before`` or ``after``."""
     caps = detect_side_capabilities()
@@ -400,9 +470,11 @@ def run_side(
     log(f"capabilities: {json.dumps(caps)}")
     log(
         f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches>={batches} "
-        f"min_seconds>={min_seconds} warm=max(1,w*{prefetch_factor}) cpus={ncpu} "
-        f"configs={len(cfgs)} sha={sha or '?'}"
+        f"min_seconds>={min_seconds} (high-w≥{HIGH_WORKER_THRESHOLD} → "
+        f"≥{HIGH_WORKER_MIN_SECONDS}s) warm=max(1,w*{prefetch_factor}) "
+        f"repeats={repeats} cpus={ncpu} configs={len(cfgs)} sha={sha or '?'}"
     )
+    log("protocol: stop when batches AND min_seconds both met (max window)")
     log(f"PYTHONPATH[0]={sys.path[0]!r}")
 
     try:
@@ -427,26 +499,47 @@ def run_side(
         del ds
 
         results: list[dict] = []
-        for w, pf, hd, dt in cfgs:
-            label = f"w{w}_p{pf}_h{hd}_t{dt}" if safety_grid else f"w{w}_p{pf}"
-            results.append(
-                run_one(
-                    label,
-                    side=side,
-                    num_workers=w,
-                    max_prefetch=pf,
-                    seed=seed,
-                    wd=wd,
-                    batches=batches,
-                    min_seconds=min_seconds,
-                    prefetch_factor=prefetch_factor,
-                    hedge_delay=hd,
-                    download_timeout=dt,
-                    sha=sha,
-                    jsonl=jpath,
+        # Interleave repeats across configs when repeats>1 so A/B noise is
+        # comparable; for a single side this is config-major then repeat.
+        for rep in range(max(1, repeats)):
+            for w, pf, hd, dt in cfgs:
+                label = f"w{w}_p{pf}_h{hd}_t{dt}" if safety_grid else f"w{w}_p{pf}"
+                results.append(
+                    run_one(
+                        label,
+                        side=side,
+                        num_workers=w,
+                        max_prefetch=pf,
+                        seed=seed,
+                        wd=wd,
+                        batches=batches,
+                        min_seconds=min_seconds,
+                        prefetch_factor=prefetch_factor,
+                        hedge_delay=hd,
+                        download_timeout=dt,
+                        sha=sha,
+                        jsonl=jpath,
+                        repeat=rep,
+                    )
                 )
-            )
 
+        accum = os.environ.get("LITDATA_BENCH_ACCUM_OUT", "").strip()
+        if accum:
+            out = Path(accum)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.exists():
+                prev = json.loads(out.read_text())
+                results = list(prev.get("results") or []) + results
+                # Renumber repeats so summaries see a contiguous series.
+                by_label: dict[str, int] = {}
+                for r in results:
+                    lab = r["label"]
+                    r["repeat"] = by_label.get(lab, 0)
+                    by_label[lab] = r["repeat"] + 1
+        else:
+            out = partial_path(side, sha=sha, ts=run_ts)
+
+        summaries = cell_summaries(results)
         payload = {
             "side": side,
             "meta": {
@@ -458,6 +551,10 @@ def run_side(
                 "batch_size": BS,
                 "batches": batches,
                 "min_seconds": min_seconds,
+                "high_worker_min_seconds": HIGH_WORKER_MIN_SECONDS,
+                "high_worker_threshold": HIGH_WORKER_THRESHOLD,
+                "timing_window": "max(batches, min_seconds) — both floors required",
+                "repeats": max(r.get("repeat", 0) for r in results) + 1 if results else max(1, repeats),
                 "prefetch_factor": prefetch_factor,
                 "warm_batches_formula": "max(1, num_workers * prefetch_factor)",
                 "multiprocessing_context": "spawn",
@@ -481,18 +578,86 @@ def run_side(
                     else "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0"
                 ),
                 "caveat": (
-                    "Short windows and high-worker cells can be noisy (~2× run-to-run). "
-                    "Trust systematic patterns (e.g. prefetch helps), not fine Δ%."
+                    "Use --repeats ≥5 and medians for publish claims. "
+                    "Trust systematic patterns, not single-run fine Δ%."
                 ),
             },
             "results": results,
+            "summaries": summaries,
         }
-        out = partial_path(side, sha=sha, ts=run_ts)
         out.write_text(json.dumps(payload, indent=2) + "\n")
         log(f"Wrote {out}")
         log(f"JSONL {jpath}")
+        for label, s in summaries.items():
+            spread = s.get("ips_spread_pct")
+            spread_s = f" spread={spread:.1f}%" if isinstance(spread, (int, float)) else ""
+            log(f"  summary {label}: median={s['ips']:.1f} ips n={s['n']}{spread_s}")
     finally:
         wd.stop()
+
+
+def run_interleaved(
+    *,
+    before_pythonpath: str,
+    workers: list[int],
+    batches: int,
+    min_seconds: float,
+    prefetch_factor: int,
+    repeats: int,
+) -> None:
+    """Alternate before/after subprocesses (main, head, main, head, …) into one partial each."""
+    script = str(Path(__file__).resolve())
+    after_pythonpath = os.environ.get("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
+    n_rep = max(1, repeats)
+    sha = git_sha()
+    run_ts = time.time()
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    outs = {
+        "before": partial_path("before", sha=sha, ts=run_ts),
+        "after": partial_path("after", sha=sha, ts=run_ts),
+    }
+    log(
+        f"=== interleaved A/B repeats={n_rep} workers={workers} "
+        f"batches>={batches} min_seconds>={min_seconds} ==="
+    )
+    log(f"before PYTHONPATH={before_pythonpath} → {outs['before'].name}")
+    log(f"after  PYTHONPATH={after_pythonpath} → {outs['after'].name}")
+    for rep in range(n_rep):
+        for side, pypath in (("before", before_pythonpath), ("after", after_pythonpath)):
+            env = os.environ.copy()
+            env["PYTHONPATH"] = pypath
+            env["LITDATA_BENCH_GIT"] = sha or env.get("LITDATA_BENCH_GIT", "")
+            env["LITDATA_BENCH_ACCUM_OUT"] = str(outs[side])
+            cmd = [
+                sys.executable,
+                script,
+                "--side",
+                side,
+                "--workers",
+                ",".join(str(w) for w in workers),
+                "--batches",
+                str(batches),
+                "--min-seconds",
+                str(min_seconds),
+                "--prefetch-factor",
+                str(prefetch_factor),
+                "--repeats",
+                "1",
+            ]
+            log(f"interleave rep={rep} side={side}: {' '.join(cmd)}")
+            subprocess.check_call(cmd, env=env)
+    log(f"interleave complete — merge with: python {script} --merge")
+    log(f"  before={outs['before']}")
+    log(f"  after={outs['after']}")
+
+
+def _representative_runs(payload: dict) -> list[dict]:
+    """Prefer per-cell median summaries; fall back to raw single runs."""
+    summaries = payload.get("summaries") or {}
+    if summaries:
+        return list(summaries.values())
+    # Build summaries from raw results when older partials lack them.
+    return list(cell_summaries(payload.get("results") or {}).values())
 
 
 def merge() -> None:
@@ -503,10 +668,13 @@ def merge() -> None:
     before = json.loads(before_path.read_text())
     after = json.loads(after_path.read_text())
 
-    workers = sorted({r["workers"] for r in before["results"]} | {r["workers"] for r in after["results"]})
-    before_by_w = {r["workers"]: r for r in before["results"] if r["prefetch"] == 0}
+    before_reps = _representative_runs(before)
+    after_reps = _representative_runs(after)
+
+    workers = sorted({r["workers"] for r in before_reps} | {r["workers"] for r in after_reps})
+    before_by_w = {r["workers"]: r for r in before_reps if r["prefetch"] == 0}
     after_by_pf: dict[int, dict[int, dict]] = {}
-    for r in after["results"]:
+    for r in after_reps:
         after_by_pf.setdefault(r["prefetch"], {})[r["workers"]] = r
     prefetch_levels = sorted(after_by_pf)
 
@@ -514,21 +682,27 @@ def merge() -> None:
     cells = []
     for w in workers:
         b = before_by_w.get(w)
-        row: dict = {"workers": w, "before_ips": b["ips"] if b else None}
+        row: dict = {
+            "workers": w,
+            "before_ips": b["ips"] if b else None,
+            "before_n": b.get("n") if b else None,
+            "before_spread_pct": b.get("ips_spread_pct") if b else None,
+        }
         after_best = None
         for pf in prefetch_levels:
             a = after_by_pf.get(pf, {}).get(w)
             row[f"after_prefetch{pf}_ips"] = a["ips"] if a else None
-            if b and a:
-                row[f"speedup_prefetch{pf}"] = a["ips"] / b["ips"] if b["ips"] else None
+            row[f"after_prefetch{pf}_spread_pct"] = a.get("ips_spread_pct") if a else None
+            if b and a and b["ips"] and a["ips"]:
+                row[f"speedup_prefetch{pf}"] = a["ips"] / b["ips"]
                 row[f"delta_pct_prefetch{pf}"] = ((a["ips"] - b["ips"]) / b["ips"]) * 100.0
-            if a and (after_best is None or a["ips"] > after_best["ips"]):
+            if a and (after_best is None or (a["ips"] or 0) > (after_best["ips"] or 0)):
                 after_best = a
-        if b and after_best:
+        if b and after_best and b["ips"] and after_best["ips"]:
             row["after_best_ips"] = after_best["ips"]
             row["after_best_prefetch"] = after_best["prefetch"]
-            row["speedup_best"] = after_best["ips"] / b["ips"] if b["ips"] else None
-            row["delta_pct_best"] = ((after_best["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None
+            row["speedup_best"] = after_best["ips"] / b["ips"]
+            row["delta_pct_best"] = ((after_best["ips"] - b["ips"]) / b["ips"]) * 100.0
         rows.append(row)
         if not b:
             continue
@@ -542,8 +716,12 @@ def merge() -> None:
                     "prefetch": pf,
                     "before_ips": b["ips"],
                     "after_ips": a["ips"],
-                    "delta_pct": ((a["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None,
-                    "speedup": a["ips"] / b["ips"] if b["ips"] else None,
+                    "before_n": b.get("n"),
+                    "after_n": a.get("n"),
+                    "before_spread_pct": b.get("ips_spread_pct"),
+                    "after_spread_pct": a.get("ips_spread_pct"),
+                    "delta_pct": ((a["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] and a["ips"] else None,
+                    "speedup": a["ips"] / b["ips"] if b["ips"] and a["ips"] else None,
                     "before_elapsed": b.get("elapsed"),
                     "after_elapsed": a.get("elapsed"),
                     "before_batches": b.get("batches"),
@@ -551,7 +729,7 @@ def merge() -> None:
                 }
             )
 
-    best_after = max(cells, key=lambda c: c["after_ips"]) if cells else None
+    best_after = max(cells, key=lambda c: c["after_ips"] or 0) if cells else None
     payload = {
         "meta": {
             "mount_input": MOUNT_INPUT,
@@ -562,8 +740,8 @@ def merge() -> None:
             "before": before["meta"],
             "after": after["meta"],
             "delta_definition": (
-                "delta_pct = ((after - before) / before) * 100; before is stock main "
-                "(no max_prefetch API, measured at prefetch=0)"
+                "delta_pct = ((after_median - before_median) / before_median) * 100; "
+                "before is stock main (no max_prefetch API, measured at prefetch=0)"
             ),
             "note": (
                 "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / "
@@ -573,16 +751,20 @@ def merge() -> None:
                 "Publish table emphasizes after prefetch≥16; prefetch=0 kept in JSON for honesty."
             ),
             "caveat": (
-                "Long-window protocol (≥300 batches or ≥10s after warm drain). Prefer systematic patterns over fine Δ%."
+                "Protocol: max(≥300 batches, ≥30s) timed window; prefer --repeats ≥5 with "
+                "median ips + spread. Trust systematic patterns over single-run fine Δ%."
             ),
             "default_max_prefetch": 16,
             "publish_prefetch": [pf for pf in prefetch_levels if pf >= 16],
+            "ips_aggregation": "median across repeats when summaries present",
         },
         "cells": cells,
         "best_after": best_after,
         "comparison": rows,
         "before_results": before["results"],
         "after_results": after["results"],
+        "before_summaries": before.get("summaries"),
+        "after_summaries": after.get("summaries"),
         "sources": {"before": str(before_path), "after": str(after_path)},
     }
     out = unique_result_path("raw_before_vs_after")
@@ -642,19 +824,39 @@ def main() -> None:
         "--batches",
         type=int,
         default=DEFAULT_BATCHES,
-        help=f"minimum timed batches (default {DEFAULT_BATCHES}; recommend ≥300)",
+        help=f"minimum timed batches (default {DEFAULT_BATCHES}); window is max(batches, min_seconds)",
     )
     parser.add_argument(
         "--min-seconds",
         type=float,
         default=DEFAULT_MIN_SECONDS,
-        help=f"minimum timed window seconds (default {DEFAULT_MIN_SECONDS})",
+        help=(
+            f"minimum timed window seconds (default {DEFAULT_MIN_SECONDS}); "
+            f"num_workers≥{HIGH_WORKER_THRESHOLD} always uses ≥{HIGH_WORKER_MIN_SECONDS}s"
+        ),
     )
     parser.add_argument(
         "--prefetch-factor",
         type=int,
         default=DEFAULT_PREFETCH_FACTOR,
-        help="DataLoader prefetch_factor; warm batches = 1 + workers * this (default 2)",
+        help="DataLoader prefetch_factor; warm batches = max(1, workers * this) (default 2)",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=DEFAULT_REPEATS,
+        help="repeat each cell N times; report median+spread (default 1; use ≥5 for publish)",
+    )
+    parser.add_argument(
+        "--interleave",
+        action="store_true",
+        help="alternate before/after subprocesses (requires --before-pythonpath); then --merge",
+    )
+    parser.add_argument(
+        "--before-pythonpath",
+        type=str,
+        default="",
+        help="PYTHONPATH for stock main tree when using --interleave",
     )
     parser.add_argument(
         "--workers",
@@ -676,14 +878,26 @@ def main() -> None:
     if args.merge:
         merge()
         return
-    if not args.side:
-        parser.error("pass --side before|after or --merge")
     if args.trust:
         workers = TRUST_WORKERS
     elif args.workers.strip():
         workers = [int(x) for x in args.workers.split(",") if x.strip()]
     else:
         workers = WORKERS
+    if args.interleave:
+        if not args.before_pythonpath.strip():
+            parser.error("--interleave requires --before-pythonpath")
+        run_interleaved(
+            before_pythonpath=args.before_pythonpath.strip(),
+            workers=workers,
+            batches=args.batches,
+            min_seconds=args.min_seconds,
+            prefetch_factor=args.prefetch_factor,
+            repeats=args.repeats,
+        )
+        return
+    if not args.side:
+        parser.error("pass --side before|after, --interleave, or --merge")
     run_side(
         args.side,
         workers=workers,
@@ -691,6 +905,7 @@ def main() -> None:
         min_seconds=args.min_seconds,
         prefetch_factor=args.prefetch_factor,
         safety_grid=args.safety_grid,
+        repeats=args.repeats,
     )
 
 

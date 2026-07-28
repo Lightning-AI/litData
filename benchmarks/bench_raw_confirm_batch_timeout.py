@@ -56,7 +56,7 @@ def main() -> None:
             seed=seed,
             wd=wd,
             batches=300,
-            min_seconds=10.0,
+                min_seconds=30.0,
             prefetch_factor=2,
             hedge_delay=0.0,
             download_timeout=dt,

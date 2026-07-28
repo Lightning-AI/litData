@@ -335,7 +335,7 @@ for batch in loader:
 | `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
-| `max_concurrent_downloads` | `64` | Max in-flight downloads per worker |
+| `max_concurrent_downloads` | `64` | Max in-flight downloads per worker (worker-aware: aggregate budget from median file size is split across workers) |
 | `max_prefetch` | `16` | Per-worker sequential look-ahead after each batch (default on). When `num_workers > 1`, effective look-ahead is `min(max_prefetch, 64 // num_workers)` so aggregate stays ~64 items. Pass `0` to disable |
 | `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
 | `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |
@@ -409,7 +409,7 @@ raw: bytes = dataset[0]
 
 - Prefer `num_workers > 0` so worker processes overlap async batch downloads with training. Scale workers toward host vCPUs for network-bound JPEG-sized objects — avoid saturating every vCPU.
 - On Linux, after any parent-process dataset I/O, use `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)` — default `fork` can hang S3 clients in workers.
-- Default `max_prefetch=16` enables sequential look-ahead **per DataLoader worker**; shuffled access disables it. Pass `0` to turn off. When `num_workers > 1`, look-ahead is capped so aggregate in-flight items stay near 64 rather than scaling as `num_workers × max_prefetch`.
+- Default `max_prefetch=16` enables sequential look-ahead **per DataLoader worker**; shuffled access disables it. Pass `0` to turn off. When `num_workers > 1`, look-ahead and download concurrency both scale down with worker count so aggregate in-flight work stays bounded.
 - Prefer an `s3://` / `gs://` URL or `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)) — avoid reading through FUSE.
 - Leave `range_parallel_threshold=0` (default) for typical JPEGs; raise it only for large objects where parallel ranged GETs help.
 - Best for medium/large files. Tiny objects (≲100 KB) are request-overhead bound — pack with [`optimize`](#speed-up-model-training) → `StreamingDataset` when I/O plateaus.

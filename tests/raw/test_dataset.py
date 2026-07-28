@@ -71,6 +71,44 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
     assert _effective_prefetch(max_prefetch, num_workers) == expected
 
 
+@pytest.mark.parametrize(
+    ("num_workers", "max_concurrent", "median_bytes", "expected"),
+    [
+        # num_workers <= 1 keeps the constructor cap
+        (0, 64, 100_000, 64),
+        (1, 64, 100_000, 64),
+        # ~100KB JPEG → aggregate budget caps at 128; split across workers, floor 8
+        (2, 64, 100_000, 64),  # min(64, max(8, 128//2)) = 64
+        (8, 64, 100_000, 16),  # 128//8 = 16
+        (16, 64, 100_000, 8),  # 128//16 = 8
+        (24, 64, 100_000, 8),  # 128//24 = 5 → floor 8
+        (32, 64, 100_000, 8),  # 128//32 = 4 → floor 8
+        # Large objects shrink the aggregate budget (floor 32) → fewer permits
+        (4, 64, 10 * 1024 * 1024, 8),  # budget=32, 32//4=8
+        # Unknown size uses default median (256KiB) → still capped at 128
+        (8, 64, None, 16),
+        # Never exceed the user cap
+        (2, 4, 100_000, 4),
+    ],
+)
+def test_effective_concurrency_vs_num_workers(num_workers, max_concurrent, median_bytes, expected):
+    from litdata.raw.dataset import _effective_concurrency
+
+    assert _effective_concurrency(max_concurrent, num_workers, median_bytes) == expected
+
+
+def test_aggregate_concurrency_budget_clamps():
+    from litdata.raw.dataset import (
+        _AGGREGATE_CONCURRENCY_BUDGET_CAP,
+        _AGGREGATE_CONCURRENCY_BUDGET_FLOOR,
+        _aggregate_concurrency_budget,
+    )
+
+    assert _aggregate_concurrency_budget(1) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
+    assert _aggregate_concurrency_budget(50 * 1024 * 1024) == _AGGREGATE_CONCURRENCY_BUDGET_FLOOR
+    assert _AGGREGATE_CONCURRENCY_BUDGET_FLOOR <= _aggregate_concurrency_budget(None) <= _AGGREGATE_CONCURRENCY_BUDGET_CAP
+
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_schedule_prefetch_uses_effective_budget(tmp_path):
     """_schedule_prefetch schedules only the worker-aware effective look-ahead."""

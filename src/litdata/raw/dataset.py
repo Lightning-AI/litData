@@ -87,6 +87,14 @@ _HEDGE_ASSUMED_BANDWIDTH_BPS = 25 * 1024 * 1024  # ~25 MB/s floor for delay scal
 # Cap aggregate sequential look-ahead across DataLoader workers (items total).
 # Per-worker effective = min(max_prefetch, budget // num_workers) when num_workers > 1.
 _AGGREGATE_PREFETCH_BUDGET = 64
+# Stage 1 static concurrency: size an aggregate in-flight download budget from median
+# object size + assumed shared bandwidth, then split across DataLoader workers.
+_ASSUMED_AGGREGATE_BANDWIDTH_BPS = 100 * 1024 * 1024  # ~100 MB/s NIC / prefix share
+_CONCURRENCY_PIPELINE_SECONDS = 0.5  # target aggregate bytes ≈ bandwidth × this
+_DEFAULT_MEDIAN_FILE_BYTES = 256 * 1024
+_AGGREGATE_CONCURRENCY_BUDGET_FLOOR = 32
+_AGGREGATE_CONCURRENCY_BUDGET_CAP = 128
+_MIN_CONCURRENCY_PER_WORKER = 8
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
@@ -372,6 +380,9 @@ def _effective_prefetch(max_prefetch: int, num_workers: int) -> int:
     Constructor default ``max_prefetch=16`` stays ergonomic at low workers (w≤4 keeps 16).
     At higher worker counts each worker gets a smaller share so total in-flight look-ahead
     does not scale as ``num_workers × max_prefetch``.
+
+    TODO(Stage 2): hit-rate controller — if windowed hit rate <30% → halve effective
+    look-ahead (floor 0); >90% and batch waited on a miss → +1–2. Not implemented yet.
     """
     if max_prefetch <= 0:
         return 0
@@ -379,6 +390,58 @@ def _effective_prefetch(max_prefetch: int, num_workers: int) -> int:
         return max_prefetch
     # TODO(open): if effective < 8, return 0 — pending repeats; priority below downloader conformance.
     return min(max_prefetch, max(0, _AGGREGATE_PREFETCH_BUDGET // num_workers))
+
+
+def _median_file_bytes(files: Sequence[FileMetadata]) -> int | None:
+    """Return median positive file size from index metadata, or ``None`` if unknown."""
+    sizes = [f.size for f in files if f.size > 0]
+    if not sizes:
+        return None
+    return int(statistics.median(sizes))
+
+
+def _aggregate_concurrency_budget(median_file_bytes: int | None) -> int:
+    """Aggregate in-flight download slots across all workers (size-aware, clamped).
+
+    Larger median objects → fewer slots needed to keep ~``bandwidth × pipeline`` bytes
+    in flight; tiny objects still hit the cap so high-``num_workers`` cannot stampede.
+    """
+    median = median_file_bytes if median_file_bytes and median_file_bytes > 0 else _DEFAULT_MEDIAN_FILE_BYTES
+    target_bytes = int(_ASSUMED_AGGREGATE_BANDWIDTH_BPS * _CONCURRENCY_PIPELINE_SECONDS)
+    raw = max(1, target_bytes // median)
+    return max(_AGGREGATE_CONCURRENCY_BUDGET_FLOOR, min(_AGGREGATE_CONCURRENCY_BUDGET_CAP, raw))
+
+
+def _effective_concurrency(
+    max_concurrent_downloads: int,
+    num_workers: int,
+    median_file_bytes: int | None = None,
+) -> int:
+    """Per-worker download permits: ``clamp(budget // num_workers, floor, max)``.
+
+    Mirrors :func:`_effective_prefetch` for the download semaphore. At high worker
+    counts this turns ``num_workers × max_concurrent_downloads`` potential in-flight
+    GETs into a size-aware aggregate without runtime feedback (Stage 1 statics).
+    """
+    if max_concurrent_downloads <= 0:
+        return 1
+    if num_workers <= 1:
+        return max_concurrent_downloads
+    per_worker = _aggregate_concurrency_budget(median_file_bytes) // num_workers
+    # clamp(budget // n, floor, max) with user max always respected when max < floor.
+    return min(max_concurrent_downloads, max(_MIN_CONCURRENCY_PER_WORKER, per_worker))
+
+
+def _num_dataloader_workers() -> int:
+    """Return DataLoader ``num_workers``, or ``1`` when called outside a worker."""
+    try:
+        from torch.utils.data import get_worker_info
+    except ImportError:
+        return 1
+    info = get_worker_info()
+    if info is None:
+        return 1
+    return max(1, int(info.num_workers))
 
 
 def _consume_prefetch_exception(task: asyncio.Task) -> None:
@@ -463,11 +526,14 @@ class CacheManager:
         _sweep_orphan_tmp_files(self.cache_dir)
 
         self.storage_options = storage_options or {}
+        # Index median size (bytes); set by StreamingRawDataset after discovery.
+        self._median_file_bytes: int | None = None
         self._downloader: Downloader | None = None
         self._downloader_pid: int | None = None
         self._downloader_loop: asyncio.AbstractEventLoop | None = None
         self._semaphore: asyncio.Semaphore | None = None
         self._semaphore_loop: asyncio.AbstractEventLoop | None = None
+        self._semaphore_permits: int | None = None
         self._path_inflight: dict[str, asyncio.Task] = {}
         self._path_inflight_loop: asyncio.AbstractEventLoop | None = None
         # Presence hint only: membership does not skip exists checks (stale marks self-heal).
@@ -484,11 +550,12 @@ class CacheManager:
         self._downloader_loop = None
         self._semaphore = None
         self._semaphore_loop = None
+        self._semaphore_permits = None
         self._path_inflight = {}
         self._path_inflight_loop = None
         self._shutdown_range_executor()
         self._hedge_fired = 0
-        # Keep _present_paths — cache files survive fork/spawn on shared FS.
+        # Keep _present_paths / _median_file_bytes — index metadata survives fork/spawn.
 
     def __getstate__(self) -> dict[str, Any]:
         """Serialize config only — never downloader/loop/executor/inflight state.
@@ -508,12 +575,14 @@ class CacheManager:
             "lock_wait_timeout": self.lock_wait_timeout,
             "cache_dir": self.cache_dir,
             "storage_options": self.storage_options,
+            "_median_file_bytes": self._median_file_bytes,
             # Runtime — always fresh in the child.
             "_downloader": None,
             "_downloader_pid": None,
             "_downloader_loop": None,
             "_semaphore": None,
             "_semaphore_loop": None,
+            "_semaphore_permits": None,
             "_path_inflight": {},
             "_path_inflight_loop": None,
             "_present_paths": set(),
@@ -530,12 +599,14 @@ class CacheManager:
         self._downloader_loop = None
         self._semaphore = None
         self._semaphore_loop = None
+        self._semaphore_permits = None
         self._path_inflight = {}
         self._path_inflight_loop = None
         self._present_paths = set(state.get("_present_paths") or ())
         self._range_executor = None
         self._range_executor_pid = None
         self._hedge_fired = 0
+        self._median_file_bytes = state.get("_median_file_bytes")
 
     def _shutdown_range_executor(self) -> None:
         if self._range_executor is not None:
@@ -608,12 +679,27 @@ class CacheManager:
             self._downloader_loop = loop
         return self._downloader
 
+    def _effective_download_permits(self) -> int:
+        """Worker-aware permit count for the download semaphore (Stage 1 statics)."""
+        return _effective_concurrency(
+            self.max_concurrent_downloads,
+            _num_dataloader_workers(),
+            self._median_file_bytes,
+        )
+
     def _get_semaphore(self) -> asyncio.Semaphore:
-        """Return a semaphore bound to the current event loop."""
+        """Return a semaphore bound to the current event loop with effective permits.
+
+        Permit count is recomputed from ``num_workers`` + median file size so high
+        worker counts do not open ``num_workers × max_concurrent_downloads`` GETs.
+        Loop-keyed like other runtime clients; cleared by ``reset_runtime_state``.
+        """
         loop = asyncio.get_running_loop()
-        if self._semaphore is None or self._semaphore_loop is not loop:
-            self._semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
+        permits = self._effective_download_permits()
+        if self._semaphore is None or self._semaphore_loop is not loop or self._semaphore_permits != permits:
+            self._semaphore = asyncio.Semaphore(permits)
             self._semaphore_loop = loop
+            self._semaphore_permits = permits
         return self._semaphore
 
     @asynccontextmanager
@@ -1126,6 +1212,10 @@ class StreamingRawDataset(Dataset):
                 when ``item_type="bytes"``, or ``str`` / ``list[str]`` paths when ``item_type="path"``.
                 Prefer C-level / GIL-releasing transforms, or decode in ``collate_fn``.
             max_concurrent_downloads: Max in-flight downloads per worker (default: 64).
+                When ``num_workers > 1``, the semaphore uses a worker-aware effective
+                concurrency (size-aware aggregate budget split across workers, floored
+                at 8) so aggregate in-flight GETs stay near that budget rather than
+                ``num_workers × max_concurrent_downloads``.
             max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
                 roughly ``2×`` a typical batch). Pass ``0`` to disable. Look-ahead is per
                 DataLoader worker, but when ``num_workers > 1`` the scheduled amount is
@@ -1198,6 +1288,7 @@ class StreamingRawDataset(Dataset):
             recompute_index,
         )
         logger.info("Discovered %s files.", len(self.files))
+        self.cache_manager._median_file_bytes = _median_file_bytes(self.files)
         self._maybe_warn_tiny_files()
 
         # Transform the flat list of files into the desired item structure.
@@ -1305,6 +1396,7 @@ class StreamingRawDataset(Dataset):
             cm._downloader_loop = None
             cm._semaphore = None
             cm._semaphore_loop = None
+            cm._semaphore_permits = None
             cm._path_inflight = {}
             cm._path_inflight_loop = None
             cm._range_executor = None
