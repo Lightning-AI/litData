@@ -1748,11 +1748,11 @@ def test_data_processor_end_to_end_with_data_connection_id(tmpdir, monkeypatch):
     ("output_dir", "broadcast_paths", "expect_broadcast"),
     [
         # Default off for ordinary paths
-        ("/tmp/out", False, False),
+        ("/data/out", False, False),
         # Explicit True always broadcasts
-        ("/tmp/out", True, True),
+        ("local/out", True, True),
         # `{%strftime}` time template auto-enables broadcast
-        ("/tmp/out_{%Y-%m-%d}", False, True),
+        ("local/out_{%Y-%m-%d}", False, True),
         ("s3://bucket/run_{%Y-%m-%d_%H-%M-%S}", False, True),
     ],
 )

@@ -265,12 +265,12 @@ epub_exclude_files = ["search.html"]
 
 # -- Options for intersphinx extension ---------------------------------------
 
-# Example configuration for intersphinx: refer to the Python standard library.
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "torch": ("https://pytorch.org/docs/stable/", None),
-    "numpy": ("https://numpy.org/doc/stable/", None),
-}
+# Remote inventory fetches are unused here (no :external: / inventory roles) and
+# flake under Sphinx ``-W`` when hosts reset (e.g. docs.python.org ConnectionReset).
+# Keep the extension enabled for local experiments; leave the mapping empty so
+# ``make linkcheck`` / CI does not depend on third-party ``objects.inv`` availability.
+# If re-enabling, prefer current hosts (torch moved to docs.pytorch.org).
+intersphinx_mapping = {}
 
 # -- Options for todo extension ----------------------------------------------
 
