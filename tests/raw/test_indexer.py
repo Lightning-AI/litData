@@ -5,7 +5,13 @@ import pytest
 
 from litdata import StreamingRawDataset
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14
-from litdata.raw.indexer import _INDEX_FILENAME, FileIndexer, FileMetadata
+from litdata.raw.indexer import (
+    _INDEX_FILENAME,
+    FileIndexer,
+    FileMetadata,
+    _is_windows_drive_scheme,
+    _validate_input_dir_scheme,
+)
 
 
 def test_file_metadata():
@@ -198,6 +204,27 @@ def test_discover_files_unsupported_scheme():
     indexer = FileIndexer()
     with pytest.raises(ValueError, match="Unsupported input directory scheme: `http`"):
         indexer.discover_files("http://unsupported/path", {})
+
+
+def test_windows_drive_scheme_treated_as_local():
+    """urlparse('C:\\\\Users\\\\...') yields scheme='c'; treat as local, not remote."""
+    assert _is_windows_drive_scheme("c")
+    assert _is_windows_drive_scheme("C")
+    assert not _is_windows_drive_scheme("s3")
+    assert not _is_windows_drive_scheme("ftp")
+    assert not _is_windows_drive_scheme("")
+
+    # Same classification urlparse uses for Windows absolute paths (also on Linux).
+    _validate_input_dir_scheme(r"C:\Users\test\dataset")
+    _validate_input_dir_scheme("C:/Users/test/dataset")
+
+    with pytest.raises(ValueError, match="Unsupported input directory scheme: `ftp`"):
+        _validate_input_dir_scheme("ftp://unsupported/path")
+
+    indexer = FileIndexer()
+    with patch.object(indexer, "_discover_local_files", return_value=[]) as mock_local:
+        indexer.discover_files(r"C:\Users\test\dataset", {})
+        mock_local.assert_called_once_with(r"C:\Users\test\dataset")
 
 
 @patch("litdata.raw.indexer.BaseIndexer._upload_to_cloud")

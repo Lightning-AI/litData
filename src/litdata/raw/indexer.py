@@ -31,6 +31,27 @@ _INDEX_FILENAME = "index.json.zstd"
 _UPLOAD_DENIED_WARNED_PIDS: set[int] = set()
 
 
+def _is_windows_drive_scheme(scheme: str) -> bool:
+    """True when ``urlparse`` mistook a Windows drive letter for a URI scheme.
+
+    Paths like ``C:\\Users\\...`` parse with ``scheme='c'``. A single-letter scheme is
+    never a valid URI scheme (RFC 3986 requires >=2 chars), so treat it as local.
+    """
+    return len(scheme) == 1 and scheme.isalpha()
+
+
+def _validate_input_dir_scheme(input_dir: str) -> None:
+    """Raise if ``input_dir`` uses an unsupported remote scheme.
+
+    Local paths (including Windows drive letters) are allowed.
+    """
+    scheme = urlparse(input_dir).scheme
+    if scheme and not _is_windows_drive_scheme(scheme) and scheme not in _SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"Unsupported input directory scheme: `{scheme}`. Supported schemes are: {_SUPPORTED_PROVIDERS}"
+        )
+
+
 @dataclass
 class FileMetadata:
     """Metadata for a single file in the dataset."""
@@ -83,12 +104,7 @@ class BaseIndexer(ABC):
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
 
-        parsed_url = urlparse(input_dir)
-        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
-                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
-            )
+        _validate_input_dir_scheme(input_dir)
 
         if not recompute_index:
             files = self._load_index_from_cache(input_dir, cache_dir, storage_options)
@@ -258,13 +274,10 @@ class FileIndexer(BaseIndexer):
 
     def discover_files(self, input_dir: str, storage_options: dict[str, Any] | None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
-        parsed_url = urlparse(input_dir)
-        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
-                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
-            )
+        _validate_input_dir_scheme(input_dir)
 
+        parsed_url = urlparse(input_dir)
+        # Windows drive letters parse as single-letter schemes; treat those as local.
         if parsed_url.scheme in _SUPPORTED_PROVIDERS:  # Cloud storage
             return self._discover_cloud_files(input_dir, storage_options)
 
