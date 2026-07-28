@@ -4,10 +4,12 @@ All paths under `src/litdata/`. This pipeline fans work across workers (and mach
 
 ## Public API (`processing/functions.py`)
 
-- **`optimize(fn, inputs=None, output_dir="optimized_data", chunk_size=None, chunk_bytes=None, compression=None, encryption=None, num_workers=None, num_nodes=None, machine=None, num_downloaders=None, num_uploaders=None, reader=None, mode=None, use_checkpoint=False, item_loader=None, start_method=None, storage_options={}, keep_data_ordered=True, ...)`** — `functions.py:387`. Runs `fn` per input; the return value is flattened via pytree and serialized into `chunk-*.bin` + `index.json`. **Requires exactly one of `chunk_size` / `chunk_bytes`.** `mode="append"`/`"overwrite"` reuse/replace an existing index. Builds `LambdaDataChunkRecipe` (or `QueueDataChunkRecipe` if a `queue` is given) → `DataProcessor.run`.
-- **`map(fn, inputs, output_dir, ...)`** — `functions.py:242`. Applies `fn(input, output_dir)` for side effects (no chunking). **`fn` must write to `output_dir` and return `None`.** Builds `LambdaMapRecipe`.
-- **`merge_datasets(input_dirs, output_dir, max_workers=os.cpu_count(), storage_options={})`** — `functions.py:675`. Merges already-optimized datasets by copying chunk files and concatenating their `index.json` chunk lists. Validates matching `data_format`/`compression`.
-- **`walk(folder, max_workers=os.cpu_count())`** — `functions.py:621`. Cloud-optimized `os.walk` using a `ThreadPoolExecutor`; order is not depth-first.
+User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `#optimize-kwargs` / `#map` / `#walk`.
+
+- **`optimize(...)`** — `functions.py:387`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `weights`/`input_dir`, `num_nodes`/`machine`. → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`.
+- **`map(...)`** — `functions.py:242`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty`. → `LambdaMapRecipe`.
+- **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — `functions.py:675`. Copy chunks + concat `index.json`; matching `data_format`/compression required.
+- **`walk(folder, max_workers=...)`** — `functions.py:621`. Threaded cloud `os.walk` (Studio-optimized); yield order is **not** depth-first.
 
 ## Orchestration (`processing/data_processor.py`)
 

@@ -1,110 +1,74 @@
-# Cache, Writer/Reader, PrepareChunksThread & the chunk lifecycle
+# Cache, prefetch, and chunk lifecycle
 
-This is the deepest and most race-prone part of LitData. Read it before touching anything under `streaming/{cache,reader,writer,config,item_loader,downloader}.py`.
+How remote chunks land on disk, how much space they use, and how workers share/delete them. User knobs first; contributor invariants below. Chunk binary layout → [streaming.md](streaming.md).
 
-## Cache: the façade over Writer and Reader
+## User model
 
-`Cache` (`cache.py:35`) is the single object a `StreamingDataset` talks to. It is **bidirectional**:
+```
+remote URL / local path  →  download into cache_dir  →  deserialize sample  →  (optional) delete chunk when done
+```
 
-- **Write side** — `Cache.__setitem__`/`_add_item` → `BinaryWriter` (`writer.py:50`). Used by the *caching* path (`CacheDataLoader`) and by `optimize`'s `Cache`. `Cache.done()` flushes, `Cache.merge()` concatenates per-rank `{rank}.index.json` into one `index.json`.
-- **Read side** — `Cache.__getitem__` (`cache.py:151`) → `BinaryReader.read` (`reader.py:438`). Used by `StreamingDataset`.
+`StreamingDataset` builds a `Cache` (`streaming/cache.py`) that owns a `BinaryReader` (and, on the write path, a `BinaryWriter`). Users almost never construct `Cache` directly.
 
-`Cache.filled` (`cache.py:120`) decides write-vs-read: it checks for `index.json` + expected worker count. A missing `index.json` when reading is the "did you optimize?" error (`dataset.py:322`).
+### Knobs
 
-The chunk binary format (`[num_items:uint32][offset:uint32[N+1]][data]`, `writer.py:218`) and item-loader coupling are covered in [streaming.md](streaming.md). This file focuses on the **runtime read machinery** and the **cross-worker chunk lifecycle**, which streaming.md only summarizes.
+| Knob               | Default                                                                      | Effect                                                   |
+| ------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `cache_dir`        | `LITDATA_CACHE_DIR` or `~/.lightning/chunks` (Studio: often `/cache/chunks`) | Where `.bin` chunks are stored                           |
+| `max_cache_size`   | `"100GB"`                                                                    | Evict consumed chunks when the cache folder exceeds this |
+| `max_pre_download` | `2` (async remote often floors to ≥4)                                        | Chunks each worker may prefetch ahead                    |
 
-## BinaryReader.read — the per-item hot path
+**Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size`.**
+Example: 8 workers × prefetch 4 × 64 MB ≈ 2 GB in flight before eviction. Keep `max_cache_size` comfortably above that (code warns below ~25 GB for multi-worker training).
 
-`BinaryReader.read(index)` (`reader.py:438`):
+```python
+dataset = StreamingDataset(
+    "s3://bucket/data",
+    cache_dir="/data/cache",
+    max_cache_size="50GB",
+    max_pre_download=4,
+)
+```
 
-1. Lazily loads `ChunksConfig` (`_try_load_config`) — downloads `index.json` on first call.
-2. `config[index]` (`config.py:289`) → `(local_chunkpath, begin, filesize_bytes)`. For compressed data `local_chunkpath` is the **decompressed** `.bin` path.
-3. If remote/compressed: `setup_thread_and_download_chunk` starts (once) the per-worker `PrepareChunksThread` and enqueues this worker's chunks for download.
-4. `item_loader.load_item_from_chunk(...)` (`item_loader.py:172`) opens the `.bin`, seeks the offset table, reads `[begin,end)`, deserializes. **If the `.bin` isn't present yet it busy-waits** (`item_loader.py:206-223`): sleeps 0.1s, at `FORCE_DOWNLOAD_TIME` (30s) calls `force_download`, and at `MAX_WAIT_TIME` (120s) raises `FileNotFoundError: The <path> hasn't been found.`
-5. On chunk transition (`index.chunk_index != self._last_chunk_index`): `_decrement_local_lock(last)` + `delete([last])` (enqueues deletion of the chunk just finished).
-6. On `index.is_last_index`: close handle, decrement, delete, stop the thread, reset per-epoch state.
+- `LITDATA_CACHE_DIR=/path` — global default without passing `cache_dir`.
+- CLI: `litdata cache path` · `litdata cache clear`.
+- `Dir(path=local_cache, url=remote)` when cache location and remote URL differ.
+- Random access (`dataset[i]`) may fetch byte ranges (`on_demand_bytes`); iteration prefers full-chunk cache.
 
-`rank` (`reader.py:435`) = `global_rank * worker_world_size + worker_rank` — the flat worker identity used everywhere.
+### Prefetch env (optional)
 
-## PrepareChunksThread — one daemon thread per worker
+| Env                                | Role                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------- |
+| `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` | Force off/on async download overlap (default on for remote)                   |
+| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`   | Floor for `max_pre_download` when async is on (default 4; `0` disables floor) |
 
-`PrepareChunksThread` (`reader.py:50`) is what makes streaming overlap with training. Each `BinaryReader` owns one. It services three queues in its `run()` loop (`reader.py:276`):
+## Contributor: read hot path
 
-- `_force_download_queue` (checked first each iteration) → `_force_download` (`reader.py:240`): delete-then-redownload a chunk a reader is blocked on. Attached to the item loader at `reader.py:411` so `item_loader.force_download` feeds this thread.
-- `_to_download_queue` → `download_chunk_from_index` for each assigned chunk, bounded by `max_pre_download` (default 2) via `_pre_download_counter`. `_END_TOKEN` stops it.
-- `_to_delete_queue` → `_maybe_delete_chunks` → `_apply_delete`, gated by `max_cache_size` and `_can_delete_chunk` (`reader.py:228`).
+`BinaryReader.read` (`reader.py`):
 
-**Eviction is only active when `max_cache_size` is set** (or `MAX_CACHE_SIZE` env). `_delete_chunks_when_processed` (`reader.py:84`) is true when a node's slice doesn't fit in the cache; then chunks are deleted aggressively as they're consumed. Otherwise deletion waits until the folder exceeds `max_cache_size` (`_get_folder_size`, `reader.py:581`, which is deliberately robust to deletion races and ignores `.cnt`/`.lock`/`.zstd.bin`).
+1. Load `ChunksConfig` / `index.json` (download once if remote).
+2. Resolve `(chunk_path, begin, size)` for the index.
+3. Ensure `PrepareChunksThread` is running and the chunk is queued.
+4. Item loader waits until the `.bin` exists (busy-wait; force-redownload after ~30s; fail ~120s).
+5. On chunk change: decrement lock + enqueue delete of the previous chunk.
+6. On last index: stop the prepare thread.
 
-## Prefetch & eviction — `max_pre_download` invariants (load-bearing)
+`PrepareChunksThread` (one daemon per worker) services download / force-download / delete queues, gated by `max_pre_download` and `max_cache_size`.
 
-`PrepareChunksThread` keeps at most `max_pre_download` chunks "in flight" via `_pre_download_counter` (incremented on finalize, decremented on successful delete).
+### Prefetch / eviction invariants
 
-### Async floor vs cache-budget cap
+- When delete-when-processed is active, budget capping may shrink `max_pre_download` so `workers × max_pre × chunk` fits near `max_cache_size`.
+- **Never leave live `max_pre_download == 1` via that cap** — download and delete can deadlock (reader waits forever for the next chunk). Floor capped values at **2**.
+- Prepare-thread teardown must not block on stuck `asyncio` default-executor workers (`shutdown(wait=False)`).
 
-1. **Async floor** (`async_prefetch.apply_async_pre_download_floor`): when `LITDATA_ASYNC_CHUNK_PREFETCH` is on (default for **remote**), raise `max_pre_download` to at least 4 so `asyncio.gather` can overlap S3 RTT. Override floor with `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` (`0` disables).
-2. **Budget cap** (`_cap_pre_download_for_cache_budget`): when delete-when-processed is on, shrink per-worker prefetch so `workers × max_pre × mean_chunk` stays near `max_cache_size`. Applies even for tiny unit-test budgets where the shared slot gate is off (sub-10MB).
+## Contributor: shared-chunk deletion
 
-### Never leave live `max_pre_download == 1` via the budget cap
+Shuffle may **split one chunk across several workers** on a node. Three guards prevent one worker deleting a file another still needs:
 
-With `_max_pre_download == 1`:
+1. **Static skip list** — only the worker that finishes a shared chunk last may delete it (`can_delete` / `skip_chunk_indexes_deletion`). Must also apply on resume.
+2. **`.cnt` + file lock** — refcount per chunk; delete only at zero.
+3. **Force redownload** — last resort if a reader blocks on a missing `.bin`.
 
-- `_can_download_more` → `pre_counter < 1` (only one download in flight)
-- delete-when-processed watermark → historically `pre_counter >= max_pre - 1` ⇒ `>= 0` (always true) or, after safety floor, still needs careful pairing with download gating
+Debugging: multi-worker + small `max_cache_size` to force eviction; `enable_tracer()` for lock/delete timeline; `DEBUG_LITDATA=1` for tombstones. Hangs in “chunk not found” waits under tiny budgets → check prefetch floor (≥2), not only deletion.
 
-If a delete is skipped (in-use / positive `.cnt`) while `pre_counter` stays at 1, the prepare thread never downloads the next chunk → readers hang in `_wait_until_chunk_ready` until pytest-timeout (120s). **Tiny-budget CI tests** (`max_cache_size=1` / `512` / `2000`) hit this immediately.
-
-**Invariant:** `_cap_pre_download_for_cache_budget` floors the capped value at **2**. Do not "fix" thrash by allowing cap→1 without also redesigning download/delete coupling.
-
-### Prepare-thread teardown must not hang
-
-`run()` wraps `_run_loop()` and calls `close_thread_event_loop()` in `finally`. That loop's default executor hosts `asyncio.to_thread` workers (`asyncio_N`). **Do not** `await loop.shutdown_default_executor()` in teardown — it joins stuck workers and blocks `thread.join()` (seen as 120s hangs in `test_prepare_chunks_thread_eviction`). Prefer clearing `_default_executor` and `executor.shutdown(wait=False)`.
-
-### Two-phase cold `max_pre` — tried, not shipped
-
-Idea: start each remote worker at `max_pre=1` for first-chunk bandwidth fairness, then promote to the async/budget target. Studio ep0 ImageNet (48w, same target=4): cold=1 slightly higher ips in one run but **worse `t_first_batch`**; cold=2 middle; results within S3 noise. **Do not re-enable by default** without multi-run evidence that both ips and `t_first` improve. Opt-in research knobs (if reintroduced): `LITDATA_PREFETCH_TWO_PHASE`, `LITDATA_COLD_START_MAX_PRE`, `LITDATA_COLD_START_PROMOTE_AFTER`. Default should stay **remote-only** if revived — local compressed paths must not get cold `max_pre=1` (Windows file-open races).
-
-## Distributed sampling — how workers get disjoint (mostly) chunk slices
-
-Covered in depth in [streaming.md](streaming.md) ("Shuffling & sharding"). The essentials that matter for the lifecycle:
-
-- `Shuffle.get_chunks_and_intervals_per_workers` returns `workers_chunks` / `workers_intervals` — **flat lists indexed by `rank * num_workers + worker`**, length `world_size * num_workers`.
-- `_associate_chunks_and_intervals_to_workers` (`utilities/shuffle.py:65`) gives each worker an item budget and **splits a chunk's interval across worker boundaries** when it straddles them. Consequence: **a single chunk can be assigned to several workers**, each reading a different sub-interval. This is the source of all the deletion complexity below.
-- `dataset.__iter__` slices out this worker's `worker_chunks`/`worker_intervals` (`dataset.py:378`) and computes the skip-deletion mapping for the node.
-
-## The shared-chunk deletion problem (and the three mechanisms guarding it)
-
-Because a chunk can be shared by multiple workers on a node (all pointing at the same cache file), **one worker deleting a chunk after it finishes can pull the file out from under another worker that still needs it** → `FileNotFoundError: chunk-N-M.bin hasn't been found` raised at `item_loader.py:223` (PyTree) / `:515` (Tokens). Three mechanisms exist to prevent this:
-
-### 1. Static skip-deletion list (`skip_chunk_indexes_deletion` / `can_delete`)
-
-Computed in `dataset.__iter__` via `_find_chunks_per_workers_on_which_to_skip_deletion` (`utilities/shuffle.py:147`): for each shared chunk it determines the single worker that reads it **last in consumption order**, and tells every *other* sharing worker to skip deleting it. Stored on `ChunksConfig.skip_chunk_indexes_deletion`; queried via `config.can_delete(chunk_index)` (`config.py:117`). This is the primary, race-free guard (it is derived from the deterministic shuffle assignment, not from wall-clock state). **It must be consulted in `reader._apply_delete`** — historically it was computed but ignored (see the bug note below).
-
-### 2. Cross-worker reference counting (`.cnt` + `.cnt.lock` files)
-
-`downloader._increment_local_lock` (`downloader.py:55`) bumps `<chunk>.bin.cnt` under a `FileLock` when a worker will read a chunk; `reader._decrement_local_lock` (`reader.py:111`) decrements when a worker finishes it and removes the file at zero. `_apply_delete` refuses to delete while `_remaining_locks > 0` (`reader.py:180`). This is the dynamic guard. **Its correctness depends on every sharing worker incrementing before any sharer decrements to zero** — see the increment-lag hazard below.
-
-### 3. Priority force-redownload (`_force_download_queue`)
-
-When a reader blocks on a missing `.bin` for `FORCE_DOWNLOAD_TIME`, `item_loader.force_download` enqueues the chunk onto its own thread's `_force_download_queue`; `_force_download` (`reader.py:240`) deletes any stale copy and re-downloads under `FileLock(..., timeout=0)`. This is a last-resort recovery, not prevention.
-
-### Failure modes / invariants to preserve
-
-- **`can_delete` must gate `_apply_delete`.** If its result is computed but unused, mechanism 1 is dead and only the racy refcount protects shared chunks.
-- **Increment-lag:** increments happen lazily in the prefetch thread (bounded by `max_pre_download`), while decrement+delete happen when a worker finishes a chunk. If a fast worker finishes a shared chunk before a slow co-worker has prefetched (incremented) it, the count is 0 and the chunk is deleted prematurely. Mechanism 1 (static list) is what actually closes this hole; the refcount alone does not.
-- **The skip list must be set on resume too.** It is computed in `dataset.__iter__`; if it is only set on the fresh-epoch branch, resumed runs have no mechanism-1 protection.
-- **Node slicing:** `workers_chunks` is indexed by `rank * num_workers + worker`, so a node's workers start at `first_rank_this_node * num_workers`. Using `* (node_size * num_workers)` overshoots for multi-node.
-- **`skip_lock=True`** (force-redownload path) intentionally bypasses both the skip list and the refcount — a worker re-fetching its *own* needed chunk must be allowed through.
-- **s3transfer temp files:** boto3 downloads to `chunk-*.zstd.bin.<random>` then renames. Leftover `<random>`-suffixed files in the cache are interrupted/duplicated downloads — a symptom of delete/redownload churn, not the root cause. `_get_folder_size` counts `.bin`-containing temp files but ignores `.zstd.bin`.
-
-### Debugging this class of failure
-
-1. Reproduce with `num_workers` > 1 and `max_cache_size` set small enough to force eviction (that's when deletion runs).
-2. `enable_tracer()` — the `increment_lock_*` / `decrement_lock_*` / `delete_chunk_*` events show the refcount timeline per chunk; a `delete_chunk_X` with a later `read_chunk_X` on another worker is the race.
-3. `DEBUG_LITDATA=1` writes `<chunk>.tmb` tombstones recording which rank deleted a chunk and its `can_delete` verdict.
-4. Inspect the cache dir: leftover `.zstd.bin.<random>` + missing `.bin` for a low-numbered chunk = premature deletion + failed redownload.
-5. **Hang (not FileNotFoundError):** if tests timeout in `_wait_until_chunk_ready` / `PrepareChunksThread.join` under tiny `max_cache_size`, check logs for `capping max_pre_download … → 1` and verify the budget-cap floor (≥2) and non-blocking event-loop teardown still hold.
-
-### Windows open races after decompress
-
-`ChunksConfig.try_decompress` writes via temp + `os.replace`. On Windows, `open(chunk.bin)` can raise `PermissionError` briefly even after size-ready (AV / replace). `item_loader._open_chunk_file` retries; do not "fix" by skipping close-before-delete — Windows still cannot `os.remove` an open handle.
+Shuffle assignment details → [streaming.md](streaming.md). Fair throughput measurement → [benchmarking.md](benchmarking.md).

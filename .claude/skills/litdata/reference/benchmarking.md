@@ -1,62 +1,85 @@
-# Benchmarking streaming (Studio / real S3)
+# Benchmarking streaming performance
 
-Use this when comparing download backends, `max_pre_download`, async prefetch, or cache sizes on a real ImageNet-scale dataset. Microbenches lie; cold epoch-0 with a wiped cache is the truth for S3.
+Use this when measuring or comparing LitData streaming or optimization. Prefer real datasets and cold caches over microbenchmarks.
 
-Studio path / credential background: [lightning-studio.md](lightning-studio.md).
+**Primary suite:** repo `benchmarks/` — ready-to-run CLI scripts (LitData + FFCV). Read the READMEs there before inventing a new harness.
 
-## Canonical Studio dataset & runner
+Studio paths / free-threading → [lightning-studio.md](lightning-studio.md). Prefetch/cache math → [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md). Image JPEG vs PIL → [using-litdata.md](using-litdata.md).
 
-| Item          | Value                                                                                                                                                                                |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Dataset       | `/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search` (~64 MB chunks)                                                                                              |
-| Cache         | `/cache/chunks` — **wipe before every cold ep0** (`rm -rf /cache/chunks/*`)                                                                                                          |
-| Runner        | `scripts/bench/bench_s3_full_epochs.py`                                                                                                                                              |
-| Python        | Studio default is **GIL on**. Nogil needs a free-threading conda/Studio env first — see [lightning-studio.md](lightning-studio.md). `PYTHON_GIL=0` / `-Xgil=0` alone are not enough. |
-| Typical knobs | `--workers 48 --batch-size 256 --max-pre-download 4 --max-cache-size 200GB --epochs 1`                                                                                               |
+## Repo layout (`benchmarks/`)
+
+| Path                                      | Role                                                        |
+| ----------------------------------------- | ----------------------------------------------------------- |
+| `benchmarks/README.md`                    | Index: LitData vs FFCV folders                              |
+| `benchmarks/litdata/`                     | Optimize + stream ImageNet with LitData                     |
+| `benchmarks/litdata/README.md`            | CLI flags (`--write_mode jpeg`, `--quality`, `--resize`, …) |
+| `benchmarks/litdata/optimize_imagenet.py` | `optimize` ImageNet (JPEG/PIL write modes)                  |
+| `benchmarks/litdata/stream_imagenet.py`   | Epoch throughput for an optimized dataset                   |
+| `benchmarks/stream_raw_imagenet.py`       | `StreamingRawDataset` baseline (no optimize)                |
+| `benchmarks/ffcv/`                        | Convert / write / stream with FFCV for format comparison    |
+| `benchmarks/ffcv/README.md`               | FFCV install + write/stream steps                           |
+
+Start from `benchmarks/litdata/README.md` for LitData-only runs; use `benchmarks/ffcv/` when comparing formats. All scripts are CLI-based (`--help`).
+
+### Typical LitData flow
 
 ```bash
-cd /path/to/litData
-rm -rf /cache/chunks/*
+# 1) Optimize (prefer JPEG — see using-litdata.md)
+python benchmarks/litdata/optimize_imagenet.py \
+  --input_dir /path/to/raw/imagenet/train \
+  --output_dir /path/to/optimized/imagenet \
+  --resize --resize_size 256 \
+  --write_mode jpeg \
+  --quality 90 \
+  --num_workers 32
 
-# Default Studio / laptop (GIL build):
-PYTHONPATH=src python scripts/bench/bench_s3_full_epochs.py \
-  --label my-run --epochs 1 --workers 48 --batch-size 256 \
-  --max-pre-download 4 --max-cache-size 200GB --async-prefetch
-
-# Only after switching to a free-threading Python (conda / Studio image), not the default:
-# python -c 'import sys; print(sys.version, getattr(sys, "_is_gil_enabled", lambda: None)())'
-# PYTHON_GIL=0 PYTHONPATH=src python -Xgil=0 scripts/bench/bench_s3_full_epochs.py ...
+# 2) Stream (wipe cache first for a cold epoch)
+litdata cache clear
+python benchmarks/litdata/stream_imagenet.py \
+  --input_dir /path/to/optimized/imagenet \
+  --batch_size 256 \
+  --epochs 2
+# Use --use_pil if you optimized with raw PIL images
 ```
 
-Report both:
+Raw (unoptimized) baseline:
 
-- **`images_per_s`** (full epoch throughput)
-- **`t_first_batch_s`** (time to first batch — cold-start / bandwidth fairness)
+```bash
+python benchmarks/stream_raw_imagenet.py --help
+```
 
-Rough Studio baselines (noisy; re-measure after big changes):
+## What to measure
 
-- Warm / decode-bound epoch ≈ **12k** img/s
-- Cold ep0 async+obstore @ `max_pre=4` ≈ **10–11k** img/s, `t_first` ≈ **7–9s**
-- Single-run deltas under ~5% are usually S3 noise — repeat before claiming a win
+| Metric                                                 | Why                                |
+| ------------------------------------------------------ | ---------------------------------- |
+| Throughput (samples or images / sec) over a full epoch | Steady-state training rate         |
+| Time to first batch (if available)                     | Cold-start / first-chunk fairness  |
+| Epoch 2+                                               | Warm-cache / decode-bound behavior |
 
-## Fair comparisons (mandatory)
+Always state: dataset, chunk/write mode, `num_workers`, `batch_size`, `max_pre_download`, `max_cache_size`, local vs remote.
 
-1. **Same `max_pre_download` (and same async floor)** on every arm. Comparing async (floor→4) vs sync (user `max_pre=2`) is not fair.
-2. **Wipe cache** between cold runs.
-3. **Force boto3** when measuring the boto3 path: setting env in the parent is not enough if workers re-import. Prefer a `sitecustomize.py` on `PYTHONPATH` that patches `litdata.streaming.downloader._OBSTORE_AVAILABLE = False` (or equivalent) so **all** DataLoader workers see it. `PYTHONSTARTUP` alone does **not** run in worker processes.
-4. **obstore is already a hard dependency** (`requirements.txt`). Do not add it again in release PRs; code still falls back via `RequirementCache("obstore")` if missing at runtime.
+## Fair comparison checklist
 
-Related scripts under `scripts/bench/`:
+1. **Wipe the chunk cache** before every cold run (`litdata cache clear` or delete the cache dir).
+2. **Same knobs on every arm** — workers, batch size, image size/quality, prefetch/cache when applicable.
+3. **Same machine, network, and dataset revision.**
+4. **JPEG vs PIL** — LitData `--write_mode jpeg` vs PIL RAW are different formats; don’t mix when comparing loaders. FFCV has its own write modes (`benchmarks/ffcv/`).
+5. **Repeat noisy cloud runs** before claiming small wins.
+6. **CI unit tests ≠ production throughput.**
 
-- `bench_obstore_vs_boto3.py` — micro download compare
-- `bench_obstore_chunksize_grid.py` / `bench_obstore_imagenet_grid.py` — `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` grids (default **8 MiB** was fine on Studio ImageNet)
-- `bench_s3_cache_size.py` — `max_cache_size` sweep
+## Peak disk reminder
 
-## What not to ship without evidence
+```
+peak ≈ num_workers × max_pre_download × mean_chunk_size
+```
 
-- **Two-phase cold `max_pre` (start at 1, promote to target):** intended for multi-worker first-chunk fairness. Studio ep0 showed mixed results (possible slight ips gain, worse `t_first` at cold=1). Keep **off** unless multi-run benches beat the steady `max_pre=4` baseline on both metrics. Details: [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md).
-- **Raising async gather width past the budget cap:** peak disk ≈ `num_workers × max_pre × chunk_size`. Cap exists so tiny `max_cache_size` tests and small caches do not thrash; never allow the cap to land on `max_pre=1` (deadlock).
+Raise prefetch only if disk/`max_cache_size` can hold the peak.
 
-## CI vs Studio
+## Interpreting results
 
-Unit tests use tiny `max_cache_size` and `local:` remotes to exercise delete-when-processed. They will **not** tell you if obstore or async helps ImageNet. If CI hangs waiting for chunks under tiny budgets, fix download/delete gating first (see cache lifecycle doc) before trusting Studio numbers.
+- **Cold epoch** → remote/download bound?
+- **Warm epoch** → decode / transform bound?
+- Compare LitData optimized vs raw (`stream_raw_imagenet.py`) vs FFCV on the same source when possible.
+- Root `README.md` Benchmarks section is the published narrative; re-run `benchmarks/` to reproduce on your hardware.
+
+Dev-only sweeps (prefetch grids, download backends, …) may also live under `scripts/bench/` — still apply the fair-comparison rules above.

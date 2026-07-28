@@ -1,8 +1,10 @@
 # LitData on Lightning Studio
 
-Lightning Studio is the usual place LitData is developed and benchmarked. Paths under `/teamspace/…` look like a local filesystem but often resolve to cloud URLs + temporary credentials via the Lightning SDK.
+Lightning Studio is a common place to develop and benchmark LitData. Paths under `/teamspace/…` look local but often resolve to cloud URLs + temporary credentials.
 
-## Mental model
+**Canonical path/URI documentation (all schemes + every teamspace prefix):** [resolver.md](resolver.md). Customer README: `#resolve-paths`.
+
+## Mental model (Studio-specific)
 
 ```
 User path                          What LitData actually uses
@@ -10,32 +12,15 @@ User path                          What LitData actually uses
 /teamspace/studios/this_studio/…   Local Dir(path=…, url=None) — workspace disk
 /teamspace/s3_connections/<name>/… Dir(path=…, url=s3://…, data_connection_id=…)
 /teamspace/gcs_connections/…       Same idea for GCS
-s3://bucket/prefix                 Direct URL (boto3/obstore; no Studio resolver)
+s3://bucket/prefix                 Direct URL (no Studio resolver; your AWS creds)
 ```
 
-`StreamingDataset(input_dir="/teamspace/s3_connections/…")` therefore:
+1. **`_resolve_dir`** → `Dir(path, url, data_connection_id)` — full table in [resolver.md](resolver.md)
+2. Downloads/uploads use **`url`** (object store), not FUSE, for connection paths
+3. **`data_connection_id`** → temp project-role credentials when needed (`streaming/client.py`)
+4. Chunk cache still under `LITDATA_CACHE_DIR` / `~/.lightning/chunks` / `cache_dir=` (benches often `/cache/chunks`)
 
-1. **`_resolve_dir`** (`streaming/resolver.py`) → `Dir(path, url, data_connection_id)`
-2. Downloads go to **`url`** (real S3/GCS), not by reading the FUSE path as a normal file for every chunk
-3. Credentials often come from **`data_connection_id`** → Lightning control plane temp bucket credentials (`streaming/client.py`), not long-lived keys in the environment
-4. Local chunk cache still lands under `LITDATA_CACHE_DIR` / `~/.lightning/chunks` or an explicit `cache_dir=` (Studio benches often use `/cache/chunks`)
-
-**`/teamspace/studios/this_studio`** is special: always treated as **local workspace** (`url=None`). Other `/teamspace/studios/<name>/…` paths resolve to that Studio’s cloud-backed content bucket via the Lightning API.
-
-## Teamspace path prefixes
-
-| Prefix                                                                                    | Role                                                                                |
-| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `/teamspace/studios/this_studio/`                                                         | This Studio’s workspace (local)                                                     |
-| `/teamspace/studios/<other>/`                                                             | Another Studio’s code/content (resolved to cluster bucket URL)                      |
-| `/teamspace/s3_connections/<conn>/`                                                       | Named S3 data connection → bucket URL + `data_connection_id`                        |
-| `/teamspace/gcs_connections/<conn>/`                                                      | Named GCS data connection                                                           |
-| `/teamspace/s3_folders/`, `/teamspace/gcs_folders/`                                       | Folder-style connections                                                            |
-| `/teamspace/lightning_storage/`                                                           | Lightning-managed object storage (often R2-style creds)                             |
-| `/teamspace/datasets/`                                                                    | Dataset mounts (path may be rewritten for cache identity)                           |
-| `/teamspace/efs_connections/`, `/teamspace/efs_folders/`, `/teamspace/filestore_folders/` | POSIX / EFS-style stores (filestore path rewrite helpers in `dataset_utilities.py`) |
-
-Connection name is path segment `[3]` (e.g. `/teamspace/s3_connections/optimized-imagenet-1m/...` → connection `optimized-imagenet-1m`). Lookup: `LightningClient.data_connection_service_list_data_connections(project_id)`.
+Connection name is path segment `[3]`. Lookup: Lightning data-connection API for the project.
 
 ## Environment variables Studio injects
 

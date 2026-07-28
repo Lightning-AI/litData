@@ -29,6 +29,7 @@ Transform                              Optimize
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#key-features">Features</a> •
+  <a href="#resolve-paths">Paths & cloud URLs</a> •
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#start-from-a-template">Templates</a> •
   <a href="#community">Community</a>
@@ -124,25 +125,27 @@ Transform raw data into optimized chunks for maximum streaming speed.
 This step formats the dataset for fast loading by writing data in an efficient chunked binary format.
 
 ```python
+import io
 import numpy as np
 from PIL import Image
 import litdata as ld
 
 def random_images(index):
-    # Replace with your actual image loading here (e.g., .jpg, .png, etc.)
-    # Recommended: use compressed formats like JPEG for better storage and optimized streaming speed
-    # You can also apply resizing or reduce image quality to further increase streaming speed and save space
-    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+    # Replace with your actual image loading (e.g. Image.open("photo.jpg")).
+    # Prefer JPEG: return a JpegImageFile, or re-encode at quality≈95. Plain
+    # Image.fromarray(...) stores uncompressed PIL RAW and can be 10×+ larger.
+    img = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+    jpeg_image = Image.open(buf)  # JpegImageFile → compressed bytes in the chunk
     fake_labels = np.random.randint(10)
 
-    # You can use any key:value pairs. Note that their types must not change between samples, and Python lists must
-    # always contain the same number of elements with the same types
-    data = {"index": index, "image": fake_images, "class": fake_labels}
-
-    return data
+    # Keys/types must stay stable across samples; list lengths/types fixed
+    return {"index": index, "image": jpeg_image, "class": fake_labels}
 
 if __name__ == "__main__":
-    # The optimize function writes data in an optimized format
+    # Exactly one of chunk_bytes or chunk_size
     ld.optimize(
         fn=random_images,                   # the function applied to each input
         inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
@@ -166,7 +169,12 @@ Load the data by replacing the PyTorch Dataset and DataLoader with the Streaming
 ```python
 import litdata as ld
 
-dataset = ld.StreamingDataset('s3://my-bucket/fast_data', shuffle=True, drop_last=True)
+dataset = ld.StreamingDataset(
+    's3://my-bucket/fast_data',
+    shuffle=True,
+    drop_last=True,  # important for multi-GPU so every rank sees the same length
+    seed=42,
+)
 
 # Custom collate function to handle the batch (optional)
 def collate_fn(batch):
@@ -176,7 +184,7 @@ def collate_fn(batch):
     }
 
 
-dataloader = ld.StreamingDataLoader(dataset, collate_fn=collate_fn)
+dataloader = ld.StreamingDataLoader(dataset, batch_size=64, collate_fn=collate_fn)
 for sample in dataloader:
     img, cls = sample["image"], sample["class"]
 ```
@@ -350,10 +358,6 @@ storage_options = {
 }
 
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
-
-
-
-dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
 ```
 
 Also, you can specify a custom cache directory when initializing your dataset. This is useful when you want to store the cache in a specific location.
@@ -363,6 +367,77 @@ from litdata import StreamingDataset
 # Initialize the StreamingDataset with the custom cache directory
 dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache")
 ```
+
+Any local path, `s3://` / `gs://` / `r2://` / `azure://` / `hf://`, `local:` network drive, or Lightning `/teamspace/...` connection works — see [Resolve any path or cloud URL](#resolve-paths).
+
+</details>
+
+<details>
+  <summary> ✅ Optimize images as JPEG (not raw PIL) <a id="optimize-jpeg" href="#optimize-jpeg">🔗</a> </summary>
+&nbsp;
+
+How you return images from `optimize` controls storage size and streaming speed.
+
+| What you return | Serializer | Result |
+|-----------------|------------|--------|
+| `PIL.JpegImageFile` (e.g. `Image.open("x.jpg")`) | JPEG | Compressed bytes — **preferred** |
+| Plain `PIL.Image` / `Image.fromarray(...)` | PIL RAW | Uncompressed pixels — often **10×+ larger** |
+
+**Best practice:** store JPEG at **quality ≈ 95** (or keep existing `.jpg` files). Resize when helpful.
+
+```python
+import io
+from PIL import Image
+import litdata as ld
+
+def load_image(path):
+    img = Image.open(path)
+    if not str(path).lower().endswith((".jpg", ".jpeg")):
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=95)
+        buf.seek(0)
+        img = Image.open(buf)  # JpegImageFile
+    return {"image": img, "path": path}
+
+if __name__ == "__main__":
+    ld.optimize(fn=load_image, inputs=list_of_paths, output_dir="fast_data", chunk_bytes="64MB", num_workers=8)
+```
+
+Ready-made ImageNet optimize/stream scripts: `benchmarks/litdata/` (`--write_mode jpeg --quality 90`).
+
+</details>
+
+<details>
+  <summary> ✅ Custom serializers <a id="serializers" href="#serializers">🔗</a> </summary>
+&nbsp;
+
+LitData serializes each leaf of your sample with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `tifffile`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), and `pickle` (fallback).
+
+For images, returning a `JpegImageFile` selects **`jpeg`**; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
+
+Pass custom serializers when **streaming** (and when using the lower-level `Cache` writer):
+
+```python
+from litdata import StreamingDataset
+from litdata.streaming.serializers import Serializer
+
+class MyTypeSerializer(Serializer):
+    def serialize(self, item):
+        return item.to_bytes(), None  # (bytes, optional metadata string)
+
+    def deserialize(self, data: bytes):
+        return MyType.from_bytes(data)
+
+    def can_serialize(self, item) -> bool:
+        return isinstance(item, MyType)
+
+dataset = StreamingDataset(
+    "s3://bucket/data",
+    serializers={"my_type": MyTypeSerializer()},  # merged on top of built-ins
+)
+```
+
+Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer JPEG / numpy / tensor leaves for best results.
 
 </details>
 
@@ -557,6 +632,81 @@ for batch in val_dataloader:
 ```
 
 ![An illustration showing how the Streaming Dataset works with multi node.](https://pl-flash-data.s3.amazonaws.com/streaming_dataset.gif)
+
+</details>
+
+<details>
+  <summary> ✅ Shuffle, seed, and drop_last <a id="shuffle" href="#shuffle">🔗</a> </summary>
+&nbsp;
+
+Shuffling is **deterministic** and designed for distributed training:
+
+1. Chunks are assigned (and possibly split) across ranks/workers.
+2. Items inside each chunk are permuted.
+
+The permutation depends on `seed`, the epoch, and chunk metadata — the same settings always yield the same order (required for resumable `state_dict`).
+
+```python
+from litdata import StreamingDataset, StreamingDataLoader
+
+train = StreamingDataset(
+    "s3://my-bucket/train",
+    shuffle=True,
+    drop_last=True,  # keep every rank/worker at the same length (default True under DDP)
+    seed=42,         # default is 42; keep stable when resuming
+)
+loader = StreamingDataLoader(train, batch_size=64, num_workers=8)
+
+# shuffle=/drop_last= on the loader override the dataset
+loader = StreamingDataLoader(train, batch_size=64, shuffle=True, drop_last=True)
+```
+
+**Notes**
+
+- Val/test: usually `shuffle=False`, `drop_last=False`.
+- If `drop_last=False` under multi-GPU, LitData warns — collectives can hang when ranks see different lengths.
+- Resume with `loader.state_dict()` / `load_state_dict()`. To deliberately ignore checkpointed shuffle settings, set `force_override_state_dict=True` on the dataset.
+
+</details>
+
+<details>
+  <summary> ✅ StreamingDataset & StreamingDataLoader knobs <a id="streaming-kwargs" href="#streaming-kwargs">🔗</a> </summary>
+&nbsp;
+
+**`StreamingDataset`**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `input_dir` | required | Local path, cloud URI, `Dir`, or parquet path (basename wildcards OK) |
+| `cache_dir` | `LITDATA_CACHE_DIR` or `~/.lightning/chunks` | Where chunks are cached |
+| `item_loader` | from index | `TokensLoader`, `ParquetLoader`, … |
+| `shuffle` | `False` | Deterministic shuffle (see [Shuffle](#shuffle)) |
+| `drop_last` | `True` if distributed else `False` | Equal length across ranks |
+| `seed` | `42` | Shuffle / subsample RNG |
+| `serializers` | built-ins | Custom serialize/deserialize map |
+| `max_cache_size` | `"100GB"` | Evict consumed chunks beyond this size |
+| `max_pre_download` | `2` | Chunks each worker may prefetch (raise for throughput; watch disk) |
+| `subsample` | `1.0` | Fraction of data (`0.01`) or upsample (`2.5`) |
+| `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom |
+| `storage_options` | `{}` | Cloud client options |
+| `session_options` | `{}` | boto3 session options (S3) |
+| `index_path` | `None` | Parquet/HF `index.json` file or directory |
+| `force_override_state_dict` | `False` | Local ctor args override loaded checkpoint |
+| `transform` | `None` | Callable or list of callables per sample |
+
+Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size`.
+
+**`StreamingDataLoader`**
+
+| Argument | Description |
+|----------|-------------|
+| All usual `torch.utils.data.DataLoader` kwargs | `batch_size`, `num_workers`, `collate_fn`, `pin_memory`, … |
+| `shuffle` / `drop_last` | Forwarded to the streaming dataset |
+| `profile_batches` | Record a Chrome/`viztracer` trace (`pip install viztracer`, needs `num_workers>=1`) |
+| `profile_skip_batches` / `profile_dir` | Skip N batches; choose output directory |
+| `multiprocessing_context` | Use **`"spawn"`** (or `"forkserver"`) with `ParquetLoader` + `num_workers>0` on Linux |
+
+Prefer `StreamingDataLoader` over a plain PyTorch `DataLoader` for optimized / combined / parallel datasets (resume + correct batch metadata).
 
 </details>
 
@@ -921,7 +1071,12 @@ train_datasets = [
 
 # Mix SlimPajama data and Starcoder data with these proportions:
 weights = (0.693584, 0.306416)
-combined_dataset = CombinedStreamingDataset(datasets=train_datasets, seed=42, weights=weights, iterate_over_all=False)
+combined_dataset = CombinedStreamingDataset(
+    datasets=train_datasets,
+    seed=42,
+    weights=weights,
+    iterate_over_all=False,  # required when passing weights (see below)
+)
 
 train_dataloader = StreamingDataLoader(combined_dataset, batch_size=8, pin_memory=True, num_workers=os.cpu_count())
 
@@ -930,37 +1085,34 @@ for batch in tqdm(train_dataloader):
     pass
 ```
 
-**Batching Methods**
+**`iterate_over_all` vs `weights` (important)**
 
-The `CombinedStreamingDataset` supports two different batching methods through the `batching_method` parameter:
+| Mode | Behavior |
+|------|----------|
+| `iterate_over_all=True` (default) | Iterate until **all** datasets are exhausted. Do **not** pass `weights` — LitData derives them from dataset lengths (raises `ValueError` if you pass both). |
+| `iterate_over_all=False` | Stop when **any** dataset is exhausted. Pass explicit `weights` for your mixture (e.g. TinyLlama). Length may be `None` (variable). |
 
-**Stratified Batching (Default)**:
-With `batching_method="stratified"` (the default), each batch contains samples from multiple datasets according to the specified weights:
+**Batching Methods** (`batching_method`)
+
+**Stratified** (default): each batch mixes samples from multiple datasets according to the weights.
 
 ```python
-# Default stratified batching - batches mix samples from all datasets
 combined_dataset = CombinedStreamingDataset(
-    datasets=[dataset1, dataset2], 
-    batching_method="stratified"  # This is the default
+    datasets=[dataset1, dataset2],
+    batching_method="stratified",  # default
 )
 ```
 
-**Per-Stream Batching**:
-With `batching_method="per_stream"`, each batch contains samples exclusively from a single dataset. This is useful when datasets have different shapes or structures:
+**Per-stream**: each batch comes from only one randomly selected dataset (useful when shapes/dtypes differ).
 
 ```python
-# Per-stream batching - each batch contains samples from only one dataset
 combined_dataset = CombinedStreamingDataset(
-    datasets=[dataset1, dataset2], 
-    batching_method="per_stream"
+    datasets=[dataset1, dataset2],
+    batching_method="per_stream",
 )
-
-# This ensures each batch has consistent structure, helpful for datasets with varying:
-# - Image sizes
-# - Sequence lengths  
-# - Data types
-# - Feature dimensions
 ```
+
+Other knobs: `seed` (default `42`), `force_override_state_dict=True` to let local ctor args override a loaded checkpoint.
 </details>
 
 <details>
@@ -1435,14 +1587,24 @@ outputs = optimize(
   <summary> ✅ Limit local cache space <a id="limit-cache" href="#limit-cache">🔗</a> </summary>
 &nbsp;
 
-Limit the amount of disk space used by temporary files, preventing storage issues.
+Control how much disk the local chunk cache may use. Downloaded chunks are deleted after use once the cache exceeds the limit.
 
-Adapt the local caching limit of the `StreamingDataset`. This is useful to make sure the downloaded data chunks are deleted when used and the disk usage stays low.
+Default `max_cache_size` is **`100GB`**. Peak disk in flight is roughly:
+
+```
+num_workers × max_pre_download × mean_chunk_size
+```
+
+Keep `max_cache_size` comfortably above that peak.
 
 ```python
 from litdata import StreamingDataset
 
-dataset = StreamingDataset(..., max_cache_size="10GB")
+dataset = StreamingDataset(
+    "s3://my-bucket/my-data",
+    max_cache_size="10GB",
+    max_pre_download=4,  # chunks each worker may prefetch (default 2)
+)
 ```
 
 </details>
@@ -1451,16 +1613,30 @@ dataset = StreamingDataset(..., max_cache_size="10GB")
   <summary> ✅ Change cache directory path <a id="cache-directory" href="#cache-directory">🔗</a> </summary>
 &nbsp;
 
-Specify the directory where cached files should be stored, ensuring efficient data retrieval and management. This is particularly useful for organizing your data storage and improving access times.
+Specify where cached chunk files are stored.
 
 ```python
 from litdata import StreamingDataset
 from litdata.streaming.cache import Dir
 
-cache_dir = "/path/to/your/cache"
-data_dir = "s3://my-bucket/my_optimized_dataset"
+# Simple: dedicated cache directory
+dataset = StreamingDataset("s3://my-bucket/my_optimized_dataset", cache_dir="/path/to/your/cache")
 
-dataset = StreamingDataset(input_dir=Dir(path=cache_dir, url=data_dir))
+# Or when cache path and remote URL should differ:
+dataset = StreamingDataset(input_dir=Dir(path="/path/to/your/cache", url="s3://my-bucket/my_optimized_dataset"))
+```
+
+Global default without passing `cache_dir` every time:
+
+```bash
+export LITDATA_CACHE_DIR=/path/to/your/cache
+```
+
+CLI:
+
+```bash
+litdata cache path    # print the active cache directory
+litdata cache clear   # delete cached chunks
 ```
 
 </details>
@@ -1527,69 +1703,56 @@ print(dataset[:])
   <summary> ✅ Encrypt, decrypt data at chunk/sample level <a id="encrypt-decrypt" href="#encrypt-decrypt">🔗</a> </summary>
 &nbsp;
 
-Secure data by applying encryption to individual samples or chunks, ensuring sensitive information is protected during storage.
+Encrypt optimized data at **sample** or **chunk** level. Built-ins: `FernetEncryption` and `RSAEncryption` (`litdata.utilities.encryption`). Requires the `cryptography` package. **Not supported for Mosaic MDS.**
 
-This example shows how to use the `FernetEncryption` class for sample-level encryption with a data optimization function.
+| `level` | Meaning |
+|---------|---------|
+| `"sample"` (default) | Encrypt each sample independently |
+| `"chunk"` | Encrypt whole chunks |
+
+**Fernet (symmetric)**
 
 ```python
-from litdata import optimize
+from litdata import optimize, StreamingDataset
 from litdata.utilities.encryption import FernetEncryption
-import numpy as np
-from PIL import Image
 
-# Initialize FernetEncryption with a password for sample-level encryption
-fernet = FernetEncryption(password="your_secure_password", level="sample")
+fernet = FernetEncryption(password="your_secure_password", level="sample")  # or level="chunk"
 data_dir = "s3://my-bucket/optimized_data"
 
-def random_image(index):
-    """Generate a random image for demonstration purposes."""
-    fake_img = Image.fromarray(np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8))
-    return {"image": fake_img, "class": index}
+def fn(index):
+    return {"index": index, "value": index**2}
 
-# Optimize data while applying encryption
-optimize(
-    fn=random_image,
-    inputs=list(range(5)),  # Example inputs: [0, 1, 2, 3, 4]
-    num_workers=1,
-    output_dir=data_dir,
-    chunk_bytes="64MB",
-    encryption=fernet,
-)
+if __name__ == "__main__":
+    optimize(
+        fn=fn,
+        inputs=list(range(5)),
+        num_workers=1,
+        output_dir=data_dir,
+        chunk_bytes="64MB",
+        encryption=fernet,
+    )
+    fernet.save("fernet.pem")  # persist salt/level; keep the password safe
 
-# Save the encryption key to a file for later use
-fernet.save("fernet.pem")
-```
-
-Load the encrypted data using the `StreamingDataset` class as follows:
-
-```python
-from litdata import StreamingDataset
-from litdata.utilities.encryption import FernetEncryption
-
-# Load the encryption key
-fernet = FernetEncryption(password="your_secure_password", level="sample")
-fernet.load("fernet.pem")
-
-# Create a streaming dataset for reading the encrypted samples
+# Later — load key material with the same password
+fernet = FernetEncryption.load("fernet.pem", password="your_secure_password")
 ds = StreamingDataset(input_dir=data_dir, encryption=fernet)
 ```
 
-Implement your own encryption method: Subclass the `Encryption` class and define the necessary methods:
+**RSA (asymmetric)**
 
 ```python
-from litdata.utilities.encryption import Encryption
+from litdata.utilities.encryption import RSAEncryption
 
-class CustomEncryption(Encryption):
-    def encrypt(self, data):
-        # Implement your custom encryption logic here
-        return data
+rsa = RSAEncryption(password="your_secure_password", level="sample")  # or "chunk"
+optimize(fn=fn, inputs=list(range(5)), output_dir=data_dir, chunk_bytes="64MB", encryption=rsa)
+rsa.save("rsa.pem")
 
-    def decrypt(self, data):
-        # Implement your custom decryption logic here
-        return data
+rsa = RSAEncryption.load("rsa.pem", password="your_secure_password")
+ds = StreamingDataset(input_dir=data_dir, encryption=rsa)
 ```
 
-This allows the data to remain secure while maintaining flexibility in the encryption method.
+**Custom algorithm** — subclass `Encryption` and implement `encrypt` / `decrypt` / `save` / `load` / `state_dict` / `algorithm`.
+
 </details>
 
 <details>
@@ -1661,17 +1824,99 @@ if __name__ == "__main__":
 </details>
 
 <details>
-  <summary> ✅ Lightning AI Data Connections - Direct download and upload <a id="lightning-connections" href="#lightning-connections">🔗</a> </summary>
+  <summary> ✅ Resolve any path or cloud URL (local, S3, GCS, R2, Azure, HF, Studio) <a id="resolve-paths" href="#resolve-paths">🔗</a> </summary>
 
 &nbsp;
 
-[Lightning Studios](https://lightning.ai/) have special directories for data connections that are available to an entire teamspace. LitData functions that reference those directories will experience a significant performance increase as uploads and downloads will happen directly from the bucket that backs the folder.
+LitData **resolves** every dataset path you pass to `StreamingDataset`, `StreamingRawDataset`, `optimize`, `map`, and related APIs. You write one path string; LitData figures out whether to read locally, download from object storage, or (inside [Lightning Studios](https://lightning.ai/)) talk **directly to the bucket** behind a `/teamspace/...` mount instead of going through slow FUSE I/O.
 
-For example, output artifacts from this code will be directly uploaded to the `my-data-1` s3 bucket.
+### Supported URI schemes
+
+| Scheme | Example | Use when |
+|--------|---------|----------|
+| Local path | `./data` or `/data/imagenet` | Files on disk |
+| `s3://` | `s3://my-bucket/optimized` | AWS S3 |
+| `gs://` | `gs://my-bucket/optimized` | Google Cloud Storage |
+| `r2://` | `r2://my-bucket/optimized` | Cloudflare R2 |
+| `azure://` | `azure://container/optimized` | Azure Blob Storage |
+| `hf://` | `hf://datasets/org/name/data` | Hugging Face datasets (parquet) |
+| `local:` | `local:/mnt/nfs/dataset` | Network / shared drive (LitData still caches chunks locally to reduce NAS load) |
 
 ```python
-from litdata import optimize
+from litdata import StreamingDataset, optimize
 
+# Same APIs — only the path changes
+StreamingDataset("s3://my-bucket/fast_data", shuffle=True, drop_last=True)
+StreamingDataset("gs://my-bucket/fast_data")
+StreamingDataset("r2://my-bucket/fast_data", storage_options={...})
+StreamingDataset("azure://my-container/fast_data", storage_options={...})
+StreamingDataset("hf://datasets/org/name/data")
+StreamingDataset("local:/data/shared-drive/some-data")
+StreamingDataset("/var/data/fast_data")  # plain local directory
+```
+
+Pass cloud credentials with `storage_options` (and optional `session_options` for boto3 profiles/regions). See [Stream from multiple cloud providers](#cloud-providers).
+
+### Cache directory vs remote URL
+
+By default LitData caches downloaded chunks under `~/.lightning/chunks` (override with `cache_dir=` or `LITDATA_CACHE_DIR`). When the cache location and the dataset URL must differ, use `Dir`:
+
+```python
+from litdata import StreamingDataset
+from litdata.streaming.resolver import Dir
+
+dataset = StreamingDataset(
+    Dir(path="/fast-ssd/cache/run-1", url="s3://my-bucket/fast_data")
+)
+# Equivalent:
+dataset = StreamingDataset("s3://my-bucket/fast_data", cache_dir="/fast-ssd/cache/run-1")
+```
+
+```bash
+export LITDATA_CACHE_DIR=/fast-ssd/cache
+litdata cache path    # show active cache directory
+litdata cache clear   # wipe cached chunks
+```
+
+### Date/time path templates
+
+Embed a `strftime` pattern in `{...}` and LitData expands it to the current time (useful for versioned `output_dir`s):
+
+```python
+# e.g. on 2025-05-05 → ".../run_2025-05-05"
+optimize(
+    fn=fn,
+    inputs=inputs,
+    output_dir="s3://my-bucket/datasets/run_{%Y-%m-%d}",
+    chunk_bytes="64MB",
+)
+```
+
+### Lightning Studio `/teamspace/...` paths (direct bucket I/O)
+
+In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer these paths in LitData** — optimize/map uploads and StreamingDataset downloads use the **backing object store URL** (and temporary credentials when needed), which is much faster than reading every file through the FUSE mount.
+
+| Path prefix | What LitData does |
+|-------------|-------------------|
+| `/teamspace/studios/this_studio/...` | Local Studio workspace disk (not a cloud URL) |
+| `/teamspace/studios/<other_studio>/...` | Resolves to that Studio’s content bucket (`s3://` or `gs://`) |
+| `/teamspace/s3_connections/<name>/...` | Direct S3 to the connection’s bucket |
+| `/teamspace/gcs_connections/<name>/...` | Direct GCS |
+| `/teamspace/s3_folders/<name>/...` | S3 folder connection |
+| `/teamspace/gcs_folders/<name>/...` | GCS folder connection |
+| `/teamspace/lightning_storage/<name>/...` | Lightning-managed object storage (R2-style) |
+| `/teamspace/datasets/...` | Teamspace datasets mount → project datasets bucket |
+
+```python
+from litdata import StreamingDataset, StreamingRawDataset, optimize
+
+# Stream optimized data from an attached S3 connection (direct bucket download)
+dataset = StreamingDataset("/teamspace/s3_connections/my-data-1/fast_data", shuffle=True, drop_last=True)
+
+# Stream raw files from a connection
+raw = StreamingRawDataset("/teamspace/s3_connections/my-bucket-1/raw")
+
+# Optimize *into* a connection — chunks upload straight to the bucket
 def should_keep(data):
     if data % 2 == 0:
         yield data
@@ -1682,31 +1927,16 @@ if __name__ == "__main__":
         inputs=list(range(1000)),
         output_dir="/teamspace/s3_connections/my-data-1/output",
         chunk_bytes="64MB",
-        num_workers=1
+        num_workers=1,
     )
 ```
 
+**Tips**
 
-Similarly, data will be downloaded directly from the `my-data-1` s3 bucket in this example code.
+- Version remote outputs (`.../v2`, `.../run_{%Y-%m-%d}`). Optimized datasets are immutable unless you pass `mode="append"` or `mode="overwrite"`.
+- Outside Studio, use `s3://` / `gs://` / … with your own credentials — `/teamspace/...` resolution needs Lightning Studio environment variables.
+- `optimize` / `map` with `num_nodes` on Studios write under `/teamspace/jobs/...` when `output_dir` is local; use a connection path to land data directly in your bucket.
 
-```python
-from litdata import StreamingRawDataset
-
-if __name__ == "__main__":
-    data_dir = "/teamspace/s3_connections/my-bucket-1/data"
-
-    raw_dataset = StreamingRawDataset(data_dir)
-
-    data = list(raw_dataset)
-    print(data)
-```
-
-References to any of the following directories will work similarly:
-1. `/teamspace/lightning_storage/...`
-2. `/teamspace/s3_connections/...`
-3. `/teamspace/gcs_connections/...`
-4. `/teamspace/s3_folders/...`
-5. `/teamspace/gcs_folders/...`
 </details>
 
 &nbsp;
@@ -1720,30 +1950,112 @@ References to any of the following directories will work similarly:
 
 Apply the same change to different parts of the dataset at once to save time and effort.
 
-The `map` operator can be used to apply a function over a list of inputs.
-
-Here is an example where the `map` operator is used to apply a `resize_image` function over a folder of large images.
+The `map` operator applies a function over a list of inputs. **`fn` must write into `output_dir` and return `None`.** Guard with `if __name__ == "__main__"` when using multiple workers.
 
 ```python
+import os
 from litdata import map
 from PIL import Image
 
-# Note: Inputs could also refer to files on s3 directly.
-input_dir = "my_large_images"
+input_dir = "my_large_images"  # or s3://...
 inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
 
-# The resize image takes one of the input (image_path) and the output directory.
-# Files written to output_dir are persisted.
 def resize_image(image_path, output_dir):
-  output_image_path = os.path.join(output_dir, os.path.basename(image_path))
-  Image.open(image_path).resize((224, 224)).save(output_image_path)
+    output_image_path = os.path.join(output_dir, os.path.basename(image_path))
+    Image.open(image_path).resize((224, 224)).save(output_image_path)
 
-map(
-    fn=resize_image,
-    inputs=inputs,
-    output_dir="s3://my-bucket/my_resized_images",
-)
+if __name__ == "__main__":
+    map(
+        fn=resize_image,
+        inputs=inputs,
+        output_dir="s3://my-bucket/my_resized_images",
+        num_workers=8,
+    )
 ```
+
+**`map` arguments**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `fn` | required | `fn(input, output_dir) -> None` |
+| `inputs` | required | Sequence or `StreamingDataLoader` |
+| `output_dir` | required | Local or cloud path ([resolver](#resolve-paths)) |
+| `input_dir` | `None` | Root for remote inputs (background download while processing) |
+| `weights` | `None` | Per-input weights to balance workers |
+| `num_workers` | CPU count | Local process workers |
+| `fast_dev_run` | `False` | Process only a few items (`True` → small default, or an int) |
+| `num_nodes` / `machine` | `None` | Scale out on [Lightning Studios](https://lightning.ai/) |
+| `num_downloaders` / `num_uploaders` | auto | I/O concurrency per worker |
+| `reorder_files` | `True` | Pack by file size for balance; `False` preserves order |
+| `error_when_not_empty` | `False` | Error if `output_dir` already has files |
+| `reader` | default | Custom reader for inputs |
+| `batch_size` | `None` | Group inputs into batches for `fn` |
+| `start_method` | spawn† | Multiprocessing start method (†spawn unless IPython) |
+| `optimize_dns` | `None` | Optimized DNS (Studio / cloud) |
+| `storage_options` | `{}` | Cloud credentials / endpoints |
+| `keep_data_ordered` | `True` | `False` = shared work queue (better for uneven/slow workers) |
+
+</details>
+
+<details>
+  <summary> ✅ <code>optimize</code> arguments reference <a id="optimize-kwargs" href="#optimize-kwargs">🔗</a> </summary>
+&nbsp;
+
+Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). **Exactly one of `chunk_bytes` or `chunk_size`.** Use `if __name__ == "__main__"`.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `fn` | required | Maps each input → sample (or `yield` samples / skip bad ones) |
+| `inputs` | `None` | Sequence or `StreamingDataLoader` (ignored if `queue` is set) |
+| `queue` | `None` | `multiprocessing.Queue` of live inputs; send **one** `ALL_DONE` when finished |
+| `output_dir` | `"optimized_data"` | Local or cloud ([resolver](#resolve-paths)); version remote prefixes |
+| `input_dir` | `None` | Remote input root for background download |
+| `weights` | `None` | Per-input weights to balance workers |
+| `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`) |
+| `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
+| `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
+| `compression` | `None` | `"zstd"` today |
+| `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom ([encrypt](#encrypt-decrypt)) |
+| `num_workers` | CPU count | Local workers |
+| `fast_dev_run` | `False` | Smoke a subset of inputs |
+| `num_nodes` / `machine` | `None` | Multi-node on Lightning Studios |
+| `num_downloaders` / `num_uploaders` | auto | I/O concurrency per worker |
+| `reorder_files` | `True` | Size-based packing; `False` preserves order |
+| `reader` | default | Custom input reader |
+| `batch_size` | `None` | Group inputs for `fn` |
+| `mode` | `None` | `"append"` or `"overwrite"` existing dataset; default treats data as immutable |
+| `use_checkpoint` | `False` | Resume an interrupted optimize from `.checkpoints` |
+| `item_loader` | `None` | e.g. `TokensLoader()` for contiguous tokens |
+| `start_method` | spawn† | Multiprocessing start method |
+| `optimize_dns` | `None` | Optimized DNS |
+| `storage_options` | `{}` | Cloud credentials / endpoints |
+| `keep_data_ordered` | `True` | `False` = shared queue among workers |
+| `verbose` | `True` | Progress logging |
+
+Related features: [shared queue](#shared-queue), [queue input](#queue-input), [append/overwrite](#modify-datasets), [compression](#compression), [TokensLoader / LLM](#llm-training), [filter](#filter-data).
+
+</details>
+
+<details>
+  <summary> ✅ Cloud-optimized <code>walk</code> (list files at scale) <a id="walk" href="#walk">🔗</a> </summary>
+&nbsp;
+
+`litdata.walk` is a threaded, cloud-friendly alternative to `os.walk` for building large `inputs=` lists (especially on Lightning Studios). Yields `(dirpath, dirnames, filenames)` like `os.walk`, but **order is not depth-first**.
+
+```python
+from litdata import walk, optimize
+
+inputs = []
+for root, dirs, files in walk("/teamspace/s3_connections/my-data/raw", max_workers=32):
+    for name in files:
+        if name.endswith(".jpg"):
+            inputs.append(f"{root}/{name}")
+
+if __name__ == "__main__":
+    optimize(fn=load_image, inputs=inputs, output_dir="...", chunk_bytes="64MB")
+```
+
+Prints a warning outside Lightning Studio — it is optimized for that environment; elsewhere prefer `os.walk` or your cloud SDK’s listing API.
 
 </details>
 
