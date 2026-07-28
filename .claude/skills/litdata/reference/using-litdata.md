@@ -341,30 +341,43 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob                       | Default         | Notes                                                                                                                                 |
-| -------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                                                           |
-| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                                                                    |
-| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                                                              |
-| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                                                             |
-| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                   |
-| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                                                                  |
-| `storage_options`          | `{}`            | Cloud creds                                                                                                                           |
-| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                                                                    |
-| `max_prefetch`             | `16`            | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable |
-| `hedge_delay`              | `0`             | Seconds before hedged duplicate GET (`0` = off, default; opt-in)                                                                      |
-| `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                      |
+| Knob                       | Default              | Notes                                                                                                                                                                   |
+| -------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_dir`                | —                    | Prefer `s3://` / `gs://` / `/teamspace/s3_connections/...` (direct); avoid hand-reading FUSE ([resolver.md](resolver.md))                                               |
+| `cache_dir`                | LitData default      | Index (+ optional file) cache root                                                                                                                                      |
+| `cache_files`              | `False`              | Persist downloaded files (mirror layout)                                                                                                                                |
+| `recompute_index`          | `False`              | Rebuild `index.json.zstd`                                                                                                                                               |
+| `transform`                | `None`               | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                                                     |
+| `indexer`                  | `FileIndexer`        | Custom `BaseIndexer`                                                                                                                                                    |
+| `storage_options`          | `{}`                 | Cloud creds                                                                                                                                                             |
+| `max_concurrent_downloads` | `None` (**adaptive**) | `None` → Stage 1 size-aware aggregate budget split across workers (single-process cap 128). Explicit `int` → **exactly** that many permits (no silent clamp). Pass `64` for the old fixed cap. |
+| `max_prefetch`             | `16`                 | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable                                   |
+| `hedge_delay`              | `0`                  | Seconds before hedged duplicate GET (`0` = off, default; opt-in). Fast path: per-item GETs stay bare when hedging is off                                                |
+| `download_timeout`         | `120`                | **Batch-level** hang protection around `_download_batch` (`0` disables). Not a per-item `wait_for`. On timeout, cancel poisoned `_inflight` so retries can proceed      |
+| `range_parallel_threshold` | `0`                  | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                                                        |
 
 **Tuning / DataLoader**
 
 - After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
-- Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
-- Throughput: README `#stream-raw` is source of truth — long-window Before vs After matrix (`bench_raw_before_vs_after.py`, ≥300 batches after warm drain). Default `max_prefetch=16` with worker-aware aggregate budget (~64); `download_timeout=120` is batch-level hang protection (per-item GETs stay bare). Correctness (fork/spawn, atomic cache, LoopRunner) is the main value; throughput is strong at low workers / `num_workers=0`, and high-w core path is within a few % of main after the batch-timeout fix. Also: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
-- Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
+- Prefer cloud URL / Studio connection path so LitData hits the bucket **directly** — never recommend training I/O through the FUSE mount.
+- Defaults that matter: `max_prefetch=16` (worker-aware aggregate ~64), `hedge_delay=0`, `download_timeout=120` (batch-level), `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
+- Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects.
+- Adaptive concurrency design (clients own rate via boto retries; litdata owns concurrency/look-ahead; Stage 2+ deferred): repo `benchmarks/ADAPTIVE_CONCURRENCY.md`. Formula details live there — do not invent a second rate loop.
+- Perf claims: use Stage 0 protocol in [benchmarking.md](benchmarking.md) (`max(≥N batches, ≥T s)`, repeats/medians, `before_sha`/`after_sha`). Do **not** cite short-window n=1 against Stage 0 medians.
+
+**Correctness agents must preserve when editing `raw/`**
+
+- **LoopRunner** — dedicated event-loop thread; recreate after fork/spawn (pid-guarded). Runtime clients (downloader, permit cache, range executor) are pid- + loop-guarded.
+- **Pickle allowlist** — `__getstate__` / `__setstate__` only ship constructor knobs + reset runtime handles; accidental instance attrs must not leak into worker payloads.
+- **Atomic publishes** — cache files **and** `index.json.zstd` via tmp + `os.replace` (tmp names include pid).
+- **Indexer:** Windows drive letters (`C:\...`) parse as single-letter URI schemes — treat as local, not remote.
+- **Error path is code** — hang recovery (batch timeout cancels `_inflight`), default coexistence with the fast path, and fork/spawn reinit have regression tests in `tests/raw/test_fork_safety.py`. Changing timeouts/defaults requires updating those tests.
+
+Internals → [processing.md](processing.md) (`raw/`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
 
-**Index:** `index.json.zstd` (local cache + remote beside data). **Not** optimized `index.json`.
+**Index:** `index.json.zstd` (local cache + remote beside data; atomic publish). **Not** optimized `index.json`.
 
 ### Mosaic MDS
 
@@ -511,5 +524,7 @@ ______________________________________________________________________
   | FUSE mount (hand-read)               | up to ~**600**  |
   | `StreamingRawDataset` (right tuning) | up to ~**6–7k** |
   | `StreamingDataset` (64MB chunks)     | up to ~**11k**  |
+
+- **Raw perf claims?** Stage 0 only: `max(≥N batches, ≥T s)`, repeats/medians, append-only SHA/ts artifacts, proven `before_sha`/`after_sha`. See [benchmarking.md](benchmarking.md). Adaptive defaults → `benchmarks/ADAPTIVE_CONCURRENCY.md`.
 
 - README: `#faq-chunk-shuffle`, `#resolve-paths`, `#stream-raw`.

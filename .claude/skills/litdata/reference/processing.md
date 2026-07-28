@@ -105,7 +105,7 @@ When `no_downloaders` (no `input_dir`, or a `reader` is set), `ready_to_process_
 
 ## `raw/` — `StreamingRawDataset` (first-class; no optimize)
 
-User cookbook → [using-litdata.md](using-litdata.md) §10. README → `#stream-raw`.
+User cookbook → [using-litdata.md](using-litdata.md) §10. README → `#stream-raw`. Adaptive stages → repo `benchmarks/ADAPTIVE_CONCURRENCY.md`.
 
 `StreamingRawDataset` (`raw/dataset.py`) is a **map-style** `torch.utils.data.Dataset` that streams **original files** (JPEG, audio, …) from local or cloud paths. It does **not** use LitData chunks, `BinaryReader`, or `StreamingDataLoader`.
 
@@ -118,6 +118,7 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | `FileIndexer` / `BaseIndexer` (`raw/indexer.py`) | Discover files; cache `index.json.zstd` locally + upload beside remote data                     |
 | `CacheManager`                                   | Optional on-disk file cache (`cache_files=True`); always holds index cache dir                  |
+| `_LoopRunner`                                    | Per-process dedicated asyncio thread (optional uvloop); recreate after fork                     |
 | `setup(files)`                                   | Default identity; override to filter/group → `list[FileMetadata]` or `list[list[FileMetadata]]` |
 | `__getitem__` / `__getitems__`                   | **Fully async** download; batches use `asyncio.gather` over `adownload_fileobj`                 |
 | Cloud clients                                    | **Built-in retries** (e.g. S3 adaptive `max_attempts`) for transient failures                   |
@@ -126,7 +127,16 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
 
 **Do not conflate indexes:** raw = `index.json.zstd` (file list). Optimized = `index.json` (chunk metadata).
 
-**Agent guidance:** lead with `StreamingRawDataset` when the user has an existing file tree and has not asked for max throughput / resume. Stress: raw bytes + async batched downloads + retries; upgrade path `optimize` + `StreamingDataset`. Same path resolver as streaming (`/teamspace/s3_connections/…`, `s3://`, …).
+### Operational invariants (edit with care)
+
+- **Division of labor:** clients own **rate** (boto/obstore retries). Litdata owns **concurrency** (`max_concurrent_downloads`) and **look-ahead** (`max_prefetch`). Do not nest a litdata rate loop that fights client retries. Stage 1 = static size-aware budget when `max_concurrent_downloads=None`; Stages 2+ (prefetch hit-rate, AIMD) are deferred — see design note.
+- **Fork / spawn safety:** `register_at_fork` shuts down the runner; pid-guarded caches recreate downloader / permits / range executor when pid or event loop changes. `__getstate__` is an **allowlist** of constructor knobs (runtime handles reset on unpickle).
+- **Atomic publishes:** downloaded cache files **and** `index.json.zstd` use tmp + `os.replace` (tmp includes pid). Partial writes must not become visible readers.
+- **Batch timeout:** `download_timeout` wraps the batch gather once; per-item GETs stay on the fast path when `hedge_delay=0`. Timeout must cancel `_inflight` entries or retries hang on the poisoned task.
+- **Indexer schemes:** `urlparse("C:\\Users\\...")` yields `scheme='c'`. Single-letter schemes are Windows drive letters — local paths, not unsupported remotes (`_is_windows_drive_scheme`).
+- **Tests:** `tests/raw/test_fork_safety.py` covers fork reinit, allowlist pickle, atomic publish, batch-timeout hang recovery, and fast-path coexistence with default `download_timeout=120`.
+
+**Agent guidance:** lead with `StreamingRawDataset` when the user has an existing file tree and has not asked for max throughput / resume. Prefer cloud URL over FUSE. Stress: raw bytes + async batched downloads + retries; upgrade path (shuffle inputs →) `optimize` + `StreamingDataset`. Same path resolver as streaming (`/teamspace/s3_connections/…`, `s3://`, …).
 
 ## Gotchas (read before editing the engine)
 

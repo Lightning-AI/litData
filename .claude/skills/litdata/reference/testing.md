@@ -80,6 +80,21 @@ Use stdlib `unittest.mock` (`Mock`, `MagicMock`, `patch`) + the pytest `monkeypa
 
 Local idiom: most files define their own `seed_everything(seed)`. CLI tests use a `run_cli(args_list)` helper (patches `sys.argv`, captures stdout). `tests/streaming/utils.py` gives `filter_lock_files` / `get_lock_files` to assert on chunk dirs ignoring `.lock`/`.cnt` artifacts.
 
+## Raw streaming regressions (`tests/raw/`)
+
+`tests/raw/test_fork_safety.py` is the correctness suite for cloud-download hardening. When changing `StreamingRawDataset` / `CacheManager` / indexer publish paths, keep or extend coverage for:
+
+- Fork/spawn LoopRunner reinit + pid-guarded downloader/permit caches
+- Allowlisted pickle (`__getstate__` must not ship accidental instance attrs)
+- Atomic cache + `index.json.zstd` publishes (tmp + `os.replace`)
+- Batch-level `download_timeout` hang recovery (cancel poisoned `_inflight`; retry succeeds)
+- Fast path: per-item GETs stay bare when `hedge_delay=0` even if `download_timeout=120`
+- Adaptive vs exact `max_concurrent_downloads` (None vs int)
+
+`tests/raw/conftest.py` tears down the module LoopRunner between tests — follow that pattern if you add fixtures that touch `_RUNNER`.
+
+Error-path behavior is production code: do not “fix” hang recovery only in comments — assert it.
+
 ## When tests hang or flake
 
 - Processing/worker tests spawn real subprocesses — run **serially** (why CI separates `tests/processing`). Use `--timeout=120`.

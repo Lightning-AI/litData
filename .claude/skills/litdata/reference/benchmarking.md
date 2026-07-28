@@ -16,10 +16,25 @@ Studio paths / free-threading → [lightning-studio.md](lightning-studio.md). Pr
 | `benchmarks/litdata/optimize_imagenet.py` | `optimize` ImageNet (JPEG/PIL write modes)                  |
 | `benchmarks/litdata/stream_imagenet.py`   | Epoch throughput for an optimized dataset                   |
 | `benchmarks/stream_raw_imagenet.py`       | `StreamingRawDataset` baseline (no optimize)                |
+| `benchmarks/bench_raw_before_vs_after.py` | Stage 0 A/B harness for raw cloud download changes          |
+| `benchmarks/ADAPTIVE_CONCURRENCY.md`      | Adaptive concurrency / look-ahead design + Stage 1          |
 | `benchmarks/ffcv/`                        | Convert / write / stream with FFCV for format comparison    |
 | `benchmarks/ffcv/README.md`               | FFCV install + write/stream steps                           |
 
 Start from `benchmarks/litdata/README.md` for LitData-only runs; use `benchmarks/ffcv/` when comparing formats. All scripts are CLI-based (`--help`).
+
+## Raw streaming Stage 0 protocol
+
+When measuring or claiming `StreamingRawDataset` cloud download wins (`bench_raw_before_vs_after.py` and friends):
+
+1. **Window = `max(N batches, T seconds)`** — require **both** floors (default ≥300 batches **and** ≥30s). Not either/or.
+2. **Warm** `max(1, num_workers × prefetch_factor)` batches before timing.
+3. **Repeats + medians** — prefer interleaved A/B, `n≥5` for grids, report median + spread. Single-run digs are exploratory only.
+4. **Append-only artifacts** — write `*.{sha}.{unix_ts}.json` (+ JSONL); never overwrite prior result files.
+5. **Provenance** — record `before_sha` / `after_sha` from `git rev-parse` on each PYTHONPATH tree (not only the runner SHA in the filename). Refuse to publish without both.
+6. **Trust hierarchy:** provenance-verified confirm cell (known `before_sha`/`after_sha`, protocol floors, n≥3) ≫ full-grid medians with null tree SHAs ≫ short-window or n=1 digs. Never cite a short-window n=1 against Stage 0 medians.
+
+Design note / Stage 1 formula: `benchmarks/ADAPTIVE_CONCURRENCY.md`.
 
 ### Typical LitData flow
 
