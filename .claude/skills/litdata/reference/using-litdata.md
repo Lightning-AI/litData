@@ -144,14 +144,35 @@ ______________________________________________________________________
 
 Torch `DataLoader` args plus:
 
-| Arg                                    | Notes                                                                                                           |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `shuffle` / `drop_last`                | Forwarded onto the streaming dataset                                                                            |
-| `profile_batches`                      | Needs `viztracer`, `num_workers>=1` → `result.json`                                                             |
-| `profile_skip_batches` / `profile_dir` | Skip N batches; choose output dir                                                                               |
-| `multiprocessing_context`              | **Required `'spawn'` (or forkserver)** with `ParquetLoader` + `num_workers>0` on Linux (Polars + fork deadlock) |
+| Arg                       | Notes                                                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `shuffle` / `drop_last`   | Forwarded onto the streaming dataset                                                                            |
+| `multiprocessing_context` | **Required `'spawn'` (or forkserver)** with `ParquetLoader` + `num_workers>0` on Linux (Polars + fork deadlock) |
 
 Use `StreamingDataLoader` (not plain `DataLoader`) for optimized / combined / parallel datasets so batch metadata and `state_dict` work.
+
+### Profiling (`profile_batches`) — viztracer
+
+```python
+StreamingDataLoader(
+    dataset,
+    batch_size=64,
+    num_workers=4,                 # required (>=1)
+    profile_batches=20,            # int = N batches; True = whole epoch; False = off
+    profile_skip_batches=5,        # warm-up batches before recording
+    profile_dir="./profiles",      # writes result.json (default cwd; overwrites)
+)
+```
+
+| Requirement | Detail                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| Dep         | `pip install viztracer`                                                                                |
+| Workers     | `num_workers >= 1` or raises                                                                           |
+| Rank        | Only global rank 0 patches the worker loop                                                             |
+| Scope       | Worker **0** only                                                                                      |
+| Output      | `{profile_dir}/result.json` — open in `chrome://tracing` or [ui.perfetto.dev](https://ui.perfetto.dev) |
+
+`int` wraps `fetcher.fetch` and stops after skip+N fetches; `True` traces until the worker loop ends. Complementary to `enable_tracer()` + Litracer (pipeline events) — see [debugging.md](debugging.md). README: `#profile-loading`.
 
 ______________________________________________________________________
 
@@ -355,16 +376,18 @@ StreamingDataset(..., encryption=enc)
 
 ______________________________________________________________________
 
-## 13. Debug
+## 13. Debug & profile
+
+**DataLoader worker CPU** — `StreamingDataLoader(..., profile_batches=20, num_workers=4)` → viztracer `result.json` (§7 / README `#profile-loading`).
+
+**LitData pipeline events** — `enable_tracer()` → `litdata_debug.log` → Litracer → Perfetto:
 
 ```python
 from litdata.debugger import enable_tracer
-enable_tracer()  # litdata_debug.log — delete before re-trace
-# litracer litdata_debug.log -o litdata_trace.json
-# ui.perfetto.dev preferred over chrome://tracing
+enable_tracer()  # delete existing litdata_debug.log before re-trace
 ```
 
-`litdata.breakpoint` — safe in optimize / DataLoader workers. More → [debugging.md](debugging.md).
+`litdata.breakpoint` — safe in optimize / DataLoader workers. Full knobs → [debugging.md](debugging.md).
 
 ______________________________________________________________________
 

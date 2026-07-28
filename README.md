@@ -685,8 +685,8 @@ Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size`.
 |----------|-------------|
 | All usual `torch.utils.data.DataLoader` kwargs | `batch_size`, `num_workers`, `collate_fn`, `pin_memory`, … |
 | `shuffle` / `drop_last` | Forwarded to the streaming dataset |
-| `profile_batches` | Record a Chrome/`viztracer` trace (`pip install viztracer`, needs `num_workers>=1`) |
-| `profile_skip_batches` / `profile_dir` | Skip N batches; choose output directory |
+| `profile_batches` | `int` / `True` / `False` — viztracer worker trace (see [Profile data loading](#profile-loading)) |
+| `profile_skip_batches` / `profile_dir` | Warm-up skip count; output dir for `result.json` |
 | `multiprocessing_context` | Use **`"spawn"`** (or `"forkserver"`) with `ParquetLoader` + `num_workers>0` on Linux |
 
 Prefer `StreamingDataLoader` over a plain PyTorch `DataLoader` for optimized / combined / parallel datasets (resume + correct batch metadata).
@@ -1568,17 +1568,60 @@ for batch in dataloader:
   <summary> ✅ Profile data loading speed <a id="profile-loading" href="#profile-loading">🔗</a> </summary>
 &nbsp;
 
-Measure and optimize how fast your data is being loaded, improving efficiency.
+`StreamingDataLoader` can record a **viztracer** Chrome trace of the DataLoader worker loop so you can see where time goes (fetch, deserialize, collate, IPC).
 
-The `StreamingDataLoader` supports profiling of your data loading process. Simply use the `profile_batches` argument to specify the number of batches you want to profile:
+### Prerequisites
+
+```bash
+pip install viztracer
+```
+
+Profiling requires **`num_workers >= 1`** (raises otherwise). On multi-GPU, only **global rank 0** installs the worker profiler.
+
+### Usage
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
 
-StreamingDataLoader(..., profile_batches=5)
+dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True, drop_last=True)
+
+loader = StreamingDataLoader(
+    dataset,
+    batch_size=64,
+    num_workers=4,
+    profile_batches=20,          # record this many batches (int), or True for the whole run
+    profile_skip_batches=5,      # warm up / skip cold-start batches before recording
+    profile_dir="./profiles",    # where to write result.json (default: cwd)
+)
+
+for batch in loader:
+    train_step(batch)
+    # after profile_batches (+ skip) complete, worker 0 saves the trace and prints the path
 ```
 
-This generates a Chrome trace called `result.json`. Then, visualize this trace by opening Chrome browser at the `chrome://tracing` URL and load the trace inside.
+| Arg | Default | Meaning |
+|-----|---------|---------|
+| `profile_batches` | `False` | `int` → stop after that many **recorded** batches; `True` → profile until the iterator ends; `False` → off |
+| `profile_skip_batches` | `0` | Batches to skip before the tracer starts (useful to skip cache cold-start) |
+| `profile_dir` | current working directory | Directory for `result.json` (overwrites an existing file) |
+
+Only **worker 0** is instrumented. When an `int` is used, the tracer wraps `fetcher.fetch` and stops after `profile_skip_batches + profile_batches` fetch calls. When `True`, tracing runs for the lifetime of that worker loop.
+
+### View the trace
+
+```bash
+# Option A — Chrome
+# open chrome://tracing and load profiles/result.json
+
+# Option B — Perfetto (often better for large traces)
+# open https://ui.perfetto.dev and load the same file
+```
+
+### Tips
+
+- Delete or change `profile_dir` between runs — LitData removes an existing `result.json` before starting.
+- Pair with a wiped chunk cache if you care about **cold** epoch behavior (`litdata cache clear`).
+- For deeper LitData internals (download / lock / delete timeline), use `enable_tracer()` + [Litracer](https://github.com/deependujha/litracer) instead — see [Debug & Profile LitData](#debug-profile). That path is complementary: viztracer = DataLoader worker CPU timeline; Litracer = LitData pipeline events.
 
 </details>
 

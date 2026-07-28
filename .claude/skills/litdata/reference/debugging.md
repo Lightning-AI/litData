@@ -1,5 +1,28 @@
 # Debugging & profiling LitData
 
+## StreamingDataLoader profiling (viztracer)
+
+User-facing DataLoader worker CPU trace — complementary to `enable_tracer()` below.
+
+```python
+from litdata import StreamingDataset, StreamingDataLoader
+
+loader = StreamingDataLoader(
+    StreamingDataset("s3://bucket/data"),
+    batch_size=64,
+    num_workers=4,              # required
+    profile_batches=20,         # or True for full iterator
+    profile_skip_batches=5,     # skip cold batches
+    profile_dir="./profiles",   # → profiles/result.json
+)
+```
+
+- Needs `pip install viztracer`. Raises if `num_workers == 0`.
+- Only **global rank 0** + **worker 0** are instrumented (`dataloader.py` `_ProfileWorkerLoop`).
+- `int` → stop after `profile_skip_batches + profile_batches` `fetcher.fetch` calls; `True` → until worker loop ends.
+- Overwrites existing `result.json`. View in `chrome://tracing` or Perfetto.
+- Full user doc: README `#profile-loading`; cookbook: [using-litdata.md](using-litdata.md) §7.
+
 ## Breakpoints inside worker processes
 
 Normal `breakpoint()` doesn't work in DataLoader or `optimize`/`map` worker subprocesses (no stdin). Use LitData's multiprocessing-safe pdb, which reopens `sys.stdin` under a lock (`utilities/breakpoint.py:33`, exported as `litdata.breakpoint`):
