@@ -12,19 +12,8 @@
     "persistent_workers": true,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32
-    ],
-    "prefetch": [
-      0
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+    "prefetch": [0],
     "range_parallel_threshold": null,
     "max_concurrent_downloads": null,
     "capabilities": {
@@ -32,15 +21,7 @@
       "has_range_parallel_threshold": false,
       "has_loop_runner": false,
       "uvloop": "n/a (before / no LoopRunner)",
-      "params": [
-        "cache_dir",
-        "cache_files",
-        "indexer",
-        "input_dir",
-        "recompute_index",
-        "storage_options",
-        "transform"
-      ]
+      "params": ["cache_dir", "cache_files", "indexer", "input_dir", "recompute_index", "storage_options", "transform"]
     },
     "git_hint": "5d8cfc1997ef8dcddbda6aab3c9619d496a202fa",
     "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://"

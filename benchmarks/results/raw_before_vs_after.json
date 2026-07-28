@@ -5,16 +5,7 @@
     "batches": 30,
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
     "before": {
       "input": "s3://imagenet-1m-template/raw/val",
       "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
@@ -27,19 +18,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        0,
-        1,
-        2,
-        4,
-        8,
-        16,
-        24,
-        32
-      ],
-      "prefetch": [
-        0
-      ],
+      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+      "prefetch": [0],
       "range_parallel_threshold": null,
       "max_concurrent_downloads": null,
       "capabilities": {
@@ -72,20 +52,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        0,
-        1,
-        2,
-        4,
-        8,
-        16,
-        24,
-        32
-      ],
-      "prefetch": [
-        0,
-        16
-      ],
+      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+      "prefetch": [0, 16],
       "range_parallel_threshold": 0,
       "max_concurrent_downloads": 64,
       "capabilities": {

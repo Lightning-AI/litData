@@ -92,8 +92,9 @@ def copy_index(src: Path, dst: Path) -> None:
 
 def detect_side_capabilities() -> dict:
     """Inspect imported litdata for before/after feature markers."""
-    from litdata import StreamingRawDataset
     import inspect
+
+    from litdata import StreamingRawDataset
 
     params = set(inspect.signature(StreamingRawDataset.__init__).parameters)
     has_prefetch = "max_prefetch" in params
@@ -107,10 +108,7 @@ def detect_side_capabilities() -> dict:
         try:
             import uvloop
 
-            uvloop_status = (
-                f"available (uvloop {getattr(uvloop, '__version__', '?')}; "
-                f"create→{_loop_backend_name()})"
-            )
+            uvloop_status = f"available (uvloop {getattr(uvloop, '__version__', '?')}; create→{_loop_backend_name()})"
         except ImportError:
             uvloop_status = "not installed (stdlib asyncio fallback)"
     except ImportError:
@@ -219,10 +217,7 @@ def run_side(side: str) -> None:
     if side == "after" and not caps["has_max_prefetch"]:
         raise SystemExit("PYTHONPATH points at main tree but --side after requested")
     if side == "before" and caps["has_max_prefetch"]:
-        raise SystemExit(
-            "PYTHONPATH points at optimized tree but --side before requested "
-            f"(params={caps['params']})"
-        )
+        raise SystemExit(f"PYTHONPATH points at optimized tree but --side before requested (params={caps['params']})")
 
     side_root = ROOT / side
     if side_root.exists():
@@ -237,10 +232,7 @@ def run_side(side: str) -> None:
     inp = input_for(side)
     log(f"=== side={side} ===")
     log(f"capabilities: {json.dumps(caps)}")
-    log(
-        f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches={BATCHES} "
-        f"cpus={ncpu} configs={len(cfgs)}"
-    )
+    log(f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches={BATCHES} cpus={ncpu} configs={len(cfgs)}")
     log(f"PYTHONPATH[0]={sys.path[0]!r}")
 
     try:
@@ -258,7 +250,7 @@ def run_side(side: str) -> None:
                 from uvloop_status import log_loop_runner_backend
 
                 log_loop_runner_backend(log, prefix="after index seed")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log(f"LoopRunner log skipped: {e}")
         else:
             log("LoopRunner: not present on this tree (asyncio.run per batch)")
@@ -267,9 +259,7 @@ def run_side(side: str) -> None:
         results: list[dict] = []
         for w, pf in cfgs:
             label = f"w{w}_p{pf}"
-            results.append(
-                run_one(label, side=side, num_workers=w, max_prefetch=pf, seed=seed, wd=wd)
-            )
+            results.append(run_one(label, side=side, num_workers=w, max_prefetch=pf, seed=seed, wd=wd))
 
         payload = {
             "side": side,
@@ -348,14 +338,16 @@ def merge() -> None:
         for pf, a in ((0, a0), (16, a16)):
             if a is None:
                 continue  # omit missing/crashed
-            cells.append({
-                "workers": w,
-                "prefetch": pf,
-                "before_ips": b["ips"],
-                "after_ips": a["ips"],
-                "delta_pct": ((a["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None,
-                "speedup": a["ips"] / b["ips"] if b["ips"] else None,
-            })
+            cells.append(
+                {
+                    "workers": w,
+                    "prefetch": pf,
+                    "before_ips": b["ips"],
+                    "after_ips": a["ips"],
+                    "delta_pct": ((a["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None,
+                    "speedup": a["ips"] / b["ips"] if b["ips"] else None,
+                }
+            )
 
     best_after = max(cells, key=lambda c: c["after_ips"]) if cells else None
     payload = {
