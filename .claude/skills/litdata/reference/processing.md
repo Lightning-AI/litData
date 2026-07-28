@@ -15,8 +15,8 @@ All paths under `src/litdata/`. This pipeline fans work across workers (and mach
 
 User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `#optimize-kwargs` / `#map` / `#walk`.
 
-- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`. → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`.
-- **`map(...)`** — `functions.py` `map`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty`. → `LambdaMapRecipe`.
+- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`, `broadcast_paths=False` (auto-on for `{%strftime}` paths — see [multi-node.md](multi-node.md) §3.4). → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`.
+- **`map(...)`** — `functions.py` `map`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty` + `broadcast_paths`. → `LambdaMapRecipe`.
 - **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — Copy chunks + concat `index.json`; matching `data_format`/compression required.
 - **`walk(folder, max_workers=...)`** — Threaded cloud `os.walk` (Studio-optimized); yield order is **not** depth-first.
 

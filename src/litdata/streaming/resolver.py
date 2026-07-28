@@ -433,6 +433,21 @@ def _get_lightning_cloud_url() -> str:
     return os.getenv("LIGHTNING_CLOUD_URL", "https://lightning.ai")
 
 
+_TIME_TEMPLATE_RE = re.compile(r"^.*{%.*}.*$")
+
+
+def _has_time_template(path: str | Path | Dir | None) -> bool:
+    """Return True if ``path`` contains a LitData ``{%strftime}`` placeholder.
+
+    Used to decide whether multi-node ``broadcast_object`` should align resolved
+    dirs (each rank would otherwise expand ``datetime.now()`` independently).
+    Already-resolved :class:`~litdata.streaming.cache.Dir` values return False.
+    """
+    if path is None or isinstance(path, Dir):
+        return False
+    return _TIME_TEMPLATE_RE.search(str(path)) is not None
+
+
 def _resolve_time_template(path: str) -> str:
     """Resolves a datetime pattern in the given path string.
 
@@ -449,8 +464,7 @@ def _resolve_time_template(path: str) -> str:
     Returns:
         str: The path with the datetime placeholder replaced by the current timestamp.
     """
-    match = re.search("^.*{%.*}.*$", path)
-    if match is None:
+    if not _has_time_template(path):
         return path
 
     pattern = path.split("{")[1].split("}")[0]

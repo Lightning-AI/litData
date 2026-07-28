@@ -508,6 +508,14 @@ def test_resolve_time_template():
     assert resolver._resolve_time_template(path_3) == f"/logs/log_{curr_year}-{curr_month:02d}/important"
 
 
+def test_has_time_template():
+    assert resolver._has_time_template("/logs/log_{%Y-%m-%d}") is True
+    assert resolver._has_time_template("s3://bucket/run_{%Y-%m-%d_%H-%M-%S}") is True
+    assert resolver._has_time_template("/logs/my_logfile") is False
+    assert resolver._has_time_template(None) is False
+    assert resolver._has_time_template(resolver.Dir(path="/logs/log_2025-05-05")) is False
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
 def test_src_resolver_gcs_connections(monkeypatch, lightning_cloud_mock):
     """Test GCS connections resolver."""

@@ -48,6 +48,7 @@ from litdata.streaming.resolver import (
     _assert_dir_has_index_file,
     _assert_dir_is_empty,
     _execute,
+    _has_time_template,
     _resolve_dir,
 )
 from litdata.utilities._pytree import tree_flatten
@@ -259,6 +260,7 @@ def map(
     optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
+    broadcast_paths: bool = False,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -289,6 +291,8 @@ def map(
             workload and reduce idle time when some workers finish early. This may lead to unordered
             processing of items. If True, each worker processes a statically assigned subset of items
             in order.
+        broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
+            Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -319,6 +323,10 @@ def map(
         )
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
+        # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
+        should_broadcast_paths = (
+            broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
+        )
         _output_dir: Dir = _resolve_dir(output_dir)
 
         if _output_dir.url and "cloudspaces" in _output_dir.url:
@@ -332,6 +340,7 @@ def map(
 
         if not isinstance(inputs, StreamingDataLoader):
             input_dir = input_dir or _get_input_dir(inputs)
+            should_broadcast_paths = should_broadcast_paths or _has_time_template(input_dir)
             resolved_dir = _resolve_dir(input_dir)
 
             if isinstance(batch_size, int) and batch_size > 1:
@@ -355,6 +364,7 @@ def map(
             start_method=start_method,
             storage_options=storage_options,
             keep_data_ordered=keep_data_ordered,
+            broadcast_paths=should_broadcast_paths,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
@@ -413,6 +423,7 @@ def optimize(
     storage_options: dict[str, Any] = {},
     keep_data_ordered: bool = True,
     verbose: bool = True,
+    broadcast_paths: bool = False,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -461,6 +472,9 @@ def optimize(
             processing of items. If True, each worker processes a statically assigned subset of items
             in order.
         verbose: Whether to print the progress of the optimization. Defaults to True.
+        broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
+            Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template so ranks
+            share one expanded path. When off, each rank uses its locally resolved path.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -510,6 +524,10 @@ def optimize(
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         DATA_OPTIMIZER_NUM_NODES = int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0))
+        # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
+        should_broadcast_paths = (
+            broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
+        )
         _output_dir: Dir = _resolve_dir(output_dir)
 
         if (
@@ -535,7 +553,9 @@ def optimize(
 
         if not isinstance(inputs, StreamingDataLoader) and queue is None:
             assert inputs is not None
-            resolved_dir = _resolve_dir(input_dir or _get_input_dir(inputs))
+            input_dir_resolved = input_dir or _get_input_dir(inputs)
+            should_broadcast_paths = should_broadcast_paths or _has_time_template(input_dir_resolved)
+            resolved_dir = _resolve_dir(input_dir_resolved)
 
             if isinstance(batch_size, int) and batch_size > 1:
                 inputs = [inputs[pos : pos + batch_size] for pos in range(0, len(inputs), batch_size)]
@@ -576,6 +596,7 @@ def optimize(
             storage_options=storage_options,
             keep_data_ordered=keep_data_ordered,
             verbose=verbose,
+            broadcast_paths=should_broadcast_paths,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):

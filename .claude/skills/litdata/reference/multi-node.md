@@ -8,13 +8,13 @@ ______________________________________________________________________
 
 ## 0. What “multi-node” means here (and what it is not)
 
-| Mechanism                                                       | Used for                                                                                     | Symbols / env                                                                |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **Lightning Studio job** (`num_nodes=N`)                        | Distributed **optimize/map**                                                                 | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
-| **`DATA_OPTIMIZER_*` env**                                      | Rank / world inside each job instance                                                        | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK`      |
-| **`broadcast_object`**                                          | Align `input_dir` / `output_dir` across instances when Lightning app URL present             | `utilities/broadcast.py`                                                     |
-| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched | `utilities/env.py`                                                           |
-| **SLURM**                                                       | **Not** a first-class optimize launcher in this repo                                         | Do not document SLURM as supported for `num_nodes`                           |
+| Mechanism                                                       | Used for                                                                                                                                        | Symbols / env                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Lightning Studio job** (`num_nodes=N`)                        | Distributed **optimize/map**                                                                                                                    | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
+| **`DATA_OPTIMIZER_*` env**                                      | Rank / world inside each job instance                                                                                                           | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK`      |
+| **`broadcast_object`**                                          | Align dirs when `broadcast_paths` is on (or auto for `{%strftime}` paths) and Lightning app URL present                                         | `utilities/broadcast.py`                                                     |
+| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched                                                    | `utilities/env.py`                                                           |
+| **SLURM**                                                       | **Not** a first-class optimize launcher in this repo                                                                                            | Do not document SLURM as supported for `num_nodes`                           |
 
 If `num_nodes` / `machine` are set **outside** Studio (`_IS_IN_STUDIO` false) → `ValueError` (“Only https://lightning.ai/ supports multiple nodes…”).
 
@@ -117,17 +117,30 @@ Both `_map_items_to_workers_sequentially` and `_map_items_to_workers_weighted` (
 - Input `multiprocessing.Queue` or `keep_data_ordered=False`: dynamic consumption; multi-node semantics are weaker / different — checkpointing **unsupported** for Queue inputs. Prefer static list inputs for multi-node jobs.
 - `ALL_DONE` sentinel for shared-queue shutdown (`keep_data_ordered=False`).
 
-### 3.4 Broadcast dirs
+### 3.4 Broadcast dirs (`broadcast_paths`)
 
-After resolve, `DataProcessor` runs:
+`optimize` / `map` / `DataProcessor` take **`broadcast_paths: bool = False`**.
+
+After resolve, broadcast runs **only when** `broadcast_paths` is effectively on:
 
 ```python
-self.input_dir = broadcast_object("input_dir", self.input_dir, rank=_get_node_rank())
-self.output_dir = broadcast_object("output_dir", self.output_dir, rank=_get_node_rank())
+# Auto-on if input_dir or output_dir contains a `{%strftime}` template (detected before resolve).
+self.broadcast_paths = broadcast_paths or _has_time_template(input_dir) or _has_time_template(output_dir)
+
+if self.broadcast_paths:
+    self.input_dir = broadcast_object("input_dir", self.input_dir, rank=_get_node_rank())
+    self.output_dir = broadcast_object("output_dir", self.output_dir, rank=_get_node_rank())
 ```
 
-- If `LIGHTNING_APP_EXTERNAL_URL` is set: HTTP broadcast until all ranks agree.
-- Else: returns local `obj` unchanged (each node must resolve the same paths independently — usual for Studio connections / `s3://`).
+| Case | Behavior |
+| ---- | -------- |
+| Default (`False`), no `{%…}` in path | **Skip** broadcast — each rank keeps its locally resolved `Dir` (fine for stable `s3://` / connection paths) |
+| Path has `{%Y-%m-%d}` (etc.) | **Auto-enable** — ranks must share one expanded timestamp |
+| `broadcast_paths=True` | Always broadcast after resolve |
+
+- If `LIGHTNING_APP_EXTERNAL_URL` is set and broadcast runs: HTTP broadcast until all ranks agree.
+- Else `broadcast_object` returns the local `obj` unchanged.
+- Multi-node implication when off: ranks must independently resolve to the **same** paths; do not rely on per-rank `datetime.now()` without a shared template + auto-broadcast.
 
 ______________________________________________________________________
 

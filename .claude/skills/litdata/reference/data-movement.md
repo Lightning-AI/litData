@@ -32,7 +32,7 @@ _resolve_dir  (streaming/resolver.py)
         │  Dir(path=…, url=…, data_connection_id=?)
         ▼
 DataProcessor  (processing/data_processor.py)
-        │  broadcast_object input/output Dir (Studio multi-node)
+        │  broadcast_object input/output Dir (only if broadcast_paths / `{%strftime}`)
         │  shard items → DataWorkerProcess × num_workers
         ▼
 Per worker (BaseWorker._setup):

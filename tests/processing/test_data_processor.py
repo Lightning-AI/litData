@@ -1742,3 +1742,126 @@ def test_data_processor_end_to_end_with_data_connection_id(tmpdir, monkeypatch):
     # Note: Due to the complexity of mocking the full pipeline, we mainly verify
     # that the fs_provider was called, indicating the data_connection_id code paths were executed
     assert len(calls_made) > 0, "fs_provider should have been called"
+
+
+@pytest.mark.parametrize(
+    ("output_dir", "broadcast_paths", "expect_broadcast"),
+    [
+        # Default off for ordinary paths
+        ("/tmp/out", False, False),
+        # Explicit True always broadcasts
+        ("/tmp/out", True, True),
+        # `{%strftime}` time template auto-enables broadcast
+        ("/tmp/out_{%Y-%m-%d}", False, True),
+        ("s3://bucket/run_{%Y-%m-%d_%H-%M-%S}", False, True),
+    ],
+)
+def test_data_processor_broadcast_paths(tmpdir, monkeypatch, output_dir, broadcast_paths, expect_broadcast):
+    """broadcast_paths defaults off; auto-on for `{%strftime}` paths; explicit True forces broadcast."""
+    broadcast_mock = mock.MagicMock(side_effect=lambda key, obj, rank: obj)
+    monkeypatch.setattr(data_processor_module, "broadcast_object", broadcast_mock)
+
+    DataProcessor(
+        input_dir=str(tmpdir),
+        output_dir=output_dir,
+        num_workers=1,
+        verbose=False,
+        broadcast_paths=broadcast_paths,
+    )
+
+    if expect_broadcast:
+        assert broadcast_mock.call_count == 2
+        assert broadcast_mock.call_args_list[0].args[0] == "input_dir"
+        assert broadcast_mock.call_args_list[1].args[0] == "output_dir"
+    else:
+        broadcast_mock.assert_not_called()
+
+
+def test_data_processor_broadcast_paths_default_false(tmpdir, monkeypatch):
+    broadcast_mock = mock.MagicMock(side_effect=lambda key, obj, rank: obj)
+    monkeypatch.setattr(data_processor_module, "broadcast_object", broadcast_mock)
+
+    processor = DataProcessor(input_dir=str(tmpdir), output_dir=str(tmpdir / "out"), num_workers=1, verbose=False)
+
+    assert processor.broadcast_paths is False
+    broadcast_mock.assert_not_called()
+
+
+def test_optimize_broadcast_paths_auto_on_for_time_template(tmpdir, monkeypatch):
+    """optimize detects `{%strftime}` on the unresolved path before `_resolve_dir`."""
+    captured: dict[str, Any] = {}
+
+    class CaptureDataProcessor(DataProcessor):
+        def __init__(self, *args, **kwargs):
+            captured["broadcast_paths"] = kwargs.get("broadcast_paths")
+            super().__init__(*args, **kwargs)
+
+        def run(self, data_recipe):
+            return None
+
+    monkeypatch.setattr(functions, "DataProcessor", CaptureDataProcessor)
+    monkeypatch.setattr(functions, "_assert_dir_has_index_file", mock.MagicMock())
+
+    optimize(
+        fn=lambda x: x,
+        inputs=[1, 2, 3],
+        output_dir=str(tmpdir / "out_{%Y-%m-%d}"),
+        chunk_size=2,
+        num_workers=1,
+        verbose=False,
+    )
+
+    assert captured["broadcast_paths"] is True
+
+
+def test_optimize_broadcast_paths_default_off(tmpdir, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class CaptureDataProcessor(DataProcessor):
+        def __init__(self, *args, **kwargs):
+            captured["broadcast_paths"] = kwargs.get("broadcast_paths")
+            super().__init__(*args, **kwargs)
+
+        def run(self, data_recipe):
+            return None
+
+    monkeypatch.setattr(functions, "DataProcessor", CaptureDataProcessor)
+    monkeypatch.setattr(functions, "_assert_dir_has_index_file", mock.MagicMock())
+
+    optimize(
+        fn=lambda x: x,
+        inputs=[1, 2, 3],
+        output_dir=str(tmpdir / "out"),
+        chunk_size=2,
+        num_workers=1,
+        verbose=False,
+    )
+
+    assert captured["broadcast_paths"] is False
+
+
+def test_optimize_broadcast_paths_explicit_true(tmpdir, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class CaptureDataProcessor(DataProcessor):
+        def __init__(self, *args, **kwargs):
+            captured["broadcast_paths"] = kwargs.get("broadcast_paths")
+            super().__init__(*args, **kwargs)
+
+        def run(self, data_recipe):
+            return None
+
+    monkeypatch.setattr(functions, "DataProcessor", CaptureDataProcessor)
+    monkeypatch.setattr(functions, "_assert_dir_has_index_file", mock.MagicMock())
+
+    optimize(
+        fn=lambda x: x,
+        inputs=[1, 2, 3],
+        output_dir=str(tmpdir / "out"),
+        chunk_size=2,
+        num_workers=1,
+        verbose=False,
+        broadcast_paths=True,
+    )
+
+    assert captured["broadcast_paths"] is True
