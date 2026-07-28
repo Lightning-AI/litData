@@ -327,7 +327,12 @@ def run_one(
     wd.beat(f"{label}:r{repeat} warm({warm_batches})")
     t0 = time.perf_counter()
     for i in range(warm_batches):
-        next(it)
+        try:
+            next(it)
+        except StopIteration:
+            # High ips × min_seconds can exceed one epoch (50k/64 ≈ 782 batches).
+            it = iter(loader)
+            next(it)
         wd.beat(f"{label}:r{repeat} warm {i + 1}/{warm_batches}")
     warm_s = time.perf_counter() - t0
 
@@ -337,7 +342,11 @@ def run_one(
     wd.beat(f"{label}:r{repeat} timed")
     t0 = time.perf_counter()
     while True:
-        batch = next(it)
+        try:
+            batch = next(it)
+        except StopIteration:
+            it = iter(loader)
+            batch = next(it)
         samples += len(batch)
         timed_batches += 1
         wd.beat(f"{label}:r{repeat} batch {timed_batches}")
