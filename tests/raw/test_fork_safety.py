@@ -103,6 +103,7 @@ def test_os_fork_clears_runner_and_lock(tmp_path: Path) -> None:
         cache_dir=str(tmp_path / "cache"),
         cache_files=True,
         hedge_delay=0,
+        max_prefetch=0,
     )
     parent_runner = _get_loop_runner()
     assert parent_runner.is_alive()
@@ -290,7 +291,13 @@ def test_prefetch_failure_retries_on_demand(tmp_path: Path, caplog: pytest.LogCa
 def test_getitem_from_running_event_loop(tmp_path: Path) -> None:
     """``__getitem__`` works when the caller already has a running loop (notebook path)."""
     (tmp_path / "a.bin").write_bytes(b"notebook")
-    ds = StreamingRawDataset(str(tmp_path), cache_dir=str(tmp_path / "cache"), cache_files=False, hedge_delay=0)
+    ds = StreamingRawDataset(
+        str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=False,
+        hedge_delay=0,
+        max_prefetch=0,
+    )
 
     async def from_running_loop() -> bytes:
         # Nested: running loop + dataset sync API.
@@ -960,7 +967,12 @@ def test_largest_first_preserves_result_order(tmp_path: Path) -> None:
 def test_duplicate_batch_indices_fanout(tmp_path: Path) -> None:
     (tmp_path / "a.bin").write_bytes(b"same")
     (tmp_path / "b.bin").write_bytes(b"other")
-    ds = StreamingRawDataset(str(tmp_path), cache_dir=str(tmp_path / "cache"), hedge_delay=0)
+    ds = StreamingRawDataset(
+        str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        hedge_delay=0,
+        max_prefetch=0,
+    )
     ds.items = sorted(ds.items, key=lambda m: m.path)
     calls = {"n": 0}
     real = ds.cache_manager.download_file_async

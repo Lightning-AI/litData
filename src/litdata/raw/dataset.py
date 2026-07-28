@@ -1103,7 +1103,7 @@ class StreamingRawDataset(Dataset):
         recompute_index: bool = False,
         transform: Callable[[Any], Any] | None = None,
         max_concurrent_downloads: int = 64,
-        max_prefetch: int = 0,
+        max_prefetch: int = 16,
         prefetch_cache_size: int | None = None,
         item_type: Literal["bytes", "path"] = "bytes",
         hedge_delay: float = 0.0,
@@ -1127,8 +1127,8 @@ class StreamingRawDataset(Dataset):
                 when ``item_type="bytes"``, or ``str`` / ``list[str]`` paths when ``item_type="path"``.
                 Prefer C-level / GIL-releasing transforms, or decode in ``collate_fn``.
             max_concurrent_downloads: Max in-flight downloads per worker (default: 64).
-            max_prefetch: Best-effort sequential look-ahead after each batch (default: 0 = off).
-                Recommend ``2 * batch_size`` when access is mostly sequential.
+            max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
+                roughly ``2×`` a typical batch). Pass ``0`` to disable.
             prefetch_cache_size: LRU entry cap for prefetched items. Defaults to
                 ``max(max_prefetch * 2, max_prefetch)`` when prefetch is enabled.
             item_type: ``"bytes"`` (default) buffers each object in RAM; ``"path"`` downloads to

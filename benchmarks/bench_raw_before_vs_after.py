@@ -11,7 +11,8 @@ Run twice with different PYTHONPATH / --side, then merge:
   python benchmarks/bench_raw_before_vs_after.py --merge
 
 Defaults aim for trustworthy windows: >=300 batches (or use --min-seconds),
-and warm ``num_workers * prefetch_factor`` batches before timing starts.
+and warm ``max(1, num_workers * prefetch_factor)`` batches before timing starts.
+After measures prefetch in ``[0, 16, 32]`` (publish ≥16; p0 kept in JSON).
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ DEFAULT_MIN_SECONDS = 10.0
 DEFAULT_PREFETCH_FACTOR = 2
 WORKERS = [0, 1, 2, 4, 8, 16, 24, 32]
 TRUST_WORKERS = [0, 2, 4, 8, 16]
+AFTER_PREFETCH = [0, 16, 32]
 TIMEOUT = 600.0
 OLD_FUSE = 75.2
 
@@ -231,8 +233,8 @@ def run_one(
     loader = DataLoader(ds, **kwargs)
     it = iter(loader)
 
-    # Drain pipeline buffer before timing: 1 warm + workers×prefetch_factor.
-    warm_batches = 1 + (num_workers * prefetch_factor if num_workers > 0 else 0)
+    # Drain pipeline buffer before timing (≥ workers×prefetch_factor).
+    warm_batches = max(1, num_workers * prefetch_factor if num_workers > 0 else 1)
     wd.beat(f"{label}: warm({warm_batches})")
     t0 = time.perf_counter()
     for i in range(warm_batches):
@@ -279,7 +281,41 @@ def run_one(
     if jsonl is not None:
         append_jsonl(jsonl, result)
     del it, loader, ds
+    _reap_zombie_children()
     return result
+
+
+def _reap_zombie_children() -> None:
+    """Best-effort reap of leftover DataLoader worker zombies."""
+    try:
+        import multiprocessing as mp
+
+        for p in mp.active_children():
+            try:
+                p.join(timeout=2.0)
+            except Exception:
+                pass
+            if p.is_alive():
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                try:
+                    p.join(timeout=1.0)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # Non-blocking waitpid sweep for any unreaped children.
+    try:
+        while True:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid <= 0:
+                break
+    except ChildProcessError:
+        pass
+    except Exception:
+        pass
 
 
 def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tuple]:
@@ -299,7 +335,7 @@ def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tup
         return out
     if side == "before":
         return [(w, 0, None, None) for w in workers]
-    return [(w, pf, 0.0, None) for w in workers for pf in (0, 16)]
+    return [(w, pf, 0.0, None) for w in workers for pf in AFTER_PREFETCH]
 
 
 def partial_path(side: str) -> Path:
@@ -347,7 +383,7 @@ def run_side(
     log(f"capabilities: {json.dumps(caps)}")
     log(
         f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches>={batches} "
-        f"min_seconds>={min_seconds} warm=1+w*{prefetch_factor} cpus={ncpu} "
+        f"min_seconds>={min_seconds} warm=max(1,w*{prefetch_factor}) cpus={ncpu} "
         f"configs={len(cfgs)} sha={sha or '?'}"
     )
     log(f"PYTHONPATH[0]={sys.path[0]!r}")
@@ -406,13 +442,13 @@ def run_side(
                 "batches": batches,
                 "min_seconds": min_seconds,
                 "prefetch_factor": prefetch_factor,
-                "warm_batches_formula": "1 + num_workers * prefetch_factor",
+                "warm_batches_formula": "max(1, num_workers * prefetch_factor)",
                 "multiprocessing_context": "spawn",
                 "persistent_workers": True,
                 "cpus": ncpu,
                 "fuse_baseline_samples_per_s": OLD_FUSE,
                 "workers": workers,
-                "prefetch": [0] if side == "before" else [0, 16],
+                "prefetch": [0] if side == "before" else list(AFTER_PREFETCH),
                 "range_parallel_threshold": 0 if side == "after" else None,
                 "max_concurrent_downloads": 64 if side == "after" else None,
                 "hedge_delay": 0.0 if side == "after" else None,
@@ -449,39 +485,35 @@ def merge() -> None:
 
     workers = sorted({r["workers"] for r in before["results"]} | {r["workers"] for r in after["results"]})
     before_by_w = {r["workers"]: r for r in before["results"] if r["prefetch"] == 0}
-    after_p0 = {r["workers"]: r for r in after["results"] if r["prefetch"] == 0}
-    after_p16 = {r["workers"]: r for r in after["results"] if r["prefetch"] == 16}
+    after_by_pf: dict[int, dict[int, dict]] = {}
+    for r in after["results"]:
+        after_by_pf.setdefault(r["prefetch"], {})[r["workers"]] = r
+    prefetch_levels = sorted(after_by_pf)
 
     rows = []
     cells = []
     for w in workers:
         b = before_by_w.get(w)
-        a0 = after_p0.get(w)
-        a16 = after_p16.get(w)
-        row = {
-            "workers": w,
-            "before_ips": b["ips"] if b else None,
-            "after_prefetch0_ips": a0["ips"] if a0 else None,
-            "after_prefetch16_ips": a16["ips"] if a16 else None,
-        }
-        if b and a0:
-            row["speedup_prefetch0"] = a0["ips"] / b["ips"] if b["ips"] else None
-            row["delta_pct_prefetch0"] = ((a0["ips"] - b["ips"]) / b["ips"]) * 100.0
-        if b and a16:
-            row["speedup_prefetch16"] = a16["ips"] / b["ips"] if b["ips"] else None
-            row["delta_pct_prefetch16"] = ((a16["ips"] - b["ips"]) / b["ips"]) * 100.0
+        row: dict = {"workers": w, "before_ips": b["ips"] if b else None}
         after_best = None
-        for cand in (a0, a16):
-            if cand and (after_best is None or cand["ips"] > after_best["ips"]):
-                after_best = cand
+        for pf in prefetch_levels:
+            a = after_by_pf.get(pf, {}).get(w)
+            row[f"after_prefetch{pf}_ips"] = a["ips"] if a else None
+            if b and a:
+                row[f"speedup_prefetch{pf}"] = a["ips"] / b["ips"] if b["ips"] else None
+                row[f"delta_pct_prefetch{pf}"] = ((a["ips"] - b["ips"]) / b["ips"]) * 100.0
+            if a and (after_best is None or a["ips"] > after_best["ips"]):
+                after_best = a
         if b and after_best:
             row["after_best_ips"] = after_best["ips"]
             row["after_best_prefetch"] = after_best["prefetch"]
             row["speedup_best"] = after_best["ips"] / b["ips"] if b["ips"] else None
+            row["delta_pct_best"] = ((after_best["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None
         rows.append(row)
         if not b:
             continue
-        for pf, a in ((0, a0), (16, a16)):
+        for pf in prefetch_levels:
+            a = after_by_pf.get(pf, {}).get(w)
             if a is None:
                 continue  # omit missing/crashed
             cells.append(
@@ -516,13 +548,16 @@ def merge() -> None:
             "note": (
                 "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / "
                 "LoopRunner; FUSE mount path on main selects LocalDownloader and is broken "
-                "for async reads); after = feature/raw-streaming-perf defaults "
-                "(range_parallel_threshold=0, hedge_delay=0, mount→s3://)"
+                "for async reads); after = feature/raw-streaming-perf "
+                "(default max_prefetch=16, range_parallel_threshold=0, hedge_delay=0, mount→s3://). "
+                "Publish table emphasizes after prefetch≥16; prefetch=0 kept in JSON for honesty."
             ),
             "caveat": (
-                "Run-to-run variance can be ~2× on short/high-worker windows. "
-                "Prefer systematic patterns over fine Δ%. High-worker cells need long windows."
+                "Long-window protocol (≥300 batches or ≥10s after warm drain). "
+                "Prefer systematic patterns over fine Δ%."
             ),
+            "default_max_prefetch": 16,
+            "publish_prefetch": [pf for pf in prefetch_levels if pf >= 16],
         },
         "cells": cells,
         "best_after": best_after,
@@ -533,7 +568,28 @@ def merge() -> None:
     OUT.write_text(json.dumps(payload, indent=2) + "\n")
     log(f"Wrote {OUT}")
 
+    publish = [c for c in cells if c["prefetch"] >= 16]
     print()
+    print("Published matrix (prefetch ≥ 16):")
+    print(f"{'w':>4}  {'before':>10}  {'after@16':>10}  {'after@32':>10}  {'Δ%@16':>8}  {'best Δ%':>8}")
+    print("-" * 68)
+    for w in workers:
+        b = before_by_w.get(w)
+        a16 = after_by_pf.get(16, {}).get(w)
+        a32 = after_by_pf.get(32, {}).get(w)
+        if not b:
+            continue
+        ips16 = a16["ips"] if a16 else float("nan")
+        ips32 = a32["ips"] if a32 else float("nan")
+        d16 = ((ips16 - b["ips"]) / b["ips"]) * 100.0 if a16 and b["ips"] else float("nan")
+        best = max((x for x in (a16, a32) if x), key=lambda x: x["ips"], default=None)
+        db = ((best["ips"] - b["ips"]) / b["ips"]) * 100.0 if best and b["ips"] else float("nan")
+        print(
+            f"{w:>4}  {b['ips']:>10.1f}  {ips16:>10.1f}  {ips32:>10.1f}  "
+            f"{d16:>+7.1f}%  {db:>+7.1f}%"
+        )
+    print()
+    print("Full cells (includes prefetch=0):")
     print(f"{'w':>4}  {'pf':>4}  {'before':>10}  {'after':>10}  {'Δ%':>8}  {'×':>6}  {'after_s':>8}")
     print("-" * 62)
     for c in cells:
@@ -546,9 +602,16 @@ def merge() -> None:
     print()
     if best_after:
         print(
-            f"Best after (noisy; treat as indicative): w={best_after['workers']} "
+            f"Best after: w={best_after['workers']} "
             f"prefetch={best_after['prefetch']} → {best_after['after_ips']:.1f} samples/s "
             f"(~{best_after['delta_pct']:+.0f}% / {best_after['speedup']:.2f}x vs before)"
+        )
+    if publish:
+        best_pub = max(publish, key=lambda c: c["after_ips"])
+        print(
+            f"Best published (pf≥16): w={best_pub['workers']} "
+            f"prefetch={best_pub['prefetch']} → {best_pub['after_ips']:.1f} samples/s "
+            f"(~{best_pub['delta_pct']:+.0f}% / {best_pub['speedup']:.2f}x vs before)"
         )
 
 

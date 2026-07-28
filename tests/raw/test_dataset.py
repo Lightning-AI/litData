@@ -41,12 +41,21 @@ def test_get_local_path(tmp_path):
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_streaming_raw_dataset_default_max_prefetch(tmp_path):
+    """Default max_prefetch is a positive look-ahead (16)."""
+    (tmp_path / "file1.jpg").write_bytes(b"x")
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    assert dataset.max_prefetch == 16
+    assert dataset.prefetch_cache_size == 32
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem(tmp_path):
     """Test single item access."""
     test_content = b"test image content"
     (tmp_path / "file1.jpg").write_bytes(test_content)
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path))
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
 
     # Patch async download to return test_content
     async def mock_download_file_async(file_path, size=None):
@@ -62,7 +71,7 @@ def test_streaming_raw_dataset_getitem_index_error(tmp_path):
     """Test index error for out of range access."""
     (tmp_path / "file1.jpg").write_text("content1")
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=0)
 
     with pytest.raises(IndexError, match="Index 1 out of range"):
         dataset[1]
@@ -103,7 +112,7 @@ def test_streaming_raw_dataset_getitems(tmp_path):
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=0)
 
     # Mock _download_batch to return test contents
     async def mock_download_batch(indices):
@@ -126,7 +135,7 @@ async def test_download_batch_flat(tmp_path):
     for file_path, content in test_contents.items():
         Path(file_path).write_bytes(content)
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path))
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
 
     async def mock_download_and_process_item(file_path, size=None):
         return test_contents[file_path]
@@ -161,7 +170,7 @@ async def test_download_batch_grouped(tmp_path):
         def setup(self, files):
             return [files[i : i + 2] for i in range(0, len(files), 2)]
 
-    grouped_dataset = GroupedDataset(input_dir=str(tmp_path))
+    grouped_dataset = GroupedDataset(input_dir=str(tmp_path), max_prefetch=0)
 
     async def mock_download_and_process_group(file_paths, sizes=None):
         return [test_contents[fp] for fp in file_paths]
@@ -185,7 +194,7 @@ def test_thread_safety(tmp_path):
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=0)
 
     # Mock _download_batch to return test contents
     async def mock_download_batch(indices):
@@ -209,7 +218,7 @@ def test_streaming_raw_dataset_getitems_type_error(tmp_path):
     """Test type error for invalid indices type."""
     (tmp_path / "file1.jpg").write_text("content1")
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=0)
 
     with pytest.raises(TypeError):
         dataset.__getitems__(0)  # Should be a list
@@ -220,7 +229,7 @@ def test_streaming_raw_dataset_getitems_index_error(tmp_path):
     """Test index error for out of range batch access."""
     (tmp_path / "file1.jpg").write_text("content1")
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=0)
 
     with pytest.raises(IndexError, match="out of range"):
         dataset.__getitems__([0, 1])
@@ -235,7 +244,7 @@ def test_streaming_raw_dataset_transform(tmp_path):
     def transform(x):
         return x.decode() + "_transformed"
 
-    dataset = StreamingRawDataset(input_dir=str(tmp_path), transform=transform)
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), transform=transform, max_prefetch=0)
 
     # Patch async download to return test_content
     async def mock_download_file_async(file_path, size=None):
