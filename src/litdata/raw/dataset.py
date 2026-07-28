@@ -1429,6 +1429,8 @@ class StreamingRawDataset(Dataset):
                         task.cancel()
                 # Cancelling _resolve_index wrappers does not cancel awaited _inflight
                 # download tasks; hung prefetch entries would otherwise poison retries.
+                # Prefetch tasks outside unique_pending survive here and self-heal when
+                # a later batch needs them (one extra budget delay).
                 for idx in unique_pending:
                     inflight = self._inflight.pop(idx, None)
                     if inflight is not None and not inflight.done():
