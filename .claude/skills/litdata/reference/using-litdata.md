@@ -8,16 +8,16 @@ ______________________________________________________________________
 
 ## 1. Choose a workflow
 
-| Goal                                          | API                                                     |
-| --------------------------------------------- | ------------------------------------------------------- |
-| Stream files as-is (no preprocess)            | **`StreamingRawDataset`** + torch `DataLoader`          |
-| Fastest training I/O                          | `optimize` → `StreamingDataset` + `StreamingDataLoader` |
+| Goal                                             | API                                                                                                             |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Stream files as-is (no preprocess)               | **`StreamingRawDataset`** + torch `DataLoader`                                                                  |
+| Fastest training I/O                             | `optimize` → `StreamingDataset` + `StreamingDataLoader`                                                         |
 | Strong source ordering / need file-level shuffle | Prefer **`StreamingRawDataset`** + `DataLoader(shuffle=True)`, **or** shuffle/repartition **before** `optimize` |
-| Parallel side effects (resize, scrape, embed) | `map`                                                   |
-| Weighted mix                                  | `CombinedStreamingDataset`                              |
-| One sample from each dataset / cycle length   | `ParallelStreamingDataset`                              |
-| Existing MDS / Parquet / HF parquet           | `StreamingDataset` (+ `ParquetLoader` when needed)      |
-| LLM token windows                             | `TokensLoader` on optimize **and** stream               |
+| Parallel side effects (resize, scrape, embed)    | `map`                                                                                                           |
+| Weighted mix                                     | `CombinedStreamingDataset`                                                                                      |
+| One sample from each dataset / cycle length      | `ParallelStreamingDataset`                                                                                      |
+| Existing MDS / Parquet / HF parquet              | `StreamingDataset` (+ `ParquetLoader` when needed)                                                              |
+| LLM token windows                                | `TokensLoader` on optimize **and** stream                                                                       |
 
 **Rule:** `StreamingRawDataset` = zero prep, native files (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
 
