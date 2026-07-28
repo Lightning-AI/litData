@@ -8,10 +8,10 @@ ______________________________________________________________________
 
 ## 0. Two different “downloaders” — do not conflate
 
-| Path | What agents mean by “downloader” | Module / symbols | Transport |
-| ---- | -------------------------------- | ---------------- | --------- |
-| **Write / processing** (`optimize`, `map`) | Child **processes** per worker that prefetch input files into a data cache | `processing/data_processor.py`: `_download_data_target`, `_start_downloaders` | **`FsProvider`** (`streaming/fs_provider.py`) for `s3`/`gs`/`r2`; local `shutil.copyfile` otherwise |
-| **Read / streaming** (`StreamingDataset`, `StreamingRawDataset`) | **`Downloader` ABC** subclasses selected by URL prefix | `streaming/downloader.py`: `Downloader`, `S3Downloader`, `GCPDownloader`, `R2Downloader`, `AzureDownloader`, `HFDownloader`, `LocalDownloader`, `get_downloader`, `_DOWNLOADERS` | Cloud SDKs / obstore / boto3 per subclass |
+| Path                                                             | What agents mean by “downloader”                                           | Module / symbols                                                                                                                                                                 | Transport                                                                                           |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Write / processing** (`optimize`, `map`)                       | Child **processes** per worker that prefetch input files into a data cache | `processing/data_processor.py`: `_download_data_target`, `_start_downloaders`                                                                                                    | **`FsProvider`** (`streaming/fs_provider.py`) for `s3`/`gs`/`r2`; local `shutil.copyfile` otherwise |
+| **Read / streaming** (`StreamingDataset`, `StreamingRawDataset`) | **`Downloader` ABC** subclasses selected by URL prefix                     | `streaming/downloader.py`: `Downloader`, `S3Downloader`, `GCPDownloader`, `R2Downloader`, `AzureDownloader`, `HFDownloader`, `LocalDownloader`, `get_downloader`, `_DOWNLOADERS` | Cloud SDKs / obstore / boto3 per subclass                                                           |
 
 There are **no** classes named `Uploader` or `Remover`. Processing upload/remove are process targets `_upload_fn` and `_remove_target` in `data_processor.py`.
 
@@ -57,21 +57,21 @@ DataChunkRecipe._done → merge per-worker indexes → upload index.json
 
 Public knobs (`processing/functions.py` → `DataProcessor`):
 
-| Knob | Default | Meaning |
-| ---- | ------- | ------- |
-| `num_downloaders` | `2` (`DataProcessor`: `num_downloaders or 2`) | Downloader processes **per worker** |
-| `num_uploaders` | `1` | Uploader processes **per worker** |
-| `delete_cached_files` | `True` on `DataProcessor` | Passed to worker as `remove`; starts remover. **Not** exposed on public `optimize()` / `map()` — stays default True unless you construct `DataProcessor` yourself |
-| `input_dir` | Auto via `_get_input_dir(inputs)` or explicit | Resolved `Dir`; drives download + path rewrite |
-| `output_dir` | Required | Resolved `Dir`; drives upload |
-| `storage_options` | `{}` | Merged with `data_connection_id` via `construct_storage_options` (`processing/utilities.py`) |
+| Knob                  | Default                                       | Meaning                                                                                                                                                           |
+| --------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `num_downloaders`     | `2` (`DataProcessor`: `num_downloaders or 2`) | Downloader processes **per worker**                                                                                                                               |
+| `num_uploaders`       | `1`                                           | Uploader processes **per worker**                                                                                                                                 |
+| `delete_cached_files` | `True` on `DataProcessor`                     | Passed to worker as `remove`; starts remover. **Not** exposed on public `optimize()` / `map()` — stays default True unless you construct `DataProcessor` yourself |
+| `input_dir`           | Auto via `_get_input_dir(inputs)` or explicit | Resolved `Dir`; drives download + path rewrite                                                                                                                    |
+| `output_dir`          | Required                                      | Resolved `Dir`; drives upload                                                                                                                                     |
+| `storage_options`     | `{}`                                          | Merged with `data_connection_id` via `construct_storage_options` (`processing/utilities.py`)                                                                      |
 
 Cache roots (`data_processor.py`):
 
-| Helper | Env override | Default |
-| ------ | ------------ | ------- |
-| `_get_cache_dir` (chunks) | `DATA_OPTIMIZER_CACHE_FOLDER` | Studio: `/cache/chunks`; else `{tempdir}/chunks` |
-| `_get_cache_data_dir` (downloaded inputs) | `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | Studio: `/cache/data`; else `{tempdir}/data` |
+| Helper                                    | Env override                       | Default                                          |
+| ----------------------------------------- | ---------------------------------- | ------------------------------------------------ |
+| `_get_cache_dir` (chunks)                 | `DATA_OPTIMIZER_CACHE_FOLDER`      | Studio: `/cache/chunks`; else `{tempdir}/chunks` |
+| `_get_cache_data_dir` (downloaded inputs) | `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | Studio: `/cache/data`; else `{tempdir}/data`     |
 
 `DataProcessor._cleanup_cache` **rmtrees both** at the start of each `run()` so prior runs cannot poison the job.
 
@@ -91,26 +91,26 @@ class Dir:
     data_connection_id: str | None  # temp creds for some Studio connections
 ```
 
-| Situation | `path` | `url` | Processing download behavior |
-| --------- | ------ | ----- | ---------------------------- |
-| Plain local dir | abs path | `None` | No cloud download; may `shutil.copyfile` into data cache if path is outside `this_studio` |
-| Direct `s3://` / `gs://` / `r2://` | `None` | cloud URL | **Downloader procs skip** (`no_downloaders` when `input_dir.path is None`) — see §3.1 caveat |
-| Studio FUSE: `/teamspace/s3_connections/…`, `s3_folders`, `gcs_*`, `lightning_storage`, `datasets`, other studio | FUSE path | backing `s3://` / `gs://` / `r2://` | Downloaders rewrite FUSE→URL and `FsProvider.download_file` |
-| `/teamspace/studios/this_studio/…` | workspace path | `None` | Local; LitData does not invent a bucket URL |
+| Situation                                                                                                        | `path`         | `url`                               | Processing download behavior                                                                 |
+| ---------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| Plain local dir                                                                                                  | abs path       | `None`                              | No cloud download; may `shutil.copyfile` into data cache if path is outside `this_studio`    |
+| Direct `s3://` / `gs://` / `r2://`                                                                               | `None`         | cloud URL                           | **Downloader procs skip** (`no_downloaders` when `input_dir.path is None`) — see §3.1 caveat |
+| Studio FUSE: `/teamspace/s3_connections/…`, `s3_folders`, `gcs_*`, `lightning_storage`, `datasets`, other studio | FUSE path      | backing `s3://` / `gs://` / `r2://` | Downloaders rewrite FUSE→URL and `FsProvider.download_file`                                  |
+| `/teamspace/studios/this_studio/…`                                                                               | workspace path | `None`                              | Local; LitData does not invent a bucket URL                                                  |
 
 **Agent rule (same as raw streaming):** pass `/teamspace/s3_connections/…` or `s3://…` into LitData. Do **not** train or bulk-copy through FUSE with bare `open()` / `cp`. Resolver + FsProvider talk to the object store directly.
 
 ### 2.2 Studio mount → URL (resolver functions)
 
-| Mount prefix | Resolver | Typical `url` |
-| ------------ | -------- | ------------- |
-| `/teamspace/s3_connections/<name>/…` | `_resolve_s3_connections` | customer S3 (`data_connection.aws.source` + suffix) |
-| `/teamspace/s3_folders/<name>/…` | `_resolve_s3_folders` | S3 folder connection source + suffix |
-| `/teamspace/gcs_connections/<name>/…` | `_resolve_gcs_connections` | `gs://…` |
-| `/teamspace/gcs_folders/<name>/…` | `_resolve_gcs_folders` | `gs://…` |
-| `/teamspace/lightning_storage/<name>/…` | `_resolve_lightning_storage` | `r2://…` + **always** `data_connection_id` |
-| `/teamspace/datasets/…` | `_resolve_datasets` | cluster datasets S3 |
-| `/teamspace/studios/<other>/…` | `_resolve_studio` | studio content `s3://` or `gs://` |
+| Mount prefix                            | Resolver                     | Typical `url`                                       |
+| --------------------------------------- | ---------------------------- | --------------------------------------------------- |
+| `/teamspace/s3_connections/<name>/…`    | `_resolve_s3_connections`    | customer S3 (`data_connection.aws.source` + suffix) |
+| `/teamspace/s3_folders/<name>/…`        | `_resolve_s3_folders`        | S3 folder connection source + suffix                |
+| `/teamspace/gcs_connections/<name>/…`   | `_resolve_gcs_connections`   | `gs://…`                                            |
+| `/teamspace/gcs_folders/<name>/…`       | `_resolve_gcs_folders`       | `gs://…`                                            |
+| `/teamspace/lightning_storage/<name>/…` | `_resolve_lightning_storage` | `r2://…` + **always** `data_connection_id`          |
+| `/teamspace/datasets/…`                 | `_resolve_datasets`          | cluster datasets S3                                 |
+| `/teamspace/studios/<other>/…`          | `_resolve_studio`            | studio content `s3://` or `gs://`                   |
 
 Connection name = path segment `[3]`. Credentials: ambient cloud keys, or temp project-role creds when `data_connection_id` is set (`streaming/client.py`).
 
@@ -162,13 +162,13 @@ For each path in the item:
 
 **Local vs remote summary:**
 
-| Input | Action |
-| ----- | ------ |
-| FUSE connection + missing local file | Resolve to `url`, FsProvider download into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` |
-| Already cached under `cache_data_dir` | No-op, pass through |
-| Real local file outside `this_studio` | Copy into data cache |
-| `this_studio` local | Leave path as-is (no copy into cache for that prefix) |
-| Unsupported scheme | Raise |
+| Input                                 | Action                                                                        |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| FUSE connection + missing local file  | Resolve to `url`, FsProvider download into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` |
+| Already cached under `cache_data_dir` | No-op, pass through                                                           |
+| Real local file outside `this_studio` | Copy into data cache                                                          |
+| `this_studio` local                   | Leave path as-is (no copy into cache for that prefix)                         |
+| Unsupported scheme                    | Raise                                                                         |
 
 ### 3.4 Interaction with user `fn`
 
@@ -190,10 +190,10 @@ Default `num_uploaders or 1` per worker.
 
 ### 4.2 Who enqueues uploads
 
-| Recipe | What gets uploaded |
-| ------ | ------------------ |
-| **`optimize` / `DataChunkRecipe`** | Each closed chunk filepath from `Cache._add_item` / `cache.done()`; optional checkpoint JSON under `.checkpoints` when `use_checkpoint` |
-| **`map` / `MapRecipe`** | Every file under a per-item `tempfile.mkdtemp()` after `prepare_item` (user writes into that dir); uploaded as `(tmpdir, filepath)` so relative layout is preserved |
+| Recipe                             | What gets uploaded                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`optimize` / `DataChunkRecipe`** | Each closed chunk filepath from `Cache._add_item` / `cache.done()`; optional checkpoint JSON under `.checkpoints` when `use_checkpoint`                             |
+| **`map` / `MapRecipe`**            | Every file under a per-item `tempfile.mkdtemp()` after `prepare_item` (user writes into that dir); uploaded as `(tmpdir, filepath)` so relative layout is preserved |
 
 `_try_upload` no-ops if output_dir has neither path nor url, or data is empty/missing on disk. Round-robins across `to_upload_queues`.
 
@@ -257,19 +257,19 @@ ______________________________________________________________________
 
 Used when **reading** optimized chunks or raw files — not the optimize worker pool.
 
-| Piece | Role |
-| ----- | ---- |
-| `get_downloader(remote_dir, cache_dir, chunks, storage_options, session_options)` | Prefix match on `_DOWNLOADERS` |
-| `Downloader.download_file` / `download_bytes` / `adownload_file` / `adownload_fileobj` | Sync + async APIs |
-| Atomic publish | `_temp_download_path` + `_atomic_replace` (tmp includes pid) |
-| `register_downloader` / `unregister_downloader` | Extension points |
-| `StreamingRawDataset.downloader` | Uses same registry; prefer cloud URL / connection path over FUSE ([using-litdata.md](using-litdata.md) §10) |
-| `async_prefetch.py` | Prefers `adownload_file` when overridden |
+| Piece                                                                                  | Role                                                                                                        |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `get_downloader(remote_dir, cache_dir, chunks, storage_options, session_options)`      | Prefix match on `_DOWNLOADERS`                                                                              |
+| `Downloader.download_file` / `download_bytes` / `adownload_file` / `adownload_fileobj` | Sync + async APIs                                                                                           |
+| Atomic publish                                                                         | `_temp_download_path` + `_atomic_replace` (tmp includes pid)                                                |
+| `register_downloader` / `unregister_downloader`                                        | Extension points                                                                                            |
+| `StreamingRawDataset.downloader`                                                       | Uses same registry; prefer cloud URL / connection path over FUSE ([using-litdata.md](using-litdata.md) §10) |
+| `async_prefetch.py`                                                                    | Prefers `adownload_file` when overridden                                                                    |
 
 **FsProvider vs Downloader** (also [storage-format.md](storage-format.md) §5):
 
 | | FsProvider | Downloader |
-| | ---------- | ---------- |
+| | \---------- | ---------- |
 | Optimize input download / chunk upload / index / merge / empty checks | ✅ | ❌ |
 | StreamingDataset chunk prefetch / StreamingRawDataset | ❌ | ✅ |
 | Schemes | s3, gs, r2 | + azure, hf, local |
@@ -278,29 +278,29 @@ ______________________________________________________________________
 
 ## 7. Local vs remote — decision table for agents
 
-| Goal | Prefer | What LitData does |
-| ---- | ------ | ----------------- |
-| Optimize files on Studio S3 connection | `input_dir` / paths under `/teamspace/s3_connections/…` | Resolve → downloaders + FsProvider GET into `/cache/data` |
-| Optimize from laptop with AWS creds | `s3://bucket/…` in inputs; may need design that doesn’t rely on `path`-based downloaders — verify whether your inputs are local copies or you read via SDK inside `fn` | Pure `s3://` `Dir` has `path=None` → **no** `_download_data_target` pool |
-| Write durable chunks | `output_dir=/teamspace/s3_connections/…/vN` or `s3://…` | Uploaders + `_upload_index` via FsProvider |
-| Scratch only | local / `this_studio` (small) | Local copy uploaders; multi-node remaps `this_studio` optimize outs to job artifacts ([multi-node.md](multi-node.md)) |
-| Raw training I/O | `StreamingRawDataset("s3://…")` or connection path | `Downloader` async; **not** processing downloaders |
+| Goal                                   | Prefer                                                                                                                                                                 | What LitData does                                                                                                     |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Optimize files on Studio S3 connection | `input_dir` / paths under `/teamspace/s3_connections/…`                                                                                                                | Resolve → downloaders + FsProvider GET into `/cache/data`                                                             |
+| Optimize from laptop with AWS creds    | `s3://bucket/…` in inputs; may need design that doesn’t rely on `path`-based downloaders — verify whether your inputs are local copies or you read via SDK inside `fn` | Pure `s3://` `Dir` has `path=None` → **no** `_download_data_target` pool                                              |
+| Write durable chunks                   | `output_dir=/teamspace/s3_connections/…/vN` or `s3://…`                                                                                                                | Uploaders + `_upload_index` via FsProvider                                                                            |
+| Scratch only                           | local / `this_studio` (small)                                                                                                                                          | Local copy uploaders; multi-node remaps `this_studio` optimize outs to job artifacts ([multi-node.md](multi-node.md)) |
+| Raw training I/O                       | `StreamingRawDataset("s3://…")` or connection path                                                                                                                     | `Downloader` async; **not** processing downloaders                                                                    |
 
 ______________________________________________________________________
 
 ## 8. Error modes & agent checklists
 
-| Symptom | Likely cause | What to check |
-| ------- | ------------ | ------------- |
-| `ValueError: The provided … isn't supported` in downloader/uploader | Scheme outside `_SUPPORTED_PROVIDERS` for processing | Use s3/gs/r2 for optimize I/O; azure/hf are streaming-Downloader-only |
-| Auth / 403 on download or upload | Missing keys; RO bucket; connection without write; missing `data_connection_id` for R2 | `storage_options`, Studio connection attach, IAM |
-| Hang with remote inputs | Disk wait (`_wait_for_disk_usage_higher_than_threshold` 25 GB); remover stuck; uploader exception only `print`ed | Free space on `/`; `num_workers=1`; watch uploader `print(e)` |
-| `The provided item … didn't contain any filepaths` | `_collect_paths` / `_is_path` failed | Pass real paths under `input_dir.path`; set `input_dir` explicitly |
-| Chunks left / RuntimeError in `_done` | Uploader failed or `delete_cached_files` + local output mismatch | Inspect cache dirs; uploader errors |
-| Index never appears (multi-node) | Last node waiting on peer `{rank}-index.json` | [multi-node.md](multi-node.md) peer wait |
-| FUSE “works” in `ls` but training/optimize is slow or crashes | Reading mount directly | Pass path into LitData; confirm `Dir.url` is set |
-| Partial / corrupt local file | Crash mid-download (FsProvider path is not always atomic the way `Downloader._atomic_replace` is) | Wipe `DATA_OPTIMIZER_DATA_CACHE_FOLDER` / re-run; prefer connection+resolver path |
-| `cloudspaces` in output URL | Rejected in `optimize`/`map` | Use connections / datasets, not studio content URLs |
+| Symptom                                                             | Likely cause                                                                                                     | What to check                                                                     |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `ValueError: The provided … isn't supported` in downloader/uploader | Scheme outside `_SUPPORTED_PROVIDERS` for processing                                                             | Use s3/gs/r2 for optimize I/O; azure/hf are streaming-Downloader-only             |
+| Auth / 403 on download or upload                                    | Missing keys; RO bucket; connection without write; missing `data_connection_id` for R2                           | `storage_options`, Studio connection attach, IAM                                  |
+| Hang with remote inputs                                             | Disk wait (`_wait_for_disk_usage_higher_than_threshold` 25 GB); remover stuck; uploader exception only `print`ed | Free space on `/`; `num_workers=1`; watch uploader `print(e)`                     |
+| `The provided item … didn't contain any filepaths`                  | `_collect_paths` / `_is_path` failed                                                                             | Pass real paths under `input_dir.path`; set `input_dir` explicitly                |
+| Chunks left / RuntimeError in `_done`                               | Uploader failed or `delete_cached_files` + local output mismatch                                                 | Inspect cache dirs; uploader errors                                               |
+| Index never appears (multi-node)                                    | Last node waiting on peer `{rank}-index.json`                                                                    | [multi-node.md](multi-node.md) peer wait                                          |
+| FUSE “works” in `ls` but training/optimize is slow or crashes       | Reading mount directly                                                                                           | Pass path into LitData; confirm `Dir.url` is set                                  |
+| Partial / corrupt local file                                        | Crash mid-download (FsProvider path is not always atomic the way `Downloader._atomic_replace` is)                | Wipe `DATA_OPTIMIZER_DATA_CACHE_FOLDER` / re-run; prefer connection+resolver path |
+| `cloudspaces` in output URL                                         | Rejected in `optimize`/`map`                                                                                     | Use connections / datasets, not studio content URLs                               |
 
 **Debug tip:** `num_workers=1`, `fast_dev_run=True`, and inspect `/cache/data` + `/cache/chunks` (or temp equivalents). Worker exceptions land in `error_queue` → main `RuntimeError` + `terminate()` siblings.
 

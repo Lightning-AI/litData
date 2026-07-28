@@ -8,13 +8,13 @@ ______________________________________________________________________
 
 ## 0. What “multi-node” means here (and what it is not)
 
-| Mechanism | Used for | Symbols / env |
-| --------- | -------- | ------------- |
-| **Lightning Studio job** (`num_nodes=N`) | Distributed **optimize/map** | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
-| **`DATA_OPTIMIZER_*` env** | Rank / world inside each job instance | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK` |
-| **`broadcast_object`** | Align `input_dir` / `output_dir` across instances when Lightning app URL present | `utilities/broadcast.py` |
-| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched | `utilities/env.py` |
-| **SLURM** | **Not** a first-class optimize launcher in this repo | Do not document SLURM as supported for `num_nodes` |
+| Mechanism                                                       | Used for                                                                                     | Symbols / env                                                                |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Lightning Studio job** (`num_nodes=N`)                        | Distributed **optimize/map**                                                                 | `functions.py` gate → `resolver._execute` → platform sets `DATA_OPTIMIZER_*` |
+| **`DATA_OPTIMIZER_*` env**                                      | Rank / world inside each job instance                                                        | `_get_num_nodes`, `_get_node_rank`, worker `DATA_OPTIMIZER_GLOBAL_RANK`      |
+| **`broadcast_object`**                                          | Align `input_dir` / `output_dir` across instances when Lightning app URL present             | `utilities/broadcast.py`                                                     |
+| **Torch distributed / `WORLD_SIZE` / `GLOBAL_RANK` / `NNODES`** | **Training** stream path (`_DistributedEnv.detect`) — **not** how optimize jobs are launched | `utilities/env.py`                                                           |
+| **SLURM**                                                       | **Not** a first-class optimize launcher in this repo                                         | Do not document SLURM as supported for `num_nodes`                           |
 
 If `num_nodes` / `machine` are set **outside** Studio (`_IS_IN_STUDIO` false) → `ValueError` (“Only https://lightning.ai/ supports multiple nodes…”).
 
@@ -57,26 +57,26 @@ ______________________________________________________________________
 
 ### 2.1 Processing ranks (optimize/map workers)
 
-| Variable | Reader | Role |
-| -------- | ------ | ---- |
-| `DATA_OPTIMIZER_NUM_NODES` | `_get_num_nodes()`; launch gate | World of machines. `>0` means “already inside a distributed job / run DataProcessor” |
-| `DATA_OPTIMIZER_NODE_RANK` | `_get_node_rank()` | This machine’s rank in `[0, num_nodes)` |
-| `DATA_OPTIMIZER_GLOBAL_RANK` | Set in `BaseWorker._set_environ_variables` | `node_rank * num_workers + worker_index` — used for chunk filenames / writer rank |
-| `DATA_OPTIMIZER_NUM_WORKERS` | Set in worker; also `_DistributedEnv._instantiate_in_map_or_optimize` | Local worker count |
-| `DATA_OPTIMIZER_CACHE_FOLDER` | `_get_cache_dir` | Chunk cache root (default Studio `/cache/chunks`) |
-| `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | `_get_cache_data_dir` | Downloaded input cache (default `/cache/data`) |
-| `DATA_OPTIMIZER_TIMEOUT` | Worker `_loop` queue get | Default 300s; shared-queue mode often 200s |
-| `DATA_OPTIMIZER_FAST_DEV_RUN` | `_get_fast_dev_run` | Related to fast_dev_run defaults |
-| `ENABLE_STATUS_REPORT` / `_ENABLE_STATUS` | Progress | Node 0 may write `status.json` with coarse % |
+| Variable                                  | Reader                                                                | Role                                                                                 |
+| ----------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `DATA_OPTIMIZER_NUM_NODES`                | `_get_num_nodes()`; launch gate                                       | World of machines. `>0` means “already inside a distributed job / run DataProcessor” |
+| `DATA_OPTIMIZER_NODE_RANK`                | `_get_node_rank()`                                                    | This machine’s rank in `[0, num_nodes)`                                              |
+| `DATA_OPTIMIZER_GLOBAL_RANK`              | Set in `BaseWorker._set_environ_variables`                            | `node_rank * num_workers + worker_index` — used for chunk filenames / writer rank    |
+| `DATA_OPTIMIZER_NUM_WORKERS`              | Set in worker; also `_DistributedEnv._instantiate_in_map_or_optimize` | Local worker count                                                                   |
+| `DATA_OPTIMIZER_CACHE_FOLDER`             | `_get_cache_dir`                                                      | Chunk cache root (default Studio `/cache/chunks`)                                    |
+| `DATA_OPTIMIZER_DATA_CACHE_FOLDER`        | `_get_cache_data_dir`                                                 | Downloaded input cache (default `/cache/data`)                                       |
+| `DATA_OPTIMIZER_TIMEOUT`                  | Worker `_loop` queue get                                              | Default 300s; shared-queue mode often 200s                                           |
+| `DATA_OPTIMIZER_FAST_DEV_RUN`             | `_get_fast_dev_run`                                                   | Related to fast_dev_run defaults                                                     |
+| `ENABLE_STATUS_REPORT` / `_ENABLE_STATUS` | Progress                                                              | Node 0 may write `status.json` with coarse %                                         |
 
 ### 2.2 Job / artifacts (Studio)
 
-| Variable | Role |
-| -------- | ---- |
-| `LIGHTNING_SKIP_INSTALL` / `LIGHTNING_BRANCH` | Injected into remote job command string |
+| Variable                                                                                                   | Role                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `LIGHTNING_SKIP_INSTALL` / `LIGHTNING_BRANCH`                                                              | Injected into remote job command string                             |
 | `LIGHTNING_BUCKET_NAME`, `LIGHTNING_CLOUD_PROJECT_ID`, `LIGHTNING_CLOUD_APP_ID`, `LIGHTNING_CLOUD_WORK_ID` | `_get_work_dir()` → artifacts `s3://…/artifacts/{work_id}/content/` |
-| `LIGHTNING_CLOUD_URL` | Job URL pretty-print; auth helpers |
-| `LIGHTNING_APP_EXTERNAL_URL` | If set, `broadcast_object` uses Lightning broadcast HTTP API |
+| `LIGHTNING_CLOUD_URL`                                                                                      | Job URL pretty-print; auth helpers                                  |
+| `LIGHTNING_APP_EXTERNAL_URL`                                                                               | If set, `broadcast_object` uses Lightning broadcast HTTP API        |
 
 ### 2.3 Training distributed env (do not confuse)
 
@@ -232,20 +232,20 @@ ______________________________________________________________________
 
 ## 9. Failure modes & pitfalls (agent checklist)
 
-| Pitfall | What happens | Mitigation |
-| ------- | ------------ | ---------- |
-| Peer never writes `{k}-index.json` | Last node **hangs** in `_wait_for_file_to_exist` | Ensure all nodes finish; same `output_dir`; credentials on every node; check failed job instances |
-| Duplicate work | Mis-set `DATA_OPTIMIZER_NODE_RANK` / all nodes think they are 0 | Trust platform env; don’t manually override inconsistently |
-| NFS shared cache dir | Nodes stomp `/cache` if incorrectly shared | Keep node-local caches; use object store for outputs |
-| Reading FUSE for size packing | `_get_item_filesizes` hits mount; slow/wrong under load | Prefer connection paths that exist as files for size, or pass `weights=`; accept TODO that sizes aren’t broadcast from node 0 |
-| Only node 0 has AWS keys | Other nodes fail downloads/uploads | Attach connection / inject creds on all instances |
-| `keep_data_ordered=False` + multi-node | Shared queue is **per node**, not global | Prefer ordered static sharding for multi-node |
-| Index config mismatch across workers | `_merge_no_wait` raises inconsistent `config` | Same `fn` / serializers / compression on all workers |
-| Local `output_dir` on multi-node | Machines don’t share disk; merge/upload logic expects reachable `output_dir` | Use remote `output_dir` |
-| Assuming torchrun/SLURM | `num_nodes=` outside Studio errors | Use Studio jobs or run your own process manager **and** set `DATA_OPTIMIZER_*` yourself (unsupported DIY — verify carefully) |
-| `map` + `this_studio` output | No artifacts remap | Write to connection / `s3://` |
-| Uploader swallows exceptions | `_upload_fn` `print(e)` then may still signal remover | Watch logs; missing remote chunks + stuck index |
-| Hard kill on worker error | `_exit_on_error` → `terminate()` all local workers | Fix root error with `num_workers=1` / `fast_dev_run` |
+| Pitfall                                | What happens                                                                 | Mitigation                                                                                                                    |
+| -------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Peer never writes `{k}-index.json`     | Last node **hangs** in `_wait_for_file_to_exist`                             | Ensure all nodes finish; same `output_dir`; credentials on every node; check failed job instances                             |
+| Duplicate work                         | Mis-set `DATA_OPTIMIZER_NODE_RANK` / all nodes think they are 0              | Trust platform env; don’t manually override inconsistently                                                                    |
+| NFS shared cache dir                   | Nodes stomp `/cache` if incorrectly shared                                   | Keep node-local caches; use object store for outputs                                                                          |
+| Reading FUSE for size packing          | `_get_item_filesizes` hits mount; slow/wrong under load                      | Prefer connection paths that exist as files for size, or pass `weights=`; accept TODO that sizes aren’t broadcast from node 0 |
+| Only node 0 has AWS keys               | Other nodes fail downloads/uploads                                           | Attach connection / inject creds on all instances                                                                             |
+| `keep_data_ordered=False` + multi-node | Shared queue is **per node**, not global                                     | Prefer ordered static sharding for multi-node                                                                                 |
+| Index config mismatch across workers   | `_merge_no_wait` raises inconsistent `config`                                | Same `fn` / serializers / compression on all workers                                                                          |
+| Local `output_dir` on multi-node       | Machines don’t share disk; merge/upload logic expects reachable `output_dir` | Use remote `output_dir`                                                                                                       |
+| Assuming torchrun/SLURM                | `num_nodes=` outside Studio errors                                           | Use Studio jobs or run your own process manager **and** set `DATA_OPTIMIZER_*` yourself (unsupported DIY — verify carefully)  |
+| `map` + `this_studio` output           | No artifacts remap                                                           | Write to connection / `s3://`                                                                                                 |
+| Uploader swallows exceptions           | `_upload_fn` `print(e)` then may still signal remover                        | Watch logs; missing remote chunks + stuck index                                                                               |
+| Hard kill on worker error              | `_exit_on_error` → `terminate()` all local workers                           | Fix root error with `num_workers=1` / `fast_dev_run`                                                                          |
 
 ______________________________________________________________________
 

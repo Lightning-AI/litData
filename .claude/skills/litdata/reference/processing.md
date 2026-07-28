@@ -4,12 +4,12 @@ All paths under `src/litdata/`. This pipeline fans work across workers (and mach
 
 **Load these when the task touches I/O or scale:**
 
-| Topic | Doc |
-| ----- | --- |
+| Topic                                                                                | Doc                                                   |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------- |
 | Downloaders / uploaders / removers, FUSE→URL, cache dirs, FsProvider vs `Downloader` | **[data-movement.md](data-movement.md)** (exhaustive) |
-| Multi-node Studio jobs, sharding, index merge, checkpoints, pitfalls | **[multi-node.md](multi-node.md)** (exhaustive) |
-| Chunk / `index.json` / `BinaryWriter` / `FsProvider` | [storage-format.md](storage-format.md) |
-| Path URI tables | [resolver.md](resolver.md) |
+| Multi-node Studio jobs, sharding, index merge, checkpoints, pitfalls                 | **[multi-node.md](multi-node.md)** (exhaustive)       |
+| Chunk / `index.json` / `BinaryWriter` / `FsProvider`                                 | [storage-format.md](storage-format.md)                |
+| Path URI tables                                                                      | [resolver.md](resolver.md)                            |
 
 ## Public API (`processing/functions.py`)
 
@@ -55,11 +55,11 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
 
 Each `BaseWorker` runs a local pipeline of child processes (spawned in `_setup`):
 
-| Child | Start | Target | Default count | Role |
-| ----- | ----- | ------ | ------------- | ---- |
-| Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2` | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via **FsProvider** (not `Downloader` ABC) |
-| Uploaders | `_start_uploaders` | `_upload_fn` | `num_uploaders or 1` | Push chunks / map outputs to `output_dir` |
-| Remover | `_start_remover` | `_remove_target` | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files |
+| Child       | Start                | Target                  | Default count              | Role                                                                                              |
+| ----------- | -------------------- | ----------------------- | -------------------------- | ------------------------------------------------------------------------------------------------- |
+| Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2`     | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via **FsProvider** (not `Downloader` ABC) |
+| Uploaders   | `_start_uploaders`   | `_upload_fn`            | `num_uploaders or 1`       | Push chunks / map outputs to `output_dir`                                                         |
+| Remover     | `_start_remover`     | `_remove_target`        | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files                                                 |
 
 Worker main loop (`_loop`): `ready_to_process_queue.get()` → `_handle_data_chunk_recipe` or `_handle_data_transform_recipe`.
 
@@ -73,14 +73,14 @@ Exhaustive I/O (path rewrite, disk wait 25 GB, index upload vs chunk uploaders
 
 ## Cross-process queues
 
-| Queue | Direction | Purpose |
-| ----- | --------- | ------- |
-| `error_queue` | worker→main | tracebacks; `_exit_on_error` `terminate()`s siblings |
-| `progress_queue` | worker→main | `(index, counter)` for tqdm |
-| `msg_queue` | worker→main | log lines routed around tqdm |
-| `stop_queues` | main→worker | SIGINT graceful stop |
-| `ready_to_process_queue` / `shared_queue` | downloader→worker | core work items |
-| `to_download_queues` / `to_upload_queues` / `remove_queue` | worker→child | I/O offload |
+| Queue                                                      | Direction         | Purpose                                              |
+| ---------------------------------------------------------- | ----------------- | ---------------------------------------------------- |
+| `error_queue`                                              | worker→main       | tracebacks; `_exit_on_error` `terminate()`s siblings |
+| `progress_queue`                                           | worker→main       | `(index, counter)` for tqdm                          |
+| `msg_queue`                                                | worker→main       | log lines routed around tqdm                         |
+| `stop_queues`                                              | main→worker       | SIGINT graceful stop                                 |
+| `ready_to_process_queue` / `shared_queue`                  | downloader→worker | core work items                                      |
+| `to_download_queues` / `to_upload_queues` / `remove_queue` | worker→child      | I/O offload                                          |
 
 ## `raw/` — `StreamingRawDataset` (first-class; no optimize)
 
