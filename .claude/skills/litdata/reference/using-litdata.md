@@ -337,7 +337,7 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 
 - After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
 - Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
-- Published ImageNet-val raw sweep (48 vCPU 4×L4 Studio, bs=64, spawn + persistent, uvloop): best **`num_workers=24`, `max_prefetch=16` → ~7350 samples/s** (~98× vs old FUSE ~75). Full matrix + tips: README `#stream-raw` / `benchmarks/results/raw_worker_prefetch_sweep.json`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+- Throughput: README `#stream-raw` is source of truth. Before vs after A/B (`main` → LoopRunner/prefetch): `benchmarks/results/raw_before_vs_after.json` (best in A/B ~**5455 samples/s** at w=16, prefetch=16, **+10.6%** vs stock main). Exhaustive after-only matrix peaked ~**7350 samples/s** (w=24, prefetch=16) vs FUSE ~75: `raw_worker_prefetch_sweep.json`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
 - Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.

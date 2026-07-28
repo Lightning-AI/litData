@@ -414,29 +414,40 @@ raw: bytes = dataset[0]
 
 ### Throughput (ImageNet val raw → S3)
 
-Measured on a **4×L4 Lightning Studio (48 vCPUs)** against `s3://imagenet-1m-template/raw/val` (50 k JPEGs), `batch_size=64`, 30 timed batches, `multiprocessing_context="spawn"`, `persistent_workers=True`, uvloop, `max_concurrent_downloads=64`, `cache_files=False`. Reproduce: `python benchmarks/bench_raw_workers.py`. Source: `benchmarks/results/raw_worker_prefetch_sweep.json`.
+Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50 k JPEGs), `batch_size=64`, 30 timed batches after 1 warm, `multiprocessing_context="spawn"`, `persistent_workers=True`, `cache_files=False`. Storage path: `s3://imagenet-1m-template/raw/val` (mount `/teamspace/s3_connections/...` remaps to the bucket URL on the optimized tree).
 
-Old Studio FUSE baseline (same data, path-as-FUSE): ~**75 samples/s**.
+#### Before vs After (`main` → this branch)
 
-**Best:** `num_workers=24`, `max_prefetch=16` → **~7350 samples/s** (~98× vs FUSE).
+A/B of stock `StreamingRawDataset` on **`main`** (no `max_prefetch` / LoopRunner; `asyncio.run` per batch; uvloop N/A) vs this branch (LoopRunner + uvloop, `range_parallel_threshold=0`, `max_concurrent_downloads=64`). Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`.
 
-Samples/s (`num_workers` × `max_prefetch`):
+`before` has no `max_prefetch` API — every row’s before column is stock main at that worker count (prefetch=0). Δ% = `((after − before) / before) × 100`. Missing/crashed cells are omitted (none in this run). Short timed windows at high workers can be noisy (e.g. before `w=24` finished 30 batches in ~0.18 s).
 
-| workers \\ prefetch | 0 | 16 | 32 | 64 | 96 | 128 |
-|--------------------:|------:|------:|------:|------:|------:|------:|
-| 0 | 850 | 538 | 614 | 795 | 886 | 941 |
-| 1 | 481 | 442 | 807 | 882 | 853 | 1230 |
-| 2 | 727 | 1750 | 1512 | 924 | 1604 | 1037 |
-| 4 | 3327 | 2491 | 1653 | 3185 | 1754 | 1318 |
-| 8 | 3627 | 3629 | 4002 | 2250 | 3047 | 6925 |
-| 16 | 5508 | 5152 | 4349 | 6099 | 6890 | 4483 |
-| 24 | 4082 | **7350** | 4285 | 3081 | 3416 | 2843 |
-| 32 | 4758 | 3948 | 3702 | 3666 | 3149 | 2904 |
-| 48 | 456 | 456 | 436 | 363 | 448 | 426 |
+**Best after in this A/B:** `num_workers=16`, `max_prefetch=16` → **~5455 samples/s** (**+10.6%** / **1.11×** vs stock main @ 16 workers).
 
-`num_workers=48` collapses to ~400–450 samples/s and can segfault workers on shutdown — prefer mid-high worker counts on this class of host.
+| workers | prefetch | before (samples/s) | after (samples/s) | Δ% | speedup |
+|--------:|---------:|-------------------:|------------------:|-----:|--------:|
+| 0 | 0 | 630 | 633 | +0.5% | 1.01× |
+| 0 | 16 | 630 | 690 | +9.6% | 1.10× |
+| 1 | 0 | 779 | 901 | +15.7% | 1.16× |
+| 1 | 16 | 779 | 721 | −7.4% | 0.93× |
+| 2 | 0 | 1407 | 855 | −39.3% | 0.61× |
+| 2 | 16 | 1407 | 1692 | +20.2% | 1.20× |
+| 4 | 0 | 2604 | 1444 | −44.6% | 0.55× |
+| 4 | 16 | 2604 | 3110 | +19.5% | 1.19× |
+| 8 | 0 | 3253 | 2906 | −10.7% | 0.89× |
+| 8 | 16 | 3253 | 4395 | +35.1% | 1.35× |
+| 16 | 0 | 4931 | 3645 | −26.1% | 0.74× |
+| 16 | 16 | 4931 | **5455** | **+10.6%** | **1.11×** |
+| 24 | 0 | 10556 | 3727 | −64.7% | 0.35× |
+| 24 | 16 | 10556 | 5361 | −49.2% | 0.51× |
+| 32 | 0 | 3244 | 4162 | +28.3% | 1.28× |
+| 32 | 16 | 3244 | 3257 | +0.4% | 1.00× |
 
-Ranged parallel downloads are **opt-in** (`range_parallel_threshold=0` by default). Forcing ranged GETs on this JPEG workload is slower than whole-object downloads (`benchmarks/results/raw_ranged_vs_whole.json`).
+With `max_prefetch=16`, after is usually ahead of stock main at the same worker count (except noisy `w=24` and a small dip at `w=1`). Prefetch=0 often loses to main’s simpler `asyncio.run` path — prefer enabling look-ahead.
+
+Old Studio FUSE baseline (path-as-FUSE): ~**75 samples/s**. Separately, an exhaustive **after-only** worker×prefetch sweep peaked at **`w=24`, `prefetch=16` → ~7350 samples/s** (~98× vs FUSE); full matrix: `benchmarks/results/raw_worker_prefetch_sweep.json` / `python benchmarks/bench_raw_workers.py`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+
+Ranged parallel downloads remain **opt-in** (`range_parallel_threshold=0` by default). Forcing ranged GETs on this JPEG workload is slower than whole-object downloads (`benchmarks/results/raw_ranged_vs_whole.json`).
 
 </details>
 

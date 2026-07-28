@@ -1,0 +1,130 @@
+{
+  "side": "before",
+  "meta": {
+    "input": "s3://imagenet-1m-template/raw/val",
+    "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+    "storage": "s3://imagenet-1m-template/raw/val",
+    "n_files": 50000,
+    "index_s": 8.018374823999693,
+    "batch_size": 64,
+    "batches": 30,
+    "multiprocessing_context": "spawn",
+    "persistent_workers": true,
+    "cpus": 48,
+    "fuse_baseline_samples_per_s": 75.2,
+    "workers": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16,
+      24,
+      32
+    ],
+    "prefetch": [
+      0
+    ],
+    "range_parallel_threshold": null,
+    "max_concurrent_downloads": null,
+    "capabilities": {
+      "has_max_prefetch": false,
+      "has_range_parallel_threshold": false,
+      "has_loop_runner": false,
+      "uvloop": "n/a (before / no LoopRunner)",
+      "params": [
+        "cache_dir",
+        "cache_files",
+        "indexer",
+        "input_dir",
+        "recompute_index",
+        "storage_options",
+        "transform"
+      ]
+    },
+    "git_hint": "5d8cfc1997ef8dcddbda6aab3c9619d496a202fa",
+    "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://"
+  },
+  "results": [
+    {
+      "side": "before",
+      "label": "w0_p0",
+      "workers": 0,
+      "prefetch": 0,
+      "ips": 629.5218173032138,
+      "warm_s": 0.2861762249995081,
+      "elapsed": 3.0499340089991165,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w1_p0",
+      "workers": 1,
+      "prefetch": 0,
+      "ips": 779.0158945627203,
+      "warm_s": 0.25633496200134687,
+      "elapsed": 2.4646480430001247,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w2_p0",
+      "workers": 2,
+      "prefetch": 0,
+      "ips": 1407.2994554304264,
+      "warm_s": 0.23707523300072353,
+      "elapsed": 1.3643151730011596,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w4_p0",
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 2603.529206694426,
+      "warm_s": 0.25153872600094473,
+      "elapsed": 0.7374605189997965,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w8_p0",
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 3252.8035074756567,
+      "warm_s": 0.3988649050006643,
+      "elapsed": 0.5902600620011071,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w16_p0",
+      "workers": 16,
+      "prefetch": 0,
+      "ips": 4931.263161319901,
+      "warm_s": 0.27472747299907496,
+      "elapsed": 0.3893525729999965,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w24_p0",
+      "workers": 24,
+      "prefetch": 0,
+      "ips": 10556.113835248114,
+      "warm_s": 0.49204495400044834,
+      "elapsed": 0.18188511700100207,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w32_p0",
+      "workers": 32,
+      "prefetch": 0,
+      "ips": 3243.5852606855224,
+      "warm_s": 0.26520102600079554,
+      "elapsed": 0.5919375769990438,
+      "samples": 1920
+    }
+  ]
+}

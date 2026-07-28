@@ -1,0 +1,625 @@
+{
+  "meta": {
+    "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+    "batch_size": 64,
+    "batches": 30,
+    "multiprocessing_context": "spawn",
+    "persistent_workers": true,
+    "workers": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16,
+      24,
+      32
+    ],
+    "before": {
+      "input": "s3://imagenet-1m-template/raw/val",
+      "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+      "storage": "s3://imagenet-1m-template/raw/val",
+      "n_files": 50000,
+      "index_s": 8.018374823999693,
+      "batch_size": 64,
+      "batches": 30,
+      "multiprocessing_context": "spawn",
+      "persistent_workers": true,
+      "cpus": 48,
+      "fuse_baseline_samples_per_s": 75.2,
+      "workers": [
+        0,
+        1,
+        2,
+        4,
+        8,
+        16,
+        24,
+        32
+      ],
+      "prefetch": [
+        0
+      ],
+      "range_parallel_threshold": null,
+      "max_concurrent_downloads": null,
+      "capabilities": {
+        "has_max_prefetch": false,
+        "has_range_parallel_threshold": false,
+        "has_loop_runner": false,
+        "uvloop": "n/a (before / no LoopRunner)",
+        "params": [
+          "cache_dir",
+          "cache_files",
+          "indexer",
+          "input_dir",
+          "recompute_index",
+          "storage_options",
+          "transform"
+        ]
+      },
+      "git_hint": "5d8cfc1997ef8dcddbda6aab3c9619d496a202fa",
+      "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://"
+    },
+    "after": {
+      "input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+      "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+      "storage": "s3://imagenet-1m-template/raw/val",
+      "n_files": 50000,
+      "index_s": 8.366329956999834,
+      "batch_size": 64,
+      "batches": 30,
+      "multiprocessing_context": "spawn",
+      "persistent_workers": true,
+      "cpus": 48,
+      "fuse_baseline_samples_per_s": 75.2,
+      "workers": [
+        0,
+        1,
+        2,
+        4,
+        8,
+        16,
+        24,
+        32
+      ],
+      "prefetch": [
+        0,
+        16
+      ],
+      "range_parallel_threshold": 0,
+      "max_concurrent_downloads": 64,
+      "capabilities": {
+        "has_max_prefetch": true,
+        "has_range_parallel_threshold": true,
+        "has_loop_runner": true,
+        "uvloop": "available (uvloop 0.22.1; create\u2192uvloop)",
+        "params": [
+          "cache_dir",
+          "cache_files",
+          "download_timeout",
+          "hedge_delay",
+          "indexer",
+          "input_dir",
+          "item_type",
+          "max_concurrent_downloads",
+          "max_prefetch",
+          "prefetch_cache_size",
+          "range_chunk_size",
+          "range_parallel_threshold",
+          "recompute_index",
+          "storage_options",
+          "transform"
+        ]
+      },
+      "git_hint": "e458be1e07485d81778b582dc8fe189207ac8a5b",
+      "input_note": "after uses mount path; _storage_path prefers cloud URL"
+    },
+    "note": "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / LoopRunner; FUSE mount path on main selects LocalDownloader and is broken for async reads); after = feature/raw-streaming-perf defaults (range_parallel_threshold=0, mount\u2192s3://)",
+    "delta_definition": "delta_pct = ((after - before) / before) * 100; before is stock main (no max_prefetch API, measured at prefetch=0)",
+    "omitted": "none in this run; before has no max_prefetch so prefetch>0 rows compare after vs stock main baseline"
+  },
+  "comparison": [
+    {
+      "workers": 0,
+      "before_ips": 629.5218173032138,
+      "after_prefetch0_ips": 632.8726418902654,
+      "after_prefetch16_ips": 690.2281495437081,
+      "speedup_prefetch0": 1.005322809305333,
+      "speedup_prefetch16": 1.0964324516988975,
+      "after_best_ips": 690.2281495437081,
+      "after_best_prefetch": 16,
+      "speedup_best": 1.0964324516988975,
+      "delta_pct_prefetch0": 0.5322809305332937,
+      "delta_pct_prefetch16": 9.643245169889754
+    },
+    {
+      "workers": 1,
+      "before_ips": 779.0158945627203,
+      "after_prefetch0_ips": 901.2173050526277,
+      "after_prefetch16_ips": 721.0167045733909,
+      "speedup_prefetch0": 1.1568663891748985,
+      "speedup_prefetch16": 0.9255481301547953,
+      "after_best_ips": 901.2173050526277,
+      "after_best_prefetch": 0,
+      "speedup_best": 1.1568663891748985,
+      "delta_pct_prefetch0": 15.686638917489853,
+      "delta_pct_prefetch16": -7.445186984520468
+    },
+    {
+      "workers": 2,
+      "before_ips": 1407.2994554304264,
+      "after_prefetch0_ips": 854.6528508626327,
+      "after_prefetch16_ips": 1692.2284740472896,
+      "speedup_prefetch0": 0.6072999229586391,
+      "speedup_prefetch16": 1.2024650954829772,
+      "after_best_ips": 1692.2284740472896,
+      "after_best_prefetch": 16,
+      "speedup_best": 1.2024650954829772,
+      "delta_pct_prefetch0": -39.27000770413609,
+      "delta_pct_prefetch16": 20.246509548297727
+    },
+    {
+      "workers": 4,
+      "before_ips": 2603.529206694426,
+      "after_prefetch0_ips": 1443.641013858223,
+      "after_prefetch16_ips": 3110.1106036434103,
+      "speedup_prefetch0": 0.5544938809006654,
+      "speedup_prefetch16": 1.194574885369604,
+      "after_best_ips": 3110.1106036434103,
+      "after_best_prefetch": 16,
+      "speedup_best": 1.194574885369604,
+      "delta_pct_prefetch0": -44.550611909933465,
+      "delta_pct_prefetch16": 19.4574885369604
+    },
+    {
+      "workers": 8,
+      "before_ips": 3252.8035074756567,
+      "after_prefetch0_ips": 2905.735185592619,
+      "after_prefetch16_ips": 4394.612951609232,
+      "speedup_prefetch0": 0.8933017868784885,
+      "speedup_prefetch16": 1.351023184004028,
+      "after_best_ips": 4394.612951609232,
+      "after_best_prefetch": 16,
+      "speedup_best": 1.351023184004028,
+      "delta_pct_prefetch0": -10.669821312151148,
+      "delta_pct_prefetch16": 35.102318400402815
+    },
+    {
+      "workers": 16,
+      "before_ips": 4931.263161319901,
+      "after_prefetch0_ips": 3644.858178538954,
+      "after_prefetch16_ips": 5454.499804106813,
+      "speedup_prefetch0": 0.739132765642824,
+      "speedup_prefetch16": 1.1061060068525854,
+      "after_best_ips": 5454.499804106813,
+      "after_best_prefetch": 16,
+      "speedup_best": 1.1061060068525854,
+      "delta_pct_prefetch0": -26.0867234357176,
+      "delta_pct_prefetch16": 10.610600685258552
+    },
+    {
+      "workers": 24,
+      "before_ips": 10556.113835248114,
+      "after_prefetch0_ips": 3727.005113653765,
+      "after_prefetch16_ips": 5361.358449606034,
+      "speedup_prefetch0": 0.3530660214376292,
+      "speedup_prefetch16": 0.5078913067140128,
+      "after_best_ips": 5361.358449606034,
+      "after_best_prefetch": 16,
+      "speedup_best": 0.5078913067140128,
+      "delta_pct_prefetch0": -64.69339785623708,
+      "delta_pct_prefetch16": -49.21086932859872
+    },
+    {
+      "workers": 32,
+      "before_ips": 3243.5852606855224,
+      "after_prefetch0_ips": 4161.671315409755,
+      "after_prefetch16_ips": 3256.575443069394,
+      "speedup_prefetch0": 1.28304668474483,
+      "speedup_prefetch16": 1.0040048838984816,
+      "after_best_ips": 4161.671315409755,
+      "after_best_prefetch": 0,
+      "speedup_best": 1.28304668474483,
+      "delta_pct_prefetch0": 28.304668474483012,
+      "delta_pct_prefetch16": 0.40048838984816326
+    }
+  ],
+  "before_results": [
+    {
+      "side": "before",
+      "label": "w0_p0",
+      "workers": 0,
+      "prefetch": 0,
+      "ips": 629.5218173032138,
+      "warm_s": 0.2861762249995081,
+      "elapsed": 3.0499340089991165,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w1_p0",
+      "workers": 1,
+      "prefetch": 0,
+      "ips": 779.0158945627203,
+      "warm_s": 0.25633496200134687,
+      "elapsed": 2.4646480430001247,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w2_p0",
+      "workers": 2,
+      "prefetch": 0,
+      "ips": 1407.2994554304264,
+      "warm_s": 0.23707523300072353,
+      "elapsed": 1.3643151730011596,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w4_p0",
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 2603.529206694426,
+      "warm_s": 0.25153872600094473,
+      "elapsed": 0.7374605189997965,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w8_p0",
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 3252.8035074756567,
+      "warm_s": 0.3988649050006643,
+      "elapsed": 0.5902600620011071,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w16_p0",
+      "workers": 16,
+      "prefetch": 0,
+      "ips": 4931.263161319901,
+      "warm_s": 0.27472747299907496,
+      "elapsed": 0.3893525729999965,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w24_p0",
+      "workers": 24,
+      "prefetch": 0,
+      "ips": 10556.113835248114,
+      "warm_s": 0.49204495400044834,
+      "elapsed": 0.18188511700100207,
+      "samples": 1920
+    },
+    {
+      "side": "before",
+      "label": "w32_p0",
+      "workers": 32,
+      "prefetch": 0,
+      "ips": 3243.5852606855224,
+      "warm_s": 0.26520102600079554,
+      "elapsed": 0.5919375769990438,
+      "samples": 1920
+    }
+  ],
+  "after_results": [
+    {
+      "side": "after",
+      "label": "w0_p0",
+      "workers": 0,
+      "prefetch": 0,
+      "ips": 632.8726418902654,
+      "warm_s": 0.48391088700009277,
+      "elapsed": 3.0337857459999213,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w0_p16",
+      "workers": 0,
+      "prefetch": 16,
+      "ips": 690.2281495437081,
+      "warm_s": 0.17839373999959207,
+      "elapsed": 2.781688926001152,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w1_p0",
+      "workers": 1,
+      "prefetch": 0,
+      "ips": 901.2173050526277,
+      "warm_s": 0.26654910300021584,
+      "elapsed": 2.130451766999613,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w1_p16",
+      "workers": 1,
+      "prefetch": 16,
+      "ips": 721.0167045733909,
+      "warm_s": 0.24809486099911737,
+      "elapsed": 2.6629064040007506,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w2_p0",
+      "workers": 2,
+      "prefetch": 0,
+      "ips": 854.6528508626327,
+      "warm_s": 0.24241268200057675,
+      "elapsed": 2.2465261749985075,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w2_p16",
+      "workers": 2,
+      "prefetch": 16,
+      "ips": 1692.2284740472896,
+      "warm_s": 0.24494596399927104,
+      "elapsed": 1.134598566000932,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w4_p0",
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 1443.641013858223,
+      "warm_s": 0.2430281240012846,
+      "elapsed": 1.329970527000114,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w4_p16",
+      "workers": 4,
+      "prefetch": 16,
+      "ips": 3110.1106036434103,
+      "warm_s": 0.23222976100078085,
+      "elapsed": 0.6173413890010124,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w8_p0",
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 2905.735185592619,
+      "warm_s": 0.28235844599839766,
+      "elapsed": 0.6607622089995857,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w8_p16",
+      "workers": 8,
+      "prefetch": 16,
+      "ips": 4394.612951609232,
+      "warm_s": 0.2461215869989246,
+      "elapsed": 0.43689854399963224,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w16_p0",
+      "workers": 16,
+      "prefetch": 0,
+      "ips": 3644.858178538954,
+      "warm_s": 0.34528131400111306,
+      "elapsed": 0.526769467000122,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w16_p16",
+      "workers": 16,
+      "prefetch": 16,
+      "ips": 5454.499804106813,
+      "warm_s": 0.26353759599987825,
+      "elapsed": 0.35200294599962945,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w24_p0",
+      "workers": 24,
+      "prefetch": 0,
+      "ips": 3727.005113653765,
+      "warm_s": 0.39636550700015505,
+      "elapsed": 0.5151589390006848,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w24_p16",
+      "workers": 24,
+      "prefetch": 16,
+      "ips": 5361.358449606034,
+      "warm_s": 0.46282929299923126,
+      "elapsed": 0.35811819300033676,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w32_p0",
+      "workers": 32,
+      "prefetch": 0,
+      "ips": 4161.671315409755,
+      "warm_s": 0.38903947899962077,
+      "elapsed": 0.46135310899990145,
+      "samples": 1920
+    },
+    {
+      "side": "after",
+      "label": "w32_p16",
+      "workers": 32,
+      "prefetch": 16,
+      "ips": 3256.575443069394,
+      "warm_s": 0.28672344099868496,
+      "elapsed": 0.5895763919997989,
+      "samples": 1920
+    }
+  ],
+  "cells": [
+    {
+      "workers": 0,
+      "prefetch": 0,
+      "before_ips": 629.5218173032138,
+      "after_ips": 632.8726418902654,
+      "delta_pct": 0.5322809305332937,
+      "speedup": 1.005322809305333,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 0,
+      "prefetch": 16,
+      "before_ips": 629.5218173032138,
+      "after_ips": 690.2281495437081,
+      "delta_pct": 9.643245169889754,
+      "speedup": 1.0964324516988975,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 1,
+      "prefetch": 0,
+      "before_ips": 779.0158945627203,
+      "after_ips": 901.2173050526277,
+      "delta_pct": 15.686638917489853,
+      "speedup": 1.1568663891748985,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 1,
+      "prefetch": 16,
+      "before_ips": 779.0158945627203,
+      "after_ips": 721.0167045733909,
+      "delta_pct": -7.445186984520468,
+      "speedup": 0.9255481301547953,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 2,
+      "prefetch": 0,
+      "before_ips": 1407.2994554304264,
+      "after_ips": 854.6528508626327,
+      "delta_pct": -39.27000770413609,
+      "speedup": 0.6072999229586391,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 2,
+      "prefetch": 16,
+      "before_ips": 1407.2994554304264,
+      "after_ips": 1692.2284740472896,
+      "delta_pct": 20.246509548297727,
+      "speedup": 1.2024650954829772,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 4,
+      "prefetch": 0,
+      "before_ips": 2603.529206694426,
+      "after_ips": 1443.641013858223,
+      "delta_pct": -44.550611909933465,
+      "speedup": 0.5544938809006654,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 4,
+      "prefetch": 16,
+      "before_ips": 2603.529206694426,
+      "after_ips": 3110.1106036434103,
+      "delta_pct": 19.4574885369604,
+      "speedup": 1.194574885369604,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 8,
+      "prefetch": 0,
+      "before_ips": 3252.8035074756567,
+      "after_ips": 2905.735185592619,
+      "delta_pct": -10.669821312151148,
+      "speedup": 0.8933017868784885,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 8,
+      "prefetch": 16,
+      "before_ips": 3252.8035074756567,
+      "after_ips": 4394.612951609232,
+      "delta_pct": 35.102318400402815,
+      "speedup": 1.351023184004028,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 16,
+      "prefetch": 0,
+      "before_ips": 4931.263161319901,
+      "after_ips": 3644.858178538954,
+      "delta_pct": -26.0867234357176,
+      "speedup": 0.739132765642824,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 16,
+      "prefetch": 16,
+      "before_ips": 4931.263161319901,
+      "after_ips": 5454.499804106813,
+      "delta_pct": 10.610600685258552,
+      "speedup": 1.1061060068525854,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 24,
+      "prefetch": 0,
+      "before_ips": 10556.113835248114,
+      "after_ips": 3727.005113653765,
+      "delta_pct": -64.69339785623708,
+      "speedup": 0.3530660214376292,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 24,
+      "prefetch": 16,
+      "before_ips": 10556.113835248114,
+      "after_ips": 5361.358449606034,
+      "delta_pct": -49.21086932859872,
+      "speedup": 0.5078913067140128,
+      "before_note": "stock main (no max_prefetch)"
+    },
+    {
+      "workers": 32,
+      "prefetch": 0,
+      "before_ips": 3243.5852606855224,
+      "after_ips": 4161.671315409755,
+      "delta_pct": 28.304668474483012,
+      "speedup": 1.28304668474483,
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 32,
+      "prefetch": 16,
+      "before_ips": 3243.5852606855224,
+      "after_ips": 3256.575443069394,
+      "delta_pct": 0.40048838984816326,
+      "speedup": 1.0040048838984816,
+      "before_note": "stock main (no max_prefetch)"
+    }
+  ],
+  "best_after": {
+    "workers": 16,
+    "prefetch": 16,
+    "after_ips": 5454.499804106813,
+    "before_ips": 4931.263161319901,
+    "delta_pct": 10.610600685258552,
+    "speedup": 1.1061060068525854
+  }
+}
