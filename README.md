@@ -367,6 +367,55 @@ dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache")
 </details>
 
 <details>
+  <summary> ✅ Stream MosaicML MDS datasets <a id="stream-mds" href="#stream-mds">🔗</a> </summary>
+&nbsp;
+
+If you already have datasets written in [MosaicML Streaming](https://github.com/mosaicml/streaming) MDS (Mosaic Data Shard) format, you can stream them directly with LitData—no re-optimization or conversion required!
+
+LitData's default `PyTreeLoader` natively understands the MDS binary layout, so you can read existing MDS shards using the familiar `StreamingDataset` and `StreamingDataLoader` APIs.
+
+**Assumption:**
+
+Your dataset directory contains MDS shard files (e.g. `shard.00000.mds`, ...) along with an `index.json` describing the shards and their `column_sizes`/`column_names`.
+
+**Stream the MDS dataset:**
+
+```python
+import litdata as ld
+
+Point to your MDS dataset stored locally or in the cloud
+
+mds_dataset_uri = "s3://my-bucket/my-mds-data" # or a local path
+
+LitData automatically detects and deserializes the MDS format
+
+dataset = ld.StreamingDataset(mds_dataset_uri)
+
+print("Sample", dataset[0])
+
+dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
+for sample in dataloader:
+  pass
+```
+
+**How it works:**
+
+- LitData reads the `format` field from the dataset config. When it's set to `"mds"`, the item loader uses MDS-aware deserialization (`mds_deserialize`) that respects the per-column sizes stored in each shard.
+- Fixed-size columns are read directly, while variable-size columns are prefixed with a `uint32` length header—exactly as in the MosaicML MDS spec.
+- Each sample is reconstructed into its original Python structure via LitData's `data_spec`.
+
+**Key benefits:**
+
+✅ **Zero conversion:**       Reuse existing MDS shards as-is.    
+✅ **Drop-in APIs:**          Use the same `StreamingDataset` / `StreamingDataLoader` you already know.    
+✅ **Cloud-native:**          Stream MDS shards directly from S3, GCS, or Azure.    
+✅ **Easy migration:**        Move from MosaicML Streaming to LitData without re-optimizing.    
+
+> **Note:** Encrypted data loading is not currently supported for the MDS format.
+
+</details>
+
+<details>
   <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
 
 &nbsp;
