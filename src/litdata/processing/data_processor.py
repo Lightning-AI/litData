@@ -46,7 +46,7 @@ from litdata.constants import (
     _TQDM_AVAILABLE,
 )
 from litdata.processing.readers import BaseReader, StreamingDataLoaderReader
-from litdata.processing.utilities import _create_dataset, construct_storage_options, remove_uuid_from_filename
+from litdata.processing.utilities import construct_storage_options, remove_uuid_from_filename
 from litdata.streaming import Cache
 from litdata.streaming.cache import Dir
 from litdata.streaming.dataloader import StreamingDataLoader
@@ -1429,24 +1429,8 @@ class DataProcessor:
         if self.verbose:
             print("Workers are finished.")
         size = len(workers_user_items) if workers_user_items is not None else None
-        result = data_recipe._done(size, self.delete_cached_files, self.output_dir)
+        data_recipe._done(size, self.delete_cached_files, self.output_dir)
 
-        if num_nodes == node_rank + 1 and self.output_dir.url and self.output_dir.path is not None and _IS_IN_STUDIO:
-            from lightning_sdk.lightning_cloud.openapi import V1DatasetType
-
-            data_type = V1DatasetType.CHUNKED if isinstance(data_recipe, DataChunkRecipe) else V1DatasetType.TRANSFORMED
-            _create_dataset(
-                input_dir=self.input_dir.path,
-                storage_dir=self.output_dir.path,
-                dataset_type=data_type,
-                empty=False,
-                size=str(result.size),
-                num_bytes=result.num_bytes,
-                data_format=result.data_format,
-                compression=result.compression,
-                num_chunks=str(result.num_chunks),
-                num_bytes_per_chunk=[str(v) for v in (result.num_bytes_per_chunk or [])],
-            )
         if self.verbose:
             print("Finished data processing!")
         if self.use_checkpoint and isinstance(data_recipe, DataChunkRecipe):

@@ -55,7 +55,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Cache / prefetch / eviction / shared-chunk deletion                                | `reference/cache-and-chunk-lifecycle.md`            |
 | Fair streaming benchmarks (`benchmarks/` suite)                                    | `reference/benchmarking.md`                         |
 | Lightning Studio env, credentials, free-threading                                  | `reference/lightning-studio.md`                     |
-| Write path (`optimize`/`map`)                                                      | `reference/processing.md`                           |
+| Write path / **multi-node** `num_nodes` job launch                                 | `reference/processing.md`                           |
 | Dev env, PR/CI style                                                               | `reference/contributing.md`                         |
 | Tests & fixtures                                                                   | `reference/testing.md`                              |
 | Tracing, breakpoints, env knobs                                                    | `reference/debugging.md`                            |

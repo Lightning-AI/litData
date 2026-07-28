@@ -10,7 +10,7 @@ from io import BytesIO
 from queue import Empty
 from typing import Any
 from unittest import mock
-from unittest.mock import ANY, Mock
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -544,10 +544,6 @@ def test_data_processsor_distributed(fast_dev_run, delete_cached_files, tmpdir, 
 
     monkeypatch.setattr(data_processor_module.os, "_exit", mock.MagicMock())
 
-    _create_dataset_mock = mock.MagicMock()
-
-    monkeypatch.setattr(data_processor_module, "_create_dataset", _create_dataset_mock)
-
     from PIL import Image
 
     input_dir = os.path.join(tmpdir, "dataset")
@@ -627,8 +623,6 @@ def test_data_processsor_distributed(fast_dev_run, delete_cached_files, tmpdir, 
     expected = sorted(fast_dev_run_disabled_chunks_0 + fast_dev_run_disabled_chunks_1 + ["1-index.json"])
 
     assert sorted(os.listdir(remote_output_dir)) == expected
-
-    _create_dataset_mock.assert_not_called()
 
 
 class TextTokenizeRecipe(DataChunkRecipe):
@@ -1005,21 +999,21 @@ def test_data_processing_map_without_input_dir_local(monkeypatch, tmpdir):
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows not supported")
 def test_data_processing_map_without_input_dir_remote(monkeypatch, tmpdir):
     cache_dir = os.path.join(tmpdir, "cache")
+    resolved_output = tmpdir / "output"
+    os.makedirs(resolved_output, exist_ok=True)
     output_dir = os.path.join("/teamspace", "datasets", "target_dir")
 
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", cache_dir)
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", cache_dir)
 
-    create_dataset_mock = Mock()
     monkeypatch.setenv("LIGHTNING_CLUSTER_ID", "1")
     monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "2")
     monkeypatch.setenv("LIGHTNING_CLOUD_SPACE_ID", "3")
     monkeypatch.setattr("litdata.processing.data_processor._IS_IN_STUDIO", True)
     monkeypatch.setattr(
         "litdata.streaming.resolver._resolve_datasets",
-        Mock(return_value=Dir(path=tmpdir / "output", url="url")),
+        Mock(return_value=Dir(path=str(resolved_output), url="url")),
     )
-    monkeypatch.setattr("litdata.processing.data_processor._create_dataset", create_dataset_mock)
 
     map(
         map_fn_index,
@@ -1028,18 +1022,7 @@ def test_data_processing_map_without_input_dir_remote(monkeypatch, tmpdir):
         num_workers=1,
     )
 
-    create_dataset_mock.assert_called_with(
-        input_dir=None,
-        storage_dir=str(tmpdir / "output"),
-        dataset_type=ANY,
-        empty=ANY,
-        size=ANY,
-        num_bytes=ANY,
-        data_format=ANY,
-        compression=ANY,
-        num_chunks=ANY,
-        num_bytes_per_chunk=ANY,
-    )
+    assert sorted(os.listdir(resolved_output)) == [f"{i}.JPEG" for i in range(5)]
 
 
 @pytest.mark.skipif(condition=not _PIL_AVAILABLE or sys.platform == "win32", reason="Requires: ['pil']")

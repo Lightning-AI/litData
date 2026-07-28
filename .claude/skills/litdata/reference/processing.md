@@ -11,6 +11,49 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
 - **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — `functions.py:675`. Copy chunks + concat `index.json`; matching `data_format`/compression required.
 - **`walk(folder, max_workers=...)`** — `functions.py:621`. Threaded cloud `os.walk` (Studio-optimized); yield order is **not** depth-first.
 
+## Multi-node launch (`num_nodes` / `machine`) — read this first
+
+`num_nodes` is **not** local multiprocessing. It only works inside **Lightning Studio** (`_IS_IN_STUDIO`; else `ValueError` in `functions.py`). Dual path for both `map` and `optimize`:
+
+```
+if num_nodes is None OR DATA_OPTIMIZER_NUM_NODES > 0:
+    → run DataProcessor on this machine (single-node OR a job worker)
+else:
+    → _execute(...)   # resolver.py:461 — create Studio data-prep job, block until done
+```
+
+1. User calls `optimize(..., num_nodes=N, machine=Machine.DATA_PREP)` on a Studio.
+2. `_execute` starts a multi-instance job that re-runs `python {' '.join(sys.argv)}` on **N** machines (`resolver.py:483–492`). `machine=None` → current Studio machine. (`interruptible` exists on `_execute` but **optimize/map never pass it** — always `False`; do not document as a public knob.)
+3. Platform injects `DATA_OPTIMIZER_NUM_NODES`, `DATA_OPTIMIZER_NODE_RANK`, etc. on each instance.
+4. The same script hits the **local** branch (gate sees `DATA_OPTIMIZER_NUM_NODES > 0`) and each node processes only its shard.
+5. Caller blocks until the job completes or fails (`FAILED` → `RuntimeError`). Job URL is printed to the Studio Runs UI.
+
+**Prefer durable `output_dir`:** `/teamspace/s3_connections/...`, `/teamspace/datasets/...`, or `s3://...`.
+If optimize’s `output_dir` is under `/teamspace/studios/this_studio` **and** workers are multi-node, LitData rewrites it to the job artifacts bucket via `_get_work_dir()` (`functions.py:515–524` → `utilities.py:196–205` → `s3://{LIGHTNING_BUCKET_NAME}/projects/.../artifacts/{work_id}/content/...`). **`map` does not apply this remap.** Paths like `/teamspace/jobs/...` are the Studio job mount UI — LitData does not construct that string itself. Rejects outputs whose URL contains `cloudspaces` (use connections/datasets instead).
+
+### Env vars (multi-node / workers)
+
+| Var                                                                                                        | Role                                                                          |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `DATA_OPTIMIZER_NUM_NODES`                                                                                 | Launch gate + world size; `>0` means “I’m a job worker / already distributed” |
+| `DATA_OPTIMIZER_NODE_RANK`                                                                                 | This node’s rank `[0, num_nodes)`                                             |
+| `DATA_OPTIMIZER_GLOBAL_RANK` / `DATA_OPTIMIZER_NUM_WORKERS`                                                | Set inside workers for chunk filenames / writer rank                          |
+| `DATA_OPTIMIZER_CACHE_FOLDER` / `DATA_CACHE_FOLDER`                                                        | Cache roots (Studio often `/cache/...`)                                       |
+| `DATA_OPTIMIZER_TIMEOUT`                                                                                   | Queue get timeout (default 300s; shared-queue ~200s)                          |
+| `DATA_OPTIMIZER_FAST_DEV_RUN`                                                                              | Related to `fast_dev_run` defaults                                            |
+| `LIGHTNING_SKIP_INSTALL` / `LIGHTNING_BRANCH`                                                              | Injected into remote job command                                              |
+| `LIGHTNING_BUCKET_NAME`, `LIGHTNING_CLOUD_PROJECT_ID`, `LIGHTNING_CLOUD_APP_ID`, `LIGHTNING_CLOUD_WORK_ID` | `_get_work_dir()` artifacts URL                                               |
+| `ENABLE_STATUS_REPORT`                                                                                     | Extra progress reporting                                                      |
+
+### Sharding & index merge (`data_processor.py`)
+
+- `world_size = num_nodes * num_workers`. Items packed across **all** ranks, then each node keeps only its worker slice. **No cross-node RPC** — pure env coordination.
+- Each node writes per-rank chunk files + `{rank}-index.json` (node-local).
+- **Last node** (`num_nodes == node_rank + 1`) waits for peer index files, merges into final `index.json`, and uploads. Peer wait can **hang** if a node never writes its index.
+- Every node needs credentials for inputs/outputs (connections → temp creds; raw `s3://` → keys on all instances).
+
+User cookbook: [using-litdata.md](using-litdata.md) §9. Studio UX: [lightning-studio.md](lightning-studio.md).
+
 ## Orchestration (`processing/data_processor.py`)
 
 `DataProcessor.run(recipe)` (`data_processor.py:1226`) is the single entrypoint both `optimize` and `map` call. Lifecycle:
@@ -20,11 +63,11 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
    - `_map_items_to_workers_weighted` (`:377`) — default when `reorder_files` + `input_dir` exist, or when `weights` given. Bin-packs by file size (`_pack_greedily`) across `world_size = num_nodes * num_workers`, then permutes.
    - `_map_items_to_workers_sequentially` (`:303`) — contiguous slices; `align_chunking` packs full chunks.
    - Queue mode — no static assignment; `shared_queue` is set.
-3. **Multi-node slicing** is baked into both mappers via `_get_node_rank()`/`_get_num_nodes()` (env `DATA_OPTIMIZER_NODE_RANK`/`_NUM_NODES`); each returns only its node's worker slice. **No cross-node RPC** — coordination is purely env-var driven.
+3. **Multi-node slicing** via `_get_node_rank()`/`_get_num_nodes()` — see section above.
 4. **Checkpointing** (`:1297`) trims each worker's list to resume from `checkpoint_next_index`; `fast_dev_run` trims to N items.
 5. **`_create_process_workers`** (`:1462`) spawns one `DataWorkerProcess` per worker.
 6. **Progress loop** (`:1376`) polls `error_queue` (re-raises via `_exit_on_error`, which `terminate()`s all workers) and `progress_queue` (tqdm). Exits when the counter equals `num_items` or all workers die.
-7. **`recipe._done(...)`** (`:1432`) merges caches / writes the index; index merge + platform registration run only on the last node.
+7. **`recipe._done(...)`** merges caches / writes the index; index merge runs only on the last node.
 
 ## Key classes
 
@@ -76,7 +119,7 @@ The **indexer** (`raw/indexer.py`) replaces the optimize pass: `BaseIndexer.buil
 06. `FakeQueue` is not a real queue — no inter-process/blocking semantics.
 07. Path detection is heuristic (`_is_path`/`_to_path`, `functions.py:439`); an item with zero detected file paths raises (`:775`).
 08. `align_chunking` requires `chunk_size` (not bytes) (`:497`, `:1275`).
-09. Index merge + platform registration only on the last node (`num_nodes == node_rank + 1`).
+09. Index merge only on the last node (`num_nodes == node_rank + 1`).
 10. Errors are swallowed into `error_queue` then re-raised in the main loop; a worker exception without a traceback string can hang the loop. `_exit_on_error` hard-`terminate()`s siblings — no graceful flush. **To surface a hidden error, run with `num_workers=1` or `fast_dev_run=True`.**
 11. Checkpointing unsupported for Queue inputs (`:1298`) or generator `fn`s (`:1303`).
 

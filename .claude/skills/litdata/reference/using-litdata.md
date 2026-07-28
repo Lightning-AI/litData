@@ -184,10 +184,10 @@ ______________________________________________________________________
 | `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count                                                   |
 | `align_chunking`                    | `False`         | Single-worker chunk boundaries (needs `chunk_size`; uneven load)                                |
 | `compression`                       | `None`          | `"zstd"`                                                                                        |
-| `encryption`                        | `None`          | Fernet / RSA / custom; \`level="sample"                                                         |
+| `encryption`                        | `None`          | Fernet / RSA / custom; `level="sample"` or `"chunk"`                                            |
 | `num_workers`                       | CPUs            | Local parallelism                                                                               |
 | `fast_dev_run`                      | `False`         | Smoke subset                                                                                    |
-| `num_nodes` / `machine`             | `None`          | Lightning Studios scale-out                                                                     |
+| `num_nodes` / `machine`             | `None`          | **Studio-only multi-node job** (see below) — not local MP                                       |
 | `num_downloaders` / `num_uploaders` | auto            | I/O concurrency                                                                                 |
 | `reorder_files`                     | `True`          | Size packing; `False` preserves order                                                           |
 | `reader` / `batch_size`             | —               | Custom reader; group inputs                                                                     |
@@ -199,9 +199,36 @@ ______________________________________________________________________
 | `keep_data_ordered`                 | `True`          | `False` = shared work queue                                                                     |
 | `verbose`                           | `True`          | Progress                                                                                        |
 
+### Multi-node (`num_nodes` / `machine`) — Lightning Studios
+
+```python
+from litdata import optimize, Machine
+
+if __name__ == "__main__":
+    optimize(
+        fn=fn,
+        inputs=inputs,
+        output_dir="/teamspace/s3_connections/my-data/v1",  # prefer connection / s3:// / datasets
+        chunk_bytes="64MB",
+        num_workers=8,
+        num_nodes=32,
+        machine=Machine.DATA_PREP,  # or omit to inherit the Studio machine; enum from lightning_sdk
+    )
+```
+
+| Fact         | Detail                                                                                                                                                                                                                |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Where        | Lightning Studio only (`lightning_sdk` required)                                                                                                                                                                      |
+| What happens | Spawns a data-prep **job** that re-runs your script on N machines; platform sets `DATA_OPTIMIZER_*`                                                                                                                   |
+| Sharding     | `world_size = num_nodes × num_workers`; each node processes its slice; **last node merges** `index.json`                                                                                                              |
+| Outputs      | Prefer `/teamspace/s3_connections/...` or cloud URL. Local / `this_studio` optimize outputs remap to job **artifacts** S3 (`map` does **not** remap the same way). Studio may also show `/teamspace/jobs/...` mounts. |
+| Creds        | Every node must reach inputs + outputs                                                                                                                                                                                |
+
+Internals / env table → [processing.md](processing.md) (Multi-node launch). Studio UX → [lightning-studio.md](lightning-studio.md).
+
 ### `map`
 
-`fn(input, output_dir) -> None` (must write files). Same family of knobs as optimize **plus** `error_when_not_empty`. No `chunk_*` / `encryption` / `item_loader` / `mode` / `use_checkpoint` / `verbose`.
+`fn(input, output_dir) -> None` (must write files). Same family of knobs as optimize **plus** `error_when_not_empty`. No `chunk_*` / `encryption` / `item_loader` / `mode` / `use_checkpoint` / `verbose`. Same `num_nodes`/`machine` job launch as optimize.
 
 ### `walk`
 

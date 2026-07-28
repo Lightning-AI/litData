@@ -73,7 +73,19 @@ GIL-disabled Studio runs are a useful high-throughput baseline for “how fast c
 
 ## Optimize / write from Studio
 
-`optimize` / `map` with `output_dir` under a data connection or Studio cloud path will resolve via the same `Dir` machinery and upload through `FsProvider`. Writing into a non-empty remote dir is refused unless `append` / `overwrite` ([streaming.md](streaming.md) gotchas). Prefer writing to a dedicated prefix.
+`optimize` / `map` with `output_dir` under a data connection or Studio cloud path will resolve via the same `Dir` machinery and upload through `FsProvider`. Writing into a non-empty remote dir is refused unless `append` / `overwrite`. Prefer a dedicated versioned prefix.
+
+### Multi-node `num_nodes` / `machine`
+
+Passing `num_nodes=N` (optionally `machine=Machine.DATA_PREP`) from a Studio:
+
+1. LitData calls `_execute` → creates a **data-prep job** (Runs UI URL is printed).
+2. Each of N instances re-runs your script with `DATA_OPTIMIZER_NUM_NODES` / `NODE_RANK` set, then runs `DataProcessor` on its shard.
+3. Last node merges `{rank}-index.json` → final `index.json`.
+
+**Output tip:** write to `/teamspace/s3_connections/...`, `/teamspace/datasets/...`, or `s3://...` so results land in a durable bucket. Optimize may remap `/teamspace/studios/this_studio/...` outputs to the job artifacts S3 URL; the Studio UI may expose them under `/teamspace/jobs/...`. Ensure **every** node can read inputs and write outputs (attached connections or cloud credentials).
+
+Full launch/env/sharding → [processing.md](processing.md). User recipe → [using-litdata.md](using-litdata.md) §9.
 
 ## Quick Studio smoke
 

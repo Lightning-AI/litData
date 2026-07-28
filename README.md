@@ -1671,44 +1671,53 @@ dataset = StreamingDataset(input_dir="local:/data/shared-drive/some-data")
 </details>
 
 <details>
-  <summary> ✅ Optimize dataset in distributed environment <a id="distributed-optimization" href="#distributed-optimization">🔗</a> </summary>
+  <summary> ✅ Optimize / map across multiple machines (Lightning Studios) <a id="distributed-optimization" href="#distributed-optimization">🔗</a> </summary>
 &nbsp;
 
-Lightning can distribute large workloads across hundreds of machines in parallel. This can reduce the time to complete a data processing task from weeks to minutes by scaling to enough machines.
+On [Lightning Studios](https://lightning.ai/), `num_nodes` and `machine` scale `optimize` / `map` across many machines. This is **not** the same as `num_workers` (processes on one machine).
 
-To apply the optimize operator across multiple machines, simply provide the num_nodes and machine arguments to it as follows:
+**How it works**
+
+1. You call `optimize(..., num_nodes=N, machine=...)` (or `map`) inside a Studio.
+2. LitData starts a **data-prep job** that re-runs your script on **N** machines.
+3. Each machine processes a shard of the inputs (`num_nodes × num_workers` total workers). The last node merges chunk indexes into a single `index.json`.
+4. Your local call blocks until the job finishes; open the printed Runs URL to monitor.
+
+Outside Studio, passing `num_nodes` / `machine` raises an error (create a Studio account to use multi-node).
 
 ```python
-import os
 from litdata import optimize, Machine
 
 def compress(index):
     return (index, index ** 2)
 
-optimize(
-    fn=compress,
-    inputs=list(range(100)),
-    num_workers=2,
-    output_dir="my_output",
-    chunk_bytes="64MB",
-    num_nodes=2,
-    machine=Machine.DATA_PREP, # You can select between dozens of optimized machines
-)
+if __name__ == "__main__":
+    optimize(
+        fn=compress,
+        inputs=list(range(100)),
+        num_workers=8,              # processes per machine
+        output_dir="/teamspace/s3_connections/my-data/optimized-v1",  # durable bucket (recommended)
+        chunk_bytes="64MB",
+        num_nodes=32,               # machines in the job
+        machine=Machine.DATA_PREP,  # or omit to use the current Studio machine type
+    )
 ```
 
-If the `output_dir` is a local path, the optimized dataset will be present in: `/teamspace/jobs/{job_name}/nodes-0/my_output`. Otherwise, it will be stored in the specified `output_dir`.
+**Where outputs land**
 
-Read the optimized dataset:
+| `output_dir` | Result |
+|--------------|--------|
+| `/teamspace/s3_connections/...`, `/teamspace/datasets/...`, `s3://...`, `gs://...` | Written directly to that store (**recommended**) |
+| Local or `/teamspace/studios/this_studio/...` | Remapped to the job’s **artifacts** storage; the Studio UI may also expose it under `/teamspace/jobs/<job>/...` |
 
 ```python
 from litdata import StreamingDataset
 
-output_dir = "/teamspace/jobs/litdata-optimize-2024-07-08/nodes.0/my_output"
-
-dataset = StreamingDataset(output_dir)
-
-print(dataset[:])
+# Prefer the same connection / cloud URL you wrote to:
+dataset = StreamingDataset("/teamspace/s3_connections/my-data/optimized-v1")
 ```
+
+The same `num_nodes` / `machine` pattern works with `map`. See also [Parallelize transforms and data optimization](#parallelize-transforms-and-data-optimization-on-cloud-machines).
 
 </details>
 
@@ -1948,7 +1957,7 @@ if __name__ == "__main__":
 
 - Version remote outputs (`.../v2`, `.../run_{%Y-%m-%d}`). Optimized datasets are immutable unless you pass `mode="append"` or `mode="overwrite"`.
 - Outside Studio, use `s3://` / `gs://` / … with your own credentials — `/teamspace/...` resolution needs Lightning Studio environment variables.
-- `optimize` / `map` with `num_nodes` on Studios write under `/teamspace/jobs/...` when `output_dir` is local; use a connection path to land data directly in your bucket.
+- `optimize` / `map` with `num_nodes` launch a Studio **job** (not local multi-process). Prefer a connection / cloud `output_dir`; local / `this_studio` optimize outputs go to job artifacts (UI may show `/teamspace/jobs/...`). Details: [distributed optimization](#distributed-optimization).
 
 </details>
 
@@ -2153,7 +2162,7 @@ Time to optimize 1.2 million ImageNet images (Faster is better):
 
 ## Parallelize data transforms
 
-Transformations with LitData are linearly parallelizable across machines.
+Transformations with LitData are linearly parallelizable across machines on [Lightning Studios](https://lightning.ai/) (see [distributed optimization](#distributed-optimization) for how the job launch works).
 
 For example, let's say that it takes 56 hours to embed a dataset on a single A10G machine. With LitData,
 this can be speed up by adding more machines in parallel
@@ -2166,20 +2175,20 @@ this can be speed up by adding more machines in parallel
 | ...               | ...            |
 | 64              | 0.875        |
 
-To scale the number of machines, run the processing script on [Lightning Studios](https://lightning.ai/):
-
 ```python
 from litdata import map, Machine
 
 map(
   ...
   num_nodes=32,
-  machine=Machine.DATA_PREP, # Select between dozens of optimized machines
+  machine=Machine.DATA_PREP,  # or omit to inherit the Studio machine
+  # Prefer output_dir on /teamspace/s3_connections/... or s3://...
 )
 ```
 
 ## Parallelize data optimization
-To scale the number of machines for data optimization, use [Lightning Studios](https://lightning.ai/):
+
+Same Studio job launch as `map` — `num_nodes` machines × `num_workers` processes; last node merges the index.
 
 ```python
 from litdata import optimize, Machine
@@ -2187,7 +2196,8 @@ from litdata import optimize, Machine
 optimize(
   ...
   num_nodes=32,
-  machine=Machine.DATA_PREP, # Select between dozens of optimized machines
+  machine=Machine.DATA_PREP,
+  output_dir="/teamspace/s3_connections/my-data/optimized-v1",
 )
 ```
 
