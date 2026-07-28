@@ -1677,7 +1677,7 @@ Default `max_cache_size` is **`100GB`**. Peak disk in flight is roughly:
 num_workers × max_pre_download × mean_chunk_size
 ```
 
-Keep `max_cache_size` comfortably above that peak.
+Keep `max_cache_size` comfortably above that peak. For remote datasets, async chunk prefetch often raises `max_pre_download` to **≥4** automatically — see [async prefetch & environment variables](#async-prefetch-env).
 
 ```python
 from litdata import StreamingDataset
@@ -1685,9 +1685,57 @@ from litdata import StreamingDataset
 dataset = StreamingDataset(
     "s3://my-bucket/my-data",
     max_cache_size="10GB",
-    max_pre_download=4,  # chunks each worker may prefetch (default 2)
+    max_pre_download=4,  # chunks each worker may prefetch (default 2; async may floor to 4)
 )
 ```
+
+</details>
+
+<details>
+  <summary> ✅ Async chunk prefetch & environment variables <a id="async-prefetch-env" href="#async-prefetch-env">🔗</a> </summary>
+&nbsp;
+
+### Async chunk prefetch
+
+LitData can overlap **remote chunk downloads** with training using `asyncio` inside each DataLoader worker’s prepare thread. This is **not** an async DataLoader — your loop stays:
+
+```python
+for batch in StreamingDataLoader(dataset, batch_size=64, num_workers=8):
+    train_step(batch)
+```
+
+| Situation | Async prefetch |
+|-----------|----------------|
+| Remote dataset (`s3://`, `gs://`, …) | **On** by default |
+| Local-only dataset | **Off** by default |
+| `LITDATA_ASYNC_CHUNK_PREFETCH=1` | Force on |
+| `LITDATA_ASYNC_CHUNK_PREFETCH=0` | Force off |
+
+When async is on, LitData raises `max_pre_download` to at least **4** so `asyncio.gather` has enough in-flight downloads (override with `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`; set `0` to disable the floor). Peak disk ≈ `num_workers × max_pre_download × chunk_size` — size `max_cache_size` accordingly.
+
+```bash
+# Debugging download/delete races — force synchronous downloads
+export LITDATA_ASYNC_CHUNK_PREFETCH=0
+
+# Keep max_pre_download=2 even with async enabled
+export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
+```
+
+### Common environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LITDATA_CACHE_DIR` | `~/.lightning/chunks` | Default chunk cache directory |
+| `LITDATA_ASYNC_CHUNK_PREFETCH` | on for remote | `0`/`1` force async chunk download overlap |
+| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` | `4` | Floor for `max_pre_download` when async is on (`0` = no floor) |
+| `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | `8` | S3 obstore stream chunk size (MiB) |
+| `MAX_WAIT_TIME` | `120` | Seconds to wait for a chunk before error |
+| `FORCE_DOWNLOAD_TIME` | `30` | Seconds before force re-download of a missing chunk |
+| `LITDATA_DISABLE_VERSION_CHECK` | `0` | `1` skips the upgrade tip |
+| `HF_TOKEN` | — | Gated Hugging Face datasets |
+| `DEBUG_LITDATA` / `PRINT_DEBUG_LOGS` | `0` | Internal debug / stdout logs |
+
+Multi-node `optimize`/`map` on Studios also uses `DATA_OPTIMIZER_*` (set by the platform). Full catalog (debug logs, Studio injects, torchrun): see the LitData skill `reference/env-vars.md` when using agent skills, or the source modules `constants.py` / `async_prefetch.py`.
 
 </details>
 

@@ -1,6 +1,6 @@
 # Using LitData — expert cookbook
 
-Become productive immediately. Narrative docs: repo `README.md`. Internals: [streaming.md](streaming.md), [processing.md](processing.md), [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md).
+Become productive immediately. Narrative docs: repo `README.md`. Internals: [streaming.md](streaming.md), [processing.md](processing.md), [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md), [storage-format.md](storage-format.md).
 
 Install: `pip install litdata` · extras: `pip install 'litdata[extras]'` (README also uses `litdata[extra]` + `s3fs` / `gcsfs` / `huggingface_hub` for specific features).
 
@@ -176,17 +176,23 @@ StreamingDataLoader(
 
 ______________________________________________________________________
 
-## 8. Cache (user-facing)
+## 8. Cache, async prefetch & environment variables
 
-See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md).
+See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) and full catalog [env-vars.md](env-vars.md).
 
 ```python
 StreamingDataset(..., cache_dir="/data/cache", max_cache_size="50GB", max_pre_download=4)
 ```
 
-- `LITDATA_CACHE_DIR` — default cache root.
-- `litdata cache path` / `litdata cache clear`.
-- Async remote prefetch: `LITDATA_ASYNC_CHUNK_PREFETCH`, `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`.
+- `LITDATA_CACHE_DIR` — default cache root · CLI: `litdata cache path` / `litdata cache clear`
+- **Async chunk prefetch** (remote downloads only; training loop stays sync):
+  - Default **on** for remote, **off** for local
+  - `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` force off/on
+  - When on, floors `max_pre_download` to `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` (default **4**; `0` disables floor)
+- Other common: `MAX_WAIT_TIME`, `FORCE_DOWNLOAD_TIME`, `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB`, `HF_TOKEN`, `LITDATA_DISABLE_VERSION_CHECK`
+- Multi-node optimize: `DATA_OPTIMIZER_*` (platform-set) — [processing.md](processing.md)
+
+README: `#async-prefetch-env`.
 
 ______________________________________________________________________
 

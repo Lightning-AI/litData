@@ -36,29 +36,32 @@ Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interac
 
 Before writing examples or answering how-tos, read the cookbook. Highlights:
 
-| Topic        | Remember                                                                                                                       |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Images       | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                |
-| Train stream | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
-| Optimize     | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                      |
-| Cache        | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                    |
-| **Paths**    | Always use LitData resolution — `s3/gs/r2/azure/hf/local:` + `/teamspace/...` (direct bucket I/O). See `reference/resolver.md` |
-| Parquet / HF | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                |
+| Topic          | Remember                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                |
+| Train stream   | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
+| Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                      |
+| Cache          | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                    |
+| Async prefetch | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`     |
+| **Paths**      | Always use LitData resolution — `s3/gs/r2/azure/hf/local:` + `/teamspace/...` (direct bucket I/O). See `reference/resolver.md` |
+| Parquet / HF   | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                |
 
 ## Reference map
 
-| Task                                                                       | Read                                                |
-| -------------------------------------------------------------------------- | --------------------------------------------------- |
-| **Use the library** (APIs, parquet/HF, optimize/map, serializers, shuffle) | `reference/using-litdata.md`                        |
-| **Paths / URLs / Studio mounts / `Dir` / time templates**                  | `reference/resolver.md` (+ README `#resolve-paths`) |
-| Read path, chunk format, shuffle math, item loaders                        | `reference/streaming.md`                            |
-| Cache / prefetch / eviction / shared-chunk deletion                        | `reference/cache-and-chunk-lifecycle.md`            |
-| Fair streaming benchmarks (`benchmarks/` suite)                            | `reference/benchmarking.md`                         |
-| Lightning Studio env, credentials, free-threading                          | `reference/lightning-studio.md`                     |
-| Write path / **multi-node** `num_nodes` job launch                         | `reference/processing.md`                           |
-| Dev env, PR/CI style                                                       | `reference/contributing.md`                         |
-| Tests & fixtures                                                           | `reference/testing.md`                              |
-| Tracing, breakpoints, env knobs                                            | `reference/debugging.md`                            |
+| Task                                                                          | Read                                                |
+| ----------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Use the library** (APIs, parquet/HF, optimize/map, serializers, shuffle)    | `reference/using-litdata.md`                        |
+| **Paths / URLs / Studio mounts / `Dir` / time templates**                     | `reference/resolver.md` (+ README `#resolve-paths`) |
+| Read path, shuffle math, item loaders, Combined/Parallel                      | `reference/streaming.md`                            |
+| **Cache / BinaryWriter / BinaryReader / `index.json` / FsProvider / sampler** | `reference/storage-format.md`                       |
+| Cache / prefetch / eviction / shared-chunk deletion                           | `reference/cache-and-chunk-lifecycle.md`            |
+| **Env vars** (async prefetch, cache, debug, `DATA_OPTIMIZER_*`, Studio)       | `reference/env-vars.md`                             |
+| Fair streaming benchmarks (`benchmarks/` suite)                               | `reference/benchmarking.md`                         |
+| Lightning Studio env, credentials, free-threading                             | `reference/lightning-studio.md`                     |
+| Write path / **multi-node** `num_nodes` job launch                            | `reference/processing.md`                           |
+| Dev env, PR/CI style                                                          | `reference/contributing.md`                         |
+| Tests & fixtures                                                              | `reference/testing.md`                              |
+| Tracing, breakpoints, env knobs                                               | `reference/debugging.md`                            |
 
 ## Public API (`src/litdata/__init__.py`)
 
@@ -84,10 +87,11 @@ Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook
 
 ## Shared concepts
 
-- Chunk: `[num_items][offsets][data]`; `index.json` holds chunks + config (`data_format`, `item_loader`, …).
+- Chunk: `[num_items][offsets][data]`; `index.json` holds chunks + config (`data_format`, `item_loader`, …) — [storage-format.md](reference/storage-format.md).
 - Item loaders own layout + intervals (`PyTreeLoader`, `TokensLoader`, `ParquetLoader`).
+- Write/management I/O = `FsProvider` (s3/gs/r2); training downloads = `Downloader`. Sampler `ChunkedIndex` is read-path; `CacheBatchSampler` is `CacheDataLoader` only.
 - Ranks from env (`_DistributedEnv` / `DATA_OPTIMIZER_*`), not a custom network.
-- Shuffle deterministic from `seed`+epoch+chunk → resumable.
+- Shuffle deterministic from `seed`+epoch+chunk → resumable (`shuffle.py`, not `sampler.py`).
 - Design: one less thing to remember; pure PyTorch; backward compatible; test-driven.
 
 ## Quick commands

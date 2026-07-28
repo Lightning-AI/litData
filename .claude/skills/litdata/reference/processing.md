@@ -1,6 +1,6 @@
 # The processing (write) pipeline — `optimize` / `map`
 
-All paths under `src/litdata/`. This pipeline fans work across workers (and machines) to transform raw data, and for `optimize` writes it into the litdata chunk format that the streaming pipeline reads.
+All paths under `src/litdata/`. This pipeline fans work across workers (and machines) to transform raw data, and for `optimize` writes it into the litdata chunk format that the streaming pipeline reads. Chunk / `index.json` / `BinaryWriter` / `FsProvider` details → [storage-format.md](storage-format.md).
 
 ## Public API (`processing/functions.py`)
 

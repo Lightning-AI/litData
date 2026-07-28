@@ -8,7 +8,7 @@ How remote chunks land on disk, how much space they use, and how workers share/d
 remote URL / local path  →  download into cache_dir  →  deserialize sample  →  (optional) delete chunk when done
 ```
 
-`StreamingDataset` builds a `Cache` (`streaming/cache.py`) that owns a `BinaryReader` (and, on the write path, a `BinaryWriter`). Users almost never construct `Cache` directly.
+`StreamingDataset` builds a `Cache` (`streaming/cache.py`) that owns a `BinaryReader` (and, on the write path, a `BinaryWriter`). Users almost never construct `Cache` directly. Class APIs, `index.json` / chunk binary layout, FsProvider, sampler → [storage-format.md](storage-format.md).
 
 ### Knobs
 
@@ -35,12 +35,16 @@ dataset = StreamingDataset(
 - `Dir(path=local_cache, url=remote)` when cache location and remote URL differ.
 - Random access (`dataset[i]`) may fetch byte ranges (`on_demand_bytes`); iteration prefers full-chunk cache.
 
-### Prefetch env (optional)
+### Async chunk prefetch
 
-| Env                                | Role                                                                          |
-| ---------------------------------- | ----------------------------------------------------------------------------- |
-| `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` | Force off/on async download overlap (default on for remote)                   |
-| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`   | Floor for `max_pre_download` when async is on (default 4; `0` disables floor) |
+**Not** an async DataLoader. `asyncio.gather` overlaps remote chunk GETs inside each worker’s `PrepareChunksThread` (`streaming/async_prefetch.py`). Training stays `for batch in loader`.
+
+| Default | Remote dataset → **on**; local-only → **off** |
+| Env override | `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` |
+| Prefetch floor | Raises `max_pre_download` to ≥ `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` (default **4**); `0` disables floor |
+| Disk | Peak ≈ `num_workers × max_pre_download × chunk_size` — size `max_cache_size` for the floored value |
+
+Full env catalog → [env-vars.md](env-vars.md). Fair benches → [benchmarking.md](benchmarking.md).
 
 ## Contributor: read hot path
 

@@ -30,20 +30,20 @@ All paths under `src/litdata/streaming/` unless noted. This is the inverse of th
 
 **On-demand mode**: if `on_demand_bytes` is true and the data is remote + PyTreeLoader + no compression/encryption, `read` fetches only the item's byte range (HTTP range GET) via `read_item_bytes` (`reader.py:535`) → `ChunksConfig.download_chunk_bytes_from_index` (`config.py:160`). Iterating flips `on_demand_bytes=False` (`dataset.py:365`) so full chunks are cached during training; it flips back on `StopIteration`.
 
-## On-disk chunk format
+## On-disk format / Cache / Writer / Reader / FsProvider / sampler
 
-Binary layout (documented at `writer.py:218`):
+**Full deep dive:** [storage-format.md](storage-format.md) — `Cache` facade, binary chunk layout, `index.json` schema, `BinaryWriter`/`BinaryReader`/`ChunksConfig`, `FsProvider` vs `Downloader`, `ChunkedIndex` + `CacheBatchSampler`.
+
+Sketch:
 
 ```
 +-----------+----------------+-----------+
-| num_items | offset_array   | item_data |
+| num_items | offset_array   | item_data |   → chunk-{rank}-{idx}[.zstd].bin
 | uint32    | uint32[N+1]    | bytes     |
 +-----------+----------------+-----------+
 ```
 
-Writer `BinaryWriter` (`writer.py:50`): `add_item`/`serialize` flatten the sample via pytree, serialize each leaf, record `data_format` (serializer names) and `data_spec` (treespec) once, delegate final byte layout to the item loader's `encode_data`. Chunks roll over when `chunk_bytes` or `chunk_size` is exceeded (`writer.py:381`). Filenames: `chunk-{rank}-{idx}.bin`. Each worker writes `{rank}.index.json`; `merge` (`writer.py:455`) concatenates all per-rank indexes into one `index.json` and asserts configs match.
-
-Reader `ChunksConfig` (`config.py:33`): loads `index.json`, deserializes `data_spec`, calls `item_loader.setup` + `generate_intervals`, maps global index → `(chunk_index, offset)` (`config.py:266`).
+`BinaryWriter` → `{rank}.index.json` → merge → `index.json`. `ChunksConfig` + `BinaryReader` consume that on the read path. Prefetch/eviction → [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md).
 
 ## Item loaders (`item_loader.py`) — own byte layout AND interval math
 
@@ -62,9 +62,9 @@ Reader `ChunksConfig` (`config.py:33`): loads `index.json`, deserializes `data_s
 
 - **`downloader.py`** — read path. `Downloader` ABC (`:41`); subclasses `S3Downloader`, `R2Downloader`, `GCPDownloader`, `AzureDownloader`, `HFDownloader`, `LocalDownloader`. Selected by URL prefix via `_DOWNLOADERS` registry + `get_downloader` (`:658`); register new ones with `register_downloader` (`:632`).
 - **S3 path prefers obstore**: `obstore` is a **hard** install dependency (`requirements.txt`). Sync and async S3 downloads stream via obstore when `_OBSTORE_AVAILABLE`; boto3 remains the fallback. Stream chunk size: `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` (default **8** MiB). Credential provider: `obstore.auth.boto3.Boto3CredentialProvider`.
-- **Async chunk prefetch** (`async_prefetch.py`): **not** an async DataLoader. Only overlaps remote chunk downloads inside `PrepareChunksThread` via `asyncio.gather`. Default **on for remote**, off for local-only; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` overrides. When on, raises `max_pre_download` floor to 4 (`LITDATA_ASYNC_MIN_PRE_DOWNLOAD`). See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) for budget-cap interaction.
-- **`fs_provider.py`** — write/management path (uploads, existence, deletes). `FsProvider` ABC; `S3FsProvider`, `R2FsProvider`, `GCPFsProvider`. Selected via `_get_fs_provider` (`:329`). Covers fewer backends than downloader.
-- **`resolver.py`** — path/URL resolution (NOT I/O backend selection). `_resolve_dir` (`:50`) → `Dir(path, url, data_connection_id)`. Resolves Lightning teamspace paths (`/teamspace/...`) to bucket URLs via the Lightning SDK. Full Studio map: [lightning-studio.md](lightning-studio.md).
+- **Async chunk prefetch** (`async_prefetch.py`): **not** an async DataLoader. Overlaps remote chunk downloads inside `PrepareChunksThread` via `asyncio.gather`. Default **on for remote**, off for local-only; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` overrides. When on, raises `max_pre_download` floor to 4 (`LITDATA_ASYNC_MIN_PRE_DOWNLOAD`). See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) and [env-vars.md](env-vars.md).
+- **`fs_provider.py`** — write/management only (`s3`/`gs`/`r2`). Details + vs Downloader: [storage-format.md](storage-format.md) §5.
+- **`resolver.py`** — path/URL resolution (NOT I/O backend selection). `_resolve_dir` (`:50`) → `Dir(path, url, data_connection_id)`. Full map: [resolver.md](resolver.md), [lightning-studio.md](lightning-studio.md).
 - **`client.py`** — `S3Client`/`R2Client` wrap boto3 with credential refresh + temporary project-role credentials from the Lightning control plane.
 - **`compression.py`** — `Compressor` ABC + `ZSTDCompressor`, registered into `_COMPRESSORS`. Decompression in `ChunksConfig.try_decompress` (`config.py:182`).
 - **`serializers.py`** — `Serializer` ABC; ordered `_SERIALIZERS` dict (`:553`, order matters because `can_serialize` is tried top-to-bottom). Includes `str/bool/int/float/video/tifffile/pil/jpeg/numpy/tensor/pickle` (catch-all). Users pass custom serializers via `StreamingDataset(serializers=...)`.
@@ -79,7 +79,7 @@ Reader `ChunksConfig` (`config.py:33`): loads `index.json`, deserializes `data_s
 
 **Stage B — in-chunk item order** (`Shuffle.__call__`): `FullShuffle` permutes with `np.random.RandomState([seed, num_chunks, current_epoch, chunk_index])` (`shuffle.py:140`), deterministic per (chunk, epoch).
 
-`sampler.py` (`ChunkedIndex`, `CacheBatchSampler`) is used by the **write/caching path** (`CacheDataLoader`), NOT the read path — don't confuse it with `shuffle.py`.
+**`sampler.py` vs `shuffle.py`:** `ChunkedIndex` is used on the **StreamingDataset read path**. `CacheBatchSampler` is **only** for `CacheDataLoader` (map-dataset → write-while-train). Epoch shuffle for streaming lives in `shuffle.py`. Full logic: [storage-format.md](storage-format.md) §6.
 
 ## Resume / checkpointing
 

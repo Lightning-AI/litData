@@ -61,7 +61,7 @@ Always state: dataset, chunk/write mode, `num_workers`, `batch_size`, `max_pre_d
 ## Fair comparison checklist
 
 1. **Wipe the chunk cache** before every cold run (`litdata cache clear` or delete the cache dir).
-2. **Same knobs on every arm** — workers, batch size, image size/quality, prefetch/cache when applicable.
+2. **Same knobs on every arm** — workers, batch size, image size/quality, prefetch/cache when applicable. For remote streams, async prefetch is **on by default** and floors `max_pre_download` to 4 — pin `LITDATA_ASYNC_CHUNK_PREFETCH` and `max_pre_download` identically when comparing sync vs async or LitData vs another loader ([env-vars.md](env-vars.md)).
 3. **Same machine, network, and dataset revision.**
 4. **JPEG vs PIL** — LitData `--write_mode jpeg` vs PIL RAW are different formats; don’t mix when comparing loaders. FFCV has its own write modes (`benchmarks/ffcv/`).
 5. **Repeat noisy cloud runs** before claiming small wins.
