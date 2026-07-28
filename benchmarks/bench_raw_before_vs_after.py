@@ -233,7 +233,7 @@ def make_dataset(
     kwargs: dict = {"cache_dir": cache, "cache_files": False}
     if side == "after":
         kwargs["max_prefetch"] = max_prefetch
-        kwargs["max_concurrent_downloads"] = 64
+        # Default None → Stage 1 adaptive permits (do not pass 64: that bypasses clamp).
         kwargs["range_parallel_threshold"] = 0
         # Match new defaults: hedging opt-in (0). Explicit for older trees / clarity.
         kwargs["hedge_delay"] = 0.0 if hedge_delay is None else hedge_delay
@@ -561,7 +561,7 @@ def run_side(
                 "workers": workers,
                 "prefetch": [0] if side == "before" else list(AFTER_PREFETCH),
                 "range_parallel_threshold": 0 if side == "after" else None,
-                "max_concurrent_downloads": 64 if side == "after" else None,
+                "max_concurrent_downloads": None,  # after default: Stage 1 adaptive; before: N/A
                 "hedge_delay": 0.0 if side == "after" else None,
                 "safety_grid": safety_grid,
                 "capabilities": caps,

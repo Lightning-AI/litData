@@ -74,21 +74,25 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
 @pytest.mark.parametrize(
     ("num_workers", "max_concurrent", "median_bytes", "expected"),
     [
-        # num_workers <= 1 keeps the constructor cap
+        # Explicit int → exactly that many permits (no silent clamp), any worker count
         (0, 64, 100_000, 64),
         (1, 64, 100_000, 64),
-        # ~100KB JPEG → aggregate budget caps at 128; split across workers, floor 8
-        (2, 64, 100_000, 64),  # min(64, max(8, 128//2)) = 64
-        (8, 64, 100_000, 16),  # 128//8 = 16
-        (16, 64, 100_000, 8),  # 128//16 = 8
-        (24, 64, 100_000, 8),  # 128//24 = 5 → floor 8
-        (32, 64, 100_000, 8),  # 128//32 = 4 → floor 8
-        # Large objects shrink the aggregate budget (floor 32) → fewer permits
-        (4, 64, 10 * 1024 * 1024, 8),  # budget=32, 32//4=8
-        # Unknown size uses default median (256KiB) → still capped at 128
-        (8, 64, None, 16),
-        # Never exceed the user cap
+        (24, 64, 100_000, 64),
+        (32, 64, 100_000, 64),
         (2, 4, 100_000, 4),
+        # Adaptive (None): ~100KB JPEG → bandwidth≈524 → cap 512
+        (0, None, 100_000, 512),  # n≤1 → full budget
+        (1, None, 100_000, 512),
+        (2, None, 100_000, 256),  # 512//2
+        (4, None, 100_000, 128),  # 512//4
+        (8, None, 100_000, 64),  # 512//8 — healthy mid-w aggregate
+        (16, None, 100_000, 32),  # 512//16
+        (24, None, 100_000, 21),  # 512//24
+        (32, None, 100_000, 16),  # 512//32
+        # Large objects: bandwidth small, Little's-law arm (~240) wins
+        (4, None, 10 * 1024 * 1024, 60),  # max(8, 240//4)
+        # Unknown size uses default median (256KiB) → max(200, 240)=240
+        (8, None, None, 30),  # 240//8
     ],
 )
 def test_effective_concurrency_vs_num_workers(num_workers, max_concurrent, median_bytes, expected):
@@ -101,14 +105,38 @@ def test_aggregate_concurrency_budget_clamps():
     from litdata.raw.dataset import (
         _AGGREGATE_CONCURRENCY_BUDGET_CAP,
         _AGGREGATE_CONCURRENCY_BUDGET_FLOOR,
+        _ASSUMED_REQUEST_LATENCY_S,
+        _ASSUMED_REQUEST_RATE,
         _aggregate_concurrency_budget,
     )
 
+    latency = int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S)  # ~240
     assert _aggregate_concurrency_budget(1) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
-    assert _aggregate_concurrency_budget(50 * 1024 * 1024) == _AGGREGATE_CONCURRENCY_BUDGET_FLOOR
+    # Huge objects: bandwidth arm collapses; Little's-law arm sets the budget
+    assert _aggregate_concurrency_budget(50 * 1024 * 1024) == latency
     assert (
         _AGGREGATE_CONCURRENCY_BUDGET_FLOOR <= _aggregate_concurrency_budget(None) <= _AGGREGATE_CONCURRENCY_BUDGET_CAP
     )
+    # Tiny ImageNet-like: bandwidth wins over latency, then hits cap
+    assert _aggregate_concurrency_budget(100_000) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
+
+
+def test_effective_download_permits_cached_per_pid(tmp_path):
+    """Permit math runs once per process, not on every semaphore acquire."""
+    (tmp_path / "a.jpg").write_bytes(b"x" * 100_000)
+    from unittest.mock import patch
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+    with patch("litdata.raw.dataset._num_dataloader_workers", side_effect=[8, 16]) as mock_w:
+        assert cm._effective_download_permits() == 64  # adaptive: 512//8
+        assert cm._effective_download_permits() == 64  # cached — ignores worker change
+        assert mock_w.call_count == 1
+    cm.reset_runtime_state()
+    with patch("litdata.raw.dataset._num_dataloader_workers", return_value=16):
+        assert cm._effective_download_permits() == 32  # recomputed: 512//16
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")

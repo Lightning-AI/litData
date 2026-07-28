@@ -15,25 +15,48 @@ A litdata controller that keys only on raised 429/503 will be nearly blind until
 
 ## Stages
 
-| Stage | What                                                                                                          | Status                         |
-| ----: | ------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-|     0 | Bench protocol: `max(N batches, T seconds)`, ≥5 interleaved repeats, median+spread, append-only artifacts     | Done (this work)               |
-|     1 | Static worker-aware concurrency: `clamp(budget // num_workers, floor, max)` from median file size + bandwidth | Done (this work)               |
-|     2 | Prefetch hit-rate controller (hit \<30% → halve, floor 0; hysteresis)                                         | Pending                        |
-|     3 | AIMD on concurrency (needs downloader throttle counts)                                                        | After contract                 |
-|     4 | Full throughput-gradient control                                                                              | Only if Stage 3 shows headroom |
+| Stage | What                                                                                                                  | Status                         |
+| ----: | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+|     0 | Bench protocol: `max(N batches, T seconds)`, ≥5 interleaved repeats, median+spread, append-only artifacts             | Done (this work)               |
+|     1 | Static worker-aware concurrency: `max(floor, budget // num_workers)` from median file size (bandwidth + Little’s-law) | Done (this work)               |
+|     2 | Prefetch hit-rate controller (hit \<30% → halve, floor 0; hysteresis)                                                 | Pending                        |
+|     3 | AIMD on concurrency (needs downloader throttle counts)                                                                | After contract                 |
+|     4 | Full throughput-gradient control                                                                                      | Only if Stage 3 shows headroom |
+
+## Stage 1 justification (honest)
+
+The original Stage 1 premise — that **w=24 with 64 permits/worker (1536 aggregate) stampeded** and needed a hard clamp — was **falsified** by the batch-timeout dig. Post-timeout, w=24 with 64 permits was within/near run-to-run noise of lower concurrency.
+
+What remains as justification is thinner and **unmeasured until the Stage 1 A/B**:
+
+- S3 prefix / neighbor pressure and request cost at pathological aggregates (N×64 → 1536+)
+- Prefer a size-aware default over asking users to tune `max_concurrent_downloads` per `num_workers`
+
+The A/B (pre-Stage-1 HEAD vs Stage-1 HEAD) is what decides whether the clamp earns its keep or needs loosening.
 
 ## Stage 1 formula (shipped)
+
+`max_concurrent_downloads=None` (default) → adaptive:
 
 ```
 target_bytes = ASSUMED_AGGREGATE_BANDWIDTH_BPS × CONCURRENCY_PIPELINE_SECONDS
              = 100 MiB/s × 0.5 s ≈ 50 MiB
-aggregate_budget = clamp(target_bytes // median_file_bytes, 32, 128)
-effective_concurrency = min(max_concurrent_downloads,
-                            max(8, aggregate_budget // num_workers))
+bandwidth_model = target_bytes // median_file_bytes
+latency_model   = ASSUMED_REQUEST_RATE × ASSUMED_REQUEST_LATENCY_S
+                ≈ 6000 req/s × 0.040 s ≈ 240
+aggregate_budget = clamp(max(bandwidth_model, latency_model), 32, 512)
+effective_concurrency = max(8, aggregate_budget // num_workers)   # n>1
+                      = aggregate_budget                            # n≤1
 ```
 
-Defaults when size unknown: median = 256 KiB. Semaphore uses this permit count (loop-keyed; cleared on fork/spawn like other runtime clients).
+**Important:** per-worker floor of 8 means realized aggregate is
+`max(budget, 8 × num_workers)` — high worker counts can exceed the budget via the floor.
+
+ImageNet ~100 KiB → bandwidth ≈ 524 → capped at 512 → at w=8 permits=64 (aggregate 512), not the old 128-cap path that compressed mid-w cells.
+
+Explicit `max_concurrent_downloads=int` → **exactly** that many permits (no silent clamp). Tuned users who pass `64` keep `64`.
+
+Defaults when size unknown: median = 256 KiB. Semaphore uses this permit count (computed once per process; cleared on fork/spawn like other runtime clients).
 
 ## Acceptance (future adaptive)
 
