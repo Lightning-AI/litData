@@ -106,7 +106,9 @@ def test_aggregate_concurrency_budget_clamps():
 
     assert _aggregate_concurrency_budget(1) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
     assert _aggregate_concurrency_budget(50 * 1024 * 1024) == _AGGREGATE_CONCURRENCY_BUDGET_FLOOR
-    assert _AGGREGATE_CONCURRENCY_BUDGET_FLOOR <= _aggregate_concurrency_budget(None) <= _AGGREGATE_CONCURRENCY_BUDGET_CAP
+    assert (
+        _AGGREGATE_CONCURRENCY_BUDGET_FLOOR <= _aggregate_concurrency_budget(None) <= _AGGREGATE_CONCURRENCY_BUDGET_CAP
+    )
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")

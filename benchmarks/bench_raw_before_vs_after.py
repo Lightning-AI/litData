@@ -616,10 +616,7 @@ def run_interleaved(
         "before": partial_path("before", sha=sha, ts=run_ts),
         "after": partial_path("after", sha=sha, ts=run_ts),
     }
-    log(
-        f"=== interleaved A/B repeats={n_rep} workers={workers} "
-        f"batches>={batches} min_seconds>={min_seconds} ==="
-    )
+    log(f"=== interleaved A/B repeats={n_rep} workers={workers} batches>={batches} min_seconds>={min_seconds} ===")
     log(f"before PYTHONPATH={before_pythonpath} → {outs['before'].name}")
     log(f"after  PYTHONPATH={after_pythonpath} → {outs['after'].name}")
     for rep in range(n_rep):

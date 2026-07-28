@@ -15,13 +15,13 @@ A litdata controller that keys only on raised 429/503 will be nearly blind until
 
 ## Stages
 
-| Stage | What | Status |
-|------:|------|--------|
-| 0 | Bench protocol: `max(N batches, T seconds)`, ≥5 interleaved repeats, median+spread, append-only artifacts | Done (this work) |
-| 1 | Static worker-aware concurrency: `clamp(budget // num_workers, floor, max)` from median file size + bandwidth | Done (this work) |
-| 2 | Prefetch hit-rate controller (hit &lt;30% → halve, floor 0; hysteresis) | Pending |
-| 3 | AIMD on concurrency (needs downloader throttle counts) | After contract |
-| 4 | Full throughput-gradient control | Only if Stage 3 shows headroom |
+| Stage | What                                                                                                          | Status                         |
+| ----: | ------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+|     0 | Bench protocol: `max(N batches, T seconds)`, ≥5 interleaved repeats, median+spread, append-only artifacts     | Done (this work)               |
+|     1 | Static worker-aware concurrency: `clamp(budget // num_workers, floor, max)` from median file size + bandwidth | Done (this work)               |
+|     2 | Prefetch hit-rate controller (hit \<30% → halve, floor 0; hysteresis)                                         | Pending                        |
+|     3 | AIMD on concurrency (needs downloader throttle counts)                                                        | After contract                 |
+|     4 | Full throughput-gradient control                                                                              | Only if Stage 3 shows headroom |
 
 ## Stage 1 formula (shipped)
 
