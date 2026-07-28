@@ -76,10 +76,7 @@ def summarize_ips(values: list[float]) -> dict:
         return {"ips_median": None, "ips_min": None, "ips_max": None, "ips_spread_pct": None, "n": 0}
     ordered = sorted(values)
     mid = len(ordered) // 2
-    if len(ordered) % 2:
-        median = ordered[mid]
-    else:
-        median = 0.5 * (ordered[mid - 1] + ordered[mid])
+    median = ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
     lo, hi = ordered[0], ordered[-1]
     spread = ((hi - lo) / median) * 100.0 if median else None
     return {
@@ -642,7 +639,7 @@ def run_interleaved(
                 "1",
             ]
             log(f"interleave rep={rep} side={side}: {' '.join(cmd)}")
-            subprocess.check_call(cmd, env=env)
+            subprocess.check_call(cmd, env=env)  # noqa: S603
     log(f"interleave complete — merge with: python {script} --merge")
     log(f"  before={outs['before']}")
     log(f"  after={outs['after']}")

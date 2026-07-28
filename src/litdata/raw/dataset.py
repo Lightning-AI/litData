@@ -421,7 +421,7 @@ def _effective_concurrency(
 
     Mirrors :func:`_effective_prefetch` for the download semaphore. At high worker
     counts this turns ``num_workers × max_concurrent_downloads`` potential in-flight
-    GETs into a size-aware aggregate without runtime feedback (Stage 1 statics).
+    GETs into a size-aware aggregate without runtime feedback (Stage 1 static clamp).
     """
     if max_concurrent_downloads <= 0:
         return 1
@@ -680,7 +680,7 @@ class CacheManager:
         return self._downloader
 
     def _effective_download_permits(self) -> int:
-        """Worker-aware permit count for the download semaphore (Stage 1 statics)."""
+        """Worker-aware permit count for the download semaphore (Stage 1 static clamp)."""
         return _effective_concurrency(
             self.max_concurrent_downloads,
             _num_dataloader_workers(),
