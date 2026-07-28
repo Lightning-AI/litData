@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -138,7 +139,8 @@ def test_os_fork_clears_runner_and_lock(tmp_path: Path) -> None:
     with os.fdopen(rfd, "rb") as rf:
         msg = rf.read(4096)
     _, status = os.waitpid(pid, 0)
-    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg
+    assert os.WIFEXITED(status), msg
+    assert os.WEXITSTATUS(status) == 0, msg
     assert msg.startswith(b"ok:")
     assert msg[3:] == b"fork-me"
     # Parent runner still usable.
@@ -332,10 +334,8 @@ def test_atomic_publish_never_exposes_short_file(tmp_path: Path) -> None:
     def poller() -> None:
         while not stop.wait(0.001):
             if os.path.exists(local):
-                try:
+                with contextlib.suppress(OSError):
                     observed_lengths.append(os.path.getsize(local))
-                except OSError:
-                    pass
 
     async def chunky_write(remote_filepath: str, local_filepath: str) -> None:
         with open(local_filepath, "wb") as f:
@@ -867,10 +867,8 @@ def test_ranged_chunk_hedge_uses_distinct_scratch(tmp_path: Path) -> None:
         def ranged(path: str, offset: int, length: int, scratch: str) -> bytes:
             scratches.append(scratch)
             # Block both concurrent attempts (first + hedge) until both have started.
-            try:
+            with contextlib.suppress(threading.BrokenBarrierError):
                 barrier.wait()
-            except threading.BrokenBarrierError:
-                pass
             return b"y" * length
 
         cm._downloader = type("D", (), {"download_bytes": staticmethod(ranged)})()  # type: ignore[assignment]
