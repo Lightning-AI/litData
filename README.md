@@ -383,11 +383,11 @@ Your dataset directory contains MDS shard files (e.g. `shard.00000.mds`, ...) al
 ```python
 import litdata as ld
 
-Point to your MDS dataset stored locally or in the cloud
+# point to your MDS dataset stored locally or in the cloud
 
 mds_dataset_uri = "s3://my-bucket/my-mds-data" # or a local path
 
-LitData automatically detects and deserializes the MDS format
+# LitData automatically detects and deserializes the MDS format
 
 dataset = ld.StreamingDataset(mds_dataset_uri)
 
