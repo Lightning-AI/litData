@@ -15,13 +15,8 @@
     "persistent_workers": true,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [
-      24
-    ],
-    "prefetch": [
-      0,
-      16
-    ],
+    "workers": [24],
+    "prefetch": [0, 16],
     "range_parallel_threshold": 0,
     "max_concurrent_downloads": 64,
     "hedge_delay": 0.0,

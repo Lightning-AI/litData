@@ -55,7 +55,6 @@ def git_sha() -> str:
     try:
         return subprocess.check_output(
             ["/usr/bin/git", "rev-parse", "--short", "HEAD"],
-
             cwd=Path(__file__).resolve().parents[1],
             text=True,
             stderr=subprocess.DEVNULL,

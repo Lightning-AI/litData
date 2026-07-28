@@ -4,16 +4,7 @@
     "batch_size": 64,
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
     "before": {
       "input": "s3://imagenet-1m-template/raw/val",
       "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
@@ -29,12 +20,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        24
-      ],
-      "prefetch": [
-        0
-      ],
+      "workers": [24],
+      "prefetch": [0],
       "range_parallel_threshold": null,
       "max_concurrent_downloads": null,
       "hedge_delay": null,
@@ -75,13 +62,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        24
-      ],
-      "prefetch": [
-        0,
-        16
-      ],
+      "workers": [24],
+      "prefetch": [0, 16],
       "range_parallel_threshold": 0,
       "max_concurrent_downloads": 64,
       "hedge_delay": 0.0,
@@ -115,9 +97,7 @@
       "input_note": "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0",
       "caveat": "Short windows and high-worker cells can be noisy (~2\u00d7 run-to-run). Trust systematic patterns (e.g. prefetch helps), not fine \u0394%."
     },
-    "long_window_workers": [
-      24
-    ],
+    "long_window_workers": [24],
     "long_window_protocol": {
       "batches": 300,
       "min_seconds": 15,
