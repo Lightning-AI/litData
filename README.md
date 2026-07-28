@@ -519,90 +519,60 @@ https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
 
 **Prerequisites:**
 
-Install the required dependencies to stream Hugging Face datasets:
 ```sh
-pip install "litdata[extra]" huggingface_hub
+pip install 'litdata[extras]' huggingface_hub
 
-# Optional: To speed up downloads on high-bandwidth networks
+# Optional: faster downloads on high-bandwidth networks
 pip install hf_transfer
 export HF_HUB_ENABLE_HF_TRANSFER=1
 ```
 
-**Stream Hugging Face dataset:**
+**Supported for HF:** datasets stored as **Parquet** only. Gated datasets: set `HF_TOKEN`.
+
+**Stream Hugging Face dataset** (auto-index + auto `ParquetLoader`):
 
 ```python
 import litdata as ld
 
-# Define the Hugging Face dataset URI
 hf_dataset_uri = "hf://datasets/leonardPKU/clevr_cogen_a_train/data"
 
-# Create a streaming dataset
-dataset = ld.StreamingDataset(hf_dataset_uri)
+dataset = ld.StreamingDataset(hf_dataset_uri)  # indexes on first use; caches index.json locally
+print("Sample", dataset[0])  # dict of columns
 
-# Print the first sample
-print("Sample", dataset[0])
-
-# Stream the dataset using StreamingDataLoader
-dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
+# With workers on Linux, use spawn (same as other ParquetLoader usage)
+dataloader = ld.StreamingDataLoader(
+    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
+)
 for sample in dataloader:
-    pass 
+    pass
 ```
 
-You don’t need to worry about indexing the dataset or any other setup. **LitData** will **handle all the necessary steps automatically** and `cache` the `index.json` file, so you won't have to index it again.
+Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes (if needed) and selects `ParquetLoader`.
 
-This ensures that the next time you stream the dataset, the indexing step is skipped..
-
-&nbsp;
-
-### Indexing the HF dataset (Optional)
-
-If the Hugging Face dataset hasn't been indexed yet, you can index it first using the `index_hf_dataset` method, and then stream it using the code above.
+### Indexing the HF dataset (optional, faster cold start)
 
 ```python
 import litdata as ld
 
-hf_dataset_uri = "hf://datasets/leonardPKU/clevr_cogen_a_train/data"
-
-ld.index_hf_dataset(hf_dataset_uri)
+# Returns the local cache directory that contains index.json
+cache_dir = ld.index_hf_dataset("hf://datasets/leonardPKU/clevr_cogen_a_train/data")
 ```
 
-- Indexing the Hugging Face dataset ahead of time will make streaming abit faster, as it avoids the need for real-time indexing during streaming.
-
-- To use `HF gated dataset`, ensure the `HF_TOKEN` environment variable is set.
-
-**Note**: For HuggingFace datasets, `indexing` & `streaming` is supported only for datasets in **`Parquet format`**.
-
-&nbsp;
-
-### Full Workflow for Hugging Face Datasets
-
-For full control over the cache path(`where index.json file will be stored`) and other configurations, follow these steps:
-
-1. Index the Hugging Face dataset first:
-
-```python
-import litdata as ld
-
-hf_dataset_uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
-
-ld.index_parquet_dataset(hf_dataset_uri, "hf-index-dir")
-```
-
-2. To stream HF datasets now, pass the `HF dataset URI`, the path where the `index.json` file is stored, and `ParquetLoader` as the `item_loader` to the **`StreamingDataset`**:
+Or control the index path explicitly:
 
 ```python
 import litdata as ld
 from litdata.streaming.item_loader import ParquetLoader
 
-hf_dataset_uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
+uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
+ld.index_parquet_dataset(uri, "hf-index-dir")  # writes index under hf-index-dir
 
-dataset = ld.StreamingDataset(hf_dataset_uri, item_loader=ParquetLoader(), index_path="hf-index-dir")
-
-for batch in ld.StreamingDataLoader(dataset, batch_size=4):
-  pass
+dataset = ld.StreamingDataset(uri, item_loader=ParquetLoader(), index_path="hf-index-dir")
+for batch in ld.StreamingDataLoader(dataset, batch_size=4, multiprocessing_context="spawn"):
+    pass
 ```
 
-&nbsp;
+See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
 ### LitData `Optimize` v/s `Parquet`
 <!-- TODO: Update benchmark -->
@@ -1406,58 +1376,112 @@ The `overwrite` mode will delete the existing data and start from fresh.
   <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
-Stream Parquet datasets directly with LitData—no need to convert them into LitData’s optimized binary format! If your dataset is already in Parquet format, you can efficiently index and stream it using `StreamingDataset` and `StreamingDataLoader`.
+Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face parquet datasets are covered in [Stream Hugging Face datasets](#stream-hf).
 
-**Assumption:**
+### Stream vs optimize vs map
 
-Your dataset directory contains one or more Parquet files.
+| Goal | Use |
+|------|-----|
+| Train on parquet as-is (no conversion) | `index_parquet_dataset` → `StreamingDataset` + `ParquetLoader` |
+| Faster I/O / tokenize / custom sample shape | `optimize(fn)` that `yield`s rows from parquet ([reduce memory](#reduce-memory)) |
+| Reshard huge parquet files while mapping | `map(..., reader=ParquetReader(cache_folder, num_rows=...))` |
 
-**Prerequisites:**
+Each sample from `ParquetLoader` is a **`dict`** (column name → value).
 
-Install the required dependencies to stream Parquet datasets from cloud storage like **Amazon S3** or **Google Cloud Storage**:
+### Prerequisites
 
 ```bash
-# For Amazon S3
-pip install "litdata[extra]" s3fs
-
-# For Google Cloud Storage
-pip install "litdata[extra]" gcsfs
+pip install 'litdata[extras]'   # includes polars + pyarrow
+# Cloud listing/index extras as needed:
+pip install s3fs    # s3://
+pip install gcsfs   # gs://
 ```
 
-**Index Your Dataset**: 
-
-Index your Parquet dataset to create an index file that LitData can use to stream the dataset.
+### Index a parquet directory
 
 ```python
 import litdata as ld
 
-# Point to your data stored in the cloud
-pq_dataset_uri = "s3://my-bucket/my-parquet-data"  # or "gs://my-bucket/my-parquet-data"
-
-ld.index_parquet_dataset(pq_dataset_uri)
+ld.index_parquet_dataset(
+    "s3://my-bucket/my-parquet-data",  # local path, s3://, gs://, or hf://
+    cache_dir=None,                   # see table below
+    storage_options={},               # cloud credentials / endpoints
+    num_workers=4,                    # parallel metadata reads
+)
 ```
 
-**Stream the Dataset**
+| Scheme | Where `index.json` is written |
+|--------|-------------------------------|
+| Local directory | Next to the files, or under `cache_dir` if set |
+| `s3://` / `gs://` | **Uploaded to the bucket** at `{url}/index.json` (needs write access) |
+| `hf://` | **Local** `cache_dir` (required for HF indexing via this helper) |
 
-Use `StreamingDataset` with `ParquetLoader` to load and stream the dataset efficiently:
+**Indexing notes**
 
+- Lists **top-level** `.parquet` files only (not recursive subfolders).
+- All files must share the same schema.
+- Supported for indexing today: local, `s3://`, `gs://`, `hf://` (not `r2://` / `azure://` yet).
+- For HF, prefer `index_hf_dataset(uri)` (returns a local cache dir) or auto-index via `StreamingDataset("hf://...")` — see [HF section](#stream-hf).
+
+### Stream with `ParquetLoader`
+
+Unlike `hf://`, local/S3/GCS parquet **does not** auto-select the loader — pass `ParquetLoader` explicitly (it must match `index.json`).
 
 ```python
 import litdata as ld
 from litdata.streaming.item_loader import ParquetLoader
 
-# Specify your dataset location in the cloud
-pq_dataset_uri = "s3://my-bucket/my-parquet-data"  # or "gs://my-bucket/my-parquet-data"
+uri = "s3://my-bucket/my-parquet-data"
+dataset = ld.StreamingDataset(
+    uri,
+    item_loader=ParquetLoader(low_memory=True),  # default: row-group streaming
+    # index_path="/path/to/index.json",         # optional if index lives elsewhere
+)
 
-# Set up the streaming dataset
-dataset = ld.StreamingDataset(pq_dataset_uri, item_loader=ParquetLoader())
+# Basename wildcards when the path ends with .parquet:
+# dataset = ld.StreamingDataset("s3://bucket/data/train-*.parquet", item_loader=ParquetLoader())
 
-print("Sample", dataset[0])
+print(dataset[0])  # dict of columns
 
-dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
-for sample in dataloader:
+# Linux + num_workers>0: use spawn (Polars + fork deadlocks)
+dataloader = ld.StreamingDataLoader(
+    dataset,
+    batch_size=4,
+    num_workers=4,
+    multiprocessing_context="spawn",
+)
+for batch in dataloader:
     pass
 ```
+
+### `ParquetLoader` knobs
+
+| Arg | Default | Meaning |
+|-----|---------|---------|
+| `low_memory` | `True` | Stream by row group (lower RAM). `False` loads each whole file into memory (warns). |
+| `pre_load_chunk` | `False` | Prefetch full DataFrame — **only effective when `low_memory=False`**. |
+
+Import: `from litdata.streaming.item_loader import ParquetLoader` (not re-exported at `litdata` top level).
+
+### Reshard parquet for `map` / `optimize`
+
+```python
+from litdata import map
+from litdata.processing.readers import ParquetReader
+
+def process(pq_file, output_dir):
+    # pq_file is a pyarrow.parquet.ParquetFile
+    ...
+
+map(
+    fn=process,
+    inputs=list_of_parquet_paths,
+    output_dir="s3://bucket/out",
+    reader=ParquetReader(cache_folder="/tmp/pq-shards", num_rows=65536),
+)
+```
+
+`ParquetReader` splits inputs that exceed `num_rows` into smaller cached files before your `fn` runs.
 
 </details>
 
@@ -1564,7 +1588,9 @@ This generates a Chrome trace called `result.json`. Then, visualize this trace b
 
 Handle large data files efficiently without using too much of your computer's memory.
 
-When processing large files like compressed [parquet files](https://en.wikipedia.org/wiki/Apache_Parquet), use the Python yield keyword to process and store one item at the time, reducing the memory footprint of the entire program.
+**Optimize from parquet** (convert into LitData chunks) when you need tokenization or LitData’s binary format. To **stream parquet without converting**, see [Stream parquet datasets](#stream-parquet).
+
+When processing large parquet files, `yield` one item at a time to keep memory low:
 
 ```python
 from pathlib import Path

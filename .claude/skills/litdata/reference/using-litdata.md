@@ -254,9 +254,58 @@ ______________________________________________________________________
 
 **MDS** — point at Mosaic shards + `index.json`; auto `format=mds`. No encryption.
 
-**HF** — `hf://datasets/...` (parquet only); optional `index_hf_dataset` / `index_parquet_dataset` + `ParquetLoader` + `index_path`. Set `HF_TOKEN` for gated data.
+### Parquet & Hugging Face (exhaustive)
 
-**Parquet** — `index_parquet_dataset(uri)` then `StreamingDataset(..., item_loader=ParquetLoader())`. Loader knobs: `low_memory`, `pre_load_chunk`.
+Deps: `pip install 'litdata[extras]'` (+ `s3fs` / `gcsfs` / `huggingface_hub`). Samples from `ParquetLoader` are **`dict`s**. Import: `from litdata.streaming.item_loader import ParquetLoader`.
+
+| Goal                                | API                                                              |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| Stream parquet as-is                | `index_*` → `StreamingDataset(..., item_loader=ParquetLoader())` |
+| Convert / tokenize                  | `optimize` + `yield` from parquet (`README` `#reduce-memory`)    |
+| Reshard huge files for map/optimize | `reader=ParquetReader(cache_folder, num_rows=65536)`             |
+
+**Index**
+
+```python
+ld.index_parquet_dataset(uri, cache_dir=None, storage_options={}, num_workers=4)
+cache = ld.index_hf_dataset("hf://datasets/org/name/data")  # returns local cache dir
+```
+
+| Scheme            | Index written to                               |
+| ----------------- | ---------------------------------------------- |
+| local             | beside files or `cache_dir`                    |
+| `s3://` / `gs://` | uploaded to `{url}/index.json` (write access)  |
+| `hf://`           | local cache (`index_hf_dataset` / `cache_dir`) |
+
+Top-level `.parquet` only; uniform schema; index schemes today: local / s3 / gs / hf (**not** r2/azure).
+
+**Stream**
+
+| Source                    | Auto-index?                             | Auto `ParquetLoader`?       |
+| ------------------------- | --------------------------------------- | --------------------------- |
+| `hf://...`                | Yes (if no `index_path`)                | Yes                         |
+| local / `s3://` / `gs://` | No — call `index_parquet_dataset` first | No — pass `ParquetLoader()` |
+
+```python
+# HF
+ds = StreamingDataset("hf://datasets/org/name/data")
+
+# S3 / local — explicit loader
+ds = StreamingDataset("s3://bucket/pq", item_loader=ParquetLoader(low_memory=True))
+# Wildcards if path ends with .parquet:
+ds = StreamingDataset("s3://bucket/data/train-*.parquet", item_loader=ParquetLoader())
+
+StreamingDataLoader(ds, num_workers=4, multiprocessing_context="spawn")  # required on Linux
+```
+
+| `ParquetLoader` arg | Default | Notes                                                         |
+| ------------------- | ------- | ------------------------------------------------------------- |
+| `low_memory`        | `True`  | Row-group path (pyarrow + polars). `False` = full file in RAM |
+| `pre_load_chunk`    | `False` | Only effective when `low_memory=False`                        |
+
+**`ParquetReader`** (`litdata.processing.readers`) for `map`/`optimize` `reader=` — splits oversized parquet inputs by `num_rows` into a cache folder; `fn` receives a `ParquetFile`.
+
+README: `#stream-parquet`, `#stream-hf`. Internals: [streaming.md](streaming.md).
 
 ______________________________________________________________________
 

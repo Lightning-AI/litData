@@ -47,11 +47,16 @@ Reader `ChunksConfig` (`config.py:33`): loads `index.json`, deserializes `data_s
 
 ## Item loaders (`item_loader.py`) — own byte layout AND interval math
 
-- **`PyTreeLoader`** (`item_loader.py:129`) — default. `load_item_from_chunk` seeks the offset table, reads `[begin,end)`, `deserialize` splits by the `data_format` header and reconstructs via `tree_unflatten`. Supports sample/chunk encryption and MDS (Mosaic) format.
-- **`TokensLoader`** (`item_loader.py:402`) — NLP. Requires `block_size`. Uses `np.memmap` over the chunk, returns fixed-size token windows with `torch.frombuffer`. `dim` in chunk metadata = token count.
-- **`ParquetLoader`** (`item_loader.py:608`) — reads parquet chunks with polars/pyarrow. Used for `hf://` and parquet-indexed datasets.
+- **`PyTreeLoader`** (`item_loader.py`) — default for LitData chunks. Offset table + pytree deserialize; encryption + MDS.
+- **`TokensLoader`** (`item_loader.py`) — NLP token windows (`block_size`); `np.memmap` + `torch.frombuffer`.
+- **`ParquetLoader`** (`item_loader.py` ~`:851`) — parquet files as “chunks”. Needs `polars>1.0` + `pyarrow`. Returns **row dicts**.
+  - `low_memory=True` (default): pyarrow row groups → polars rows; evict group when consumed.
+  - `low_memory=False`: `pl.scan_parquet(...).collect()` whole file; enables `pre_load_chunk`.
+  - HF (`hf://`) auto-wires this loader (`dataset.py`); other schemes must pass it explicitly and match `index.json`.
+  - `StreamingDataLoader` forbids fork with this loader + `num_workers>0` (`dataloader.py` ~`:630`) → `spawn` / `forkserver`.
+  - Indexing: `index_parquet_dataset` / `index_hf_dataset` → `utilities/parquet.py` dispatch (`local` / `s3` / `gs` / `hf` only). User cookbook: [using-litdata.md](using-litdata.md) §10.
 
-`ChunksConfig._validate_item_loader` (`config.py:361`) raises if the passed loader class ≠ `config["item_loader"]`.
+`ChunksConfig._validate_item_loader` raises if the passed loader class ≠ `config["item_loader"]`.
 
 ## Backends
 

@@ -36,29 +36,29 @@ Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interac
 
 Before writing examples or answering how-tos, read the cookbook. Highlights:
 
-| Topic           | Remember                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Images          | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                |
-| Train stream    | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
-| Optimize        | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                      |
-| Cache           | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                    |
-| **Paths**       | Always use LitData resolution — `s3/gs/r2/azure/hf/local:` + `/teamspace/...` (direct bucket I/O). See `reference/resolver.md` |
-| Parquet workers | `multiprocessing_context="spawn"` on Linux                                                                                     |
+| Topic        | Remember                                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Images       | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                |
+| Train stream | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
+| Optimize     | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                      |
+| Cache        | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                    |
+| **Paths**    | Always use LitData resolution — `s3/gs/r2/azure/hf/local:` + `/teamspace/...` (direct bucket I/O). See `reference/resolver.md` |
+| Parquet / HF | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                |
 
 ## Reference map
 
-| Task                                                                               | Read                                                |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------- |
-| **Use the library** (APIs, recipes, optimize/map/walk knobs, serializers, shuffle) | `reference/using-litdata.md`                        |
-| **Paths / URLs / Studio mounts / `Dir` / time templates**                          | `reference/resolver.md` (+ README `#resolve-paths`) |
-| Read path, chunk format, shuffle math, item loaders                                | `reference/streaming.md`                            |
-| Cache / prefetch / eviction / shared-chunk deletion                                | `reference/cache-and-chunk-lifecycle.md`            |
-| Fair streaming benchmarks (`benchmarks/` suite)                                    | `reference/benchmarking.md`                         |
-| Lightning Studio env, credentials, free-threading                                  | `reference/lightning-studio.md`                     |
-| Write path / **multi-node** `num_nodes` job launch                                 | `reference/processing.md`                           |
-| Dev env, PR/CI style                                                               | `reference/contributing.md`                         |
-| Tests & fixtures                                                                   | `reference/testing.md`                              |
-| Tracing, breakpoints, env knobs                                                    | `reference/debugging.md`                            |
+| Task                                                                       | Read                                                |
+| -------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Use the library** (APIs, parquet/HF, optimize/map, serializers, shuffle) | `reference/using-litdata.md`                        |
+| **Paths / URLs / Studio mounts / `Dir` / time templates**                  | `reference/resolver.md` (+ README `#resolve-paths`) |
+| Read path, chunk format, shuffle math, item loaders                        | `reference/streaming.md`                            |
+| Cache / prefetch / eviction / shared-chunk deletion                        | `reference/cache-and-chunk-lifecycle.md`            |
+| Fair streaming benchmarks (`benchmarks/` suite)                            | `reference/benchmarking.md`                         |
+| Lightning Studio env, credentials, free-threading                          | `reference/lightning-studio.md`                     |
+| Write path / **multi-node** `num_nodes` job launch                         | `reference/processing.md`                           |
+| Dev env, PR/CI style                                                       | `reference/contributing.md`                         |
+| Tests & fixtures                                                           | `reference/testing.md`                              |
+| Tracing, breakpoints, env knobs                                            | `reference/debugging.md`                            |
 
 ## Public API (`src/litdata/__init__.py`)
 
