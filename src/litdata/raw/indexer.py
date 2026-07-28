@@ -27,6 +27,8 @@ from litdata.constants import _FSSPEC_AVAILABLE, _PYTHON_GREATER_EQUAL_3_14, _TQ
 logger = logging.getLogger(__name__)
 _SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 _INDEX_FILENAME = "index.json.zstd"
+# Warn once per process when remote index upload is denied (read-only creds).
+_UPLOAD_DENIED_WARNED_PIDS: set[int] = set()
 
 
 @dataclass
@@ -147,7 +149,16 @@ class BaseIndexer(ABC):
             self._upload_to_cloud(str(local_index_path), remote_index_path, storage_options)
             logger.info(f"Uploaded index to remote cache: {remote_index_path}")
         except Exception as e:
-            logger.warning(f"Failed to upload index to remote cache: {e}")
+            pid = os.getpid()
+            if pid not in _UPLOAD_DENIED_WARNED_PIDS:
+                _UPLOAD_DENIED_WARNED_PIDS.add(pid)
+                logger.warning(
+                    "Failed to upload index to remote cache (continuing with local index; "
+                    "further upload failures in this process are silent): %s",
+                    e,
+                )
+            else:
+                logger.info("Failed to upload index to remote cache: %s", e)
 
         logger.info(f"Built index with {len(files)} files from {input_dir} at {local_index_path}")
         return files

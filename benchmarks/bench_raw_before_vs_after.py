@@ -90,19 +90,57 @@ def summarize_ips(values: list[float]) -> dict:
     }
 
 
-def git_sha() -> str:
-    """Return short git SHA for the repo containing this script, or empty."""
-    env = os.environ.get("LITDATA_BENCH_GIT", "").strip()
-    if env:
-        return env
+def git_sha(*, cwd: Path | None = None) -> str:
+    """Return short git SHA for ``cwd`` (default: repo containing this script).
+
+    ``LITDATA_BENCH_GIT`` overrides only when ``cwd`` is omitted (runner/artifact
+    naming). Prefer :func:`tree_git_sha` for before/after PYTHONPATH provenance.
+    """
+    if cwd is None:
+        env = os.environ.get("LITDATA_BENCH_GIT", "").strip()
+        if env:
+            return env
+        cwd = Path(__file__).resolve().parents[1]
     try:
         return subprocess.check_output(
             ["/usr/bin/git", "rev-parse", "--short", "HEAD"],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=str(cwd),
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return ""
+
+
+def tree_git_sha(pythonpath: str) -> str:
+    """Return short SHA for the git checkout that owns a PYTHONPATH entry."""
+    raw = (pythonpath or "").strip()
+    if not raw:
+        return ""
+    # First path entry wins (same as import resolution for litdata).
+    entry = Path(raw.split(os.pathsep)[0]).resolve()
+    # .../src → repo root; already-repo-root → itself.
+    candidates = [entry, entry.parent if entry.name == "src" else entry]
+    for cand in candidates:
+        sha = git_sha(cwd=cand)
+        if sha:
+            return sha
+    return ""
+
+
+def pythonpath_tree_sha() -> str:
+    """SHA of the litdata tree currently first on ``sys.path`` / PYTHONPATH."""
+    env_pp = os.environ.get("PYTHONPATH", "")
+    if env_pp.strip():
+        return tree_git_sha(env_pp)
+    # Fall back: package file location.
+    try:
+        import litdata
+
+        pkg = Path(litdata.__file__).resolve()
+        # litdata/__init__.py → src/litdata → src → repo
+        return git_sha(cwd=pkg.parents[2]) or git_sha(cwd=pkg.parents[1])
+    except Exception:
         return ""
 
 
@@ -361,6 +399,7 @@ def run_one(
         f"warm={warm_batches}@{warm_s:.2f}s | {timed_batches}×{samples // max(timed_batches, 1)} "
         f"in {elapsed:.2f}s (need ≥{batches} batches & ≥{min_s:.0f}s) → {ips:.1f} samples/s"
     )
+    tree_sha = pythonpath_tree_sha()
     result = {
         "side": side,
         "label": label,
@@ -376,7 +415,10 @@ def run_one(
         "min_seconds_effective": min_s,
         "hedge_delay": hedge_delay if side == "after" else None,
         "download_timeout": download_timeout if side == "after" else None,
-        "git_sha": sha,
+        "git_sha": sha,  # runner / artifact naming (may be LITDATA_BENCH_GIT)
+        "tree_sha": tree_sha,  # actual litdata checkout on PYTHONPATH
+        "before_sha": tree_sha if side == "before" else None,
+        "after_sha": tree_sha if side == "after" else None,
         "ts": time.time(),
     }
     if jsonl is not None:
@@ -508,7 +550,8 @@ def run_side(
         shutil.rmtree(side_root, ignore_errors=True)
     side_root.mkdir(parents=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    sha = git_sha()
+    sha = git_sha()  # runner / artifact filename (LITDATA_BENCH_GIT or script repo)
+    tree_sha = pythonpath_tree_sha()
     run_ts = time.time()
     jpath = jsonl_path(side, sha=sha, ts=run_ts)
     levels = list(prefetch_levels if prefetch_levels is not None else _PREFETCH_LEVELS)
@@ -527,10 +570,14 @@ def run_side(
     log(f"=== side={side} ===")
     log(f"capabilities: {json.dumps(caps)}")
     log(
+        f"provenance: side={side} tree_sha={tree_sha or '?'} "
+        f"runner_sha={sha or '?'} PYTHONPATH={os.environ.get('PYTHONPATH', '')!r}"
+    )
+    log(
         f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches>={batches} "
         f"min_seconds>={min_seconds} (high-w≥{HIGH_WORKER_THRESHOLD} → "
         f"≥{HIGH_WORKER_MIN_SECONDS}s) warm=max(1,w*{prefetch_factor}) "
-        f"repeats={repeats} cpus={ncpu} configs={len(cfgs)} sha={sha or '?'} "
+        f"repeats={repeats} cpus={ncpu} configs={len(cfgs)} "
         f"prefetch_levels={levels if side == 'after' or before_cloud_native else [0]}"
     )
     log("protocol: stop when batches AND min_seconds both met (max window)")
@@ -635,8 +682,13 @@ def run_side(
                 "safety_grid": safety_grid,
                 "capabilities": caps,
                 "git_sha": sha,
+                "tree_sha": tree_sha,
+                "before_sha": tree_sha if side == "before" else None,
+                "after_sha": tree_sha if side == "after" else None,
                 "git_hint": os.environ.get("LITDATA_BENCH_GIT", ""),
                 "jsonl": str(jpath),
+                "pythonpath": os.environ.get("PYTHONPATH", ""),
+                "sys_path0": sys.path[0] if sys.path else "",
                 "input_note": (
                     "pre-Stage-1 before: mount→s3:// like after; fixed max_concurrent_downloads=64"
                     if before_cloud_native
@@ -680,7 +732,9 @@ def run_interleaved(
     script = str(Path(__file__).resolve())
     after_pythonpath = os.environ.get("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
     n_rep = max(1, repeats)
-    sha = git_sha()
+    sha = git_sha()  # runner / artifact filenames
+    before_sha = tree_git_sha(before_pythonpath)
+    after_sha = tree_git_sha(after_pythonpath)
     run_ts = time.time()
     levels = list(prefetch_levels if prefetch_levels is not None else _PREFETCH_LEVELS)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -689,9 +743,12 @@ def run_interleaved(
         "after": partial_path("after", sha=sha, ts=run_ts),
     }
     log(f"=== interleaved A/B repeats={n_rep} workers={workers} batches>={batches} min_seconds>={min_seconds} ===")
+    log(f"provenance: before_sha={before_sha or '?'} after_sha={after_sha or '?'} runner_sha={sha or '?'}")
     log(f"before PYTHONPATH={before_pythonpath} → {outs['before'].name}")
     log(f"after  PYTHONPATH={after_pythonpath} → {outs['after'].name}")
     log(f"prefetch_levels={levels}")
+    if not before_sha or not after_sha:
+        log("WARNING: could not resolve before_sha/after_sha — do not publish without provenance")
     for rep in range(n_rep):
         for side, pypath in (("before", before_pythonpath), ("after", after_pythonpath)):
             env = os.environ.copy()
@@ -809,6 +866,8 @@ def merge() -> None:
             )
 
     best_after = max(cells, key=lambda c: c["after_ips"] or 0) if cells else None
+    before_sha = (before.get("meta") or {}).get("before_sha") or (before.get("meta") or {}).get("tree_sha")
+    after_sha = (after.get("meta") or {}).get("after_sha") or (after.get("meta") or {}).get("tree_sha")
     payload = {
         "meta": {
             "mount_input": MOUNT_INPUT,
@@ -818,6 +877,8 @@ def merge() -> None:
             "workers": workers,
             "before": before["meta"],
             "after": after["meta"],
+            "before_sha": before_sha,
+            "after_sha": after_sha,
             "delta_definition": (
                 "delta_pct = ((after_median - before_median) / before_median) * 100; "
                 "paired same-(w,prefetch) when before swept prefetch (pre-Stage-1 A/B); "
@@ -828,7 +889,7 @@ def merge() -> None:
                 "before = pre-Stage-1 feature tree (fixed max_concurrent_downloads=64) when "
                 "before_cloud_native; else stock main via s3://. after = Stage 1 adaptive "
                 "(max_concurrent_downloads=None). Both cloud-native arms use mount→s3://. "
-                "Publish table emphasizes prefetch≥16; prefetch=0 kept in JSON for honesty."
+                "Publish with proven before_sha/after_sha from tree rev-parse — not runner SHA alone."
             ),
             "caveat": (
                 "Protocol: max(≥300 batches, ≥30s) timed window; prefer --repeats ≥5 with "

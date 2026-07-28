@@ -80,22 +80,20 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
         (24, 64, 100_000, 64),
         (32, 64, 100_000, 64),
         (2, 4, 100_000, 4),
-        # Adaptive (None) gated to num_workers >= 16; below gate → historical 64
-        (0, None, 100_000, 64),
-        (1, None, 100_000, 64),
-        (2, None, 100_000, 64),
-        (4, None, 100_000, 64),
-        (8, None, 100_000, 64),  # A/B: always-on clamp hurt w8 p0; stay at 64
-        (15, None, 100_000, 64),
-        # ~100KB JPEG → bandwidth≈524 → cap 512; clamp active at w>=16
+        # Adaptive (None): ~100KB JPEG → bandwidth≈524 → cap 512
+        (0, None, 100_000, 128),  # single-process cap
+        (1, None, 100_000, 128),
+        (2, None, 100_000, 256),  # 512//2
+        (4, None, 100_000, 128),  # 512//4
+        (8, None, 100_000, 64),  # 512//8
         (16, None, 100_000, 32),  # 512//16
         (24, None, 100_000, 21),  # 512//24
         (32, None, 100_000, 16),  # 512//32
-        # Below gate: large/unknown median still yield historical 64
-        (4, None, 10 * 1024 * 1024, 64),
-        (8, None, None, 64),
-        # At gate: Little's-law arm (~240) for large objects
-        (16, None, 10 * 1024 * 1024, 15),  # max(8, 240//16)
+        # Large objects (≥1 MiB): bandwidth-only (no Little's-law pin at 240)
+        (4, None, 10 * 1024 * 1024, 8),  # budget=floor 32, 32//4=8
+        (16, None, 10 * 1024 * 1024, 8),  # 32//16=2 → floor 8
+        # Unknown size uses default median (256KiB) → latency arm (240)
+        (8, None, None, 30),  # 240//8
     ],
 )
 def test_effective_concurrency_vs_num_workers(num_workers, max_concurrent, median_bytes, expected):
@@ -108,20 +106,50 @@ def test_aggregate_concurrency_budget_clamps():
     from litdata.raw.dataset import (
         _AGGREGATE_CONCURRENCY_BUDGET_CAP,
         _AGGREGATE_CONCURRENCY_BUDGET_FLOOR,
+        _ASSUMED_AGGREGATE_BANDWIDTH_BPS,
         _ASSUMED_REQUEST_LATENCY_S,
         _ASSUMED_REQUEST_RATE,
+        _CONCURRENCY_PIPELINE_SECONDS,
         _aggregate_concurrency_budget,
     )
 
     latency = int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S)  # ~240
+    target_bytes = int(_ASSUMED_AGGREGATE_BANDWIDTH_BPS * _CONCURRENCY_PIPELINE_SECONDS)
     assert _aggregate_concurrency_budget(1) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
-    # Huge objects: bandwidth arm collapses; Little's-law arm sets the budget
-    assert _aggregate_concurrency_budget(50 * 1024 * 1024) == latency
+    # Tiny ImageNet-like: bandwidth wins over latency, then hits cap
+    assert _aggregate_concurrency_budget(100_000) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
     assert (
         _AGGREGATE_CONCURRENCY_BUDGET_FLOOR <= _aggregate_concurrency_budget(None) <= _AGGREGATE_CONCURRENCY_BUDGET_CAP
     )
-    # Tiny ImageNet-like: bandwidth wins over latency, then hits cap
-    assert _aggregate_concurrency_budget(100_000) == _AGGREGATE_CONCURRENCY_BUDGET_CAP
+    # Sub-MiB default path still uses Little's-law floor
+    assert _aggregate_concurrency_budget(256 * 1024) == max(
+        _AGGREGATE_CONCURRENCY_BUDGET_FLOOR,
+        min(_AGGREGATE_CONCURRENCY_BUDGET_CAP, max(target_bytes // (256 * 1024), latency)),
+    )
+
+
+@pytest.mark.parametrize(
+    "median_bytes",
+    [1 * 1024 * 1024, 10 * 1024 * 1024, 100 * 1024 * 1024],
+)
+def test_aggregate_budget_large_median_bandwidth_bounded(median_bytes):
+    """Medians ≥1 MiB must not be pinned by the Little's-law arm (~240)."""
+    from litdata.raw.dataset import (
+        _AGGREGATE_CONCURRENCY_BUDGET_FLOOR,
+        _ASSUMED_AGGREGATE_BANDWIDTH_BPS,
+        _ASSUMED_REQUEST_LATENCY_S,
+        _ASSUMED_REQUEST_RATE,
+        _CONCURRENCY_PIPELINE_SECONDS,
+        _aggregate_concurrency_budget,
+    )
+
+    target_bytes = int(_ASSUMED_AGGREGATE_BANDWIDTH_BPS * _CONCURRENCY_PIPELINE_SECONDS)
+    bandwidth = max(1, target_bytes // median_bytes)
+    expected = max(_AGGREGATE_CONCURRENCY_BUDGET_FLOOR, min(512, bandwidth))
+    got = _aggregate_concurrency_budget(median_bytes)
+    assert got == expected
+    latency = int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S)
+    assert got != latency or bandwidth >= latency  # not latency-pinned when bandwidth is smaller
 
 
 def test_effective_download_permits_cached_per_pid(tmp_path):
@@ -134,12 +162,33 @@ def test_effective_download_permits_cached_per_pid(tmp_path):
     ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
     cm = ds.cache_manager
     with patch("litdata.raw.dataset._num_dataloader_workers", side_effect=[8, 16]) as mock_w:
-        assert cm._effective_download_permits() == 64  # gated: w<16 → historical 64
+        assert cm._effective_download_permits() == 64  # adaptive: 512//8
         assert cm._effective_download_permits() == 64  # cached — ignores worker change
         assert mock_w.call_count == 1
     cm.reset_runtime_state()
     with patch("litdata.raw.dataset._num_dataloader_workers", return_value=16):
-        assert cm._effective_download_permits() == 32  # recomputed: clamp active, 512//16
+        assert cm._effective_download_permits() == 32  # recomputed: 512//16
+
+
+def test_effective_download_permits_reset_on_pickle(tmp_path):
+    """Pickle/spawn clears the pid-guarded permit cache."""
+    import pickle
+
+    (tmp_path / "a.jpg").write_bytes(b"x" * 100_000)
+    from unittest.mock import patch
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+    with patch("litdata.raw.dataset._num_dataloader_workers", return_value=8):
+        assert cm._effective_download_permits() == 64
+    blob = pickle.dumps(cm)
+    restored = pickle.loads(blob)  # noqa: S301
+    assert restored._cached_permits is None
+    assert restored._cached_permits_pid is None
+    with patch("litdata.raw.dataset._num_dataloader_workers", return_value=16):
+        assert restored._effective_download_permits() == 32
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")

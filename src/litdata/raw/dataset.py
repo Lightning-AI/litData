@@ -102,11 +102,12 @@ _AGGREGATE_CONCURRENCY_BUDGET_FLOOR = 32
 # ImageNet cells to ~128 aggregate (which capped winning w=4/w=8 configs).
 _AGGREGATE_CONCURRENCY_BUDGET_CAP = 512
 _MIN_CONCURRENCY_PER_WORKER = 8
-# Historical per-worker default when adaptive clamp is not applied (w < gate).
-_DEFAULT_CONCURRENCY_PER_WORKER = 64
-# Stage 1 A/B: mid-w (esp. w=8 p0) lost ~23% under always-on clamp; high-w
-# (16/24) won +40–55%. Gate adaptive split to high worker counts only.
-_ADAPTIVE_CONCURRENCY_MIN_WORKERS = 16
+# Unbenchmarked single-process adaptive path: do not open the full ~512 budget.
+_SINGLE_PROCESS_CONCURRENCY_CAP = 128
+# Little's-law arm only for sub-MiB objects (request-overhead bound). At ≥1 MiB
+# the bandwidth arm alone sizes the budget. Distinct from ``_HEDGE_MAX_BYTES``
+# (8 MiB duplicate-GET hedge policy).
+_LATENCY_MODEL_MAX_MEDIAN_BYTES = 1024 * 1024
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
@@ -420,14 +421,20 @@ def _aggregate_concurrency_budget(median_file_bytes: int | None) -> int:
     - **bandwidth**: ``(aggregate_bps × pipeline_s) // median_file_bytes`` — keep
       ~50 MiB moving for large objects.
     - **latency / Little's law**: ``target_rate × assumed_latency`` (~6000×0.040 ≈
-      240) so tiny-object paths are not request-starved by the bandwidth arm alone.
+      240) **only when** ``median < _LATENCY_MODEL_MAX_MEDIAN_BYTES`` (1 MiB) so
+      tiny-object paths are not request-starved. Medians ≥1 MiB stay
+      bandwidth-bounded (avoids pinning at 240 slots → multi-GB in flight).
 
     Per-worker floor of 8 means realized aggregate is ``max(budget, 8 × num_workers)``.
     """
     median = median_file_bytes if median_file_bytes and median_file_bytes > 0 else _DEFAULT_MEDIAN_FILE_BYTES
     target_bytes = int(_ASSUMED_AGGREGATE_BANDWIDTH_BPS * _CONCURRENCY_PIPELINE_SECONDS)
     bandwidth_model = max(1, target_bytes // median)
-    latency_model = max(1, int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S))
+    # Size-gate: Little's-law arm is for request-overhead-bound tiny objects only.
+    if median < _LATENCY_MODEL_MAX_MEDIAN_BYTES:
+        latency_model = max(1, int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S))
+    else:
+        latency_model = 0
     raw = max(bandwidth_model, latency_model)
     return max(_AGGREGATE_CONCURRENCY_BUDGET_FLOOR, min(_AGGREGATE_CONCURRENCY_BUDGET_CAP, raw))
 
@@ -439,20 +446,18 @@ def _effective_concurrency(
 ) -> int:
     """Per-worker download permits for the Stage 1 static clamp.
 
-    - ``max_concurrent_downloads is None`` (default): adaptive only when
-      ``num_workers >= _ADAPTIVE_CONCURRENCY_MIN_WORKERS`` (16) — then
+    - ``max_concurrent_downloads is None`` (default): adaptive —
       ``max(floor, budget // num_workers)`` with ``budget`` from
-      :func:`_aggregate_concurrency_budget`. Below the gate, returns the
-      historical ``_DEFAULT_CONCURRENCY_PER_WORKER`` (64) so mid-w cells are
-      not compressed.
+      :func:`_aggregate_concurrency_budget`. When ``num_workers <= 1``, returns
+      ``min(budget, _SINGLE_PROCESS_CONCURRENCY_CAP)`` (unbenchmarked path).
     - Explicit ``int``: **exactly** that many permits (no silent clamp). ``<= 0``
       collapses to 1.
     """
     if max_concurrent_downloads is not None:
         return 1 if max_concurrent_downloads <= 0 else max_concurrent_downloads
-    if num_workers < _ADAPTIVE_CONCURRENCY_MIN_WORKERS:
-        return _DEFAULT_CONCURRENCY_PER_WORKER
     budget = _aggregate_concurrency_budget(median_file_bytes)
+    if num_workers <= 1:
+        return min(budget, _SINGLE_PROCESS_CONCURRENCY_CAP)
     return max(_MIN_CONCURRENCY_PER_WORKER, budget // num_workers)
 
 
@@ -743,6 +748,19 @@ class CacheManager:
         loop = asyncio.get_running_loop()
         permits = self._effective_download_permits()
         if self._semaphore is None or self._semaphore_loop is not loop or self._semaphore_permits != permits:
+            n_workers = _num_dataloader_workers()
+            budget = (
+                _aggregate_concurrency_budget(self._median_file_bytes)
+                if self.max_concurrent_downloads is None
+                else None
+            )
+            logger.info(
+                "adaptive concurrency: median=%s budget=%s workers=%s permits=%s",
+                self._median_file_bytes,
+                budget,
+                n_workers,
+                permits,
+            )
             self._semaphore = asyncio.Semaphore(permits)
             self._semaphore_loop = loop
             self._semaphore_permits = permits
@@ -1258,12 +1276,12 @@ class StreamingRawDataset(Dataset):
                 when ``item_type="bytes"``, or ``str`` / ``list[str]`` paths when ``item_type="path"``.
                 Prefer C-level / GIL-releasing transforms, or decode in ``collate_fn``.
             max_concurrent_downloads: Per-worker in-flight download permits.
-                ``None`` (default) uses 64 permits/worker when ``num_workers < 16``;
-                at ``num_workers >= 16`` applies the Stage 1 adaptive formula
-                (size-aware aggregate budget from median file size + Little's-law
-                floor, split across workers with a per-worker floor of 8). An
-                explicit ``int`` sets **exactly** that many permits with no silent
-                clamp — pass ``64`` to force the historical fixed cap at any w.
+                ``None`` (default) applies the Stage 1 adaptive formula (size-aware
+                aggregate budget from median file size; Little's-law arm only for
+                medians below 1 MiB, split across workers with a per-worker floor
+                of 8; single-process capped at 128). An explicit ``int`` sets
+                **exactly** that many permits with no silent clamp — pass ``64``
+                to keep the historical fixed cap.
             max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
                 roughly ``2×`` a typical batch). Pass ``0`` to disable. Look-ahead is per
                 DataLoader worker, but when ``num_workers > 1`` the scheduled amount is
