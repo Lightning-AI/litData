@@ -319,15 +319,16 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob              | Default         | Notes                                                               |
-| ----------------- | --------------- | ------------------------------------------------------------------- |
-| `input_dir`       | —               | Resolver paths ([resolver.md](resolver.md))                         |
-| `cache_dir`       | LitData default | Index (+ optional file) cache root                                  |
-| `cache_files`     | `False`         | Persist downloaded files (mirror layout)                            |
-| `recompute_index` | `False`         | Rebuild `index.json.zstd`                                           |
-| `transform`       | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped) |
-| `indexer`         | `FileIndexer`   | Custom `BaseIndexer`                                                |
-| `storage_options` | `{}`            | Cloud creds                                                         |
+| Knob                       | Default         | Notes                                                               |
+| -------------------------- | --------------- | ------------------------------------------------------------------- |
+| `input_dir`                | —               | Resolver paths; prefers remote `url` over Studio FUSE `path`        |
+| `cache_dir`                | LitData default | Index (+ optional file) cache root                                  |
+| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                            |
+| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                           |
+| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped) |
+| `max_concurrent_downloads` | `64`            | Cap in-flight async file GETs per worker                            |
+| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                |
+| `storage_options`          | `{}`            | Cloud creds                                                         |
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
 

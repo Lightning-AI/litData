@@ -1,15 +1,17 @@
+import asyncio
 import os
 import sys
 import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from torch.utils.data import DataLoader
 
 from litdata import StreamingRawDataset
-from litdata.raw.dataset import CacheManager
+from litdata.raw.dataset import CacheManager, _storage_path
 from litdata.raw.indexer import FileMetadata
+from litdata.streaming.resolver import Dir
 
 
 def test_cache_manager_init_with_caching(tmp_path):
@@ -42,19 +44,65 @@ def test_get_local_path(tmp_path):
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem(tmp_path):
-    """Test single item access."""
+    """Test single item access via real local async read (no download mock)."""
     test_content = b"test image content"
     (tmp_path / "file1.jpg").write_bytes(test_content)
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
+    assert dataset[0] == test_content
 
-    # Patch async download to return test_content
-    async def mock_download_file_async(file_path):
-        return test_content
 
-    with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_file_async):
-        item = dataset[0]
-        assert item == test_content
+def test_storage_path_prefers_url():
+    assert _storage_path(Dir(path="/teamspace/s3_connections/x", url="s3://bucket/x")) == "s3://bucket/x"
+    assert _storage_path(Dir(path="/local/data", url=None)) == "/local/data"
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_cache_manager_prefers_url_for_downloader(tmp_path):
+    manager = CacheManager(
+        input_dir=Dir(path="/teamspace/s3_connections/data", url="s3://bucket/data"),
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=False,
+    )
+    assert manager._input_dir_path == "s3://bucket/data"
+    assert manager.downloader._remote_dir.startswith("s3://")
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_cache_files_persists_download(tmp_path):
+    """cache_files=True should write downloaded bytes into the cache directory."""
+    remote = "s3://bucket/dataset/file.jpg"
+    payload = b"cached-bytes"
+    manager = CacheManager(
+        input_dir="s3://bucket/dataset",
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=True,
+    )
+    local_path = manager.get_local_path(remote)
+    assert not os.path.exists(local_path)
+
+    async def fake_adownload_file(_self, remote_filepath: str, local_filepath: str) -> None:
+        Path(local_filepath).parent.mkdir(parents=True, exist_ok=True)
+        Path(local_filepath).write_bytes(payload)
+
+    manager._downloader = type(
+        "Downloader",
+        (),
+        {"adownload_file": fake_adownload_file, "adownload_fileobj": AsyncMock(return_value=payload)},
+    )()
+
+    assert asyncio.run(manager.download_file_async(remote)) == payload
+    assert Path(local_path).read_bytes() == payload
+    # Second call should hit disk (adownload_file not required).
+    manager._downloader = type(
+        "Downloader",
+        (),
+        {
+            "adownload_file": AsyncMock(side_effect=AssertionError("should not download again")),
+            "adownload_fileobj": AsyncMock(side_effect=AssertionError("should not download again")),
+        },
+    )()
+    assert asyncio.run(manager.download_file_async(remote)) == payload
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -248,25 +296,18 @@ def test_streaming_raw_dataset_transform(tmp_path):
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_with_dataloader(tmp_path):
-    """Test dataset integration with PyTorch DataLoader."""
+    """Test dataset integration with PyTorch DataLoader (real local downloads)."""
     test_contents = [b"content1", b"content2", b"content3", b"content4"]
     for i, content in enumerate(test_contents):
         (tmp_path / f"file{i}.jpg").write_bytes(content)
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
+    dataloader = DataLoader(dataset, batch_size=2, num_workers=0)
 
-    # Mock async download to return test content
-    async def mock_download_async(file_path):
-        index = int(file_path.split("file")[1].split(".")[0])
-        return test_contents[index]
-
-    with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_async):
-        dataloader = DataLoader(dataset, batch_size=2, num_workers=0)
-
-        batches = list(dataloader)
-        assert len(batches) == 2  # 4 items / batch_size 2
-        assert len(batches[0]) == 2  # First batch has 2 items
-        assert len(batches[1]) == 2  # Second batch has 2 items
+    batches = list(dataloader)
+    assert len(batches) == 2  # 4 items / batch_size 2
+    assert len(batches[0]) == 2  # First batch has 2 items
+    assert len(batches[1]) == 2  # Second batch has 2 items
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")

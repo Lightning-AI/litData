@@ -14,10 +14,11 @@
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Coroutine
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from torch.utils.data import Dataset
 
@@ -27,6 +28,28 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_CONCURRENT_DOWNLOADS = 64
+_thread_local = threading.local()
+T = TypeVar("T")
+
+
+def _storage_path(directory: Dir) -> str:
+    """Prefer remote ``url`` over local ``path`` so Studio FUSE mounts hit object storage directly."""
+    if directory.url:
+        return str(directory.url)
+    if directory.path:
+        return str(directory.path)
+    raise ValueError("Resolved directory has neither url nor path.")
+
+
+def _run_async(coro: Coroutine[Any, Any, T]) -> T:
+    """Run ``coro`` on a thread-local event loop (avoids ``asyncio.run`` creating/closing a loop per call)."""
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _thread_local.loop = loop
+    return loop.run_until_complete(coro)
 
 
 class CacheManager:
@@ -38,15 +61,20 @@ class CacheManager:
         cache_dir: str | None = None,
         storage_options: dict | None = None,
         cache_files: bool = False,
+        max_concurrent_downloads: int = _DEFAULT_MAX_CONCURRENT_DOWNLOADS,
     ):
         self.input_dir = _resolve_dir(input_dir)
-        self._input_dir_path = str(self.input_dir.path or self.input_dir.url)
+        # Object-store URL when present (Studio connections); else local path.
+        self._input_dir_path = _storage_path(self.input_dir)
         self.cache_files = cache_files
+        self.max_concurrent_downloads = max(1, max_concurrent_downloads)
 
         self.cache_dir = self._create_cache_dir(self._input_dir_path, cache_dir)
 
         self.storage_options = storage_options or {}
         self._downloader: Downloader | None = None
+        self._download_sema: asyncio.Semaphore | None = None
+        self._download_sema_loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def downloader(self) -> Downloader:
@@ -79,17 +107,37 @@ class CacheManager:
         local_path.parent.mkdir(parents=True, exist_ok=True)
         return str(local_path)
 
+    def _semaphore(self) -> asyncio.Semaphore:
+        """Return a semaphore bound to the currently running event loop."""
+        loop = asyncio.get_running_loop()
+        if self._download_sema is None or self._download_sema_loop is not loop:
+            self._download_sema = asyncio.Semaphore(self.max_concurrent_downloads)
+            self._download_sema_loop = loop
+        return self._download_sema
+
     async def download_file_async(self, file_path: str) -> bytes:
         """Asynchronously download and return file content."""
-        if self.cache_files:
-            local_path = self.get_local_path(file_path)
-            if os.path.exists(local_path):
-                return await asyncio.to_thread(Path(local_path).read_bytes)
+        async with self._semaphore():
+            if self.cache_files:
+                local_path = self.get_local_path(file_path)
+                if os.path.exists(local_path):
+                    return Path(local_path).read_bytes()
+                try:
+                    # Stream to disk (when supported), then read — warms cache_files.
+                    await self.downloader.adownload_file(file_path, local_path)
+                    return Path(local_path).read_bytes()
+                except Exception as e:
+                    raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
 
-        try:
-            return await self.downloader.adownload_fileobj(file_path)
-        except Exception as e:
-            raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
+            try:
+                data = await self.downloader.adownload_fileobj(file_path)
+            except Exception as e:
+                raise RuntimeError(f"Error downloading file {file_path}: {e}") from e
+            if data is None:
+                raise RuntimeError(
+                    f"Downloader {type(self.downloader).__name__}.adownload_fileobj returned None for {file_path}."
+                )
+            return data
 
 
 class StreamingRawDataset(Dataset):
@@ -111,6 +159,7 @@ class StreamingRawDataset(Dataset):
         cache_files: bool = False,
         recompute_index: bool = False,
         transform: Callable[[bytes | list[bytes]], Any] | None = None,
+        max_concurrent_downloads: int = _DEFAULT_MAX_CONCURRENT_DOWNLOADS,
     ):
         """Initialize StreamingRawDataset.
 
@@ -126,16 +175,24 @@ class StreamingRawDataset(Dataset):
                 structure or files on the remote storage have changed.
             transform: A function to apply to each item. It will receive `bytes` for single-file
                 items or `List[bytes]` for grouped items.
+            max_concurrent_downloads: Max in-flight file downloads per worker event loop (default 64).
+
         """
         self.input_dir = _resolve_dir(input_dir)
-        self.cache_manager = CacheManager(self.input_dir, cache_dir, storage_options, cache_files)
+        self.cache_manager = CacheManager(
+            self.input_dir,
+            cache_dir,
+            storage_options,
+            cache_files,
+            max_concurrent_downloads=max_concurrent_downloads,
+        )
         self.indexer = indexer or FileIndexer()
         self.storage_options = storage_options or {}
         self.transform = transform
 
-        # Discover all files in the input directory.
+        # Prefer url (direct object store) over path (may be a Studio FUSE mount).
         self.files: list[FileMetadata] = self.indexer.build_or_load_index(
-            str(self.input_dir.path or self.input_dir.url),
+            _storage_path(self.input_dir),
             self.cache_manager.cache_dir,
             storage_options,
             recompute_index,
@@ -175,16 +232,15 @@ class StreamingRawDataset(Dataset):
 
         item = self.items[index]
         if isinstance(item, FileMetadata):
-            return asyncio.run(self._download_and_process_item(item.path))
+            return _run_async(self._download_and_process_item(item.path))
         if isinstance(item, list):
             file_paths = [fm.path for fm in item]
-            return asyncio.run(self._download_and_process_group(file_paths))
+            return _run_async(self._download_and_process_group(file_paths))
         raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
 
     def __getitems__(self, indices: list[int]) -> list[Any]:
         """Asynchronously download a batch of items by indices."""
-        # asyncio.run() handles loop creation, execution, and teardown cleanly.
-        return asyncio.run(self._download_batch(indices))
+        return _run_async(self._download_batch(indices))
 
     async def _download_batch(self, indices: list[int]) -> list[Any]:
         """Asynchronously download and process items."""
@@ -208,16 +264,13 @@ class StreamingRawDataset(Dataset):
         group_data: list[bytes] = await asyncio.gather(*download_coros)
 
         if self.transform:
-            # The transform receives a list of bytes, corresponding to the list structure
-            # of the item defined in setup(). This is true even if the list has only one element.
-            return await asyncio.to_thread(self.transform, group_data)
+            # Transform runs in the worker process; keep it sync so downloads stay the async bottleneck.
+            return self.transform(group_data)
         return group_data
 
     async def _download_and_process_item(self, file_path: str) -> Any:
         """Download a single file and apply the transform."""
         data: bytes = await self.cache_manager.download_file_async(file_path)
         if self.transform:
-            # The transform receives a single bytes object, corresponding to the
-            # single FileMetadata object structure of the item.
-            return await asyncio.to_thread(self.transform, data)
+            return self.transform(data)
         return data

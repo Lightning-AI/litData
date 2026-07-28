@@ -15,9 +15,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `StreamingRawDataset`: prefer resolved remote `url` over local/FUSE `path` for indexing and downloads; reuse a thread-local event loop; cap concurrent downloads (`max_concurrent_downloads`, default 64); support `r2://` in the raw file indexer; honor `max_depth` for local discovery
+
 ### Removed
 
 ### Fixed
+
+- `StreamingRawDataset` / `CacheManager`: `cache_files=True` now persists downloads to the local cache (previously only read on hit)
+- `LocalDownloader.adownload_fileobj`: implement async local file reads so raw local datasets return bytes without mocks
 
 ## [0.2.58] - 2025-10-07
 

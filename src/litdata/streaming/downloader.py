@@ -18,6 +18,7 @@ import shutil
 import tempfile
 from abc import ABC
 from contextlib import suppress
+from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any, cast
 from urllib import parse
@@ -680,6 +681,14 @@ class LocalDownloader(Downloader):
         if lock_acquired:
             with contextlib.suppress(Exception):
                 os.remove(lock_path)
+
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Read a local file into memory (used by ``StreamingRawDataset``)."""
+        path = Path(remote_filepath)
+        if not path.is_file():
+            raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
+        # Sync read: local disk I/O is fast; avoids lingering default-executor threads in tests.
+        return path.read_bytes()
 
 
 class HFDownloader(Downloader):

@@ -331,6 +331,7 @@ for batch in loader:
 | `cache_files` | `False` | If `True`, keep downloaded files on disk under `cache_dir` (mirror remote layout) |
 | `recompute_index` | `False` | Force re-scan when remote files changed |
 | `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
+| `max_concurrent_downloads` | `64` | Cap in-flight async file downloads per worker |
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
 

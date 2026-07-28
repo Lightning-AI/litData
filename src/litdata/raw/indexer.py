@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from litdata.constants import _FSSPEC_AVAILABLE, _PYTHON_GREATER_EQUAL_3_14, _TQDM_AVAILABLE, _ZSTD_AVAILABLE
 
 logger = logging.getLogger(__name__)
-_SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
+_SUPPORTED_PROVIDERS = ("s3", "gs", "azure", "r2")
 _INDEX_FILENAME = "index.json.zstd"
 
 
@@ -275,12 +275,19 @@ class FileIndexer(BaseIndexer):
         return metadatas
 
     def _discover_local_files(self, input_dir: str) -> list[FileMetadata]:
-        """Recursively list files in the local filesystem."""
+        """Recursively list files in the local filesystem (honors ``max_depth``)."""
         path = Path(input_dir)
         metadatas = []
 
         for file_path in path.rglob("*"):
             if not file_path.is_file():
+                continue
+            try:
+                rel_parts = file_path.relative_to(path).parts
+            except ValueError:
+                continue
+            # Match fsspec-style depth: number of path components under ``input_dir``.
+            if len(rel_parts) > self.max_depth:
                 continue
 
             if self._should_include_file(str(file_path)):

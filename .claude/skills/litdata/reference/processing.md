@@ -114,15 +114,15 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
          → CacheManager + Downloader (fully async) → raw bytes [/ transform]
 ```
 
-| Piece                                            | Role                                                                                            |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `FileIndexer` / `BaseIndexer` (`raw/indexer.py`) | Discover files; cache `index.json.zstd` locally + upload beside remote data                     |
-| `CacheManager`                                   | Optional on-disk file cache (`cache_files=True`); always holds index cache dir                  |
-| `setup(files)`                                   | Default identity; override to filter/group → `list[FileMetadata]` or `list[list[FileMetadata]]` |
-| `__getitem__` / `__getitems__`                   | **Fully async** download; batches use `asyncio.gather` over `adownload_fileobj`                 |
-| Cloud clients                                    | **Built-in retries** (e.g. S3 adaptive `max_attempts`) for transient failures                   |
-| Default item                                     | **`bytes`** (or `list[bytes]` if grouped) — caller decodes however they want                    |
-| `transform`                                      | Optional post-download; signature matches item shape (`bytes` vs `list[bytes]`)                 |
+| Piece                          | Role                                                                                                       |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `FileIndexer` / `BaseIndexer`  | Discover files; cache `index.json.zstd` locally + upload beside remote data (`s3`/`gs`/`azure`/`r2`)       |
+| `CacheManager`                 | Prefer `Dir.url` over FUSE `path`; optional `cache_files=True` persists via `adownload_file`               |
+| `setup(files)`                 | Default identity; override to filter/group → `list[FileMetadata]` or `list[list[FileMetadata]]`            |
+| `__getitem__` / `__getitems__` | Fully async + batched (`asyncio.gather`); thread-local event loop; `max_concurrent_downloads` (default 64) |
+| Cloud clients                  | Built-in retries (e.g. S3 adaptive `max_attempts`)                                                         |
+| Default item                   | **`bytes`** (or `list[bytes]` if grouped) — caller decodes however they want                               |
+| `transform`                    | Optional post-download; signature matches item shape (`bytes` vs `list[bytes]`)                            |
 
 **Do not conflate indexes:** raw = `index.json.zstd` (file list). Optimized = `index.json` (chunk metadata).
 

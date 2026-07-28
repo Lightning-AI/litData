@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -63,6 +64,29 @@ def test_file_indexer_should_include_file_edge():
     assert idx._should_include_file("foo.bar") is True
     idx2 = FileIndexer(extensions=[".jpg"])
     assert idx2._should_include_file("foo.txt") is False
+
+
+def test_discover_local_files_respects_max_depth(tmp_path):
+    (tmp_path / "a.jpg").write_text("root")
+    nested = tmp_path / "d1" / "d2" / "d3"
+    nested.mkdir(parents=True)
+    (nested / "deep.jpg").write_text("deep")
+
+    shallow = FileIndexer(max_depth=1)._discover_local_files(str(tmp_path))
+    assert {Path(f.path).name for f in shallow} == {"a.jpg"}
+
+    deep = FileIndexer(max_depth=4)._discover_local_files(str(tmp_path))
+    assert {Path(f.path).name for f in deep} == {"a.jpg", "deep.jpg"}
+
+
+def test_file_indexer_supports_r2_scheme():
+    indexer = FileIndexer()
+    # Should not reject r2 at the scheme gate (discovery itself needs fsspec/network).
+    from litdata.raw.indexer import _SUPPORTED_PROVIDERS
+
+    assert "r2" in _SUPPORTED_PROVIDERS
+    with pytest.raises(ValueError, match="Unsupported input directory scheme"):
+        indexer.discover_files("hf://datasets/x/y", storage_options={})
 
 
 def test_discover_local_files(tmp_path):
