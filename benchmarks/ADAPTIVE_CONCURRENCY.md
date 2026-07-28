@@ -53,18 +53,20 @@ Explicit `max_concurrent_downloads=int` → **exactly** that many permits (no si
 
 Defaults when size unknown: median = 256 KiB. Permit count computed once per process; cleared on fork/spawn.
 
-## Confirmation cell (provenance)
+## Confirmation cell (provenance) — done
 
 Bench harness records `before_sha` / `after_sha` from `git rev-parse` on each PYTHONPATH tree (not only the runner SHA in filenames).
 
-Confirm protocol: interleaved n=3, `max(≥300 batches, ≥30s)`, **w=24 p=0**, before = post-`f70f785` pre-Stage-1 (`52dba61`), after = Stage 1 HEAD.
+Confirm @ `ba9da13`: interleaved n=3, `max(≥300 batches, ≥30s)`, **w=24 p=0**.
 
-| before ≈ | Interpretation                                  |
-| -------- | ----------------------------------------------- |
-| ~5.5k    | Wrong-tree / session (b): Stage 1 win shrinks   |
-| ~3.7k    | Session drift / (a): robustness story confirmed |
+|         field | value                                             |
+| ------------: | ------------------------------------------------- |
+|    before_sha | `52dba61` (post-`f70f785`, pre Stage 1; fixed 64) |
+|     after_sha | `ba9da13`                                         |
+| before median | **3816** ips (spread 30%)                         |
+|  after median | **6049** ips (spread 21%)                         |
 
-Do **not** publish unverifiable +53% without proven SHAs.
+**Verdict: (a)** — before ≈3.7k (not ~5.5k wrong-tree). Frame high-w as robustness; do **not** headline unverifiable +53%. Artifact: `benchmarks/results/raw_before_vs_after.ba9da13.1785268543.json`.
 
 ## Acceptance (future adaptive)
 
