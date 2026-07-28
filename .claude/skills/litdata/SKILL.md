@@ -22,6 +22,16 @@ LitData (`import litdata`) preprocesses and streams datasets for PyTorch trainin
 
 **To use the library expertly:** always load [reference/using-litdata.md](reference/using-litdata.md) first. Narrative source: repo `README.md`.
 
+## Install this skill
+
+From any project (Cursor, Claude Code, and other agents supported by the [skills CLI](https://github.com/vercel-labs/skills)):
+
+```bash
+npx skills add Lightning-AI/litData
+```
+
+Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interactive). In this repo the skill already lives at `.claude/skills/litdata/`.
+
 ## Expert usage (load using-litdata.md)
 
 Before writing examples or answering how-tos, read the cookbook. Highlights:

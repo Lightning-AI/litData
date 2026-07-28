@@ -85,6 +85,19 @@ pip install 'litdata[extras]'
 
 </details>
 
+<details>
+  <summary>AI agent skill (Cursor, Claude Code, …)</summary>
+
+Install the LitData expert skill so coding agents know the full API, path resolver, optimize/stream recipes, and internals:
+
+```bash
+npx skills add Lightning-AI/litData
+```
+
+Source: [`.claude/skills/litdata/`](.claude/skills/litdata/) in this repository ([skills CLI](https://github.com/vercel-labs/skills)).
+
+</details>
+
 &nbsp;
 
 ----

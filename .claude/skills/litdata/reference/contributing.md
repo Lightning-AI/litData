@@ -6,6 +6,12 @@ Full reference: `CONTRIBUTING.md`. This is the fast path.
 
 Requires Python ≥ 3.10 and `make`. LitData uses `uv` for installs.
 
+Optional — install the LitData agent skill in another checkout/tooling:
+
+```bash
+npx skills add Lightning-AI/litData
+```
+
 On **Lightning Studio**, the checkout often lives under `/teamspace/studios/this_studio/…`, with datasets attached as `/teamspace/s3_connections/…`. See [lightning-studio.md](lightning-studio.md) before assuming paths are plain local disks.
 
 ```bash
