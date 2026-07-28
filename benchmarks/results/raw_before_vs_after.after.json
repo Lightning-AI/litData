@@ -5,17 +5,27 @@
     "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
     "storage": "s3://imagenet-1m-template/raw/val",
     "n_files": 50000,
-    "index_s": 8.366329956999834,
+    "index_s": 9.73495352900136,
     "batch_size": 64,
-    "batches": 30,
+    "batches": 300,
+    "min_seconds": 15.0,
+    "prefetch_factor": 2,
+    "warm_batches_formula": "1 + num_workers * prefetch_factor",
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
-    "prefetch": [0, 16],
+    "workers": [
+      24
+    ],
+    "prefetch": [
+      0,
+      16
+    ],
     "range_parallel_threshold": 0,
     "max_concurrent_downloads": 64,
+    "hedge_delay": 0.0,
+    "safety_grid": false,
     "capabilities": {
       "has_max_prefetch": true,
       "has_range_parallel_threshold": true,
@@ -39,169 +49,44 @@
         "transform"
       ]
     },
-    "git_hint": "e458be1e07485d81778b582dc8fe189207ac8a5b",
-    "input_note": "after uses mount path; _storage_path prefers cloud URL"
+    "git_sha": "9f7bf18",
+    "git_hint": "",
+    "jsonl": "/teamspace/studios/this_studio/litData/benchmarks/results/raw_before_vs_after.after.jsonl",
+    "input_note": "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0",
+    "caveat": "Short windows and high-worker cells can be noisy (~2\u00d7 run-to-run). Trust systematic patterns (e.g. prefetch helps), not fine \u0394%."
   },
   "results": [
-    {
-      "side": "after",
-      "label": "w0_p0",
-      "workers": 0,
-      "prefetch": 0,
-      "ips": 632.8726418902654,
-      "warm_s": 0.48391088700009277,
-      "elapsed": 3.0337857459999213,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w0_p16",
-      "workers": 0,
-      "prefetch": 16,
-      "ips": 690.2281495437081,
-      "warm_s": 0.17839373999959207,
-      "elapsed": 2.781688926001152,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w1_p0",
-      "workers": 1,
-      "prefetch": 0,
-      "ips": 901.2173050526277,
-      "warm_s": 0.26654910300021584,
-      "elapsed": 2.130451766999613,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w1_p16",
-      "workers": 1,
-      "prefetch": 16,
-      "ips": 721.0167045733909,
-      "warm_s": 0.24809486099911737,
-      "elapsed": 2.6629064040007506,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w2_p0",
-      "workers": 2,
-      "prefetch": 0,
-      "ips": 854.6528508626327,
-      "warm_s": 0.24241268200057675,
-      "elapsed": 2.2465261749985075,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w2_p16",
-      "workers": 2,
-      "prefetch": 16,
-      "ips": 1692.2284740472896,
-      "warm_s": 0.24494596399927104,
-      "elapsed": 1.134598566000932,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w4_p0",
-      "workers": 4,
-      "prefetch": 0,
-      "ips": 1443.641013858223,
-      "warm_s": 0.2430281240012846,
-      "elapsed": 1.329970527000114,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w4_p16",
-      "workers": 4,
-      "prefetch": 16,
-      "ips": 3110.1106036434103,
-      "warm_s": 0.23222976100078085,
-      "elapsed": 0.6173413890010124,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w8_p0",
-      "workers": 8,
-      "prefetch": 0,
-      "ips": 2905.735185592619,
-      "warm_s": 0.28235844599839766,
-      "elapsed": 0.6607622089995857,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w8_p16",
-      "workers": 8,
-      "prefetch": 16,
-      "ips": 4394.612951609232,
-      "warm_s": 0.2461215869989246,
-      "elapsed": 0.43689854399963224,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w16_p0",
-      "workers": 16,
-      "prefetch": 0,
-      "ips": 3644.858178538954,
-      "warm_s": 0.34528131400111306,
-      "elapsed": 0.526769467000122,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w16_p16",
-      "workers": 16,
-      "prefetch": 16,
-      "ips": 5454.499804106813,
-      "warm_s": 0.26353759599987825,
-      "elapsed": 0.35200294599962945,
-      "samples": 1920
-    },
     {
       "side": "after",
       "label": "w24_p0",
       "workers": 24,
       "prefetch": 0,
-      "ips": 3727.005113653765,
-      "warm_s": 0.39636550700015505,
-      "elapsed": 0.5151589390006848,
-      "samples": 1920
+      "ips": 6634.856636711977,
+      "warm_s": 0.8791304000005766,
+      "warm_batches": 49,
+      "elapsed": 2.8938078170012886,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": 0.0,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249175.8620818
     },
     {
       "side": "after",
       "label": "w24_p16",
       "workers": 24,
       "prefetch": 16,
-      "ips": 5361.358449606034,
-      "warm_s": 0.46282929299923126,
-      "elapsed": 0.35811819300033676,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w32_p0",
-      "workers": 32,
-      "prefetch": 0,
-      "ips": 4161.671315409755,
-      "warm_s": 0.38903947899962077,
-      "elapsed": 0.46135310899990145,
-      "samples": 1920
-    },
-    {
-      "side": "after",
-      "label": "w32_p16",
-      "workers": 32,
-      "prefetch": 16,
-      "ips": 3256.575443069394,
-      "warm_s": 0.28672344099868496,
-      "elapsed": 0.5895763919997989,
-      "samples": 1920
+      "ips": 6755.452730436154,
+      "warm_s": 0.7904796370003169,
+      "warm_batches": 49,
+      "elapsed": 2.842148522999196,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": 0.0,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249232.5317261
     }
   ]
 }

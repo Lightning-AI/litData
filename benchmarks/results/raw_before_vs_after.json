@@ -2,26 +2,43 @@
   "meta": {
     "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
     "batch_size": 64,
-    "batches": 30,
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
-    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+    "workers": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16,
+      24,
+      32
+    ],
     "before": {
       "input": "s3://imagenet-1m-template/raw/val",
       "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
       "storage": "s3://imagenet-1m-template/raw/val",
       "n_files": 50000,
-      "index_s": 8.018374823999693,
+      "index_s": 9.219567076999738,
       "batch_size": 64,
-      "batches": 30,
+      "batches": 300,
+      "min_seconds": 15.0,
+      "prefetch_factor": 2,
+      "warm_batches_formula": "1 + num_workers * prefetch_factor",
       "multiprocessing_context": "spawn",
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
-      "prefetch": [0],
+      "workers": [
+        24
+      ],
+      "prefetch": [
+        0
+      ],
       "range_parallel_threshold": null,
       "max_concurrent_downloads": null,
+      "hedge_delay": null,
+      "safety_grid": false,
       "capabilities": {
         "has_max_prefetch": false,
         "has_range_parallel_threshold": false,
@@ -37,25 +54,38 @@
           "transform"
         ]
       },
-      "git_hint": "5d8cfc1997ef8dcddbda6aab3c9619d496a202fa",
-      "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://"
+      "git_sha": "9f7bf18",
+      "git_hint": "",
+      "jsonl": "/teamspace/studios/this_studio/litData/benchmarks/results/raw_before_vs_after.before.jsonl",
+      "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://",
+      "caveat": "Short windows and high-worker cells can be noisy (~2\u00d7 run-to-run). Trust systematic patterns (e.g. prefetch helps), not fine \u0394%."
     },
     "after": {
       "input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
       "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
       "storage": "s3://imagenet-1m-template/raw/val",
       "n_files": 50000,
-      "index_s": 8.366329956999834,
+      "index_s": 9.73495352900136,
       "batch_size": 64,
-      "batches": 30,
+      "batches": 300,
+      "min_seconds": 15.0,
+      "prefetch_factor": 2,
+      "warm_batches_formula": "1 + num_workers * prefetch_factor",
       "multiprocessing_context": "spawn",
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
-      "prefetch": [0, 16],
+      "workers": [
+        24
+      ],
+      "prefetch": [
+        0,
+        16
+      ],
       "range_parallel_threshold": 0,
       "max_concurrent_downloads": 64,
+      "hedge_delay": 0.0,
+      "safety_grid": false,
       "capabilities": {
         "has_max_prefetch": true,
         "has_range_parallel_threshold": true,
@@ -79,12 +109,301 @@
           "transform"
         ]
       },
-      "git_hint": "e458be1e07485d81778b582dc8fe189207ac8a5b",
-      "input_note": "after uses mount path; _storage_path prefers cloud URL"
+      "git_sha": "9f7bf18",
+      "git_hint": "",
+      "jsonl": "/teamspace/studios/this_studio/litData/benchmarks/results/raw_before_vs_after.after.jsonl",
+      "input_note": "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0",
+      "caveat": "Short windows and high-worker cells can be noisy (~2\u00d7 run-to-run). Trust systematic patterns (e.g. prefetch helps), not fine \u0394%."
     },
-    "note": "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / LoopRunner; FUSE mount path on main selects LocalDownloader and is broken for async reads); after = feature/raw-streaming-perf defaults (range_parallel_threshold=0, mount\u2192s3://)",
-    "delta_definition": "delta_pct = ((after - before) / before) * 100; before is stock main (no max_prefetch API, measured at prefetch=0)",
-    "omitted": "none in this run; before has no max_prefetch so prefetch>0 rows compare after vs stock main baseline"
+    "long_window_workers": [
+      24
+    ],
+    "long_window_protocol": {
+      "batches": 300,
+      "min_seconds": 15,
+      "warm_batches": "1 + num_workers * prefetch_factor (prefetch_factor=2)",
+      "stop_rule": "stop when batches>=300 OR elapsed>=min_seconds (whichever first after warm)"
+    },
+    "delta_definition": "delta_pct = ((after - before) / before) * 100; before is stock main (prefetch=0)",
+    "note": "before = stock StreamingRawDataset on main via s3://; after = feature/raw-streaming-perf (range_parallel_threshold=0, hedge_delay=0, mount\u2192s3://). w=24 cells are long-window remeasures; other workers remain short-window exploratory (30 batches).",
+    "caveat": "Short-window cells can disagree ~2\u00d7 run-to-run. The old before w=24=10556 (~0.18s) and after w=24 p16=5361 were short-window artifacts; after-only sweep 7350 was a separate single-run short window \u2014 not comparable. Prefer long-window w=24 and systematic patterns.",
+    "w24_long_window": {
+      "before_ips": 6813.832422638245,
+      "before_elapsed": 2.8177975050002715,
+      "before_batches": 300,
+      "before_warm_batches": 49,
+      "after_prefetch0_ips": 6634.856636711977,
+      "after_prefetch0_elapsed": 2.8938078170012886,
+      "after_prefetch16_ips": 6755.452730436154,
+      "after_prefetch16_elapsed": 2.842148522999196,
+      "git_sha_before_tree": "9f7bf18",
+      "git_sha_after_tree": "9f7bf18"
+    }
+  },
+  "cells": [
+    {
+      "workers": 0,
+      "prefetch": 0,
+      "before_ips": 629.5218173032138,
+      "after_ips": 632.8726418902654,
+      "delta_pct": 0.5322809305332937,
+      "speedup": 1.005322809305333,
+      "before_elapsed": 3.0499340089991165,
+      "after_elapsed": 3.0337857459999213,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 0,
+      "prefetch": 16,
+      "before_ips": 629.5218173032138,
+      "after_ips": 690.2281495437081,
+      "delta_pct": 9.643245169889754,
+      "speedup": 1.0964324516988975,
+      "before_elapsed": 3.0499340089991165,
+      "after_elapsed": 2.781688926001152,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 1,
+      "prefetch": 0,
+      "before_ips": 779.0158945627203,
+      "after_ips": 901.2173050526277,
+      "delta_pct": 15.686638917489853,
+      "speedup": 1.1568663891748985,
+      "before_elapsed": 2.4646480430001247,
+      "after_elapsed": 2.130451766999613,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 1,
+      "prefetch": 16,
+      "before_ips": 779.0158945627203,
+      "after_ips": 721.0167045733909,
+      "delta_pct": -7.445186984520468,
+      "speedup": 0.9255481301547953,
+      "before_elapsed": 2.4646480430001247,
+      "after_elapsed": 2.6629064040007506,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 2,
+      "prefetch": 0,
+      "before_ips": 1407.2994554304264,
+      "after_ips": 854.6528508626327,
+      "delta_pct": -39.27000770413609,
+      "speedup": 0.6072999229586391,
+      "before_elapsed": 1.3643151730011596,
+      "after_elapsed": 2.2465261749985075,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 2,
+      "prefetch": 16,
+      "before_ips": 1407.2994554304264,
+      "after_ips": 1692.2284740472896,
+      "delta_pct": 20.246509548297727,
+      "speedup": 1.2024650954829772,
+      "before_elapsed": 1.3643151730011596,
+      "after_elapsed": 1.134598566000932,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 4,
+      "prefetch": 0,
+      "before_ips": 2603.529206694426,
+      "after_ips": 1443.641013858223,
+      "delta_pct": -44.550611909933465,
+      "speedup": 0.5544938809006654,
+      "before_elapsed": 0.7374605189997965,
+      "after_elapsed": 1.329970527000114,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 4,
+      "prefetch": 16,
+      "before_ips": 2603.529206694426,
+      "after_ips": 3110.1106036434103,
+      "delta_pct": 19.4574885369604,
+      "speedup": 1.194574885369604,
+      "before_elapsed": 0.7374605189997965,
+      "after_elapsed": 0.6173413890010124,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 8,
+      "prefetch": 0,
+      "before_ips": 3252.8035074756567,
+      "after_ips": 2905.735185592619,
+      "delta_pct": -10.669821312151148,
+      "speedup": 0.8933017868784885,
+      "before_elapsed": 0.5902600620011071,
+      "after_elapsed": 0.6607622089995857,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 8,
+      "prefetch": 16,
+      "before_ips": 3252.8035074756567,
+      "after_ips": 4394.612951609232,
+      "delta_pct": 35.102318400402815,
+      "speedup": 1.351023184004028,
+      "before_elapsed": 0.5902600620011071,
+      "after_elapsed": 0.43689854399963224,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 16,
+      "prefetch": 0,
+      "before_ips": 4931.263161319901,
+      "after_ips": 3644.858178538954,
+      "delta_pct": -26.0867234357176,
+      "speedup": 0.739132765642824,
+      "before_elapsed": 0.3893525729999965,
+      "after_elapsed": 0.526769467000122,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 16,
+      "prefetch": 16,
+      "before_ips": 4931.263161319901,
+      "after_ips": 5454.499804106813,
+      "delta_pct": 10.610600685258552,
+      "speedup": 1.1061060068525854,
+      "before_elapsed": 0.3893525729999965,
+      "after_elapsed": 0.35200294599962945,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 24,
+      "prefetch": 0,
+      "before_ips": 6813.832422638245,
+      "after_ips": 6634.856636711977,
+      "delta_pct": -2.626653765825513,
+      "speedup": 0.9737334623417448,
+      "before_elapsed": 2.8177975050002715,
+      "after_elapsed": 2.8938078170012886,
+      "before_batches": 300,
+      "after_batches": 300,
+      "before_warm_batches": 49,
+      "after_warm_batches": 49,
+      "protocol": "long-window",
+      "before_note": "stock main prefetch=0; replaces short-window 10556 artifact"
+    },
+    {
+      "workers": 24,
+      "prefetch": 16,
+      "before_ips": 6813.832422638245,
+      "after_ips": 6755.452730436154,
+      "delta_pct": -0.8567820366132083,
+      "speedup": 0.9914321796338679,
+      "before_elapsed": 2.8177975050002715,
+      "after_elapsed": 2.842148522999196,
+      "before_batches": 300,
+      "after_batches": 300,
+      "before_warm_batches": 49,
+      "after_warm_batches": 49,
+      "protocol": "long-window",
+      "before_note": "stock main prefetch=0; replaces short-window 10556 artifact"
+    },
+    {
+      "workers": 32,
+      "prefetch": 0,
+      "before_ips": 3243.5852606855224,
+      "after_ips": 4161.671315409755,
+      "delta_pct": 28.304668474483012,
+      "speedup": 1.28304668474483,
+      "before_elapsed": 0.5919375769990438,
+      "after_elapsed": 0.46135310899990145,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    },
+    {
+      "workers": 32,
+      "prefetch": 16,
+      "before_ips": 3243.5852606855224,
+      "after_ips": 3256.575443069394,
+      "delta_pct": 0.40048838984816326,
+      "speedup": 1.0040048838984816,
+      "before_elapsed": 0.5919375769990438,
+      "after_elapsed": 0.5895763919997989,
+      "before_batches": null,
+      "after_batches": null,
+      "before_warm_batches": null,
+      "after_warm_batches": null,
+      "protocol": "short-window-exploratory",
+      "before_note": "stock main prefetch=0"
+    }
+  ],
+  "best_after_long_window_w24": {
+    "workers": 24,
+    "prefetch": 16,
+    "after_ips": 6755.452730436154,
+    "before_ips": 6813.832422638245,
+    "delta_pct": -0.8567820366132083
   },
   "comparison": [
     {
@@ -93,11 +412,8 @@
       "after_prefetch0_ips": 632.8726418902654,
       "after_prefetch16_ips": 690.2281495437081,
       "speedup_prefetch0": 1.005322809305333,
-      "speedup_prefetch16": 1.0964324516988975,
-      "after_best_ips": 690.2281495437081,
-      "after_best_prefetch": 16,
-      "speedup_best": 1.0964324516988975,
       "delta_pct_prefetch0": 0.5322809305332937,
+      "speedup_prefetch16": 1.0964324516988975,
       "delta_pct_prefetch16": 9.643245169889754
     },
     {
@@ -106,11 +422,8 @@
       "after_prefetch0_ips": 901.2173050526277,
       "after_prefetch16_ips": 721.0167045733909,
       "speedup_prefetch0": 1.1568663891748985,
-      "speedup_prefetch16": 0.9255481301547953,
-      "after_best_ips": 901.2173050526277,
-      "after_best_prefetch": 0,
-      "speedup_best": 1.1568663891748985,
       "delta_pct_prefetch0": 15.686638917489853,
+      "speedup_prefetch16": 0.9255481301547953,
       "delta_pct_prefetch16": -7.445186984520468
     },
     {
@@ -119,11 +432,8 @@
       "after_prefetch0_ips": 854.6528508626327,
       "after_prefetch16_ips": 1692.2284740472896,
       "speedup_prefetch0": 0.6072999229586391,
-      "speedup_prefetch16": 1.2024650954829772,
-      "after_best_ips": 1692.2284740472896,
-      "after_best_prefetch": 16,
-      "speedup_best": 1.2024650954829772,
       "delta_pct_prefetch0": -39.27000770413609,
+      "speedup_prefetch16": 1.2024650954829772,
       "delta_pct_prefetch16": 20.246509548297727
     },
     {
@@ -132,11 +442,8 @@
       "after_prefetch0_ips": 1443.641013858223,
       "after_prefetch16_ips": 3110.1106036434103,
       "speedup_prefetch0": 0.5544938809006654,
-      "speedup_prefetch16": 1.194574885369604,
-      "after_best_ips": 3110.1106036434103,
-      "after_best_prefetch": 16,
-      "speedup_best": 1.194574885369604,
       "delta_pct_prefetch0": -44.550611909933465,
+      "speedup_prefetch16": 1.194574885369604,
       "delta_pct_prefetch16": 19.4574885369604
     },
     {
@@ -145,11 +452,8 @@
       "after_prefetch0_ips": 2905.735185592619,
       "after_prefetch16_ips": 4394.612951609232,
       "speedup_prefetch0": 0.8933017868784885,
-      "speedup_prefetch16": 1.351023184004028,
-      "after_best_ips": 4394.612951609232,
-      "after_best_prefetch": 16,
-      "speedup_best": 1.351023184004028,
       "delta_pct_prefetch0": -10.669821312151148,
+      "speedup_prefetch16": 1.351023184004028,
       "delta_pct_prefetch16": 35.102318400402815
     },
     {
@@ -158,25 +462,20 @@
       "after_prefetch0_ips": 3644.858178538954,
       "after_prefetch16_ips": 5454.499804106813,
       "speedup_prefetch0": 0.739132765642824,
-      "speedup_prefetch16": 1.1061060068525854,
-      "after_best_ips": 5454.499804106813,
-      "after_best_prefetch": 16,
-      "speedup_best": 1.1061060068525854,
       "delta_pct_prefetch0": -26.0867234357176,
+      "speedup_prefetch16": 1.1061060068525854,
       "delta_pct_prefetch16": 10.610600685258552
     },
     {
       "workers": 24,
-      "before_ips": 10556.113835248114,
-      "after_prefetch0_ips": 3727.005113653765,
-      "after_prefetch16_ips": 5361.358449606034,
-      "speedup_prefetch0": 0.3530660214376292,
-      "speedup_prefetch16": 0.5078913067140128,
-      "after_best_ips": 5361.358449606034,
-      "after_best_prefetch": 16,
-      "speedup_best": 0.5078913067140128,
-      "delta_pct_prefetch0": -64.69339785623708,
-      "delta_pct_prefetch16": -49.21086932859872
+      "before_ips": 6813.832422638245,
+      "after_prefetch0_ips": 6634.856636711977,
+      "after_prefetch16_ips": 6755.452730436154,
+      "speedup_prefetch0": 0.9737334623417448,
+      "delta_pct_prefetch0": -2.626653765825513,
+      "speedup_prefetch16": 0.9914321796338679,
+      "delta_pct_prefetch16": -0.8567820366132083,
+      "protocol": "long-window: warm=1+w*prefetch_factor, batches>=300"
     },
     {
       "workers": 32,
@@ -184,11 +483,8 @@
       "after_prefetch0_ips": 4161.671315409755,
       "after_prefetch16_ips": 3256.575443069394,
       "speedup_prefetch0": 1.28304668474483,
-      "speedup_prefetch16": 1.0040048838984816,
-      "after_best_ips": 4161.671315409755,
-      "after_best_prefetch": 0,
-      "speedup_best": 1.28304668474483,
       "delta_pct_prefetch0": 28.304668474483012,
+      "speedup_prefetch16": 1.0040048838984816,
       "delta_pct_prefetch16": 0.40048838984816326
     }
   ],
@@ -258,10 +554,16 @@
       "label": "w24_p0",
       "workers": 24,
       "prefetch": 0,
-      "ips": 10556.113835248114,
-      "warm_s": 0.49204495400044834,
-      "elapsed": 0.18188511700100207,
-      "samples": 1920
+      "ips": 6813.832422638245,
+      "warm_s": 1.0138909999986936,
+      "warm_batches": 49,
+      "elapsed": 2.8177975050002715,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": null,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249075.3499482
     },
     {
       "side": "before",
@@ -400,20 +702,32 @@
       "label": "w24_p0",
       "workers": 24,
       "prefetch": 0,
-      "ips": 3727.005113653765,
-      "warm_s": 0.39636550700015505,
-      "elapsed": 0.5151589390006848,
-      "samples": 1920
+      "ips": 6634.856636711977,
+      "warm_s": 0.8791304000005766,
+      "warm_batches": 49,
+      "elapsed": 2.8938078170012886,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": 0.0,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249175.8620818
     },
     {
       "side": "after",
       "label": "w24_p16",
       "workers": 24,
       "prefetch": 16,
-      "ips": 5361.358449606034,
-      "warm_s": 0.46282929299923126,
-      "elapsed": 0.35811819300033676,
-      "samples": 1920
+      "ips": 6755.452730436154,
+      "warm_s": 0.7904796370003169,
+      "warm_batches": 49,
+      "elapsed": 2.842148522999196,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": 0.0,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249232.5317261
     },
     {
       "side": "after",
@@ -435,159 +749,5 @@
       "elapsed": 0.5895763919997989,
       "samples": 1920
     }
-  ],
-  "cells": [
-    {
-      "workers": 0,
-      "prefetch": 0,
-      "before_ips": 629.5218173032138,
-      "after_ips": 632.8726418902654,
-      "delta_pct": 0.5322809305332937,
-      "speedup": 1.005322809305333,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 0,
-      "prefetch": 16,
-      "before_ips": 629.5218173032138,
-      "after_ips": 690.2281495437081,
-      "delta_pct": 9.643245169889754,
-      "speedup": 1.0964324516988975,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 1,
-      "prefetch": 0,
-      "before_ips": 779.0158945627203,
-      "after_ips": 901.2173050526277,
-      "delta_pct": 15.686638917489853,
-      "speedup": 1.1568663891748985,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 1,
-      "prefetch": 16,
-      "before_ips": 779.0158945627203,
-      "after_ips": 721.0167045733909,
-      "delta_pct": -7.445186984520468,
-      "speedup": 0.9255481301547953,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 2,
-      "prefetch": 0,
-      "before_ips": 1407.2994554304264,
-      "after_ips": 854.6528508626327,
-      "delta_pct": -39.27000770413609,
-      "speedup": 0.6072999229586391,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 2,
-      "prefetch": 16,
-      "before_ips": 1407.2994554304264,
-      "after_ips": 1692.2284740472896,
-      "delta_pct": 20.246509548297727,
-      "speedup": 1.2024650954829772,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 4,
-      "prefetch": 0,
-      "before_ips": 2603.529206694426,
-      "after_ips": 1443.641013858223,
-      "delta_pct": -44.550611909933465,
-      "speedup": 0.5544938809006654,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 4,
-      "prefetch": 16,
-      "before_ips": 2603.529206694426,
-      "after_ips": 3110.1106036434103,
-      "delta_pct": 19.4574885369604,
-      "speedup": 1.194574885369604,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 8,
-      "prefetch": 0,
-      "before_ips": 3252.8035074756567,
-      "after_ips": 2905.735185592619,
-      "delta_pct": -10.669821312151148,
-      "speedup": 0.8933017868784885,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 8,
-      "prefetch": 16,
-      "before_ips": 3252.8035074756567,
-      "after_ips": 4394.612951609232,
-      "delta_pct": 35.102318400402815,
-      "speedup": 1.351023184004028,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 16,
-      "prefetch": 0,
-      "before_ips": 4931.263161319901,
-      "after_ips": 3644.858178538954,
-      "delta_pct": -26.0867234357176,
-      "speedup": 0.739132765642824,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 16,
-      "prefetch": 16,
-      "before_ips": 4931.263161319901,
-      "after_ips": 5454.499804106813,
-      "delta_pct": 10.610600685258552,
-      "speedup": 1.1061060068525854,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 24,
-      "prefetch": 0,
-      "before_ips": 10556.113835248114,
-      "after_ips": 3727.005113653765,
-      "delta_pct": -64.69339785623708,
-      "speedup": 0.3530660214376292,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 24,
-      "prefetch": 16,
-      "before_ips": 10556.113835248114,
-      "after_ips": 5361.358449606034,
-      "delta_pct": -49.21086932859872,
-      "speedup": 0.5078913067140128,
-      "before_note": "stock main (no max_prefetch)"
-    },
-    {
-      "workers": 32,
-      "prefetch": 0,
-      "before_ips": 3243.5852606855224,
-      "after_ips": 4161.671315409755,
-      "delta_pct": 28.304668474483012,
-      "speedup": 1.28304668474483,
-      "before_note": "stock main prefetch=0"
-    },
-    {
-      "workers": 32,
-      "prefetch": 16,
-      "before_ips": 3243.5852606855224,
-      "after_ips": 3256.575443069394,
-      "delta_pct": 0.40048838984816326,
-      "speedup": 1.0040048838984816,
-      "before_note": "stock main (no max_prefetch)"
-    }
-  ],
-  "best_after": {
-    "workers": 16,
-    "prefetch": 16,
-    "after_ips": 5454.499804106813,
-    "before_ips": 4931.263161319901,
-    "delta_pct": 10.610600685258552,
-    "speedup": 1.1061060068525854
-  }
+  ]
 }

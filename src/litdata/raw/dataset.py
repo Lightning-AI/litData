@@ -426,7 +426,7 @@ class CacheManager:
         storage_options: dict | None = None,
         cache_files: bool = False,
         max_concurrent_downloads: int = 64,
-        hedge_delay: float = 1.0,
+        hedge_delay: float = 0.0,
         download_timeout: float = 120.0,
         range_parallel_threshold: int = _RANGE_PARALLEL_THRESHOLD,
         range_chunk_size: int = _RANGE_CHUNK_SIZE,
@@ -456,6 +456,7 @@ class CacheManager:
         self._present_paths: set[str] = set()
         self._range_executor: ThreadPoolExecutor | None = None
         self._range_executor_pid: int | None = None
+        self._hedge_fired = 0
 
     def reset_runtime_state(self) -> None:
         """Drop process/loop-bound clients (call after fork or when pickling)."""
@@ -468,6 +469,7 @@ class CacheManager:
         self._path_inflight = {}
         self._path_inflight_loop = None
         self._shutdown_range_executor()
+        self._hedge_fired = 0
         # Keep _present_paths — cache files survive fork/spawn on shared FS.
 
     def __getstate__(self) -> dict[str, Any]:
@@ -499,6 +501,7 @@ class CacheManager:
             "_present_paths": set(),
             "_range_executor": None,
             "_range_executor_pid": None,
+            "_hedge_fired": 0,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -514,6 +517,7 @@ class CacheManager:
         self._present_paths = set(state.get("_present_paths") or ())
         self._range_executor = None
         self._range_executor_pid = None
+        self._hedge_fired = 0
 
     def _shutdown_range_executor(self) -> None:
         if self._range_executor is not None:
@@ -760,6 +764,8 @@ class CacheManager:
             return await first
 
         second: asyncio.Task[T] = asyncio.create_task(factory())
+        self._hedge_fired += 1
+        logger.debug("hedge fired count=%s delay=%.3fs", self._hedge_fired, delay)
         pending: set[asyncio.Task[T]] = {first, second}
         try:
             while pending:
@@ -879,11 +885,16 @@ class CacheManager:
                 size=size,
             )
 
+        delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
+        # Pay-per-use: when hedging is off/ineligible and timeout is disabled, match a bare download.
+        if delay is None and self.download_timeout is None:
+            async with self._permit(gated):
+                return await self.downloader.adownload_fileobj(file_path)
+
         async def once() -> bytes:
             async with self._permit(gated):
                 return await self.downloader.adownload_fileobj(file_path)
 
-        delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
         if delay is not None:
             return await self._with_timeout(self._hedged(once, delay), size=size)
         return await self._with_timeout(once(), size=size)
@@ -1095,7 +1106,7 @@ class StreamingRawDataset(Dataset):
         max_prefetch: int = 0,
         prefetch_cache_size: int | None = None,
         item_type: Literal["bytes", "path"] = "bytes",
-        hedge_delay: float = 1.0,
+        hedge_delay: float = 0.0,
         download_timeout: float = 120.0,
         range_parallel_threshold: int = _RANGE_PARALLEL_THRESHOLD,
         range_chunk_size: int = _RANGE_CHUNK_SIZE,
@@ -1123,11 +1134,13 @@ class StreamingRawDataset(Dataset):
             item_type: ``"bytes"`` (default) buffers each object in RAM; ``"path"`` downloads to
                 the cache and returns local path(s). ``item_type="path"`` requires ``cache_files=True``.
             hedge_delay: Seconds before starting a hedged duplicate request for a slow GET
-                (``0`` disables). Only applied to small/unknown objects (~<8MB); large objects
-                use per-chunk hedging for ranged downloads. Helps cut object-store p99 stragglers.
+                (``0`` = off, default). Opt in with a positive delay for object-store p99
+                stragglers. Only applied to small objects (~<8MB); large objects use per-chunk
+                hedging for ranged downloads.
             download_timeout: Per-object timeout floor in seconds (``0`` / disabled → no
                 timeout). For sized objects the effective budget is
                 ``max(download_timeout, size / ~25MB/s * 3)`` — a floor, not a hard cap.
+                When hedging is off and timeout is disabled, downloads take a bare fast path.
             range_parallel_threshold: Objects at least this large use parallel ranged GETs
                 when the backend supports Range (``0`` disables; opt in with a positive
                 byte threshold via the constructor).

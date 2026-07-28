@@ -1,14 +1,17 @@
-"""A/B: stock StreamingRawDataset (main) vs optimized (feature branch).
+r"""A/B: stock StreamingRawDataset (main) vs optimized (feature branch).
 
 Run twice with different PYTHONPATH / --side, then merge:
 
-  PYTHONPATH=/tmp/litdata-raw-before/src \\
+  PYTHONPATH=/tmp/litdata-raw-before/src \
     python benchmarks/bench_raw_before_vs_after.py --side before
 
-  PYTHONPATH=src \\
+  PYTHONPATH=src \
     python benchmarks/bench_raw_before_vs_after.py --side after
 
   python benchmarks/bench_raw_before_vs_after.py --merge
+
+Defaults aim for trustworthy windows: >=300 batches (or use --min-seconds),
+and warm ``num_workers * prefetch_factor`` batches before timing starts.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -34,10 +38,30 @@ ROOT = Path(tempfile.gettempdir()) / "litdata-raw-before-vs-after"
 OUT_DIR = Path(__file__).resolve().parent / "results"
 OUT = OUT_DIR / "raw_before_vs_after.json"
 BS = 64
-BATCHES = 30
+DEFAULT_BATCHES = 300
+DEFAULT_MIN_SECONDS = 10.0
+DEFAULT_PREFETCH_FACTOR = 2
 WORKERS = [0, 1, 2, 4, 8, 16, 24, 32]
-TIMEOUT = 180.0
+TRUST_WORKERS = [0, 2, 4, 8, 16]
+TIMEOUT = 600.0
 OLD_FUSE = 75.2
+
+
+def git_sha() -> str:
+    """Return short git SHA for the repo containing this script, or empty."""
+    env = os.environ.get("LITDATA_BENCH_GIT", "").strip()
+    if env:
+        return env
+    try:
+        return subprocess.check_output(
+            ["/usr/bin/git", "rev-parse", "--short", "HEAD"],
+
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return ""
 
 
 def input_for(side: str) -> str:
@@ -54,6 +78,7 @@ class HangWatchdog:
     """Kill the process if a step exceeds ``timeout_s`` without heartbeat."""
 
     def __init__(self, timeout_s: float) -> None:
+        """Initialize the watchdog with a hang timeout in seconds."""
         self.timeout_s = timeout_s
         self._label = "init"
         self._beat = time.monotonic()
@@ -61,13 +86,16 @@ class HangWatchdog:
         self._t = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
+        """Start the background watchdog thread."""
         self._t.start()
 
     def beat(self, label: str) -> None:
+        """Record progress so the watchdog does not abort."""
         self._label = label
         self._beat = time.monotonic()
 
     def stop(self) -> None:
+        """Stop the background watchdog thread."""
         self._stop.set()
 
     def _run(self) -> None:
@@ -135,7 +163,14 @@ def storage_path_of(ds) -> str:
     return MOUNT_INPUT
 
 
-def make_dataset(cache: str, *, side: str, max_prefetch: int):
+def make_dataset(
+    cache: str,
+    *,
+    side: str,
+    max_prefetch: int,
+    hedge_delay: float | None = None,
+    download_timeout: float | None = None,
+):
     """Construct StreamingRawDataset with side-appropriate kwargs."""
     from litdata import StreamingRawDataset
 
@@ -144,7 +179,22 @@ def make_dataset(cache: str, *, side: str, max_prefetch: int):
         kwargs["max_prefetch"] = max_prefetch
         kwargs["max_concurrent_downloads"] = 64
         kwargs["range_parallel_threshold"] = 0
+        # Match new defaults: hedging opt-in (0). Explicit for older trees / clarity.
+        kwargs["hedge_delay"] = 0.0 if hedge_delay is None else hedge_delay
+        if download_timeout is not None:
+            kwargs["download_timeout"] = download_timeout
+    elif hedge_delay is not None or download_timeout is not None:
+        # before tree has no these knobs — ignore for stock main.
+        pass
     return StreamingRawDataset(input_for(side), **kwargs)
+
+
+def append_jsonl(path: Path, record: dict) -> None:
+    """Append one JSON record to a JSONL file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+        f.flush()
 
 
 def run_one(
@@ -155,63 +205,123 @@ def run_one(
     max_prefetch: int,
     seed: Path,
     wd: HangWatchdog,
+    batches: int,
+    min_seconds: float,
+    prefetch_factor: int,
+    hedge_delay: float | None = None,
+    download_timeout: float | None = None,
+    sha: str = "",
+    jsonl: Path | None = None,
 ) -> dict:
     """Run one worker/prefetch trial and return timing stats."""
     cache = ROOT / side / label
     wd.beat(f"{label}: setup")
     copy_index(seed, cache)
-    ds = make_dataset(str(cache), side=side, max_prefetch=max_prefetch)
+    ds = make_dataset(
+        str(cache),
+        side=side,
+        max_prefetch=max_prefetch,
+        hedge_delay=hedge_delay,
+        download_timeout=download_timeout,
+    )
     kwargs: dict = {"batch_size": BS, "num_workers": num_workers, "shuffle": False}
     if num_workers > 0:
         kwargs["multiprocessing_context"] = "spawn"
         kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = prefetch_factor
     loader = DataLoader(ds, **kwargs)
     it = iter(loader)
-    wd.beat(f"{label}: warm")
+
+    # Drain pipeline buffer before timing: 1 warm + workers×prefetch_factor.
+    warm_batches = 1 + (num_workers * prefetch_factor if num_workers > 0 else 0)
+    wd.beat(f"{label}: warm({warm_batches})")
     t0 = time.perf_counter()
-    next(it)
+    for i in range(warm_batches):
+        next(it)
+        wd.beat(f"{label}: warm {i + 1}/{warm_batches}")
     warm_s = time.perf_counter() - t0
 
     samples = 0
+    timed_batches = 0
     wd.beat(f"{label}: timed")
     t0 = time.perf_counter()
-    for i, batch in enumerate(it):
+    while True:
+        batch = next(it)
         samples += len(batch)
-        wd.beat(f"{label}: batch {i + 1}")
-        if i + 1 >= BATCHES:
+        timed_batches += 1
+        wd.beat(f"{label}: batch {timed_batches}")
+        elapsed = time.perf_counter() - t0
+        # Stop once either floor is met (recommend ≥300 batches OR ≥10s).
+        if timed_batches >= batches or elapsed >= min_seconds:
             break
     elapsed = time.perf_counter() - t0
     ips = samples / elapsed if elapsed else 0.0
     log(
         f"[{side}/{label}] w={num_workers} pf={max_prefetch} "
-        f"warm={warm_s:.2f}s | {BATCHES}×{samples // max(BATCHES, 1)} in {elapsed:.2f}s "
-        f"→ {ips:.1f} samples/s"
+        f"warm={warm_batches}@{warm_s:.2f}s | {timed_batches}×{samples // max(timed_batches, 1)} "
+        f"in {elapsed:.2f}s → {ips:.1f} samples/s"
     )
-    del it, loader, ds
-    return {
+    result = {
         "side": side,
         "label": label,
         "workers": num_workers,
         "prefetch": max_prefetch,
         "ips": ips,
         "warm_s": warm_s,
+        "warm_batches": warm_batches,
         "elapsed": elapsed,
         "samples": samples,
+        "batches": timed_batches,
+        "hedge_delay": hedge_delay if side == "after" else None,
+        "download_timeout": download_timeout if side == "after" else None,
+        "git_sha": sha,
+        "ts": time.time(),
     }
+    if jsonl is not None:
+        append_jsonl(jsonl, result)
+    del it, loader, ds
+    return result
 
 
-def configs_for(side: str) -> list[tuple[int, int]]:
-    """Return (workers, prefetch) configs for a side."""
+def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tuple]:
+    """Return trial configs.
+
+    Normal: (workers, prefetch, hedge_delay|None, download_timeout|None)
+    safety_grid (after only): hedge_delay × download_timeout at p0 for w∈{2,4,8}.
+    """
+    if safety_grid:
+        if side != "after":
+            raise SystemExit("--safety-grid is only meaningful with --side after")
+        out = []
+        for w in (2, 4, 8):
+            for hd in (0.0, 1.0):
+                for dt in (0.0, 120.0):
+                    out.append((w, 0, hd, dt))
+        return out
     if side == "before":
-        return [(w, 0) for w in WORKERS]
-    return [(w, pf) for w in WORKERS for pf in (0, 16)]
+        return [(w, 0, None, None) for w in workers]
+    return [(w, pf, 0.0, None) for w in workers for pf in (0, 16)]
 
 
 def partial_path(side: str) -> Path:
+    """Return path for a side's partial JSON payload."""
     return OUT_DIR / f"raw_before_vs_after.{side}.json"
 
 
-def run_side(side: str) -> None:
+def jsonl_path(side: str) -> Path:
+    """Return path for a side's incremental JSONL log."""
+    return OUT_DIR / f"raw_before_vs_after.{side}.jsonl"
+
+
+def run_side(
+    side: str,
+    *,
+    workers: list[int],
+    batches: int,
+    min_seconds: float,
+    prefetch_factor: int,
+    safety_grid: bool,
+) -> None:
     """Index once and sweep configs for ``before`` or ``after``."""
     caps = detect_side_capabilities()
     if side == "after" and not caps["has_max_prefetch"]:
@@ -224,15 +334,23 @@ def run_side(side: str) -> None:
         shutil.rmtree(side_root, ignore_errors=True)
     side_root.mkdir(parents=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    sha = git_sha()
+    jpath = jsonl_path(side)
+    if jpath.exists():
+        jpath.unlink()
 
     wd = HangWatchdog(TIMEOUT)
     wd.start()
     ncpu = os.cpu_count() or 0
-    cfgs = configs_for(side)
+    cfgs = configs_for(side, workers, safety_grid=safety_grid)
     inp = input_for(side)
     log(f"=== side={side} ===")
     log(f"capabilities: {json.dumps(caps)}")
-    log(f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches={BATCHES} cpus={ncpu} configs={len(cfgs)}")
+    log(
+        f"input={inp} (mount={MOUNT_INPUT}) bs={BS} batches>={batches} "
+        f"min_seconds>={min_seconds} warm=1+w*{prefetch_factor} cpus={ncpu} "
+        f"configs={len(cfgs)} sha={sha or '?'}"
+    )
     log(f"PYTHONPATH[0]={sys.path[0]!r}")
 
     try:
@@ -257,9 +375,25 @@ def run_side(side: str) -> None:
         del ds
 
         results: list[dict] = []
-        for w, pf in cfgs:
-            label = f"w{w}_p{pf}"
-            results.append(run_one(label, side=side, num_workers=w, max_prefetch=pf, seed=seed, wd=wd))
+        for w, pf, hd, dt in cfgs:
+            label = f"w{w}_p{pf}_h{hd}_t{dt}" if safety_grid else f"w{w}_p{pf}"
+            results.append(
+                run_one(
+                    label,
+                    side=side,
+                    num_workers=w,
+                    max_prefetch=pf,
+                    seed=seed,
+                    wd=wd,
+                    batches=batches,
+                    min_seconds=min_seconds,
+                    prefetch_factor=prefetch_factor,
+                    hedge_delay=hd,
+                    download_timeout=dt,
+                    sha=sha,
+                    jsonl=jpath,
+                )
+            )
 
         payload = {
             "side": side,
@@ -270,22 +404,33 @@ def run_side(side: str) -> None:
                 "n_files": n_files,
                 "index_s": index_s,
                 "batch_size": BS,
-                "batches": BATCHES,
+                "batches": batches,
+                "min_seconds": min_seconds,
+                "prefetch_factor": prefetch_factor,
+                "warm_batches_formula": "1 + num_workers * prefetch_factor",
                 "multiprocessing_context": "spawn",
                 "persistent_workers": True,
                 "cpus": ncpu,
                 "fuse_baseline_samples_per_s": OLD_FUSE,
-                "workers": WORKERS,
+                "workers": workers,
                 "prefetch": [0] if side == "before" else [0, 16],
                 "range_parallel_threshold": 0 if side == "after" else None,
                 "max_concurrent_downloads": 64 if side == "after" else None,
+                "hedge_delay": 0.0 if side == "after" else None,
+                "safety_grid": safety_grid,
                 "capabilities": caps,
+                "git_sha": sha,
                 "git_hint": os.environ.get("LITDATA_BENCH_GIT", ""),
+                "jsonl": str(jpath),
                 "input_note": (
                     "before uses s3:// directly: main prefers FUSE path→LocalDownloader "
                     "which lacks adownload_fileobj; after uses mount and remaps to s3://"
                     if side == "before"
-                    else "after uses mount path; _storage_path prefers cloud URL"
+                    else "after uses mount path; _storage_path prefers cloud URL; hedge_delay=0"
+                ),
+                "caveat": (
+                    "Short windows and high-worker cells can be noisy (~2× run-to-run). "
+                    "Trust systematic patterns (e.g. prefetch helps), not fine Δ%."
                 ),
             },
             "results": results,
@@ -293,6 +438,7 @@ def run_side(side: str) -> None:
         out = partial_path(side)
         out.write_text(json.dumps(payload, indent=2) + "\n")
         log(f"Wrote {out}")
+        log(f"JSONL {jpath}")
     finally:
         wd.stop()
 
@@ -302,13 +448,14 @@ def merge() -> None:
     before = json.loads(partial_path("before").read_text())
     after = json.loads(partial_path("after").read_text())
 
+    workers = sorted({r["workers"] for r in before["results"]} | {r["workers"] for r in after["results"]})
     before_by_w = {r["workers"]: r for r in before["results"] if r["prefetch"] == 0}
     after_p0 = {r["workers"]: r for r in after["results"] if r["prefetch"] == 0}
     after_p16 = {r["workers"]: r for r in after["results"] if r["prefetch"] == 16}
 
     rows = []
     cells = []
-    for w in WORKERS:
+    for w in workers:
         b = before_by_w.get(w)
         a0 = after_p0.get(w)
         a16 = after_p16.get(w)
@@ -346,6 +493,10 @@ def merge() -> None:
                     "after_ips": a["ips"],
                     "delta_pct": ((a["ips"] - b["ips"]) / b["ips"]) * 100.0 if b["ips"] else None,
                     "speedup": a["ips"] / b["ips"] if b["ips"] else None,
+                    "before_elapsed": b.get("elapsed"),
+                    "after_elapsed": a.get("elapsed"),
+                    "before_batches": b.get("batches"),
+                    "after_batches": a.get("batches"),
                 }
             )
 
@@ -354,10 +505,9 @@ def merge() -> None:
         "meta": {
             "mount_input": MOUNT_INPUT,
             "batch_size": BS,
-            "batches": BATCHES,
             "multiprocessing_context": "spawn",
             "persistent_workers": True,
-            "workers": WORKERS,
+            "workers": workers,
             "before": before["meta"],
             "after": after["meta"],
             "delta_definition": (
@@ -368,7 +518,11 @@ def merge() -> None:
                 "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / "
                 "LoopRunner; FUSE mount path on main selects LocalDownloader and is broken "
                 "for async reads); after = feature/raw-streaming-perf defaults "
-                "(range_parallel_threshold=0, mount→s3://)"
+                "(range_parallel_threshold=0, hedge_delay=0, mount→s3://)"
+            ),
+            "caveat": (
+                "Run-to-run variance can be ~2× on short/high-worker windows. "
+                "Prefer systematic patterns over fine Δ%. High-worker cells need long windows."
             ),
         },
         "cells": cells,
@@ -380,35 +534,84 @@ def merge() -> None:
     OUT.write_text(json.dumps(payload, indent=2) + "\n")
     log(f"Wrote {OUT}")
 
-    # Print flat before/after table
     print()
-    print(f"{'w':>4}  {'pf':>4}  {'before':>10}  {'after':>10}  {'Δ%':>8}  {'×':>6}")
-    print("-" * 52)
+    print(f"{'w':>4}  {'pf':>4}  {'before':>10}  {'after':>10}  {'Δ%':>8}  {'×':>6}  {'after_s':>8}")
+    print("-" * 62)
     for c in cells:
+        ae = c.get("after_elapsed")
+        ae_s = f"{ae:.2f}" if isinstance(ae, (int, float)) else "?"
         print(
             f"{c['workers']:>4}  {c['prefetch']:>4}  {c['before_ips']:>10.1f}  "
-            f"{c['after_ips']:>10.1f}  {c['delta_pct']:>+7.1f}%  {c['speedup']:>5.2f}x"
+            f"{c['after_ips']:>10.1f}  {c['delta_pct']:>+7.1f}%  {c['speedup']:>5.2f}x  {ae_s:>8}"
         )
     print()
     if best_after:
         print(
-            f"Best after: w={best_after['workers']} prefetch={best_after['prefetch']} "
-            f"→ {best_after['after_ips']:.1f} samples/s "
-            f"({best_after['delta_pct']:+.1f}% / {best_after['speedup']:.2f}x vs before)"
+            f"Best after (noisy; treat as indicative): w={best_after['workers']} "
+            f"prefetch={best_after['prefetch']} → {best_after['after_ips']:.1f} samples/s "
+            f"(~{best_after['delta_pct']:+.0f}% / {best_after['speedup']:.2f}x vs before)"
         )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    """CLI entrypoint for before/after sweeps and merge."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--side", choices=("before", "after"))
     parser.add_argument("--merge", action="store_true")
+    parser.add_argument(
+        "--batches",
+        type=int,
+        default=DEFAULT_BATCHES,
+        help=f"minimum timed batches (default {DEFAULT_BATCHES}; recommend ≥300)",
+    )
+    parser.add_argument(
+        "--min-seconds",
+        type=float,
+        default=DEFAULT_MIN_SECONDS,
+        help=f"minimum timed window seconds (default {DEFAULT_MIN_SECONDS})",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=DEFAULT_PREFETCH_FACTOR,
+        help="DataLoader prefetch_factor; warm batches = 1 + workers * this (default 2)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=str,
+        default="",
+        help="comma-separated worker counts (default: full matrix; use 0,2,4,8,16 for trust A/B)",
+    )
+    parser.add_argument(
+        "--trust",
+        action="store_true",
+        help=f"shorthand for --workers {','.join(map(str, TRUST_WORKERS))} (recommended A/B)",
+    )
+    parser.add_argument(
+        "--safety-grid",
+        action="store_true",
+        help="after-only 2×2: hedge_delay∈{0,1} × download_timeout∈{0,120} at w∈{2,4,8} p0",
+    )
     args = parser.parse_args()
     if args.merge:
         merge()
-    elif args.side:
-        run_side(args.side)
-    else:
+        return
+    if not args.side:
         parser.error("pass --side before|after or --merge")
+    if args.trust:
+        workers = TRUST_WORKERS
+    elif args.workers.strip():
+        workers = [int(x) for x in args.workers.split(",") if x.strip()]
+    else:
+        workers = WORKERS
+    run_side(
+        args.side,
+        workers=workers,
+        batches=args.batches,
+        min_seconds=args.min_seconds,
+        prefetch_factor=args.prefetch_factor,
+        safety_grid=args.safety_grid,
+    )
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ lightning-sdk==2026.2.6 # Must be pinned to ensure compatibility
 google-cloud-storage
 polars
 fsspec
+uvloop; sys_platform != "win32"  # optional faster asyncio loop for StreamingRawDataset

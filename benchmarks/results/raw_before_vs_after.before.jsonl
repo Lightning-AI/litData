@@ -1,0 +1,1 @@
+{"side": "before", "label": "w24_p0", "workers": 24, "prefetch": 0, "ips": 6813.832422638245, "warm_s": 1.0138909999986936, "warm_batches": 49, "elapsed": 2.8177975050002715, "samples": 19200, "batches": 300, "hedge_delay": null, "download_timeout": null, "git_sha": "9f7bf18", "ts": 1785249075.3499482}

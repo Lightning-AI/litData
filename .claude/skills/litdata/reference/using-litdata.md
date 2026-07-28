@@ -330,14 +330,14 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 | `storage_options`          | `{}`            | Cloud creds                                                                                      |
 | `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                               |
 | `max_prefetch`             | `0`             | Sequential look-ahead after each batch (`0` = off)                                               |
-| `hedge_delay`              | `1.0`           | Seconds before hedged duplicate GET (`0` = off)                                                  |
+| `hedge_delay`              | `0`             | Seconds before hedged duplicate GET (`0` = off, default; opt-in)                                 |
 | `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs) |
 
 **Tuning / DataLoader**
 
 - After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
 - Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
-- Throughput: README `#stream-raw` is source of truth. Before vs after A/B (`main` → LoopRunner/prefetch): `benchmarks/results/raw_before_vs_after.json` (best in A/B ~**5455 samples/s** at w=16, prefetch=16, **+10.6%** vs stock main). Exhaustive after-only matrix peaked ~**7350 samples/s** (w=24, prefetch=16) vs FUSE ~75: `raw_worker_prefetch_sweep.json`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+- Throughput: README `#stream-raw` is source of truth. Prefer long-window A/B (`bench_raw_before_vs_after.py --trust`); short-window Δ% and high-w cells can disagree ~2×. After-only sweep matrix is single-run / not A/B (`raw_worker_prefetch_sweep.json`). Defaults: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
 - Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.

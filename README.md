@@ -85,6 +85,8 @@ Install all the extras
 pip install 'litdata[extras]'
 ```
 
+On Linux/macOS, `[extras]` includes optional `uvloop` for a faster asyncio event loop used by `StreamingRawDataset` (stdlib asyncio is the fallback when it is not installed).
+
 </details>
 
 <details>
@@ -336,7 +338,7 @@ for batch in loader:
 | `max_concurrent_downloads` | `64` | Max in-flight downloads per worker |
 | `max_prefetch` | `0` | Sequential look-ahead after each batch (`0` = off). Try `2 * batch_size` when access is mostly sequential |
 | `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
-| `hedge_delay` | `1.0` | Seconds before a hedged duplicate GET for a slow download (`0` = off) |
+| `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |
 | `range_parallel_threshold` | `0` | Objects ≥ this many bytes use parallel ranged GETs (`0` = whole-object only; opt-in) |
 | `item_type` | `"bytes"` | `"bytes"` buffers in RAM; `"path"` returns local cache paths (`cache_files=True` required) |
 
@@ -414,38 +416,26 @@ raw: bytes = dataset[0]
 
 ### Throughput (ImageNet val raw → S3)
 
-Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50 k JPEGs), `batch_size=64`, 30 timed batches after 1 warm, `multiprocessing_context="spawn"`, `persistent_workers=True`, `cache_files=False`. Storage path: `s3://imagenet-1m-template/raw/val` (mount `/teamspace/s3_connections/...` remaps to the bucket URL on the optimized tree).
+Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50 k JPEGs), `batch_size=64`, `multiprocessing_context="spawn"`, `persistent_workers=True`, `cache_files=False`. Storage path: `s3://imagenet-1m-template/raw/val` (mount `/teamspace/s3_connections/...` remaps to the bucket URL on the optimized tree).
 
-#### Before vs After (`main` → this branch)
+**Caveats:** short timed windows (≤30 batches / sub-second) can disagree by ~2× run-to-run — trust systematic patterns, not fine Δ%. Prefer the long-window harness: `python benchmarks/bench_raw_before_vs_after.py --side before|after --workers 24 --batches 300` (warm `1 + workers×prefetch_factor` before timing).
 
-A/B of stock `StreamingRawDataset` on **`main`** (no `max_prefetch` / LoopRunner; `asyncio.run` per batch; uvloop N/A) vs this branch (LoopRunner + uvloop, `range_parallel_threshold=0`, `max_concurrent_downloads=64`). Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`.
+#### Before vs After — long-window `w=24` (authoritative for high workers)
 
-`before` has no `max_prefetch` API — every row’s before column is stock main at that worker count (prefetch=0). Δ% = `((after − before) / before) × 100`. Missing/crashed cells are omitted (none in this run). Short timed windows at high workers can be noisy (e.g. before `w=24` finished 30 batches in ~0.18 s).
+Protocol: drain **49** warm batches (`1 + 24×2`), then time **≥300** batches. Stock **`main`** vs this branch (`LoopRunner`, optional uvloop via `litdata[extras]`, `range_parallel_threshold=0`, **`hedge_delay=0`**, `max_concurrent_downloads=64`). Source: `benchmarks/results/raw_before_vs_after.json` (`meta.w24_long_window`).
 
-**Best after in this A/B:** `num_workers=16`, `max_prefetch=16` → **~5455 samples/s** (**+10.6%** / **1.11×** vs stock main @ 16 workers).
+| workers | prefetch | before (samples/s) | after (samples/s) | Δ% | timed window |
+|--------:|---------:|-------------------:|------------------:|-----:|:-------------|
+| 24 | 0 | **6814** | **6635** | ≈ −2.6% | 300 batches / ~2.8–2.9 s after warm |
+| 24 | 16 | **6814** | **6756** | ≈ −0.9% | 300 batches / ~2.8 s after warm |
 
-| workers | prefetch | before (samples/s) | after (samples/s) | Δ% | speedup |
-|--------:|---------:|-------------------:|------------------:|-----:|--------:|
-| 0 | 0 | 630 | 633 | +0.5% | 1.01× |
-| 0 | 16 | 630 | 690 | +9.6% | 1.10× |
-| 1 | 0 | 779 | 901 | +15.7% | 1.16× |
-| 1 | 16 | 779 | 721 | −7.4% | 0.93× |
-| 2 | 0 | 1407 | 855 | −39.3% | 0.61× |
-| 2 | 16 | 1407 | 1692 | +20.2% | 1.20× |
-| 4 | 0 | 2604 | 1444 | −44.6% | 0.55× |
-| 4 | 16 | 2604 | 3110 | +19.5% | 1.19× |
-| 8 | 0 | 3253 | 2906 | −10.7% | 0.89× |
-| 8 | 16 | 3253 | 4395 | +35.1% | 1.35× |
-| 16 | 0 | 4931 | 3645 | −26.1% | 0.74× |
-| 16 | 16 | 4931 | **5455** | **+10.6%** | **1.11×** |
-| 24 | 0 | 10556 | 3727 | −64.7% | 0.35× |
-| 24 | 16 | 10556 | 5361 | −49.2% | 0.51× |
-| 32 | 0 | 3244 | 4162 | +28.3% | 1.28× |
-| 32 | 16 | 3244 | 3257 | +0.4% | 1.00× |
+This **replaces** the short-window artifact **before w=24 = 10556** (~0.18 s, buffer drain) and the conflicting after p16 figures **5361** (short A/B) vs **7350** (separate after-only sweep) — those were not steady-state. Under the long-window protocol, after ≈ before at `w=24` (within noise).
 
-With `max_prefetch=16`, after is usually ahead of stock main at the same worker count (except noisy `w=24` and a small dip at `w=1`). Prefetch=0 often loses to main’s simpler `asyncio.run` path — prefer enabling look-ahead.
+**Honest takeaway:** with `hedge_delay=0` + pay-per-use fast path (skip hedge/timeout wrappers when both are off), high-worker after matches main; enable `max_prefetch` for look-ahead at lower worker counts. Full-grid long-window A/B for other worker counts is still optional follow-up (older short-window cells remain in the JSON as exploratory only).
 
-Old Studio FUSE baseline (path-as-FUSE): ~**75 samples/s**. Separately, an exhaustive **after-only** worker×prefetch sweep peaked at **`w=24`, `prefetch=16` → ~7350 samples/s** (~98× vs FUSE); full matrix: `benchmarks/results/raw_worker_prefetch_sweep.json` / `python benchmarks/bench_raw_workers.py`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+#### After-only worker × prefetch matrix (single run; not A/B)
+
+Separate **after-only** sweep (`benchmarks/results/raw_worker_prefetch_sweep.json`, `python benchmarks/bench_raw_workers.py`): 30 timed batches after 1 warm — **indicative only**, not comparable to the A/B table above. That single run once printed a peak near `w=24`, `prefetch=16` → ~7350 samples/s (~98× vs old Studio FUSE ~75 samples/s); do **not** mix that peak with A/B claims. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
 
 Ranged parallel downloads remain **opt-in** (`range_parallel_threshold=0` by default). Forcing ranged GETs on this JPEG workload is slower than whole-object downloads (`benchmarks/results/raw_ranged_vs_whole.json`).
 

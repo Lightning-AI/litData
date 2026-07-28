@@ -5,107 +5,63 @@
     "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
     "storage": "s3://imagenet-1m-template/raw/val",
     "n_files": 50000,
-    "index_s": 8.018374823999693,
+    "index_s": 9.219567076999738,
     "batch_size": 64,
-    "batches": 30,
+    "batches": 300,
+    "min_seconds": 15.0,
+    "prefetch_factor": 2,
+    "warm_batches_formula": "1 + num_workers * prefetch_factor",
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
-    "prefetch": [0],
+    "workers": [
+      24
+    ],
+    "prefetch": [
+      0
+    ],
     "range_parallel_threshold": null,
     "max_concurrent_downloads": null,
+    "hedge_delay": null,
+    "safety_grid": false,
     "capabilities": {
       "has_max_prefetch": false,
       "has_range_parallel_threshold": false,
       "has_loop_runner": false,
       "uvloop": "n/a (before / no LoopRunner)",
-      "params": ["cache_dir", "cache_files", "indexer", "input_dir", "recompute_index", "storage_options", "transform"]
+      "params": [
+        "cache_dir",
+        "cache_files",
+        "indexer",
+        "input_dir",
+        "recompute_index",
+        "storage_options",
+        "transform"
+      ]
     },
-    "git_hint": "5d8cfc1997ef8dcddbda6aab3c9619d496a202fa",
-    "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://"
+    "git_sha": "9f7bf18",
+    "git_hint": "",
+    "jsonl": "/teamspace/studios/this_studio/litData/benchmarks/results/raw_before_vs_after.before.jsonl",
+    "input_note": "before uses s3:// directly: main prefers FUSE path\u2192LocalDownloader which lacks adownload_fileobj; after uses mount and remaps to s3://",
+    "caveat": "Short windows and high-worker cells can be noisy (~2\u00d7 run-to-run). Trust systematic patterns (e.g. prefetch helps), not fine \u0394%."
   },
   "results": [
-    {
-      "side": "before",
-      "label": "w0_p0",
-      "workers": 0,
-      "prefetch": 0,
-      "ips": 629.5218173032138,
-      "warm_s": 0.2861762249995081,
-      "elapsed": 3.0499340089991165,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w1_p0",
-      "workers": 1,
-      "prefetch": 0,
-      "ips": 779.0158945627203,
-      "warm_s": 0.25633496200134687,
-      "elapsed": 2.4646480430001247,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w2_p0",
-      "workers": 2,
-      "prefetch": 0,
-      "ips": 1407.2994554304264,
-      "warm_s": 0.23707523300072353,
-      "elapsed": 1.3643151730011596,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w4_p0",
-      "workers": 4,
-      "prefetch": 0,
-      "ips": 2603.529206694426,
-      "warm_s": 0.25153872600094473,
-      "elapsed": 0.7374605189997965,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w8_p0",
-      "workers": 8,
-      "prefetch": 0,
-      "ips": 3252.8035074756567,
-      "warm_s": 0.3988649050006643,
-      "elapsed": 0.5902600620011071,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w16_p0",
-      "workers": 16,
-      "prefetch": 0,
-      "ips": 4931.263161319901,
-      "warm_s": 0.27472747299907496,
-      "elapsed": 0.3893525729999965,
-      "samples": 1920
-    },
     {
       "side": "before",
       "label": "w24_p0",
       "workers": 24,
       "prefetch": 0,
-      "ips": 10556.113835248114,
-      "warm_s": 0.49204495400044834,
-      "elapsed": 0.18188511700100207,
-      "samples": 1920
-    },
-    {
-      "side": "before",
-      "label": "w32_p0",
-      "workers": 32,
-      "prefetch": 0,
-      "ips": 3243.5852606855224,
-      "warm_s": 0.26520102600079554,
-      "elapsed": 0.5919375769990438,
-      "samples": 1920
+      "ips": 6813.832422638245,
+      "warm_s": 1.0138909999986936,
+      "warm_batches": 49,
+      "elapsed": 2.8177975050002715,
+      "samples": 19200,
+      "batches": 300,
+      "hedge_delay": null,
+      "download_timeout": null,
+      "git_sha": "9f7bf18",
+      "ts": 1785249075.3499482
     }
   ]
 }

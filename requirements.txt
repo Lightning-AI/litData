@@ -7,4 +7,3 @@ boto3
 requests
 tifffile
 obstore
-uvloop; sys_platform != "win32"

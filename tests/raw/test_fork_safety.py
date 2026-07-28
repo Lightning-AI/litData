@@ -659,6 +659,50 @@ def test_hedge_slow_first_wins(tmp_path: Path) -> None:
     # Hedge delay is 0.05s; allow scheduling jitter on loaded CI.
     assert time.monotonic() - t0 < 2.0
     assert calls["n"] >= 2
+    assert cm._hedge_fired >= 1
+
+
+def test_hedge_delay_default_is_zero() -> None:
+    """Hedging is opt-in (default 0), matching range_parallel_threshold."""
+    import inspect
+
+    ds_default = inspect.signature(StreamingRawDataset.__init__).parameters["hedge_delay"].default
+    cm_default = inspect.signature(CacheManager.__init__).parameters["hedge_delay"].default
+    assert float(ds_default) == 0.0
+    assert float(cm_default) == 0.0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
+def test_fetch_bytes_fast_path_when_safety_off(tmp_path: Path) -> None:
+    """With hedge off and timeout disabled, download is a bare permit + adownload."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.bin").write_bytes(b"fast")
+    cm = CacheManager(
+        str(src),
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=False,
+        hedge_delay=0,
+        download_timeout=0,
+    )
+    remote = "s3://bucket/data/a.bin"
+    cm._input_dir_path = "s3://bucket/data"
+    calls = {"n": 0}
+
+    async def run() -> bytes:
+        cm._downloader_pid = os.getpid()
+        cm._downloader_loop = asyncio.get_running_loop()
+
+        async def once(path: str) -> bytes:
+            calls["n"] += 1
+            return b"fast"
+
+        cm._downloader = SimpleNamespace(adownload_fileobj=once)  # type: ignore[assignment]
+        return await cm._fetch_bytes(remote, size=4)
+
+    assert asyncio.run(run()) == b"fast"
+    assert calls["n"] == 1
+    assert cm._hedge_fired == 0
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
