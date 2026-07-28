@@ -8,17 +8,17 @@ ______________________________________________________________________
 
 ## 1. Choose a workflow
 
-| Goal                                             | API                                                                                                                        |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Stream files as-is (no preprocess)               | **`StreamingRawDataset`** + torch `DataLoader`                                                                             |
-| Full control / per-file access & grouping        | **`StreamingRawDataset`** (`setup` for groups; raw `bytes`) — tradeoff: optimized still faster, raw not too far behind     |
-| Fastest training I/O                             | `optimize` → `StreamingDataset` + `StreamingDataLoader`                                                                    |
-| Strong source ordering / need file-level shuffle | Prefer **`StreamingRawDataset`** + `DataLoader(shuffle=True)`, **or** **shuffle the sample list before** `optimize`        |
-| Parallel side effects (resize, scrape, embed)    | `map`                                                                                                                      |
-| Weighted mix                                     | `CombinedStreamingDataset`                                                                                                 |
-| One sample from each dataset / cycle length      | `ParallelStreamingDataset`                                                                                                 |
-| Existing MDS / Parquet / HF parquet              | `StreamingDataset` (+ `ParquetLoader` when needed)                                                                         |
-| LLM token windows                                | `TokensLoader` on optimize **and** stream                                                                                  |
+| Goal                                             | API                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Stream files as-is (no preprocess)               | **`StreamingRawDataset`** + torch `DataLoader`                                                                         |
+| Full control / per-file access & grouping        | **`StreamingRawDataset`** (`setup` for groups; raw `bytes`) — tradeoff: optimized still faster, raw not too far behind |
+| Fastest training I/O                             | `optimize` → `StreamingDataset` + `StreamingDataLoader`                                                                |
+| Strong source ordering / need file-level shuffle | Prefer **`StreamingRawDataset`** + `DataLoader(shuffle=True)`, **or** **shuffle the sample list before** `optimize`    |
+| Parallel side effects (resize, scrape, embed)    | `map`                                                                                                                  |
+| Weighted mix                                     | `CombinedStreamingDataset`                                                                                             |
+| One sample from each dataset / cycle length      | `ParallelStreamingDataset`                                                                                             |
+| Existing MDS / Parquet / HF parquet              | `StreamingDataset` (+ `ParquetLoader` when needed)                                                                     |
+| LLM token windows                                | `TokensLoader` on optimize **and** stream                                                                              |
 
 **Rule:** `StreamingRawDataset` = zero prep, native files, full control over grouping/order (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
 
@@ -499,14 +499,17 @@ ______________________________________________________________________
 ### FAQ bullets (chunk size, ordered data, FUSE, throughput)
 
 - **`chunk_bytes`?** Default **64MB**. Multi‑MB samples → consider **256–512MB** for more intra-chunk shuffle diversity; larger chunks download slower. Guidance, not a published sweep.
+
 - **Ordered source + optimize?** Intra-chunk + chunk-order shuffle ≠ full file-level shuffle. **Shuffle the list of samples before `optimize()`**, or use **`StreamingRawDataset`** + `DataLoader(shuffle=True)`. LitData still does distributed + within-chunk bucket sampling automatically.
+
 - **FUSE vs LitData?** Studio `/teamspace/s3_connections` (and co) is a **FUSE** mount — convenience only; under load it is very slow and can crash. Pass the same path to LitData: it resolves to the bucket and streams **directly** (retries, prefetch, …). Never recommend `open()` / naive glob on the mount for training I/O.
+
 - **Throughput ballpark (ImageNet, Studio context — order of magnitude, not guarantees):**
 
-  | Path | Rough images/s |
-  | ---- | -------------- |
-  | FUSE mount (hand-read) | up to ~**600** |
+  | Path                                 | Rough images/s  |
+  | ------------------------------------ | --------------- |
+  | FUSE mount (hand-read)               | up to ~**600**  |
   | `StreamingRawDataset` (right tuning) | up to ~**6–7k** |
-  | `StreamingDataset` (64MB chunks) | up to ~**11k** |
+  | `StreamingDataset` (64MB chunks)     | up to ~**11k**  |
 
 - README: `#faq-chunk-shuffle`, `#resolve-paths`, `#stream-raw`.
