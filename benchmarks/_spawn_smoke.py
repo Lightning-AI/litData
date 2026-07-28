@@ -5,6 +5,7 @@ from __future__ import annotations
 import pickle
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -13,11 +14,12 @@ from torch.utils.data import DataLoader
 from litdata import StreamingRawDataset
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
-CACHE = Path("/tmp/litdata-spawn-smoke-cache")
-SEED = Path("/tmp/litdata-raw-ranged-vs-whole/seed")
+CACHE = Path(tempfile.gettempdir()) / "litdata-spawn-smoke-cache"
+SEED = Path(tempfile.gettempdir()) / "litdata-raw-ranged-vs-whole" / "seed"
 
 
 def main() -> int:
+    """Run a short spawn DataLoader smoke against ImageNet val."""
     CACHE.mkdir(parents=True, exist_ok=True)
     if (SEED / "index.json.zstd").exists():
         shutil.copy2(SEED / "index.json.zstd", CACHE / "index.json.zstd")

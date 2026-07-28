@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -35,12 +36,13 @@ from uvloop_status import log_loop_runner_backend, uvloop_package_status  # noqa
 from litdata import StreamingRawDataset  # noqa: E402
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
-ROOT = Path("/tmp/litdata-raw-bench-debug")
+ROOT = Path(tempfile.gettempdir()) / "litdata-raw-bench-debug"
 BS = 32
 BATCHES = 5
 
 
 def log(msg: str) -> None:
+    """Print a timestamped benchmark log line."""
     print(f"{time.strftime('%H:%M:%S')} [bench] {msg}", flush=True)
 
 
@@ -48,6 +50,7 @@ class HangWatchdog:
     """Kill the process if a step exceeds ``timeout_s`` without heartbeat."""
 
     def __init__(self, timeout_s: float) -> None:
+        """Initialize the watchdog with a hang timeout in seconds."""
         self.timeout_s = timeout_s
         self._label = "init"
         self._beat = time.monotonic()
@@ -55,14 +58,17 @@ class HangWatchdog:
         self._thread = threading.Thread(target=self._run, name="hang-watchdog", daemon=True)
 
     def start(self) -> None:
+        """Start the background watchdog thread."""
         self._thread.start()
 
     def heartbeat(self, label: str) -> None:
+        """Record progress so the watchdog does not abort."""
         self._label = label
         self._beat = time.monotonic()
         log(f"watchdog heartbeat: {label}")
 
     def stop(self) -> None:
+        """Stop the background watchdog thread."""
         self._stop.set()
 
     def _run(self) -> None:
@@ -77,6 +83,7 @@ class HangWatchdog:
 
 
 def copy_index(src: Path, dst: Path) -> None:
+    """Copy a cached index tree from ``src`` to ``dst``."""
     if dst.exists():
         shutil.rmtree(dst, ignore_errors=True)
     dst.mkdir(parents=True, exist_ok=True)
@@ -96,6 +103,7 @@ def run(
     reuse: Path | None = None,
     mp_context: str | None = None,
 ) -> Path:
+    """Run one debug trial and return the cache directory used."""
     cache = ROOT / label
     watchdog.heartbeat(f"{label}: begin")
     log(f"=== {label}: workers={num_workers} prefetch={max_prefetch} mp={mp_context}")
@@ -117,7 +125,7 @@ def run(
     log(f"{label}: dataset ready {time.perf_counter() - t0:.2f}s len={len(ds)}")
     log_loop_runner_backend(log, prefix=f"{label}:")
 
-    kwargs: dict = dict(batch_size=BS, num_workers=num_workers, shuffle=False)
+    kwargs: dict = {"batch_size": BS, "num_workers": num_workers, "shuffle": False}
     if mp_context and num_workers > 0:
         kwargs["multiprocessing_context"] = mp_context
 
@@ -145,6 +153,7 @@ def run(
 
 
 def main() -> None:
+    """CLI entrypoint for fork-safety debug steps with a hang watchdog."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout", type=float, default=45.0, help="Hang timeout seconds per step")
     parser.add_argument(

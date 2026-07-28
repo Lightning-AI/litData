@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 
 def uvloop_package_status() -> str:
+    """Return a short string describing uvloop install and preferred loop backend."""
     from litdata.raw.dataset import _loop_backend_name
 
     try:

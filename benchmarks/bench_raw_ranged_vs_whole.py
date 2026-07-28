@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from uvloop_status import log_loop_runner_backend, uvloop_package_status
 from litdata import StreamingRawDataset
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
-ROOT = Path("/tmp/litdata-raw-ranged-vs-whole")
+ROOT = Path(tempfile.gettempdir()) / "litdata-raw-ranged-vs-whole"
 OUT = Path(__file__).resolve().parent / "results" / "raw_ranged_vs_whole.json"
 BS = 64
 BATCHES = 30
@@ -32,11 +33,15 @@ MODES = [
 
 
 def log(msg: str) -> None:
+    """Print a timestamped benchmark log line."""
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
 class HangWatchdog:
+    """Kill the process if a step exceeds ``timeout_s`` without heartbeat."""
+
     def __init__(self, timeout_s: float) -> None:
+        """Initialize the watchdog with a hang timeout in seconds."""
         self.timeout_s = timeout_s
         self._label = "init"
         self._beat = time.monotonic()
@@ -44,13 +49,16 @@ class HangWatchdog:
         self._t = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
+        """Start the background watchdog thread."""
         self._t.start()
 
     def beat(self, label: str) -> None:
+        """Record progress so the watchdog does not abort."""
         self._label = label
         self._beat = time.monotonic()
 
     def stop(self) -> None:
+        """Stop the background watchdog thread."""
         self._stop.set()
 
     def _run(self) -> None:
@@ -62,6 +70,7 @@ class HangWatchdog:
 
 
 def copy_index(src: Path, dst: Path) -> None:
+    """Copy a cached index tree from ``src`` to ``dst``."""
     if dst.exists():
         shutil.rmtree(dst, ignore_errors=True)
     dst.mkdir(parents=True)
@@ -73,6 +82,7 @@ def copy_index(src: Path, dst: Path) -> None:
 
 
 def run(label: str, *, num_workers: int, max_prefetch: int, threshold: int, seed: Path, wd: HangWatchdog) -> dict:
+    """Run one ranged-vs-whole trial and return timing stats."""
     cache = ROOT / label
     wd.beat(f"{label}: setup")
     copy_index(seed, cache)
@@ -127,6 +137,7 @@ def run(label: str, *, num_workers: int, max_prefetch: int, threshold: int, seed
 
 
 def main() -> None:
+    """CLI entrypoint for ranged vs whole-object comparisons."""
     if ROOT.exists():
         shutil.rmtree(ROOT, ignore_errors=True)
     ROOT.mkdir(parents=True)
@@ -243,7 +254,7 @@ def main() -> None:
                 "old_sweep_log": "benchmarks/results/raw_worker_prefetch_sweep.log",
                 "old_sweep_used_fixed_downloaders": False,
             },
-            "modes": {name: thr for name, thr in MODES},
+            "modes": dict(MODES),
             "results": results,
             "mode_means": mode_means,
             "winners_per_config": winners,

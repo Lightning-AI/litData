@@ -7,6 +7,7 @@ import inspect
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
 
 def clear_dir(path: str) -> None:
+    """Remove ``path`` if it is an existing directory."""
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 
@@ -33,6 +35,7 @@ def run_once(
     max_prefetch: int,
     clear_cache: bool,
 ) -> dict:
+    """Run one StreamingRawDataset throughput trial and return timing stats."""
     from litdata import StreamingRawDataset
 
     if clear_cache:
@@ -95,9 +98,10 @@ def run_once(
 
 
 def main() -> None:
+    """CLI entrypoint for prefetch A/B microbenchmarks."""
     p = argparse.ArgumentParser()
     p.add_argument("--input_dir", default="/teamspace/s3_connections/imagenet-1m-template/raw/val")
-    p.add_argument("--cache_root", default="/tmp/litdata-raw-bench")
+    p.add_argument("--cache_root", default=str(Path(tempfile.gettempdir()) / "litdata-raw-bench"))
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--num_batches", type=int, default=20)
@@ -107,13 +111,13 @@ def main() -> None:
     print(f"uvloop package: {uvloop_package_status()}")
     results = []
 
-    common = dict(
-        input_dir=args.input_dir,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        num_batches=args.num_batches,
-        clear_cache=True,
-    )
+    common = {
+        "input_dir": args.input_dir,
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "num_batches": args.num_batches,
+        "clear_cache": True,
+    }
 
     results.append(
         run_once(

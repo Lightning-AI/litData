@@ -59,7 +59,7 @@ _OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
 class Downloader(ABC):
     """Cloud/local chunk downloader.
 
-    Implementors should:
+    Implementers should:
     - Publish cache files atomically (temp path + ``os.replace``; see ``_temp_download_path``).
     - Be safe for concurrent calls from multiple threads (or document otherwise).
     - Prefer real HTTP Range in ``download_bytes`` when the backend supports it.

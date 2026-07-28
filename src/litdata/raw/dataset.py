@@ -54,8 +54,8 @@ import statistics
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -89,7 +89,7 @@ _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
 
 _WRITE_BEHIND_LOCK = threading.Lock()
-_WRITE_BEHIND_FUTURES: set[Future[Any]] = set()
+_WRITE_BEHIND_FUTURES: set[asyncio.Future[Any]] = set()
 
 
 def _loop_backend_name() -> str:
@@ -126,11 +126,12 @@ def _close_unawaited(coro: Awaitable[Any]) -> None:
             close()
 
 
-def _track_write_behind(fut: Future[Any]) -> None:
+def _track_write_behind(fut: asyncio.Future[Any]) -> None:
+    """Track a ``run_in_executor`` future until the write-behind finishes."""
     with _WRITE_BEHIND_LOCK:
         _WRITE_BEHIND_FUTURES.add(fut)
 
-    def _done(f: Future[Any]) -> None:
+    def _done(f: asyncio.Future[Any]) -> None:
         with _WRITE_BEHIND_LOCK:
             _WRITE_BEHIND_FUTURES.discard(f)
         with contextlib.suppress(Exception):
@@ -198,7 +199,7 @@ class _LoopRunner:
     def is_alive(self) -> bool:
         return self._thread.is_alive() and not self.loop.is_closed()
 
-    def run(self, coro: Awaitable[T]) -> T:
+    def run(self, coro: Coroutine[Any, Any, T]) -> T:
         if threading.current_thread() is self._thread:
             _close_unawaited(coro)
             raise RuntimeError(
@@ -278,7 +279,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_shutdown_runner_before_fork, after_in_child=_reinit_after_fork)
 
 
-def _run_async(coro: Awaitable[T]) -> T:
+def _run_async(coro: Coroutine[Any, Any, T]) -> T:
     """Dispatch ``coro`` onto the process-local loop thread and wait for the result."""
     return _get_loop_runner().run(coro)
 
@@ -738,7 +739,7 @@ class CacheManager:
             ),
         )
 
-    async def _hedged(self, factory: Callable[[], Awaitable[T]], delay: float) -> T:
+    async def _hedged(self, factory: Callable[[], Coroutine[Any, Any, T]], delay: float) -> T:
         """Run ``factory``; if slow, start a second request and prefer a non-exception winner.
 
         Each ``factory`` call is expected to acquire its own semaphore permit. The hedge is
@@ -748,7 +749,7 @@ class CacheManager:
         not abort the worker thread — the full chunk transfer may still complete and pay
         bandwidth even after the asyncio task is cancelled.
         """
-        first = asyncio.create_task(factory())
+        first: asyncio.Task[T] = asyncio.create_task(factory())
         if delay <= 0:
             return await first
         done, _ = await asyncio.wait({first}, timeout=delay)
@@ -759,8 +760,8 @@ class CacheManager:
         if self._get_semaphore().locked():
             return await first
 
-        second = asyncio.create_task(factory())
-        pending: set[asyncio.Task] = {first, second}
+        second: asyncio.Task[T] = asyncio.create_task(factory())
+        pending: set[asyncio.Task[T]] = {first, second}
         try:
             while pending:
                 finished, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -998,7 +999,7 @@ class CacheManager:
             return local_path
         raise TimeoutError(f"Timed out waiting for cache file {local_path}")
 
-    async def _dedupe_path(self, key: str, factory: Callable[[], Awaitable[T]]) -> T:
+    async def _dedupe_path(self, key: str, factory: Callable[[], Coroutine[Any, Any, T]]) -> T:
         """Coalesce concurrent work for the same cache key on this event loop."""
         loop = asyncio.get_running_loop()
         if self._path_inflight_loop is not loop:
@@ -1009,7 +1010,11 @@ class CacheManager:
         if task is None:
             task = asyncio.create_task(factory())
             self._path_inflight[key] = task
-            task.add_done_callback(lambda _t, k=key: self._path_inflight.pop(k, None))
+
+            def _clear(_t: asyncio.Task, k: str = key) -> None:
+                self._path_inflight.pop(k, None)
+
+            task.add_done_callback(_clear)
         return await task
 
     async def _ensure_cached_file(self, file_path: str, size: int | None = None) -> str:
@@ -1415,10 +1420,10 @@ class StreamingRawDataset(Dataset):
             return await self._download_and_process_group(file_paths, sizes=sizes)
         raise TypeError(f"Dataset items must be of type FileMetadata or List[FileMetadata], but found {type(item)}")
 
-    async def _download_and_process_group(self, file_paths: list[str], sizes: list[int] | None = None) -> Any:
+    async def _download_and_process_group(self, file_paths: list[str], sizes: list[int | None] | None = None) -> Any:
         """Download all files in a group, then apply the transform."""
         if sizes is None:
-            sizes = [None] * len(file_paths)  # type: ignore[list-item]
+            sizes = [None] * len(file_paths)
         if self.item_type == "path":
             group_data: list[Any] = await asyncio.gather(
                 *[self.cache_manager.ensure_file_async(path, size=sz) for path, sz in zip(file_paths, sizes)]
