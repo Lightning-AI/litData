@@ -84,6 +84,9 @@ _LOCK_SUFFIX = ".litdata-raw.lock"
 # Hedge only small / unknown objects; large whole-object GETs must not 2× egress.
 _HEDGE_MAX_BYTES = 8 * 1024 * 1024
 _HEDGE_ASSUMED_BANDWIDTH_BPS = 25 * 1024 * 1024  # ~25 MB/s floor for delay scaling
+# Cap aggregate sequential look-ahead across DataLoader workers (items total).
+# Per-worker effective = min(max_prefetch, budget // num_workers) when num_workers > 1.
+_AGGREGATE_PREFETCH_BUDGET = 64
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
@@ -361,6 +364,20 @@ def _looks_sequential(indices: list[int]) -> bool:
     if len(indices) <= 1:
         return True
     return all(indices[i] == indices[i - 1] + 1 for i in range(1, len(indices)))
+
+
+def _effective_prefetch(max_prefetch: int, num_workers: int) -> int:
+    """Per-worker look-ahead capped so aggregate stays near ``_AGGREGATE_PREFETCH_BUDGET``.
+
+    Constructor default ``max_prefetch=16`` stays ergonomic at low workers (w≤4 keeps 16).
+    At higher worker counts each worker gets a smaller share so total in-flight look-ahead
+    does not scale as ``num_workers × max_prefetch``.
+    """
+    if max_prefetch <= 0:
+        return 0
+    if num_workers <= 1:
+        return max_prefetch
+    return min(max_prefetch, max(0, _AGGREGATE_PREFETCH_BUDGET // num_workers))
 
 
 def _consume_prefetch_exception(task: asyncio.Task) -> None:
@@ -1129,10 +1146,10 @@ class StreamingRawDataset(Dataset):
             max_concurrent_downloads: Max in-flight downloads per worker (default: 64).
             max_prefetch: Best-effort sequential look-ahead after each batch (default: 16;
                 roughly ``2×`` a typical batch). Pass ``0`` to disable. Look-ahead is per
-                DataLoader worker (see ``_schedule_prefetch``); effective total budget ≈
-                ``num_workers × max_prefetch``. At high worker counts (e.g. 16–32), a smaller
-                value (e.g. 8) can ease RAM/connection pressure; at low workers, 16–32 is
-                usually fine.
+                DataLoader worker, but when ``num_workers > 1`` the scheduled amount is
+                capped to ``min(max_prefetch, 64 // num_workers)`` so aggregate look-ahead
+                stays near 64 items (e.g. w=2→16, w=8→8, w=16→4, w=32→2). Raise
+                ``max_prefetch`` only helps when it is below that per-worker share.
             prefetch_cache_size: LRU entry cap for prefetched items. Defaults to
                 ``max(max_prefetch * 2, max_prefetch)`` when prefetch is enabled.
             item_type: ``"bytes"`` (default) buffers each object in RAM; ``"path"`` downloads to
@@ -1185,6 +1202,8 @@ class StreamingRawDataset(Dataset):
         self._prefetch_cache = _LRUCache(self.prefetch_cache_size)
         self._inflight: dict[int, asyncio.Task] = {}
         self._inflight_loop: asyncio.AbstractEventLoop | None = None
+        self._prefetch_hits = 0
+        self._prefetch_misses = 0
         self._owner_pid = os.getpid()
 
         # Discover all files — prefer cloud URL over FUSE mount.
@@ -1249,6 +1268,8 @@ class StreamingRawDataset(Dataset):
         self._inflight = {}
         self._inflight_loop = None
         self._prefetch_cache = _LRUCache(self.prefetch_cache_size)
+        self._prefetch_hits = 0
+        self._prefetch_misses = 0
         self._owner_pid = pid
         self.cache_manager.reset_runtime_state()
 
@@ -1278,6 +1299,8 @@ class StreamingRawDataset(Dataset):
             "_prefetch_cache": _LRUCache(self.prefetch_cache_size),
             "_inflight": {},
             "_inflight_loop": None,
+            "_prefetch_hits": 0,
+            "_prefetch_misses": 0,
             "_owner_pid": None,
         }
 
@@ -1286,6 +1309,8 @@ class StreamingRawDataset(Dataset):
         self._owner_pid = os.getpid()
         self._inflight = {}
         self._inflight_loop = None
+        self._prefetch_hits = 0
+        self._prefetch_misses = 0
         if not isinstance(self._prefetch_cache, _LRUCache):
             self._prefetch_cache = _LRUCache(self.prefetch_cache_size)
         # CacheManager may be restored without its __setstate__ on some paths.
@@ -1361,15 +1386,23 @@ class StreamingRawDataset(Dataset):
         results: list[Any] = [None] * len(indices)
         pending_positions: dict[int, list[int]] = {}  # index -> [pos, ...]
         unique_pending: list[int] = []
+        batch_hits = 0
+        batch_misses = 0
         for pos, index in enumerate(indices):
             cached = self._prefetch_cache.get(index)
             if cached is not _MISS:
                 results[pos] = cached
+                batch_hits += 1
             else:
+                batch_misses += 1
                 if index not in pending_positions:
                     pending_positions[index] = []
                     unique_pending.append(index)
                 pending_positions[index].append(pos)
+
+        if _RAW_DEBUG:
+            self._prefetch_hits += batch_hits
+            self._prefetch_misses += batch_misses
 
         if unique_pending:
             # Largest-first so big objects overlap with smaller ones (LPT).
@@ -1384,10 +1417,15 @@ class StreamingRawDataset(Dataset):
             self._schedule_prefetch(indices)
         if _RAW_DEBUG:
             logger.warning(
-                "raw-debug: _download_batch done pid=%s n=%s inflight=%s",
+                "raw-debug: _download_batch done pid=%s n=%s inflight=%s "
+                "batch_hit=%s batch_miss=%s total_hit=%s total_miss=%s",
                 os.getpid(),
                 len(indices),
                 len(self._inflight),
+                batch_hits,
+                batch_misses,
+                self._prefetch_hits,
+                self._prefetch_misses,
             )
         return results
 
@@ -1396,8 +1434,8 @@ class StreamingRawDataset(Dataset):
 
         With ``DataLoader(num_workers>1)``, each worker receives every N-th batch, so the
         next indices for *this* worker start at ``indices[0] + num_workers * batch_len``.
-        ``max_prefetch`` is therefore a per-worker budget; aggregate in-flight cost scales
-        roughly with ``num_workers × max_prefetch``.
+        Scheduled look-ahead uses :func:`_effective_prefetch` so aggregate in-flight cost
+        stays near ``_AGGREGATE_PREFETCH_BUDGET`` rather than ``num_workers × max_prefetch``.
         """
         if self.max_prefetch <= 0 or not indices or not _looks_sequential(indices):
             return
@@ -1410,9 +1448,13 @@ class StreamingRawDataset(Dataset):
         except Exception:
             num_workers = 1
 
+        effective = _effective_prefetch(self.max_prefetch, num_workers)
+        if effective <= 0:
+            return
+
         batch_len = len(indices)
         start = indices[0] + num_workers * batch_len
-        end = min(start + self.max_prefetch, len(self.items))
+        end = min(start + effective, len(self.items))
         for index in range(start, end):
             if index in self._prefetch_cache or index in self._inflight:
                 continue

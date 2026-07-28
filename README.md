@@ -336,7 +336,7 @@ for batch in loader:
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
 | `max_concurrent_downloads` | `64` | Max in-flight downloads per worker |
-| `max_prefetch` | `16` | Per-worker sequential look-ahead after each batch (default on; ~`2×` a typical batch). Pass `0` to disable. Total look-ahead budget ≈ `num_workers × max_prefetch` |
+| `max_prefetch` | `16` | Per-worker sequential look-ahead after each batch (default on). When `num_workers > 1`, effective look-ahead is `min(max_prefetch, 64 // num_workers)` so aggregate stays ~64 items. Pass `0` to disable |
 | `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
 | `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |
 | `range_parallel_threshold` | `0` | Objects ≥ this many bytes use parallel ranged GETs (`0` = whole-object only; opt-in) |
@@ -409,7 +409,7 @@ raw: bytes = dataset[0]
 
 - Prefer `num_workers > 0` so worker processes overlap async batch downloads with training. Scale workers toward host vCPUs for network-bound JPEG-sized objects (see matrix below — avoid saturating every vCPU).
 - On Linux, after any parent-process dataset I/O, use `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)` — default `fork` can hang S3 clients in workers.
-- Default `max_prefetch=16` enables sequential look-ahead **per DataLoader worker** (each worker strides ahead on its own index stream); shuffled access disables it. Pass `0` to turn off. Aggregate cost scales roughly with `num_workers × max_prefetch × sample_bytes` (RAM + connections) — at high worker counts (e.g. 16–32) try a smaller value (e.g. 8) if memory/connection pressure shows up; at low workers, 16–32 is fine.
+- Default `max_prefetch=16` enables sequential look-ahead **per DataLoader worker** (each worker strides ahead on its own index stream); shuffled access disables it. Pass `0` to turn off. When `num_workers > 1`, scheduled look-ahead is capped to `min(max_prefetch, 64 // num_workers)` (e.g. w=2→16, w=8→8, w=16→4, w=24→2) so aggregate in-flight items stay near 64 rather than scaling as `num_workers × max_prefetch`. At low workers / `num_workers=0`, the full default of 16 applies.
 - Prefer an `s3://` / `gs://` URL or `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)) — avoid reading through FUSE.
 - Leave `range_parallel_threshold=0` (default) for typical JPEGs; raise it only for large objects where parallel ranged GETs help.
 - Best for medium/large files. Tiny objects (≲100 KB) are request-overhead bound — pack with [`optimize`](#speed-up-model-training) → `StreamingDataset` when I/O plateaus.
@@ -420,24 +420,28 @@ Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50
 
 **Protocol (long-window):** warm `max(1, workers × prefetch_factor)` with `prefetch_factor=2`, then time **≥300 batches** or **≥10 s**. Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`.
 
-**After knobs:** `max_prefetch` default **16**, `hedge_delay=0`, `range_parallel_threshold=0`, `max_concurrent_downloads=64`, optional uvloop via `litdata[extras]`. Before is stock **`main`** (no `max_prefetch` / LoopRunner; always prefetch N/A = 0).
+**After knobs:** `max_prefetch` default **16** (worker-aware effective look-ahead: aggregate budget ≈64), `hedge_delay=0`, `range_parallel_threshold=0`, `max_concurrent_downloads=64`, optional uvloop via `litdata[extras]`. Before is stock **`main`** (no `max_prefetch` / LoopRunner; always prefetch N/A = 0).
 
 #### Before vs After matrix
 
-Δ% is vs **before** at the same worker count for **after @ `max_prefetch=16`** (the new default). Green-ish wins are where after@16 (or @32) beats before. Prefetch=0 after cells are kept in the JSON only.
+Single long-window run; cells can move ±~20% run-to-run — treat fine Δ% as indicative. Δ% column is after@16 vs before at the same worker count. Prefetch=0 after cells are in the JSON for honesty (core path without look-ahead).
 
-| workers | before (main) | after p=16 (default) | after p=32 | Δ% vs before (@16) |
-|--------:|--------------:|---------------------:|-----------:|-------------------:|
-| 0 | 543 | **735** | **754** | **+35%** |
-| 1 | 641 | **785** | 644 | **+23%** |
-| 2 | 816 | **1475** | **1397** | **+81%** |
-| 4 | 2022 | 1805 | 1738 | −11% |
-| 8 | 4841 | **5718** | 3551 | **+18%** |
-| 16 | 6081 | 5976 | 6051 | −2% |
-| 24 | **6927** | 5337 | 5975 | −23% |
-| 32 | 5455 | **5723** | **5951** | **+5%** |
+| workers | before (main) | after p=0 | after p=16 | after p=32 | Δ% vs before (@16) |
+|--------:|--------------:|----------:|-----------:|-----------:|-------------------:|
+| 0 | 543 | 665 | **735** | **754** | **+35%** |
+| 1 | 641 | 796 | **785** | 644 | **+23%** |
+| 2 | 816 | 1342 | **1475** | **1397** | **+81%** |
+| 4 | 2022 | **2698** | 1805 | 1738 | −11% |
+| 8 | 4841 | 5713 | **5718**† | 3551† | **+18%** |
+| 16 | 6081 | 5792 | 5976 | 6051 | −2% |
+| 24 | **6927** | 4404 | 5337 | 5975 | −23% |
+| 32 | 5455 | 4746 | **5723** | **5951** | **+5%** |
 
-**Takeaway:** default `max_prefetch=16` wins clearly at low–mid workers (0–2, 8) and is roughly parity at 16 / a small gain at 32. At `w=24` stock main still leads this long-window run — after@32 narrows the gap vs after@16. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
+† `w=8` p16=5718 vs p32=3551 is a single-run cliff — indicative only (±~20% cells).
+
+**after p=0 vs before (high workers):** w=16 −5%; w=24 **−36%**; w=32 −13%. At w=24 the no-prefetch path still loses badly vs main → residual core overhead (not only the default look-ahead). Prefer lower effective prefetch at high `num_workers` (automatic via the aggregate budget); raise `max_prefetch` only when tuning low-worker / notebook regimes.
+
+**Takeaway:** Correctness (fork/spawn safety, atomic cache publishes, `LoopRunner`) is the primary value of this work. Throughput is regime-dependent: strong at low workers and `num_workers=0` / notebooks; at high workers prefer the worker-aware lower look-ahead (see table) and do not expect a uniform win vs stock main. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
 
 Ranged parallel downloads remain **opt-in** (`range_parallel_threshold=0`). Forced ranged GETs on this JPEG workload are slower (`benchmarks/results/raw_ranged_vs_whole.json`).
 

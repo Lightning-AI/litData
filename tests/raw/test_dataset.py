@@ -49,6 +49,67 @@ def test_streaming_raw_dataset_default_max_prefetch(tmp_path):
     assert dataset.prefetch_cache_size == 32
 
 
+@pytest.mark.parametrize(
+    ("num_workers", "max_prefetch", "expected"),
+    [
+        (1, 16, 16),
+        (0, 16, 16),  # treated as single-process (≤1)
+        (2, 16, 16),  # min(16, 64//2) = 16
+        (4, 16, 16),  # min(16, 64//4) = 16
+        (8, 16, 8),  # min(16, 64//8) = 8
+        (16, 16, 4),  # min(16, 64//16) = 4
+        (24, 16, 2),  # min(16, 64//24) = 2
+        (32, 16, 2),  # min(16, 64//32) = 2
+        (32, 32, 2),  # still capped by aggregate budget
+        (2, 32, 32),  # min(32, 64//2) = 32
+        (8, 0, 0),
+    ],
+)
+def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
+    from litdata.raw.dataset import _effective_prefetch
+
+    assert _effective_prefetch(max_prefetch, num_workers) == expected
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_schedule_prefetch_uses_effective_budget(tmp_path):
+    """_schedule_prefetch schedules only the worker-aware effective look-ahead."""
+    for i in range(200):
+        (tmp_path / f"file{i:03d}.jpg").write_bytes(b"x")
+
+    dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False, max_prefetch=16)
+
+    class _Info:
+        def __init__(self, num_workers: int):
+            self.num_workers = num_workers
+
+    def _count_scheduled(num_workers: int) -> int:
+        call_count = {"n": 0}
+
+        def counting_create_task(coro):
+            call_count["n"] += 1
+            coro.close()
+
+            class _Task:
+                def add_done_callback(self, cb):
+                    return None
+
+            return _Task()
+
+        with (
+            patch("torch.utils.data.get_worker_info", return_value=_Info(num_workers)),
+            patch("asyncio.create_task", side_effect=counting_create_task),
+        ):
+            # Sequential batch of 4; start = 0 + num_workers * 4
+            dataset._schedule_prefetch([0, 1, 2, 3])
+        return call_count["n"]
+
+    # w=16 → effective = min(16, 64//16) = 4
+    assert _count_scheduled(16) == 4
+    # w=2 → effective = min(16, 64//2) = 16
+    assert _count_scheduled(2) == 16
+
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_streaming_raw_dataset_getitem(tmp_path):
     """Test single item access."""
