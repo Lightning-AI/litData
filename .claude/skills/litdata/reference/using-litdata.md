@@ -81,30 +81,33 @@ ______________________________________________________________________
 
 ## 4. Paths & resolver (load [resolver.md](resolver.md))
 
-**Always resolve paths through LitData** — never tell users to open Studio FUSE mounts by hand for training I/O.
+**Always resolve paths through LitData.** In Studio, `/teamspace/s3_connections` & co are **FUSE** over S3/GCS/**R2** (`lightning_storage`); LitData resolves them to the backing URL and talks to the store directly — faster and more reliable than opening the mount by hand.
 
 `streaming/resolver.py` → `Dir(path, url, data_connection_id)` for every `input_dir` / `output_dir` / `cache_dir`.
 
-| Input                                                                                                  | Result                                     |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| `s3://` `gs://` `r2://` `azure://` `hf://`                                                             | Remote `url`                               |
-| `local:/mnt/nfs/...`                                                                                   | Network drive; chunks still cached locally |
-| Absolute / relative path                                                                               | Local `path`                               |
-| `/teamspace/studios/this_studio/...`                                                                   | Local Studio workspace                     |
-| `/teamspace/studios/<other>/...`                                                                       | Other studio content bucket                |
-| `/teamspace/s3_connections\|gcs_connections\|s3_folders\|gcs_folders\|lightning_storage\|datasets/...` | **Direct bucket I/O** (fast path)          |
-| `{%Y-%m-%d}` in path                                                                                   | `strftime` expanded to now                 |
-| `Dir(path=..., url=...)`                                                                               | Cache location ≠ remote URL                |
+| Input                                                                     | Result                                                                                                                                                             |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `s3://` `gs://` `r2://` `azure://` `hf://`                                | Remote `url`                                                                                                                                                       |
+| `local:/mnt/nfs/...`                                                      | Network drive; chunks still cached locally                                                                                                                         |
+| Absolute / relative path                                                  | Local `path`                                                                                                                                                       |
+| `/teamspace/studios/this_studio/...`                                      | Studio home: LitData sees local disk (`url=None`), but home is **persisted remotely** — don’t dump huge raw data here ([lightning-studio.md](lightning-studio.md)) |
+| `/teamspace/studios/<other>/...`                                          | FUSE → other studio content bucket; LitData uses bucket URL                                                                                                        |
+| `/teamspace/s3_connections\|gcs_connections\|s3_folders\|gcs_folders/...` | FUSE → customer S3/GCS; LitData **direct** object I/O                                                                                                              |
+| `/teamspace/lightning_storage/...`                                        | FUSE → Lightning **R2**; LitData **direct** R2 + temp creds                                                                                                        |
+| `/teamspace/datasets/...`                                                 | FUSE → cluster datasets S3; LitData **direct**                                                                                                                     |
+| `{%Y-%m-%d}` in path                                                      | `strftime` expanded to now                                                                                                                                         |
+| `Dir(path=..., url=...)`                                                  | Cache location ≠ remote URL                                                                                                                                        |
 
 ```python
 from litdata.streaming.resolver import Dir
 StreamingDataset("s3://bucket/data")
-StreamingDataset("/teamspace/s3_connections/my-data/optimized")  # Studio: direct S3
+StreamingDataset("/teamspace/s3_connections/my-data/optimized")  # Studio: direct S3 (not FUSE)
+StreamingDataset("/teamspace/lightning_storage/team-store/shards")  # Studio: direct R2
 StreamingDataset(Dir(path="/fast-ssd/cache", url="s3://bucket/data"))
 optimize(..., output_dir="s3://bucket/out/run_{%Y-%m-%d}")
 ```
 
-Customer-facing narrative: root `README.md` → **Resolve any path or cloud URL** (`#resolve-paths`). Exhaustive behavior: [resolver.md](resolver.md). Studio env: [lightning-studio.md](lightning-studio.md).
+Exhaustive FUSE vs backing-store map: [resolver.md](resolver.md). Studio home persistence + dataset prep: [lightning-studio.md](lightning-studio.md).
 
 ______________________________________________________________________
 

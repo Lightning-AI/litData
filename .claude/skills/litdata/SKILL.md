@@ -36,15 +36,15 @@ Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interac
 
 Before writing examples or answering how-tos, read the cookbook. Highlights:
 
-| Topic          | Remember                                                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                |
-| Train stream   | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
-| Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                      |
-| Cache          | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                    |
-| Async prefetch | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`     |
-| **Paths**      | Always use LitData resolution — `s3/gs/r2/azure/hf/local:` + `/teamspace/...` (direct bucket I/O). See `reference/resolver.md` |
-| Parquet / HF   | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                |
+| Topic          | Remember                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                           |
+| Train stream   | `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                            |
+| Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                                 |
+| Cache          | Peak disk ≈ `num_workers × max_pre_download × chunk_size`; default `max_cache_size="100GB"`                                               |
+| Async prefetch | Remote downloads overlapped by default; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1`; floor `max_pre` to 4 — `reference/env-vars.md`                |
+| **Paths**      | Studio `/teamspace/s3_connections` & co are **FUSE** — LitData hits S3/GCS/**R2** (`lightning_storage`) directly. `reference/resolver.md` |
+| Parquet / HF   | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                           |
 
 ## Reference map
 

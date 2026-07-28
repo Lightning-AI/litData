@@ -12,9 +12,35 @@ class Dir:
 
 Import: `from litdata.streaming.resolver import Dir` (also re-exported via `streaming.cache`).
 
-**Why customers care:** the same code works on a laptop (`./data`), a bucket (`s3://…`), or Lightning Studio (`/teamspace/s3_connections/…`) without rewriting I/O. Studio connection paths skip slow FUSE reads and hit the bucket directly.
+**Why this exists:** the same code works on a laptop (`./data`), a bucket (`s3://…`), or Lightning Studio (`/teamspace/s3_connections/…`) without rewriting I/O.
 
-Studio env / credentials deep-dive → [lightning-studio.md](lightning-studio.md). User cookbook → [using-litdata.md](using-litdata.md).
+### Studio mounts are FUSE — LitData bypasses them
+
+In Lightning Studio, paths under `/teamspace/s3_connections`, `gcs_connections`, `s3_folders`, `gcs_folders`, `lightning_storage`, `datasets`, and other-studio content are **FUSE mounts**: they look like a normal filesystem (`ls`, `open`) but every read/write goes through a userspace filesystem into object storage.
+
+That is convenient for browsing, and **a poor path for training I/O**:
+
+| Path                                                                                           | What happens                                                                                                                                    | Reliability / speed                              |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `open("/teamspace/s3_connections/…/chunk.bin")` or plain `DataLoader` on the mount             | Bytes travel **Studio → FUSE → object store**                                                                                                   | Slower, more brittle under many parallel workers |
+| `StreamingDataset("/teamspace/s3_connections/…")` / `optimize(..., output_dir="/teamspace/…")` | Resolver fills `Dir.url` with the **backing store URL**; downloaders / `FsProvider` talk **directly** to S3 / GCS / R2 (temp creds when needed) | Faster and more reliable                         |
+
+So: **pass the `/teamspace/...` path into LitData** — do not treat the FUSE mount as the training filesystem. LitData keeps `path` for local identity/cache hints and uses `url` for real I/O.
+
+**Backing stores (what `url` becomes):**
+
+| Mount prefix                            | Under the hood                                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `/teamspace/s3_connections/<name>/…`    | Customer **S3** bucket (`data_connection.aws.source`)                                                                         |
+| `/teamspace/gcs_connections/<name>/…`   | Customer **GCS** bucket                                                                                                       |
+| `/teamspace/s3_folders/<name>/…`        | S3 **folder** connection                                                                                                      |
+| `/teamspace/gcs_folders/<name>/…`       | GCS **folder** connection                                                                                                     |
+| `/teamspace/lightning_storage/<name>/…` | Lightning-managed storage on **Cloudflare R2** (`data_connection.r2.source` + always `data_connection_id` for temp creds)     |
+| `/teamspace/datasets/…`                 | Cluster **S3** datasets bucket (`…/projects/{id}/datasets/…`)                                                                 |
+| `/teamspace/studios/<other>/…`          | That Studio’s content bucket (`s3://` or `gs://` via `LIGHTNING_CLOUD_PROVIDER`)                                              |
+| `/teamspace/studios/this_studio/…`      | Workspace disk; LitData `url=None`. Platform **persists home to Studio’s remote backing store** — code OK, huge raw dumps not |
+
+Prep datasets on a connection / scratch-outside-home → `optimize` — [lightning-studio.md](lightning-studio.md). Cookbook → [using-litdata.md](using-litdata.md).
 
 ______________________________________________________________________
 
@@ -95,20 +121,22 @@ ______________________________________________________________________
 
 ## Lightning Studio `/teamspace/…` paths
 
-Inside [Lightning Studios](https://lightning.ai/), teamspace folders look like a normal filesystem but LitData **resolves them to the backing bucket** and streams/uploads directly. That is much faster than reading through FUSE for every chunk.
+Inside [Lightning Studios](https://lightning.ai/), connection folders appear under `/teamspace/…` as **FUSE mounts** (local-looking paths whose bytes still live in object storage). LitData **does not stream through FUSE** for these prefixes: `_resolve_dir` looks up the data connection and sets `Dir.url` to the backing bucket, then downloaders / uploaders hit that URL directly (plus temp credentials when `data_connection_id` is set). That is both **faster and more reliable** than `open()` / naive I/O on the mount under multi-worker training.
+
+Full FUSE vs direct table → top of this doc. Code: `_resolve_s3_connections`, `_resolve_lightning_storage`, etc. in `resolver.py`.
 
 ### Full prefix table
 
-| Prefix                                  | Resolved to                                                                         | Credentials                                                    |
-| --------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `/teamspace/studios/this_studio/…`      | Local workspace disk only (`url=None`)                                              | N/A                                                            |
-| `/teamspace/studios/<studio_name>/…`    | That studio’s content bucket (`s3://` or `gs://` …/cloudspaces/{id}/code/content/…) | Studio / cluster env                                           |
-| `/teamspace/s3_connections/<conn>/…`    | `data_connection.aws.source` + suffix                                               | Ambient AWS, or temp creds if `available_in_non_aws_providers` |
-| `/teamspace/gcs_connections/<conn>/…`   | `data_connection.gcp.source` + suffix                                               | GCP connection                                                 |
-| `/teamspace/s3_folders/<conn>/…`        | `data_connection.s3_folder.source` + suffix                                         | Folder connection                                              |
-| `/teamspace/gcs_folders/<conn>/…`       | `data_connection.gcs_folder.source` + suffix                                        | Folder connection                                              |
-| `/teamspace/lightning_storage/<conn>/…` | `data_connection.r2.source` + suffix                                                | Always `data_connection_id` (temp creds)                       |
-| `/teamspace/datasets/…`                 | `s3://{cluster_bucket}/projects/{project_id}/datasets/…`                            | Studio env (`LIGHTNING_CLOUD_SPACE_ID`, …)                     |
+| Prefix                                  | Backing store (FUSE under the hood except `this_studio`)                                                                                                                                 | Credentials                                                    |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `/teamspace/studios/this_studio/…`      | Workspace disk; LitData `url=None`. **Platform still persists home to Studio remote storage** — don’t store huge raw datasets here (see [lightning-studio.md](lightning-studio.md) prep) | N/A                                                            |
+| `/teamspace/studios/<studio_name>/…`    | That studio’s content bucket (`s3://` or `gs://` …/cloudspaces/{id}/code/content/…)                                                                                                      | Studio / cluster env                                           |
+| `/teamspace/s3_connections/<conn>/…`    | Customer **S3** (`data_connection.aws.source` + suffix)                                                                                                                                  | Ambient AWS, or temp creds if `available_in_non_aws_providers` |
+| `/teamspace/gcs_connections/<conn>/…`   | Customer **GCS** (`data_connection.gcp.source` + suffix)                                                                                                                                 | GCP connection                                                 |
+| `/teamspace/s3_folders/<conn>/…`        | S3 folder (`data_connection.s3_folder.source` + suffix)                                                                                                                                  | Folder connection                                              |
+| `/teamspace/gcs_folders/<conn>/…`       | GCS folder (`data_connection.gcs_folder.source` + suffix)                                                                                                                                | Folder connection                                              |
+| `/teamspace/lightning_storage/<conn>/…` | Lightning storage on **R2** (`data_connection.r2.source` + suffix)                                                                                                                       | Always `data_connection_id` (temp creds)                       |
+| `/teamspace/datasets/…`                 | Cluster datasets **S3** (`s3://{cluster_bucket}/projects/{project_id}/datasets/…`)                                                                                                       | Studio env (`LIGHTNING_CLOUD_SPACE_ID`, …)                     |
 
 Also referenced in platform docs / jobs (not all go through the same `_resolve_dir` branches): `/teamspace/jobs/…` for multi-node optimize outputs.
 
@@ -131,8 +159,9 @@ StreamingDataset("/teamspace/gcs_connections/my-gcs/data")
 StreamingDataset("/teamspace/lightning_storage/team-store/shards")
 optimize(..., output_dir="/teamspace/datasets/my-llm-tokens")
 
-# This studio workspace = local disk (great for scratch; not a cloud URL)
-optimize(..., output_dir="/teamspace/studios/this_studio/artifacts/run-01")
+# This studio home = code/notebooks OK; don’t park huge raw datasets here (persisted remotely)
+# Prefer: optimize(..., output_dir="/teamspace/s3_connections/.../v1")
+optimize(..., output_dir="/teamspace/studios/this_studio/artifacts/run-01")  # small artifacts only
 ```
 
 ### Required Studio environment (auto-injected in Studios)
@@ -192,5 +221,5 @@ ______________________________________________________________________
 3. Use **`Dir(path, url)`** or `cache_dir=` when cache disk ≠ dataset location.
 4. Use **`local:`** for NFS/shared drives so chunk caching reduces network thrash.
 5. Use **`{%Y-%m-%d}`** (or similar) to version outputs.
-6. Never tell users to “just read the FUSE path with open()” for training I/O — LitData’s resolver + downloader is the fast path.
-7. Document **all** schemes (`s3/gs/r2/azure/hf/local`) and **all** teamspace prefixes when answering path questions — customers often only know S3.
+6. Never tell users to train by reading the FUSE mount with `open()` / a plain filesystem DataLoader — pass `/teamspace/s3_connections/…` (etc.) into LitData so I/O hits S3/GCS/R2 directly ([resolver.md](resolver.md) FUSE section).
+7. Document **all** schemes (`s3/gs/r2/azure/hf/local`) and **all** teamspace prefixes when answering path questions — customers often only know S3. Remind: `lightning_storage` ⇒ **R2**.
