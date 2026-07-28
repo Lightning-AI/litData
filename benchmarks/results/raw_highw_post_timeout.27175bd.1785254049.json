@@ -5,10 +5,7 @@
   "defaults": {
     "hedge_delay": 0.0,
     "download_timeout": 120.0,
-    "max_prefetch_cells": [
-      0,
-      16
-    ]
+    "max_prefetch_cells": [0, 16]
   },
   "cells": [
     {
