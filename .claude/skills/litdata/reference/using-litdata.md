@@ -341,20 +341,20 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob                       | Default              | Notes                                                                                                                                                                   |
-| -------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input_dir`                | —                    | Prefer `s3://` / `gs://` / `/teamspace/s3_connections/...` (direct); avoid hand-reading FUSE ([resolver.md](resolver.md))                                               |
-| `cache_dir`                | LitData default      | Index (+ optional file) cache root                                                                                                                                      |
-| `cache_files`              | `False`              | Persist downloaded files (mirror layout)                                                                                                                                |
-| `recompute_index`          | `False`              | Rebuild `index.json.zstd`                                                                                                                                               |
-| `transform`                | `None`               | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                                                     |
-| `indexer`                  | `FileIndexer`        | Custom `BaseIndexer`                                                                                                                                                    |
-| `storage_options`          | `{}`                 | Cloud creds                                                                                                                                                             |
+| Knob                       | Default               | Notes                                                                                                                                                                                          |
+| -------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_dir`                | —                     | Prefer `s3://` / `gs://` / `/teamspace/s3_connections/...` (direct); avoid hand-reading FUSE ([resolver.md](resolver.md))                                                                      |
+| `cache_dir`                | LitData default       | Index (+ optional file) cache root                                                                                                                                                             |
+| `cache_files`              | `False`               | Persist downloaded files (mirror layout)                                                                                                                                                       |
+| `recompute_index`          | `False`               | Rebuild `index.json.zstd`                                                                                                                                                                      |
+| `transform`                | `None`                | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                                                                            |
+| `indexer`                  | `FileIndexer`         | Custom `BaseIndexer`                                                                                                                                                                           |
+| `storage_options`          | `{}`                  | Cloud creds                                                                                                                                                                                    |
 | `max_concurrent_downloads` | `None` (**adaptive**) | `None` → Stage 1 size-aware aggregate budget split across workers (single-process cap 128). Explicit `int` → **exactly** that many permits (no silent clamp). Pass `64` for the old fixed cap. |
-| `max_prefetch`             | `16`                 | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable                                   |
-| `hedge_delay`              | `0`                  | Seconds before hedged duplicate GET (`0` = off, default; opt-in). Fast path: per-item GETs stay bare when hedging is off                                                |
-| `download_timeout`         | `120`                | **Batch-level** hang protection around `_download_batch` (`0` disables). Not a per-item `wait_for`. On timeout, cancel poisoned `_inflight` so retries can proceed      |
-| `range_parallel_threshold` | `0`                  | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                                                        |
+| `max_prefetch`             | `16`                  | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable                                                          |
+| `hedge_delay`              | `0`                   | Seconds before hedged duplicate GET (`0` = off, default; opt-in). Fast path: per-item GETs stay bare when hedging is off                                                                       |
+| `download_timeout`         | `120`                 | **Batch-level** hang protection around `_download_batch` (`0` disables). Not a per-item `wait_for`. On timeout, cancel poisoned `_inflight` so retries can proceed                             |
+| `range_parallel_threshold` | `0`                   | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                                                                               |
 
 **Tuning / DataLoader**
 
