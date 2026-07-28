@@ -553,8 +553,7 @@ def merge() -> None:
                 "Publish table emphasizes after prefetch≥16; prefetch=0 kept in JSON for honesty."
             ),
             "caveat": (
-                "Long-window protocol (≥300 batches or ≥10s after warm drain). "
-                "Prefer systematic patterns over fine Δ%."
+                "Long-window protocol (≥300 batches or ≥10s after warm drain). Prefer systematic patterns over fine Δ%."
             ),
             "default_max_prefetch": 16,
             "publish_prefetch": [pf for pf in prefetch_levels if pf >= 16],
@@ -584,10 +583,7 @@ def merge() -> None:
         d16 = ((ips16 - b["ips"]) / b["ips"]) * 100.0 if a16 and b["ips"] else float("nan")
         best = max((x for x in (a16, a32) if x), key=lambda x: x["ips"], default=None)
         db = ((best["ips"] - b["ips"]) / b["ips"]) * 100.0 if best and b["ips"] else float("nan")
-        print(
-            f"{w:>4}  {b['ips']:>10.1f}  {ips16:>10.1f}  {ips32:>10.1f}  "
-            f"{d16:>+7.1f}%  {db:>+7.1f}%"
-        )
+        print(f"{w:>4}  {b['ips']:>10.1f}  {ips16:>10.1f}  {ips32:>10.1f}  {d16:>+7.1f}%  {db:>+7.1f}%")
     print()
     print("Full cells (includes prefetch=0):")
     print(f"{'w':>4}  {'pf':>4}  {'before':>10}  {'after':>10}  {'Δ%':>8}  {'×':>6}  {'after_s':>8}")

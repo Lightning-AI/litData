@@ -4,16 +4,7 @@
     "batch_size": 64,
     "multiprocessing_context": "spawn",
     "persistent_workers": true,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
     "before": {
       "input": "s3://imagenet-1m-template/raw/val",
       "mount_input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
@@ -29,19 +20,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        0,
-        1,
-        2,
-        4,
-        8,
-        16,
-        24,
-        32
-      ],
-      "prefetch": [
-        0
-      ],
+      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+      "prefetch": [0],
       "range_parallel_threshold": null,
       "max_concurrent_downloads": null,
       "hedge_delay": null,
@@ -82,21 +62,8 @@
       "persistent_workers": true,
       "cpus": 48,
       "fuse_baseline_samples_per_s": 75.2,
-      "workers": [
-        0,
-        1,
-        2,
-        4,
-        8,
-        16,
-        24,
-        32
-      ],
-      "prefetch": [
-        0,
-        16,
-        32
-      ],
+      "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+      "prefetch": [0, 16, 32],
       "range_parallel_threshold": 0,
       "max_concurrent_downloads": 64,
       "hedge_delay": 0.0,
@@ -134,10 +101,7 @@
     "note": "before = stock StreamingRawDataset on main via s3:// (no max_prefetch / LoopRunner; FUSE mount path on main selects LocalDownloader and is broken for async reads); after = feature/raw-streaming-perf (default max_prefetch=16, range_parallel_threshold=0, hedge_delay=0, mount\u2192s3://). Publish table emphasizes after prefetch\u226516; prefetch=0 kept in JSON for honesty.",
     "caveat": "Long-window protocol (\u2265300 batches or \u226510s after warm drain). Prefer systematic patterns over fine \u0394%.",
     "default_max_prefetch": 16,
-    "publish_prefetch": [
-      16,
-      32
-    ]
+    "publish_prefetch": [16, 32]
   },
   "cells": [
     {

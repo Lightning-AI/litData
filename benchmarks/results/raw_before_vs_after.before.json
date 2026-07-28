@@ -15,19 +15,8 @@
     "persistent_workers": true,
     "cpus": 48,
     "fuse_baseline_samples_per_s": 75.2,
-    "workers": [
-      0,
-      1,
-      2,
-      4,
-      8,
-      16,
-      24,
-      32
-    ],
-    "prefetch": [
-      0
-    ],
+    "workers": [0, 1, 2, 4, 8, 16, 24, 32],
+    "prefetch": [0],
     "range_parallel_threshold": null,
     "max_concurrent_downloads": null,
     "hedge_delay": null,
@@ -37,15 +26,7 @@
       "has_range_parallel_threshold": false,
       "has_loop_runner": false,
       "uvloop": "n/a (before / no LoopRunner)",
-      "params": [
-        "cache_dir",
-        "cache_files",
-        "indexer",
-        "input_dir",
-        "recompute_index",
-        "storage_options",
-        "transform"
-      ]
+      "params": ["cache_dir", "cache_files", "indexer", "input_dir", "recompute_index", "storage_options", "transform"]
     },
     "git_sha": "5d8cfc1",
     "git_hint": "5d8cfc1",
