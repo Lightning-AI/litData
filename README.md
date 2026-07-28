@@ -418,13 +418,15 @@ raw: bytes = dataset[0]
 
 Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50 k JPEGs), `batch_size=64`, `multiprocessing_context="spawn"`, `persistent_workers=True`, `cache_files=False`. Storage: `s3://imagenet-1m-template/raw/val` (after remaps `/teamspace/s3_connections/...` → the bucket URL).
 
-**Protocol (long-window):** warm `max(1, workers × prefetch_factor)` with `prefetch_factor=2`, then time **≥300 batches** or **≥10 s**. Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`. Python **3.12.11** (CPython; `asyncio.wait_for` cost matters on older Pythons).
+**Regime summary:** wins of **+20–80%** at ≤8 workers; **parity-to-modest-deficit (within measured noise)** at ≥16 workers; the earlier w=24 regression was the per-item timeout, fixed in `f70f785`.
+
+**Protocol (long-window):** warm `max(1, workers × prefetch_factor)` with `prefetch_factor=2`, then time **≥300 batches** or **≥10 s**. Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json` (and SHA/ts-suffixed siblings). Python **3.12.11** (CPython; `asyncio.wait_for` cost matters on older Pythons).
 
 **After knobs:** `max_prefetch` default **16** (worker-aware effective look-ahead: aggregate budget ≈64), `hedge_delay=0`, `download_timeout=120` (batch-level hang protection — one `wait_for` around the gather; per-item GETs stay on the bare fast path), `range_parallel_threshold=0`, `max_concurrent_downloads=64`, optional uvloop via `litdata[extras]`. Before is stock **`main`** (no `max_prefetch` / LoopRunner; always prefetch N/A = 0).
 
 #### Before vs After matrix
 
-Single long-window run; cells can move ±~20% run-to-run — treat fine Δ% as indicative. Δ% column is after@16 vs before at the same worker count. Prefetch=0 after cells are in the JSON for honesty (core path without look-ahead).
+Measured at **`b991c7d`** (pre batch-timeout fix, `f70f785`). Single long-window run; cells can move ±~20% run-to-run — treat fine Δ% as indicative. Δ% column is after@16 vs before at the same worker count. Prefetch=0 after cells are in the JSON for honesty (core path without look-ahead). **High-w after cells below are stale** (see ‡); post-fix high-w is reported as a band, not a re-swept grid.
 
 | workers | before (main) | after p=0 | after p=16 | after p=32 | Δ% vs before (@16) |
 |--------:|--------------:|----------:|-----------:|-----------:|-------------------:|
@@ -439,11 +441,13 @@ Single long-window run; cells can move ±~20% run-to-run — treat fine Δ% as i
 
 † `w=8` p16=5718 vs p32=3551 is a single-run cliff — indicative only (±~20% cells).
 
-‡ **Diagnosed + fixed after this matrix:** the 4404 cell still wrapped every GET in per-item `asyncio.wait_for` because `download_timeout` defaulted to 120 (fast path required `None`). Decisive dig (`download_timeout=0`, same protocol): **6559** samples/s (−5% vs main 6927). After moving hang protection to **one batch-level `wait_for`**, confirm with shipped defaults (`timeout=120`, p=0): **6697** (−3% vs main). Sources: `benchmarks/results/raw_decisive_timeout0.json`, `raw_confirm_batch_timeout.json`.
+‡ **Stale after cell (pre `f70f785`):** w=24 p=0 = **4404** still paid per-item `asyncio.wait_for` under default `download_timeout=120`. Decisive dig (`timeout=0`, same protocol): **4404 → 6559 (+49%)** — confirmed the per-item wait_for regression (`benchmarks/results/raw_decisive_timeout0.json` / `raw_decisive_timeout0.6ab527d.*.json`). Batch-level timeout retains hang protection; vs `timeout=0` it sits within noise (do not rank them on speed).
 
-**Prefetch at high workers:** the worker-aware budget tapers look-ahead toward ~nothing (e.g. w=24 → effective 2). LRU hit rate at w=8 / p16 is ~**3%** (`LITDATA_RAW_DEBUG=1`) — look-ahead rarely lands before the next strided batch, so the old high-w gap was **not** LRU waste; it was per-item timeout overhead (fixed above). Typical deployment `num_workers ≈ num_cpus / num_gpus` (e.g. 12–26) is the regime to protect.
+**Post-fix high-w (band, not points):** w=24 p=0 post-fix: **5.4–6.7k** across 3 runs (main baseline: 6.9k, single run). Same HEAD config (`timeout=120`) measured **6697 / 5892 / 5404** (±~11% around the mean). Full grid not re-swept. Artifacts: `raw_confirm_batch_timeout.6ab527d.1785252695.json` (6697), `raw_confirm_batch_timeout.27175bd.1785254132.json` (5892), `raw_highw_post_timeout.json` (5404). No decimal Δ% / single-point “−3% vs main” claims at this worker count.
 
-**Takeaway:** Correctness (fork/spawn safety, atomic cache publishes, `LoopRunner`) remains the primary value. Throughput is strongest at low workers / `num_workers=0`; at high workers the core path is now within a few percent of main once batch-level timeout is in place. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
+**Prefetch at high workers:** the worker-aware budget tapers look-ahead toward ~nothing (e.g. w=24 → effective 2). Open item: if effective < 8, consider returning 0 (pending repeats; priority below downloader conformance). LRU hit rate at w=8 / p16 is ~**3%** (`LITDATA_RAW_DEBUG=1`) — look-ahead rarely lands before the next strided batch, so the old high-w gap was **not** LRU waste; it was per-item timeout overhead (fixed above). Typical deployment `num_workers ≈ num_cpus / num_gpus` (e.g. 12–26) is the regime to protect.
+
+**Takeaway:** Correctness (fork/spawn safety, atomic cache publishes, `LoopRunner`) remains the primary value. Throughput wins are clearest at low workers / notebooks; at high workers expect parity-to-modest-deficit within the measured noise band. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
 
 Ranged parallel downloads remain **opt-in** (`range_parallel_threshold=0`). Forced ranged GETs on this JPEG workload are slower (`benchmarks/results/raw_ranged_vs_whole.json`).
 

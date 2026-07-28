@@ -1,0 +1,37 @@
+{
+  "python": "3.12.11 | packaged by Anaconda, Inc. | (main, Jun  5 2025, 13:09:17) [GCC 11.2.0]",
+  "git_sha": "6ab527d",
+  "cell": {
+    "workers": 24,
+    "prefetch": 0,
+    "download_timeout": 120.0,
+    "hedge_delay": 0.0
+  },
+  "ips": 6697.0241819476105,
+  "elapsed": 2.866945000998385,
+  "batches": 300,
+  "compare": {
+    "after_p0_old_per_item_timeout120": 4404.219,
+    "after_p0_timeout0_fast_path": 6559.125,
+    "main_w24": 6927.318
+  },
+  "delta_vs_old_after_p0_pct": 52.059290919629795,
+  "delta_vs_timeout0_pct": 2.1024021031404416,
+  "delta_vs_main_pct": -3.324429715113262,
+  "result": {
+    "side": "after",
+    "label": "w24_p0_t120.0",
+    "workers": 24,
+    "prefetch": 0,
+    "ips": 6697.0241819476105,
+    "warm_s": 0.8562817649981298,
+    "warm_batches": 48,
+    "elapsed": 2.866945000998385,
+    "samples": 19200,
+    "batches": 300,
+    "hedge_delay": 0.0,
+    "download_timeout": 120.0,
+    "git_sha": "6ab527d",
+    "ts": 1785252695.2226577
+  }
+}

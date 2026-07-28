@@ -377,6 +377,7 @@ def _effective_prefetch(max_prefetch: int, num_workers: int) -> int:
         return 0
     if num_workers <= 1:
         return max_prefetch
+    # TODO(open): if effective < 8, return 0 — pending repeats; priority below downloader conformance.
     return min(max_prefetch, max(0, _AGGREGATE_PREFETCH_BUDGET // num_workers))
 
 

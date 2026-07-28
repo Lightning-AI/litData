@@ -38,7 +38,7 @@ MOUNT_INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 S3_INPUT = "s3://imagenet-1m-template/raw/val"
 ROOT = Path(tempfile.gettempdir()) / "litdata-raw-before-vs-after"
 OUT_DIR = Path(__file__).resolve().parent / "results"
-OUT = OUT_DIR / "raw_before_vs_after.json"
+OUT = OUT_DIR / "raw_before_vs_after.json"  # legacy fixed name; writers use unique_result_path
 BS = 64
 DEFAULT_BATCHES = 300
 DEFAULT_MIN_SECONDS = 10.0
@@ -64,6 +64,22 @@ def git_sha() -> str:
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return ""
+
+
+def unique_result_path(stem: str, *, sha: str | None = None, ts: float | None = None) -> Path:
+    """Return ``OUT_DIR/{stem}.{sha}.{ts}.json`` — never overwrites a prior result file."""
+    sha_part = (sha if sha is not None else git_sha()) or "unknown"
+    ts_part = int(ts if ts is not None else time.time())
+    path = OUT_DIR / f"{stem}.{sha_part}.{ts_part}.json"
+    if path.exists():
+        # Same-second collision: bump until free.
+        n = 1
+        while True:
+            alt = OUT_DIR / f"{stem}.{sha_part}.{ts_part}.{n}.json"
+            if not alt.exists():
+                return alt
+            n += 1
+    return path
 
 
 def input_for(side: str) -> str:
@@ -327,14 +343,28 @@ def configs_for(side: str, workers: list[int], *, safety_grid: bool) -> list[tup
     return [(w, pf, 0.0, None) for w in workers for pf in AFTER_PREFETCH]
 
 
-def partial_path(side: str) -> Path:
-    """Return path for a side's partial JSON payload."""
-    return OUT_DIR / f"raw_before_vs_after.{side}.json"
+def partial_path(side: str, *, sha: str | None = None, ts: float | None = None) -> Path:
+    """Return a unique path for a side's partial JSON payload (never overwrites)."""
+    return unique_result_path(f"raw_before_vs_after.{side}", sha=sha, ts=ts)
 
 
-def jsonl_path(side: str) -> Path:
-    """Return path for a side's incremental JSONL log."""
-    return OUT_DIR / f"raw_before_vs_after.{side}.jsonl"
+def jsonl_path(side: str, *, sha: str | None = None, ts: float | None = None) -> Path:
+    """Return a unique path for a side's incremental JSONL log (never overwrites)."""
+    sha_part = (sha if sha is not None else git_sha()) or "unknown"
+    ts_part = int(ts if ts is not None else time.time())
+    return OUT_DIR / f"raw_before_vs_after.{side}.{sha_part}.{ts_part}.jsonl"
+
+
+def latest_partial(side: str) -> Path:
+    """Resolve the newest unique partial for ``side``, falling back to the legacy fixed name."""
+    matches = sorted(OUT_DIR.glob(f"raw_before_vs_after.{side}.*.json"), key=lambda p: p.stat().st_mtime)
+    if matches:
+        return matches[-1]
+    legacy = OUT_DIR / f"raw_before_vs_after.{side}.json"
+    if legacy.exists():
+        return legacy
+    raise FileNotFoundError(f"no raw_before_vs_after.{side}.* result under {OUT_DIR}")
+
 
 
 def run_side(
@@ -359,9 +389,8 @@ def run_side(
     side_root.mkdir(parents=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     sha = git_sha()
-    jpath = jsonl_path(side)
-    if jpath.exists():
-        jpath.unlink()
+    run_ts = time.time()
+    jpath = jsonl_path(side, sha=sha, ts=run_ts)
 
     wd = HangWatchdog(TIMEOUT)
     wd.start()
@@ -459,7 +488,7 @@ def run_side(
             },
             "results": results,
         }
-        out = partial_path(side)
+        out = partial_path(side, sha=sha, ts=run_ts)
         out.write_text(json.dumps(payload, indent=2) + "\n")
         log(f"Wrote {out}")
         log(f"JSONL {jpath}")
@@ -469,8 +498,11 @@ def run_side(
 
 def merge() -> None:
     """Merge before/after partial JSON into the comparison artifact."""
-    before = json.loads(partial_path("before").read_text())
-    after = json.loads(partial_path("after").read_text())
+    before_path = latest_partial("before")
+    after_path = latest_partial("after")
+    log(f"merge before={before_path.name} after={after_path.name}")
+    before = json.loads(before_path.read_text())
+    after = json.loads(after_path.read_text())
 
     workers = sorted({r["workers"] for r in before["results"]} | {r["workers"] for r in after["results"]})
     before_by_w = {r["workers"]: r for r in before["results"] if r["prefetch"] == 0}
@@ -552,9 +584,11 @@ def merge() -> None:
         "comparison": rows,
         "before_results": before["results"],
         "after_results": after["results"],
+        "sources": {"before": str(before_path), "after": str(after_path)},
     }
-    OUT.write_text(json.dumps(payload, indent=2) + "\n")
-    log(f"Wrote {OUT}")
+    out = unique_result_path("raw_before_vs_after")
+    out.write_text(json.dumps(payload, indent=2) + "\n")
+    log(f"Wrote {out}")
 
     publish = [c for c in cells if c["prefetch"] >= 16]
     print()

@@ -18,6 +18,7 @@ from bench_raw_before_vs_after import (
     git_sha,
     make_dataset,
     run_one,
+    unique_result_path,
 )
 
 
@@ -30,8 +31,9 @@ def main() -> None:
         shutil.rmtree(side_root, ignore_errors=True)
     side_root.mkdir(parents=True)
     seed = side_root / "seed"
+    sha = git_sha()
     print(f"python={sys.version}", flush=True)
-    print(f"sha={git_sha()}", flush=True)
+    print(f"sha={sha}", flush=True)
     t0 = time.perf_counter()
     ds = make_dataset(str(seed), side=side, max_prefetch=0, hedge_delay=0.0, download_timeout=dt)
     n = len(ds)
@@ -58,15 +60,15 @@ def main() -> None:
             prefetch_factor=2,
             hedge_delay=0.0,
             download_timeout=dt,
-            sha=git_sha(),
-            jsonl=OUT_DIR / "raw_decisive_timeout0.jsonl",
+            sha=sha,
+            jsonl=OUT_DIR / "raw_decisive_timeout0.jsonl",  # append-only
         )
     finally:
         wd.stop()
 
     out = {
         "python": sys.version,
-        "git_sha": git_sha(),
+        "git_sha": sha,
         "cell": {"workers": w, "prefetch": pf, "download_timeout": dt, "hedge_delay": 0.0},
         "ips": result["ips"],
         "elapsed": result["elapsed"],
@@ -78,7 +80,7 @@ def main() -> None:
         "result": result,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / "raw_decisive_timeout0.json"
+    path = unique_result_path("raw_decisive_timeout0", sha=sha, ts=result.get("ts"))
     path.write_text(json.dumps(out, indent=2))
     print(json.dumps({k: out[k] for k in out if k != "result"}, indent=2), flush=True)
     print(f"WROTE {path}", flush=True)
