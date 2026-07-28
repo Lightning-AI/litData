@@ -23,15 +23,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from torch.utils.data import DataLoader
 
+from bench_raw_before_vs_after import git_sha, unique_result_path
 from litdata import StreamingRawDataset
 from litdata.raw import dataset as raw_dataset
 
 raw_dataset._RAW_DEBUG = True
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
-OUT = Path(__file__).resolve().parent / "results" / "raw_lru_hitrate.json"
+OUT_DIR = Path(__file__).resolve().parent / "results"
 ROOT = Path(tempfile.gettempdir()) / "litdata-raw-lru-hitrate"
-LOG = OUT.with_suffix(".log")
+LOG = OUT_DIR / "raw_lru_hitrate.log"
 DONE_RE = re.compile(
     r"raw-debug: _download_batch done pid=(\d+) n=(\d+) inflight=(\d+) "
     r"batch_hit=(\d+) batch_miss=(\d+) total_hit=(\d+) total_miss=(\d+)"
@@ -241,10 +242,12 @@ def main() -> None:
             "hit_rate": (w_hits / w_total) if w_total else 0.0,
         },
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(out, indent=2))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out["git_sha"] = git_sha()
+    path = unique_result_path("raw_lru_hitrate", sha=out["git_sha"])
+    path.write_text(json.dumps(out, indent=2))
     print(json.dumps(out, indent=2), flush=True)
-    print(f"WROTE {OUT}", flush=True)
+    print(f"WROTE {path}", flush=True)
 
 
 if __name__ == "__main__":

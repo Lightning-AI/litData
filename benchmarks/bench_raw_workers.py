@@ -24,11 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from torch.utils.data import DataLoader
 from uvloop_status import log_loop_runner_backend, uvloop_package_status
 
+from bench_raw_before_vs_after import git_sha, unique_result_path
 from litdata import StreamingRawDataset
 
 INPUT = "/teamspace/s3_connections/imagenet-1m-template/raw/val"
 ROOT = Path(tempfile.gettempdir()) / "litdata-raw-worker-sweep"
-OUT = Path(__file__).resolve().parent / "results" / "raw_worker_prefetch_sweep.json"
+OUT_DIR = Path(__file__).resolve().parent / "results"
 BS = 64
 BATCHES = 30  # after 1 warm batch
 # Up to host vCPUs (4×L4 Studio = 48).
@@ -162,7 +163,7 @@ def main() -> None:
     if ROOT.exists():
         shutil.rmtree(ROOT, ignore_errors=True)
     ROOT.mkdir(parents=True)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     wd = HangWatchdog(TIMEOUT)
     wd.start()
@@ -225,8 +226,10 @@ def main() -> None:
             "results": results,
             "best": best,
         }
-        OUT.write_text(json.dumps(payload, indent=2) + "\n")
-        log(f"Wrote {OUT}")
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        path = unique_result_path("raw_worker_prefetch_sweep", sha=git_sha())
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        log(f"Wrote {path}")
     finally:
         wd.stop()
 
