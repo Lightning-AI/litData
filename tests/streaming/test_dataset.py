@@ -1072,7 +1072,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
     return StreamingDataLoader(dataset, batch_size=2, num_workers=2)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
+@pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
 @pytest.mark.timeout(90)
 @pytest.mark.parametrize("shuffle", [True, False])
