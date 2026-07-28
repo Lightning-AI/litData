@@ -38,7 +38,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 
 | Topic          | Remember                                                                                                                                  |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Raw files**  | `StreamingRawDataset`: raw `bytes`, fully async + batched downloads, retries; torch `DataLoader` — `#stream-raw` / `using-litdata.md` §10 |
+| **Raw files**  | `StreamingRawDataset`: raw `bytes`, fully async + batched downloads, retries; torch `DataLoader` — `#stream-raw` / `using-litdata.md` §10. Tune `max_prefetch` / workers; `range_parallel_threshold=0` default (ranged opt-in). ImageNet-val best ~**7350 samples/s** at w=24, prefetch=16 (~98× vs FUSE) — README matrix |
 | Images         | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                           |
 | Train stream   | Optimized: `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                 |
 | Optimize       | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`                                                                 |

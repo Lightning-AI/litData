@@ -49,7 +49,7 @@ def test_streaming_raw_dataset_getitem(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
     # Patch async download to return test_content
-    async def mock_download_file_async(file_path):
+    async def mock_download_file_async(file_path, size=None):
         return test_content
 
     with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_file_async):
@@ -128,7 +128,7 @@ async def test_download_batch_flat(tmp_path):
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
-    async def mock_download_and_process_item(file_path):
+    async def mock_download_and_process_item(file_path, size=None):
         return test_contents[file_path]
 
     with (
@@ -163,7 +163,7 @@ async def test_download_batch_grouped(tmp_path):
 
     grouped_dataset = GroupedDataset(input_dir=str(tmp_path))
 
-    async def mock_download_and_process_group(file_paths):
+    async def mock_download_and_process_group(file_paths, sizes=None):
         return [test_contents[fp] for fp in file_paths]
 
     print(grouped_dataset.items)
@@ -222,7 +222,7 @@ def test_streaming_raw_dataset_getitems_index_error(tmp_path):
 
     dataset = StreamingRawDataset(input_dir=str(tmp_path), cache_files=False)
 
-    with pytest.raises(IndexError, match="list index out of range"):
+    with pytest.raises(IndexError, match="out of range"):
         dataset.__getitems__([0, 1])
 
 
@@ -238,7 +238,7 @@ def test_streaming_raw_dataset_transform(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path), transform=transform)
 
     # Patch async download to return test_content
-    async def mock_download_file_async(file_path):
+    async def mock_download_file_async(file_path, size=None):
         return test_content
 
     with patch.object(dataset.cache_manager, "download_file_async", side_effect=mock_download_file_async):
@@ -256,7 +256,7 @@ def test_streaming_raw_dataset_with_dataloader(tmp_path):
     dataset = StreamingRawDataset(input_dir=str(tmp_path))
 
     # Mock async download to return test content
-    async def mock_download_async(file_path):
+    async def mock_download_async(file_path, size=None):
         index = int(file_path.split("file")[1].split(".")[0])
         return test_contents[index]
 
@@ -290,7 +290,7 @@ def test_cache_manager_get_local_path_invalid():
 def test_cache_manager_download_file_async_error():
     cm = CacheManager(input_dir="s3://bucket/data", cache_dir=None, cache_files=False)
 
-    async def fail_download(file_path):
+    async def fail_download(file_path, *args, **kwargs):
         raise Exception("fail")
 
     cm._downloader = type("Downloader", (), {"adownload_fileobj": fail_download})()
@@ -332,7 +332,7 @@ def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
     ds = StreamingRawDataset(input_dir=str(tmp_path))
 
     # Patch download to return bytes
-    async def mock_download_file_async(file_path):
+    async def mock_download_file_async(file_path, size=None):
         return b"abc"
 
     ds.cache_manager.download_file_async = mock_download_file_async

@@ -319,15 +319,26 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob              | Default         | Notes                                                               |
-| ----------------- | --------------- | ------------------------------------------------------------------- |
-| `input_dir`       | —               | Resolver paths ([resolver.md](resolver.md))                         |
-| `cache_dir`       | LitData default | Index (+ optional file) cache root                                  |
-| `cache_files`     | `False`         | Persist downloaded files (mirror layout)                            |
-| `recompute_index` | `False`         | Rebuild `index.json.zstd`                                           |
-| `transform`       | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped) |
-| `indexer`         | `FileIndexer`   | Custom `BaseIndexer`                                                |
-| `storage_options` | `{}`            | Cloud creds                                                         |
+| Knob                       | Default         | Notes                                                                                         |
+| -------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| `input_dir`                | —               | Resolver paths ([resolver.md](resolver.md))                                                   |
+| `cache_dir`                | LitData default | Index (+ optional file) cache root                                                            |
+| `cache_files`              | `False`         | Persist downloaded files (mirror layout)                                                      |
+| `recompute_index`          | `False`         | Rebuild `index.json.zstd`                                                                     |
+| `transform`                | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                           |
+| `indexer`                  | `FileIndexer`   | Custom `BaseIndexer`                                                                          |
+| `storage_options`          | `{}`            | Cloud creds                                                                                   |
+| `max_concurrent_downloads` | `64`            | Max in-flight downloads per worker                                                            |
+| `max_prefetch`             | `0`             | Sequential look-ahead after each batch (`0` = off)                                            |
+| `hedge_delay`              | `1.0`           | Seconds before hedged duplicate GET (`0` = off)                                               |
+| `range_parallel_threshold` | `0`             | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs) |
+
+**Tuning / DataLoader**
+
+- After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
+- Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
+- Published ImageNet-val raw sweep (48 vCPU 4×L4 Studio, bs=64, spawn + persistent, uvloop): best **`num_workers=24`, `max_prefetch=16` → ~7350 samples/s** (~98× vs old FUSE ~75). Full matrix + tips: README `#stream-raw` / `benchmarks/results/raw_worker_prefetch_sweep.json`. `num_workers=48` collapses (~400–450) and can segfault on shutdown.
+- Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
 

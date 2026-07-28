@@ -1,0 +1,190 @@
+{
+  "meta": {
+    "input": "/teamspace/s3_connections/imagenet-1m-template/raw/val",
+    "storage": "s3://imagenet-1m-template/raw/val",
+    "n_files": 50000,
+    "batch_size": 64,
+    "batches": 30,
+    "multiprocessing_context": "spawn",
+    "persistent_workers": true,
+    "max_concurrent_downloads": 64,
+    "uvloop": "available (uvloop 0.22.1; create\u2192uvloop)",
+    "note": "ImageNet val JPEGs are ~50-200KiB; default 32MiB threshold never engages ranged GETs. force_ranged uses threshold=1 to exercise the ranged path.",
+    "sample_sizes": null,
+    "old_sweep_killed": true,
+    "old_sweep_json": null,
+    "old_sweep_log": "benchmarks/results/raw_worker_prefetch_sweep.log",
+    "old_sweep_used_fixed_downloaders": false
+  },
+  "modes": {
+    "whole_object": 0,
+    "default_32MiB": 33554432,
+    "force_ranged": 1
+  },
+  "results": [
+    {
+      "label": "whole_object_w4_p0",
+      "mode": "whole_object",
+      "range_parallel_threshold": 0,
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 1427.0920034899673,
+      "warm_s": 0.4920169380002335,
+      "elapsed": 1.345393286000217,
+      "samples": 1920
+    },
+    {
+      "label": "whole_object_w4_p128",
+      "mode": "whole_object",
+      "range_parallel_threshold": 0,
+      "workers": 4,
+      "prefetch": 128,
+      "ips": 1560.3751824601698,
+      "warm_s": 0.42769633999978396,
+      "elapsed": 1.2304733000000851,
+      "samples": 1920
+    },
+    {
+      "label": "whole_object_w8_p0",
+      "mode": "whole_object",
+      "range_parallel_threshold": 0,
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 3253.6890249899498,
+      "warm_s": 0.26794812999924034,
+      "elapsed": 0.5900994180001362,
+      "samples": 1920
+    },
+    {
+      "label": "whole_object_w8_p128",
+      "mode": "whole_object",
+      "range_parallel_threshold": 0,
+      "workers": 8,
+      "prefetch": 128,
+      "ips": 5774.09009633061,
+      "warm_s": 0.2422578240002622,
+      "elapsed": 0.33251992399982555,
+      "samples": 1920
+    },
+    {
+      "label": "default_32MiB_w4_p0",
+      "mode": "default_32MiB",
+      "range_parallel_threshold": 33554432,
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 2953.0799068468627,
+      "warm_s": 0.27264053100043384,
+      "elapsed": 0.6501686579995294,
+      "samples": 1920
+    },
+    {
+      "label": "default_32MiB_w4_p128",
+      "mode": "default_32MiB",
+      "range_parallel_threshold": 33554432,
+      "workers": 4,
+      "prefetch": 128,
+      "ips": 2985.6316012696957,
+      "warm_s": 0.27602094800022314,
+      "elapsed": 0.6430800099997214,
+      "samples": 1920
+    },
+    {
+      "label": "default_32MiB_w8_p0",
+      "mode": "default_32MiB",
+      "range_parallel_threshold": 33554432,
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 4306.860190551598,
+      "warm_s": 0.2814946440003041,
+      "elapsed": 0.44580040100026963,
+      "samples": 1920
+    },
+    {
+      "label": "default_32MiB_w8_p128",
+      "mode": "default_32MiB",
+      "range_parallel_threshold": 33554432,
+      "workers": 8,
+      "prefetch": 128,
+      "ips": 5613.977404925982,
+      "warm_s": 0.2622351620002519,
+      "elapsed": 0.3420035139997708,
+      "samples": 1920
+    },
+    {
+      "label": "force_ranged_w4_p0",
+      "mode": "force_ranged",
+      "range_parallel_threshold": 1,
+      "workers": 4,
+      "prefetch": 0,
+      "ips": 1163.182496875414,
+      "warm_s": 0.43762787000014214,
+      "elapsed": 1.6506438200003686,
+      "samples": 1920
+    },
+    {
+      "label": "force_ranged_w4_p128",
+      "mode": "force_ranged",
+      "range_parallel_threshold": 1,
+      "workers": 4,
+      "prefetch": 128,
+      "ips": 845.5371098952572,
+      "warm_s": 0.44578652500058524,
+      "elapsed": 2.2707459880002716,
+      "samples": 1920
+    },
+    {
+      "label": "force_ranged_w8_p0",
+      "mode": "force_ranged",
+      "range_parallel_threshold": 1,
+      "workers": 8,
+      "prefetch": 0,
+      "ips": 2202.5663897466357,
+      "warm_s": 0.6730690179992962,
+      "elapsed": 0.8717103870003484,
+      "samples": 1920
+    },
+    {
+      "label": "force_ranged_w8_p128",
+      "mode": "force_ranged",
+      "range_parallel_threshold": 1,
+      "workers": 8,
+      "prefetch": 128,
+      "ips": 1535.974200548701,
+      "warm_s": 0.6115875020004751,
+      "elapsed": 1.2500209959998756,
+      "samples": 1920
+    }
+  ],
+  "mode_means": {
+    "whole_object": 3003.8115768176744,
+    "default_32MiB": 3964.8872758985344,
+    "force_ranged": 1436.815049266502
+  },
+  "winners_per_config": [
+    {
+      "workers": 4,
+      "prefetch": 0,
+      "best_mode": "default_32MiB",
+      "ips": 2953.0799068468627
+    },
+    {
+      "workers": 4,
+      "prefetch": 128,
+      "best_mode": "default_32MiB",
+      "ips": 2985.6316012696957
+    },
+    {
+      "workers": 8,
+      "prefetch": 0,
+      "best_mode": "default_32MiB",
+      "ips": 4306.860190551598
+    },
+    {
+      "workers": 8,
+      "prefetch": 128,
+      "best_mode": "whole_object",
+      "ips": 5774.09009633061
+    }
+  ],
+  "overall_winner": "default_32MiB"
+}

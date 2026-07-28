@@ -1,4 +1,5 @@
 import sys
+import threading
 from time import sleep, time
 from unittest import mock
 
@@ -32,7 +33,8 @@ def test_s3_client_with_storage_options(monkeypatch):
         config=botocore.config.Config(retries={"max_attempts": 100}),
     )
 
-    # Create S3Client without storage options
+    # Create S3Client without storage options (force non-Studio path so IMDS is not used).
+    monkeypatch.setattr(client, "_IS_IN_STUDIO", False)
     s3_client = client.S3Client()
     assert s3_client.client
 
@@ -431,6 +433,53 @@ def test_r2_client_property_refreshes_expired_credentials(monkeypatch):
 
     # Verify client was created twice (initial + refresh)
     assert second_call_count == first_call_count + 1
+
+
+def test_s3_client_refresh_is_serialized_under_threads(monkeypatch):
+    """Concurrent .client access at a refresh boundary must not race-create clients."""
+    in_create = {"n": 0, "max": 0}
+    counter_lock = threading.Lock()
+    barrier = threading.Barrier(8)
+
+    boto3_session = mock.MagicMock()
+    boto3 = mock.MagicMock(Session=boto3_session)
+    monkeypatch.setattr(client, "boto3", boto3)
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(refetch_interval=0, storage_options={"region_name": "us-east-1"})
+    original_create = s3._create_client
+
+    def slow_create() -> None:
+        with counter_lock:
+            in_create["n"] += 1
+            in_create["max"] = max(in_create["max"], in_create["n"])
+        try:
+            sleep(0.01)
+            original_create()
+        finally:
+            with counter_lock:
+                in_create["n"] -= 1
+
+    s3._create_client = slow_create  # type: ignore[method-assign]
+
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            barrier.wait(timeout=5)
+            for _ in range(3):
+                assert s3.client is not None
+        except BaseException as exc:  # noqa: BLE001 — collect for main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors
+    assert in_create["max"] == 1
 
 
 def test_r2_client_with_session_options(monkeypatch):

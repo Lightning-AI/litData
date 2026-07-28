@@ -13,6 +13,7 @@
 
 import json
 import os
+import threading
 from time import time
 from typing import Any
 
@@ -116,6 +117,17 @@ class S3Client:
         self._client: Any | None = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
+        # Guards lazy create + credential refresh (range GETs hit .client from many threads).
+        self._client_lock = threading.Lock()
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_client_lock", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._client_lock = threading.Lock()
 
     def _create_client(self) -> None:
         # S3 data connections marked available on non-AWS providers can't reach the bucket via the
@@ -177,16 +189,18 @@ class S3Client:
 
     @property
     def client(self) -> Any:
-        if self._client is None:
-            self._create_client()
-            self._last_time = time()
+        # boto3 clients are thread-safe for requests; construction/refresh is not.
+        with self._client_lock:
+            if self._client is None:
+                self._create_client()
+                self._last_time = time()
 
-        # Re-generate credentials for EC2
-        if self._last_time is None or (time() - self._last_time) > self._refetch_interval:
-            self._create_client()
-            self._last_time = time()
+            # Re-generate credentials for EC2 / temporary Studio creds
+            if self._last_time is None or (time() - self._last_time) > self._refetch_interval:
+                self._create_client()
+                self._last_time = time()
 
-        return self._client
+            return self._client
 
 
 class R2Client(S3Client):

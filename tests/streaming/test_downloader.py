@@ -148,6 +148,53 @@ def test_r2_downloader_download_bytes_reuses_client(r2_client_mock, tmpdir):
     ]
 
 
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_downloader_download_bytes_reuses_client(s3_client_mock, tmpdir):
+    s3_client_instance = MagicMock()
+    s3_client_mock.return_value = s3_client_instance
+
+    body = MagicMock()
+    body.read.return_value = b"hello"
+    s3_client_instance.client.get_object.return_value = {"Body": body}
+
+    downloader = S3Downloader("s3://random_bucket", str(tmpdir), [])
+    # __init__ already creates _client; download_bytes must not recreate it.
+    assert hasattr(downloader, "_client")
+    client_id = id(downloader._client)
+
+    assert downloader.download_bytes("s3://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("s3://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    assert id(downloader._client) == client_id
+    s3_client_mock.assert_called_once_with(storage_options={}, session_options={})
+    assert s3_client_instance.client.get_object.call_args_list == [
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=0-4"),
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=5-9"),
+    ]
+
+
+@mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
+def test_gcp_downloader_download_bytes_reuses_client(tmpdir, google_mock):
+    mock_client = MagicMock()
+    mock_bucket = MagicMock()
+    mock_blob = MagicMock()
+    mock_blob.download_as_bytes.return_value = b"hello"
+
+    google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
+    mock_client.bucket = MagicMock(return_value=mock_bucket)
+    mock_bucket.blob = MagicMock(return_value=mock_blob)
+
+    downloader = GCPDownloader("gs://random_bucket", str(tmpdir), [], {"project": "p"})
+    assert downloader.download_bytes("gs://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("gs://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    google_mock.cloud.storage.Client.assert_called_once_with(project="p")
+    assert mock_blob.download_as_bytes.call_args_list == [
+        mock.call(start=0, end=4),
+        mock.call(start=5, end=9),
+    ]
+
+
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     # Create mock objects

@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from abc import ABC
 from contextlib import suppress
 from time import time
@@ -56,6 +57,15 @@ _OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
 
 
 class Downloader(ABC):
+    """Cloud/local chunk downloader.
+
+    Implementors should:
+    - Publish cache files atomically (temp path + ``os.replace``; see ``_temp_download_path``).
+    - Be safe for concurrent calls from multiple threads (or document otherwise).
+    - Prefer real HTTP Range in ``download_bytes`` when the backend supports it.
+    - Clean up ``.tmp.*`` paths on failure.
+    """
+
     def __init__(
         self,
         remote_dir: str,
@@ -225,9 +235,7 @@ class S3Downloader(Downloader):
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        if not hasattr(self, "client"):
-            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
-
+        # self._client is created in __init__; S3Client.client serializes create/refresh.
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
@@ -243,9 +251,6 @@ class S3Downloader(Downloader):
 
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
-
-        if not hasattr(self, "_client"):
-            self._client = S3Client(storage_options=self._storage_options, session_options=self.session_options)
 
         bucket = obj.netloc
         key = obj.path.lstrip("/")
@@ -376,9 +381,7 @@ class R2Downloader(Downloader):
         if obj.scheme != "r2":
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        if not hasattr(self, "_client"):
-            self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
-
+        # self._client is created in __init__; R2Client.client serializes create/refresh.
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
@@ -394,9 +397,6 @@ class R2Downloader(Downloader):
 
         if obj.scheme != "r2":
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
-
-        if not hasattr(self, "_client"):
-            self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
 
         bucket = obj.netloc
         key = obj.path.lstrip("/")
@@ -452,10 +452,21 @@ class GCPDownloader(Downloader):
             raise ModuleNotFoundError(str(_GOOGLE_STORAGE_AVAILABLE))
 
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
+        self._client: Any | None = None
+        self._client_lock = threading.Lock()
+
+    def _get_client(self) -> Any:
+        """Return a cached ``google.cloud.storage.Client`` (thread-safe lazy init)."""
+        if self._client is not None:
+            return self._client
+        with self._client_lock:
+            if self._client is None:
+                from google.cloud import storage
+
+                self._client = storage.Client(**self._storage_options)
+            return self._client
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
-        from google.cloud import storage
-
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -477,7 +488,7 @@ class GCPDownloader(Downloader):
             if key[0] == "/":
                 key = key[1:]
 
-            client = storage.Client(**self._storage_options)
+            client = self._get_client()
             bucket = client.bucket(bucket_name)
             blob = bucket.blob(key)
             tmp_path = self._temp_download_path(local_filepath)
@@ -490,8 +501,6 @@ class GCPDownloader(Downloader):
                 raise
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
-        from google.cloud import storage
-
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -500,7 +509,7 @@ class GCPDownloader(Downloader):
         bucket_name = obj.netloc
         key = obj.path.lstrip("/")
 
-        client = storage.Client(**self._storage_options)
+        client = self._get_client()
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(key)
 
@@ -511,8 +520,6 @@ class GCPDownloader(Downloader):
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from GCS directly to a file-like object."""
-        from google.cloud import storage
-
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
@@ -521,7 +528,7 @@ class GCPDownloader(Downloader):
         bucket_name = obj.netloc
         key = obj.path.lstrip("/")
 
-        client = storage.Client(**self._storage_options)
+        client = self._get_client()
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(key)
 
@@ -532,11 +539,10 @@ class GCPDownloader(Downloader):
         if not hasattr(self, "_store"):
             if not _OBSTORE_AVAILABLE:
                 raise ModuleNotFoundError(str(_OBSTORE_AVAILABLE))
-            from google.cloud import storage
             from obstore.auth.google import GoogleCredentialProvider
             from obstore.store import GCSStore
 
-            client = storage.Client(**self._storage_options)
+            client = self._get_client()
             credential_provider = GoogleCredentialProvider(credentials=client._credentials)
             self._store = GCSStore(bucket, credential_provider=credential_provider)
         return self._store
@@ -657,6 +663,18 @@ class AzureDownloader(Downloader):
 
 
 class LocalDownloader(Downloader):
+    async def adownload_fileobj(self, remote_filepath: str) -> bytes:
+        """Read a local file (sync I/O; avoids leaking default-executor threads in tests)."""
+        from pathlib import Path
+
+        return Path(remote_filepath).read_bytes()
+
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Copy a local file into the cache path."""
+        if os.path.exists(local_filepath):
+            return
+        self.download_file(remote_filepath, local_filepath)
+
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         if not os.path.exists(remote_filepath):
             raise FileNotFoundError(f"The provided remote_path doesn't exist: {remote_filepath}")
@@ -673,10 +691,9 @@ class LocalDownloader(Downloader):
                 temp_file_path = local_filepath + ".tmp"
                 shutil.copy(remote_filepath, temp_file_path)
                 os.rename(temp_file_path, local_filepath)
-        # FileLock doesn't delete its lock file on release — we clean it up manually.
-        # This must happen after release (Windows can't delete open files) and after the
-        # work is done (on Linux, deleting an in-use lock file lets other processes lock
-        # on a new inode, bypassing mutual exclusion).
+        # FileLock leaves the lock path behind; remove it after release when we held it.
+        # Delete only after the critical section so other waiters do not race a new inode
+        # while we still expected exclusive access.
         if lock_acquired:
             with contextlib.suppress(Exception):
                 os.remove(lock_path)
@@ -741,6 +758,8 @@ class LocalDownloaderWithCache(LocalDownloader):
         super().download_file(remote_filepath, local_filepath)
 
 
+# TODO(follow-up): parametrized Downloader conformance suite over _DOWNLOADERS
+# (atomic publish, tmp cleanup, download_bytes correctness + concurrent safety).
 _DOWNLOADERS: dict[str, type[Downloader]] = {
     "s3://": S3Downloader,
     "gs://": GCPDownloader,

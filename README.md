@@ -333,6 +333,12 @@ for batch in loader:
 | `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
+| `max_concurrent_downloads` | `64` | Max in-flight downloads per worker |
+| `max_prefetch` | `0` | Sequential look-ahead after each batch (`0` = off). Try `2 * batch_size` when access is mostly sequential |
+| `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
+| `hedge_delay` | `1.0` | Seconds before a hedged duplicate GET for a slow download (`0` = off) |
+| `range_parallel_threshold` | `0` | Objects ≥ this many bytes use parallel ranged GETs (`0` = whole-object only; opt-in) |
+| `item_type` | `"bytes"` | `"bytes"` buffers in RAM; `"path"` returns local cache paths (`cache_files=True` required) |
 
 ### Group related files (`setup`)
 
@@ -399,9 +405,38 @@ raw: bytes = dataset[0]
 
 ### Tips
 
-- Prefer `num_workers > 0` so worker processes overlap async batch downloads with training.
-- Studio: pass `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)).
-- When throughput plateaus, run a one-time [`optimize`](#speed-up-model-training) and switch to `StreamingDataset` + `StreamingDataLoader`.
+- Prefer `num_workers > 0` so worker processes overlap async batch downloads with training. Scale workers toward host vCPUs for network-bound JPEG-sized objects (see matrix below — avoid saturating every vCPU).
+- On Linux, after any parent-process dataset I/O, use `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)` — default `fork` can hang S3 clients in workers.
+- Tune `max_prefetch` for sequential loaders; shuffled access disables look-ahead. Prefetch helps most at low worker counts.
+- Prefer an `s3://` / `gs://` URL or `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)) — avoid reading through FUSE.
+- Leave `range_parallel_threshold=0` (default) for typical JPEGs; raise it only for large objects where parallel ranged GETs help.
+- Best for medium/large files. Tiny objects (≲100 KB) are request-overhead bound — pack with [`optimize`](#speed-up-model-training) → `StreamingDataset` when I/O plateaus.
+
+### Throughput (ImageNet val raw → S3)
+
+Measured on a **4×L4 Lightning Studio (48 vCPUs)** against `s3://imagenet-1m-template/raw/val` (50 k JPEGs), `batch_size=64`, 30 timed batches, `multiprocessing_context="spawn"`, `persistent_workers=True`, uvloop, `max_concurrent_downloads=64`, `cache_files=False`. Reproduce: `python benchmarks/bench_raw_workers.py`. Source: `benchmarks/results/raw_worker_prefetch_sweep.json`.
+
+Old Studio FUSE baseline (same data, path-as-FUSE): ~**75 samples/s**.
+
+**Best:** `num_workers=24`, `max_prefetch=16` → **~7350 samples/s** (~98× vs FUSE).
+
+Samples/s (`num_workers` × `max_prefetch`):
+
+| workers \\ prefetch | 0 | 16 | 32 | 64 | 96 | 128 |
+|--------------------:|------:|------:|------:|------:|------:|------:|
+| 0 | 850 | 538 | 614 | 795 | 886 | 941 |
+| 1 | 481 | 442 | 807 | 882 | 853 | 1230 |
+| 2 | 727 | 1750 | 1512 | 924 | 1604 | 1037 |
+| 4 | 3327 | 2491 | 1653 | 3185 | 1754 | 1318 |
+| 8 | 3627 | 3629 | 4002 | 2250 | 3047 | 6925 |
+| 16 | 5508 | 5152 | 4349 | 6099 | 6890 | 4483 |
+| 24 | 4082 | **7350** | 4285 | 3081 | 3416 | 2843 |
+| 32 | 4758 | 3948 | 3702 | 3666 | 3149 | 2904 |
+| 48 | 456 | 456 | 436 | 363 | 448 | 426 |
+
+`num_workers=48` collapses to ~400–450 samples/s and can segfault workers on shutdown — prefer mid-high worker counts on this class of host.
+
+Ranged parallel downloads are **opt-in** (`range_parallel_threshold=0` by default). Forcing ranged GETs on this JPEG workload is slower than whole-object downloads (`benchmarks/results/raw_ranged_vs_whole.json`).
 
 </details>
 
