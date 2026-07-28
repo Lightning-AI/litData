@@ -317,6 +317,73 @@ def test_recompute_index_excludes_index_file(tmp_path):
         assert _INDEX_FILENAME not in f.path
 
 
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_save_index_file_atomic_publish(tmp_path):
+    """_save_index_file writes via tmp + os.replace (no direct open of final path)."""
+    import os
+    from unittest.mock import patch
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    index_path = cache_dir / _INDEX_FILENAME
+    indexer = FileIndexer()
+    files = [FileMetadata(str(tmp_path / "a.bin"), 10)]
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def tracking_replace(src, dst):
+        replace_calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    with patch("os.replace", side_effect=tracking_replace):
+        indexer._save_index_file(str(index_path), files, str(tmp_path))
+
+    assert index_path.exists()
+    assert len(replace_calls) == 1
+    src, dst = replace_calls[0]
+    assert src.endswith(f".tmp.{os.getpid()}")
+    assert dst == str(index_path)
+    assert indexer._load_index_file(str(index_path)) == files
+    # No leftover tmp beside the final index.
+    assert list(cache_dir.glob(f"{_INDEX_FILENAME}.tmp.*")) == []
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_download_from_cloud_atomic_publish(tmp_path):
+    """_download_from_cloud stages to tmp then os.replace into the final path."""
+    import os
+    from unittest.mock import MagicMock, patch
+
+    local_path = tmp_path / "cache" / _INDEX_FILENAME
+    local_path.parent.mkdir()
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def tracking_replace(src, dst):
+        replace_calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    def fake_get(remote, dest):
+        with open(dest, "wb") as f:
+            f.write(b"index-bytes")
+
+    mock_fs = MagicMock()
+    mock_fs.get.side_effect = fake_get
+    indexer = FileIndexer()
+    with (
+        patch("fsspec.filesystem", return_value=mock_fs),
+        patch("os.replace", side_effect=tracking_replace),
+    ):
+        indexer._download_from_cloud("s3://bucket/index.json.zstd", str(local_path), {})
+
+    assert local_path.read_bytes() == b"index-bytes"
+    assert len(replace_calls) == 1
+    src, dst = replace_calls[0]
+    assert src.endswith(f".tmp.{os.getpid()}")
+    assert dst == str(local_path)
+    assert list(local_path.parent.glob(f"{_INDEX_FILENAME}.tmp.*")) == []
+
+
 def test_load_index_file_handles_corrupted_zstd(tmp_path):
     """Test that _load_index_file catches ZstdError for corrupted data."""
     if _PYTHON_GREATER_EQUAL_3_14:

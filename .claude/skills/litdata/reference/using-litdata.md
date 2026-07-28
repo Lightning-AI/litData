@@ -359,7 +359,7 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 
 - After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
 - Prefer `s3://` / `/teamspace/s3_connections/...` (direct bucket) over FUSE path I/O.
-- Throughput: README `#stream-raw` is source of truth — long-window Before vs After matrix (`bench_raw_before_vs_after.py`, ≥300 batches after warm drain). Default `max_prefetch=16` with worker-aware aggregate budget (~64). Correctness (fork/spawn, atomic cache, LoopRunner) is the main value; throughput is strong at low workers / `num_workers=0`. Also: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
+- Throughput: README `#stream-raw` is source of truth — long-window Before vs After matrix (`bench_raw_before_vs_after.py`, ≥300 batches after warm drain). Default `max_prefetch=16` with worker-aware aggregate budget (~64); `download_timeout=120` is batch-level hang protection (per-item GETs stay bare). Correctness (fork/spawn, atomic cache, LoopRunner) is the main value; throughput is strong at low workers / `num_workers=0`, and high-w core path is within a few % of main after the batch-timeout fix. Also: `hedge_delay=0`, `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
 - Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects (`raw_ranged_vs_whole.json`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.

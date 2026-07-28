@@ -680,8 +680,9 @@ def test_hedge_delay_default_is_zero() -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
-def test_fetch_bytes_fast_path_when_safety_off(tmp_path: Path) -> None:
-    """With hedge off and timeout disabled, download is a bare permit + adownload."""
+@pytest.mark.parametrize("download_timeout", [0.0, 120.0])
+def test_fetch_bytes_fast_path_when_hedge_off(tmp_path: Path, download_timeout: float) -> None:
+    """Hedging off takes the bare path even when download_timeout defaults to 120."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.bin").write_bytes(b"fast")
@@ -690,11 +691,17 @@ def test_fetch_bytes_fast_path_when_safety_off(tmp_path: Path) -> None:
         cache_dir=str(tmp_path / "cache"),
         cache_files=False,
         hedge_delay=0,
-        download_timeout=0,
+        download_timeout=download_timeout,
     )
     remote = "s3://bucket/data/a.bin"
     cm._input_dir_path = "s3://bucket/data"
     calls = {"n": 0}
+    wait_for_calls = {"n": 0}
+    real_wait_for = asyncio.wait_for
+
+    async def counting_wait_for(awaitable, timeout=None, **kwargs):  # type: ignore[no-untyped-def]
+        wait_for_calls["n"] += 1
+        return await real_wait_for(awaitable, timeout=timeout, **kwargs)
 
     async def run() -> bytes:
         cm._downloader_pid = os.getpid()
@@ -707,9 +714,39 @@ def test_fetch_bytes_fast_path_when_safety_off(tmp_path: Path) -> None:
         cm._downloader = SimpleNamespace(adownload_fileobj=once)  # type: ignore[assignment]
         return await cm._fetch_bytes(remote, size=4)
 
-    assert asyncio.run(run()) == b"fast"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(asyncio, "wait_for", counting_wait_for)
+        assert asyncio.run(run()) == b"fast"
     assert calls["n"] == 1
     assert cm._hedge_fired == 0
+    assert wait_for_calls["n"] == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
+def test_download_batch_applies_timeout_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default download_timeout wraps the batch gather once, not each item."""
+    for i in range(4):
+        (tmp_path / f"f{i}.bin").write_bytes(f"data-{i}".encode())
+    ds = StreamingRawDataset(
+        str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        cache_files=False,
+        max_prefetch=0,
+        hedge_delay=0,
+        download_timeout=120.0,
+    )
+    assert ds._batch_download_budget([0, 1, 2]) == 120.0
+    wait_for_calls = {"n": 0}
+    real_wait_for = asyncio.wait_for
+
+    async def counting_wait_for(awaitable, timeout=None, **kwargs):  # type: ignore[no-untyped-def]
+        wait_for_calls["n"] += 1
+        return await real_wait_for(awaitable, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(asyncio, "wait_for", counting_wait_for)
+    items = ds.__getitems__([0, 1, 2])
+    assert len(items) == 3
+    assert wait_for_calls["n"] == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")

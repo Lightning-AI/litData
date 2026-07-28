@@ -418,9 +418,9 @@ raw: bytes = dataset[0]
 
 Measured on a **4×L4 Lightning Studio (48 vCPUs)** against ImageNet val raw (50 k JPEGs), `batch_size=64`, `multiprocessing_context="spawn"`, `persistent_workers=True`, `cache_files=False`. Storage: `s3://imagenet-1m-template/raw/val` (after remaps `/teamspace/s3_connections/...` → the bucket URL).
 
-**Protocol (long-window):** warm `max(1, workers × prefetch_factor)` with `prefetch_factor=2`, then time **≥300 batches** or **≥10 s**. Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`.
+**Protocol (long-window):** warm `max(1, workers × prefetch_factor)` with `prefetch_factor=2`, then time **≥300 batches** or **≥10 s**. Reproduce: `python benchmarks/bench_raw_before_vs_after.py --side before|after` then `--merge`. Source: `benchmarks/results/raw_before_vs_after.json`. Python **3.12.11** (CPython; `asyncio.wait_for` cost matters on older Pythons).
 
-**After knobs:** `max_prefetch` default **16** (worker-aware effective look-ahead: aggregate budget ≈64), `hedge_delay=0`, `range_parallel_threshold=0`, `max_concurrent_downloads=64`, optional uvloop via `litdata[extras]`. Before is stock **`main`** (no `max_prefetch` / LoopRunner; always prefetch N/A = 0).
+**After knobs:** `max_prefetch` default **16** (worker-aware effective look-ahead: aggregate budget ≈64), `hedge_delay=0`, `download_timeout=120` (batch-level hang protection — one `wait_for` around the gather; per-item GETs stay on the bare fast path), `range_parallel_threshold=0`, `max_concurrent_downloads=64`, optional uvloop via `litdata[extras]`. Before is stock **`main`** (no `max_prefetch` / LoopRunner; always prefetch N/A = 0).
 
 #### Before vs After matrix
 
@@ -434,14 +434,16 @@ Single long-window run; cells can move ±~20% run-to-run — treat fine Δ% as i
 | 4 | 2022 | **2698** | 1805 | 1738 | −11% |
 | 8 | 4841 | 5713 | **5718**† | 3551† | **+18%** |
 | 16 | 6081 | 5792 | 5976 | 6051 | −2% |
-| 24 | **6927** | 4404 | 5337 | 5975 | −23% |
+| 24 | **6927** | 4404‡ | 5337 | 5975 | −23% |
 | 32 | 5455 | 4746 | **5723** | **5951** | **+5%** |
 
 † `w=8` p16=5718 vs p32=3551 is a single-run cliff — indicative only (±~20% cells).
 
-**after p=0 vs before (high workers):** w=16 −5%; w=24 **−36%**; w=32 −13%. At w=24 the no-prefetch path still loses badly vs main → residual core overhead (not only the default look-ahead). Prefer lower effective prefetch at high `num_workers` (automatic via the aggregate budget); raise `max_prefetch` only when tuning low-worker / notebook regimes.
+‡ **Diagnosed + fixed after this matrix:** the 4404 cell still wrapped every GET in per-item `asyncio.wait_for` because `download_timeout` defaulted to 120 (fast path required `None`). Decisive dig (`download_timeout=0`, same protocol): **6559** samples/s (−5% vs main 6927). After moving hang protection to **one batch-level `wait_for`**, confirm with shipped defaults (`timeout=120`, p=0): **6697** (−3% vs main). Sources: `benchmarks/results/raw_decisive_timeout0.json`, `raw_confirm_batch_timeout.json`.
 
-**Takeaway:** Correctness (fork/spawn safety, atomic cache publishes, `LoopRunner`) is the primary value of this work. Throughput is regime-dependent: strong at low workers and `num_workers=0` / notebooks; at high workers prefer the worker-aware lower look-ahead (see table) and do not expect a uniform win vs stock main. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
+**Prefetch at high workers:** the worker-aware budget tapers look-ahead toward ~nothing (e.g. w=24 → effective 2). LRU hit rate at w=8 / p16 is ~**3%** (`LITDATA_RAW_DEBUG=1`) — look-ahead rarely lands before the next strided batch, so the old high-w gap was **not** LRU waste; it was per-item timeout overhead (fixed above). Typical deployment `num_workers ≈ num_cpus / num_gpus` (e.g. 12–26) is the regime to protect.
+
+**Takeaway:** Correctness (fork/spawn safety, atomic cache publishes, `LoopRunner`) remains the primary value. Throughput is strongest at low workers / `num_workers=0`; at high workers the core path is now within a few percent of main once batch-level timeout is in place. Avoid `num_workers=48` (collapses / can segfault on shutdown). Old Studio FUSE baseline ≈75 samples/s.
 
 Ranged parallel downloads remain **opt-in** (`range_parallel_threshold=0`). Forced ranged GETs on this JPEG workload are slower (`benchmarks/results/raw_ranged_vs_whole.json`).
 

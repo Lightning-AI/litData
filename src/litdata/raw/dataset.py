@@ -808,12 +808,13 @@ class CacheManager:
             raise
 
     def _download_budget(self, size: int | None = None, timeout: float | None = None) -> float | None:
-        """Return per-object timeout seconds, or ``None`` when disabled.
+        """Return a size-aware timeout floor in seconds, or ``None`` when disabled.
 
         ``download_timeout`` is a floor for sized objects: when ``size`` is known,
         the budget is ``max(download_timeout, size / assumed_bandwidth * 3)`` so large
-        transfers are not cut off by a fixed wall-clock cap. Pass an explicit
-        ``timeout`` to override (e.g. remaining budget after a partial attempt).
+        transfers are not cut off by a fixed wall-clock cap. Used by batch-level
+        hang protection (``max`` over pending indices). Pass an explicit ``timeout``
+        to override.
         """
         if timeout is not None:
             return timeout
@@ -824,18 +825,6 @@ class CacheManager:
             size_floor = size / _HEDGE_ASSUMED_BANDWIDTH_BPS * 3.0
             return max(base, size_floor)
         return base
-
-    async def _with_timeout(
-        self,
-        awaitable: Awaitable[T],
-        timeout: float | None = None,
-        *,
-        size: int | None = None,
-    ) -> T:
-        budget = self._download_budget(size, timeout=timeout)
-        if budget is None:
-            return await awaitable
-        return await asyncio.wait_for(awaitable, timeout=budget)
 
     def _supports_range(self, file_path: str) -> bool:
         return file_path.startswith(("s3://", "gs://", "r2://"))
@@ -889,7 +878,13 @@ class CacheManager:
         return joined
 
     async def _fetch_bytes(self, file_path: str, size: int | None = None, *, gated: bool = True) -> bytes:
-        """Download object bytes (optional range-parallel + size-gated hedging + timeout)."""
+        """Download object bytes (optional range-parallel + size-gated hedging).
+
+        Hang protection is enforced once per batch in
+        ``StreamingRawDataset._download_batch`` (single ``wait_for`` around the
+        gather). Defaults (``hedge_delay=0``, ``download_timeout=120``) therefore
+        take this bare fast path — no per-item ``asyncio.wait_for``.
+        """
         # Per-chunk hedging happens inside ranged downloads; never hedge the whole object.
         if (
             size is not None
@@ -897,14 +892,11 @@ class CacheManager:
             and size >= self.range_parallel_threshold
             and self._supports_range(file_path)
         ):
-            return await self._with_timeout(
-                self._ranged_download_bytes(file_path, size, gated=gated),
-                size=size,
-            )
+            return await self._ranged_download_bytes(file_path, size, gated=gated)
 
         delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
-        # Pay-per-use: when hedging is off/ineligible and timeout is disabled, match a bare download.
-        if delay is None and self.download_timeout is None:
+        # Pay-per-use: hedging off/ineligible → bare permit + download (batch enforces timeout).
+        if delay is None:
             async with self._permit(gated):
                 return await self.downloader.adownload_fileobj(file_path)
 
@@ -912,9 +904,7 @@ class CacheManager:
             async with self._permit(gated):
                 return await self.downloader.adownload_fileobj(file_path)
 
-        if delay is not None:
-            return await self._with_timeout(self._hedged(once, delay), size=size)
-        return await self._with_timeout(once(), size=size)
+        return await self._hedged(once, delay)
 
     def _schedule_write_behind(self, local_path: str, data: bytes) -> None:
         """Atomically publish ``data`` to ``local_path`` on a worker thread."""
@@ -957,9 +947,9 @@ class CacheManager:
         try:
             if self._path_is_cached(local_path):
                 return local_path
-            started = time.monotonic()
             try:
-                await self._with_timeout(self.downloader.adownload_file(file_path, tmp_path), size=size)
+                # Hang protection is batch-level; keep the owned path bare.
+                await self.downloader.adownload_file(file_path, tmp_path)
             except Exception as first_exc:
                 if self._is_non_retryable_download_error(first_exc):
                     raise
@@ -970,17 +960,8 @@ class CacheManager:
                 )
                 with contextlib.suppress(OSError):
                     os.remove(tmp_path)
-                remaining: float | None = None
-                budget = self._download_budget(size)
-                if budget is not None:
-                    remaining = max(0.0, budget - (time.monotonic() - started))
-                    if remaining <= 0:
-                        raise TimeoutError(f"Download timed out for {file_path}") from first_exc
                 # Caller already holds the download semaphore — avoid nested acquire.
-                data = await self._with_timeout(
-                    self._fetch_bytes(file_path, size=size, gated=False),
-                    timeout=remaining,
-                )
+                data = await self._fetch_bytes(file_path, size=size, gated=False)
                 await asyncio.to_thread(Path(tmp_path).write_bytes, data)
             self._verify_tmp_size(tmp_path, size)
             os.replace(tmp_path, local_path)
@@ -1158,10 +1139,12 @@ class StreamingRawDataset(Dataset):
                 (``0`` = off, default). Opt in with a positive delay for object-store p99
                 stragglers. Only applied to small objects (~<8MB); large objects use per-chunk
                 hedging for ranged downloads.
-            download_timeout: Per-object timeout floor in seconds (``0`` / disabled → no
-                timeout). For sized objects the effective budget is
-                ``max(download_timeout, size / ~25MB/s * 3)`` — a floor, not a hard cap.
-                When hedging is off and timeout is disabled, downloads take a bare fast path.
+            download_timeout: Hang-protection floor in seconds for each batch gather
+                (``0`` / disabled → no timeout). Defaults to ``120`` and coexists with the
+                per-item fast path: individual GETs are never wrapped in ``wait_for``;
+                ``_download_batch`` applies one ``wait_for`` around the gather using
+                ``max`` of the per-item size-aware floors
+                (``max(download_timeout, size / ~25MB/s * 3)``).
             range_parallel_threshold: Objects at least this large use parallel ranged GETs
                 when the backend supports Range (``0`` disables; opt in with a positive
                 byte threshold via the constructor).
@@ -1355,6 +1338,19 @@ class StreamingRawDataset(Dataset):
             return sum(fm.size for fm in item)
         return 0
 
+    def _batch_download_budget(self, indices: list[int]) -> float | None:
+        """Return one hang-protection budget for a pending batch, or ``None`` if disabled.
+
+        Uses the max per-item size-aware floor so large objects are not cut off, while
+        keeping a single ``wait_for`` around the gather (not per object).
+        """
+        base = self.cache_manager.download_timeout
+        if base is None:
+            return None
+        budgets = [self.cache_manager._download_budget(self._item_size(i)) for i in indices]
+        sized = [b for b in budgets if b is not None]
+        return max(sized) if sized else base
+
     async def _resolve_index(self, index: int) -> Any:
         """Return a cached/inflight/materialized item for ``index``."""
         task = self._inflight.get(index)
@@ -1408,7 +1404,21 @@ class StreamingRawDataset(Dataset):
             # Largest-first so big objects overlap with smaller ones (LPT).
             unique_pending.sort(key=self._item_size, reverse=True)
             tasks = [asyncio.create_task(self._resolve_index(index)) for index in unique_pending]
-            fetched = await asyncio.gather(*tasks)
+            budget = self._batch_download_budget(unique_pending)
+            try:
+                if budget is None:
+                    fetched = await asyncio.gather(*tasks)
+                else:
+                    # One wait_for for the whole batch — hang protection without per-item tax.
+                    fetched = await asyncio.wait_for(asyncio.gather(*tasks), timeout=budget)
+            except TimeoutError:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise TimeoutError(
+                    f"Batch download timed out after {budget:.1f}s ({len(unique_pending)} pending indices)"
+                ) from None
             for index, value in zip(unique_pending, fetched):
                 for pos in pending_positions[index]:
                     results[pos] = value
