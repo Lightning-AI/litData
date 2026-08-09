@@ -108,6 +108,113 @@ _SINGLE_PROCESS_CONCURRENCY_CAP = 128
 # the bandwidth arm alone sizes the budget. Distinct from ``_HEDGE_MAX_BYTES``
 # (8 MiB duplicate-GET hedge policy).
 _LATENCY_MODEL_MAX_MEDIAN_BYTES = 1024 * 1024
+_LATENCY_OBSERVATION_MAX_BYTES = 256 * 1024
+_BANDWIDTH_OBSERVATION_MIN_BYTES = 1024 * 1024
+
+
+def _env_float(name: str, default: float) -> float:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+def _get_assumed_aggregate_bandwidth_bps() -> int:
+    return _env_int("LITDATA_ASSUMED_BANDWIDTH_BPS", _ASSUMED_AGGREGATE_BANDWIDTH_BPS)
+
+
+def _get_assumed_request_rate() -> float:
+    return _env_float("LITDATA_ASSUMED_REQUEST_RATE", _ASSUMED_REQUEST_RATE)
+
+
+def _get_assumed_request_latency_s() -> float:
+    return _env_float("LITDATA_ASSUMED_REQUEST_LATENCY_S", _ASSUMED_REQUEST_LATENCY_S)
+
+
+def _get_default_median_file_bytes() -> int:
+    return _env_int("LITDATA_DEFAULT_MEDIAN_FILE_BYTES", _DEFAULT_MEDIAN_FILE_BYTES)
+
+
+def _get_single_process_concurrency_cap() -> int:
+    return _env_int("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", _SINGLE_PROCESS_CONCURRENCY_CAP)
+
+
+def _get_aggregate_concurrency_budget_cap() -> int:
+    return _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", _AGGREGATE_CONCURRENCY_BUDGET_CAP)
+
+
+def _get_aggregate_concurrency_budget_floor() -> int:
+    return _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", _AGGREGATE_CONCURRENCY_BUDGET_FLOOR)
+
+
+class BandwidthTracker:
+    """Thread-safe process-local empirical bandwidth and request latency tracker using EMA."""
+
+    def __init__(self, alpha: float = 0.2) -> None:
+        self.alpha = max(0.01, min(1.0, alpha))
+        self.bandwidth_bps_ema: float | None = None
+        self.request_latency_s_ema: float | None = None
+        self.sample_count: int = 0
+        self._lock = threading.Lock()
+
+    def record_observation(self, size_bytes: int, duration_s: float) -> None:
+        if size_bytes <= 0 or duration_s <= 0:
+            return
+        with self._lock:
+            self.sample_count += 1
+            if size_bytes < _LATENCY_OBSERVATION_MAX_BYTES:
+                if self.request_latency_s_ema is None:
+                    self.request_latency_s_ema = duration_s
+                else:
+                    self.request_latency_s_ema = (
+                        self.alpha * duration_s + (1.0 - self.alpha) * self.request_latency_s_ema
+                    )
+            elif size_bytes >= _BANDWIDTH_OBSERVATION_MIN_BYTES:
+                lat_est = (
+                    self.request_latency_s_ema
+                    if self.request_latency_s_ema is not None
+                    else _get_assumed_request_latency_s()
+                )
+                transfer_time = max(0.001, duration_s - lat_est)
+                obs_bps = float(size_bytes) / transfer_time
+                if self.bandwidth_bps_ema is None:
+                    self.bandwidth_bps_ema = obs_bps
+                else:
+                    self.bandwidth_bps_ema = self.alpha * obs_bps + (1.0 - self.alpha) * self.bandwidth_bps_ema
+
+    def get_metrics(self) -> tuple[float | None, float | None, int]:
+        with self._lock:
+            return self.bandwidth_bps_ema, self.request_latency_s_ema, self.sample_count
+
+    def __getstate__(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "alpha": self.alpha,
+                "bandwidth_bps_ema": self.bandwidth_bps_ema,
+                "request_latency_s_ema": self.request_latency_s_ema,
+                "sample_count": self.sample_count,
+            }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.alpha = state.get("alpha", 0.2)
+        self.bandwidth_bps_ema = state.get("bandwidth_bps_ema")
+        self.request_latency_s_ema = state.get("request_latency_s_ema")
+        self.sample_count = state.get("sample_count", 0)
+        self._lock = threading.Lock()
+
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: _LoopRunner | None = None
@@ -191,7 +298,7 @@ class _LoopRunner:
     def __init__(self) -> None:
         self._pid = os.getpid()
         self.loop: asyncio.AbstractEventLoop = _create_event_loop()
-        self._executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="litdata-raw-pool")
+        self._executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="asyncio_litdata-raw-pool")
         self.loop.set_default_executor(self._executor)
         if _RAW_DEBUG:
             logger.warning(
@@ -413,7 +520,10 @@ def _median_file_bytes(files: Sequence[FileMetadata]) -> int | None:
     return int(statistics.median(sizes))
 
 
-def _aggregate_concurrency_budget(median_file_bytes: int | None) -> int:
+def _aggregate_concurrency_budget(
+    median_file_bytes: int | None,
+    tracker: BandwidthTracker | None = None,
+) -> int:
     """Aggregate in-flight download slots across all workers (size-aware, clamped).
 
     Takes the max of two models then clamps to ``[floor, cap]``:
@@ -425,26 +535,46 @@ def _aggregate_concurrency_budget(median_file_bytes: int | None) -> int:
       tiny-object paths are not request-starved. Medians ≥1 MiB stay
       bandwidth-bounded (avoids pinning at 240 slots → multi-GB in flight).
 
+    Uses empirical EMA metrics from ``tracker`` when ``sample_count >= 5``.
     Per-worker floor of 8 means realized aggregate is ``max(budget, 8 × num_workers)``.
     """
-    median = median_file_bytes if median_file_bytes and median_file_bytes > 0 else _DEFAULT_MEDIAN_FILE_BYTES
-    target_bytes = int(_ASSUMED_AGGREGATE_BANDWIDTH_BPS * _CONCURRENCY_PIPELINE_SECONDS)
+    default_median = _get_default_median_file_bytes()
+    median = median_file_bytes if median_file_bytes and median_file_bytes > 0 else default_median
+
+    floor = _get_aggregate_concurrency_budget_floor()
+    cap = _get_aggregate_concurrency_budget_cap()
+
+    obs_bps: float | None = None
+    obs_lat: float | None = None
+    if tracker is not None:
+        bps_ema, lat_ema, samples = tracker.get_metrics()
+        if samples >= 5:
+            obs_bps = bps_ema
+            obs_lat = lat_ema
+
+    bandwidth_bps = obs_bps if obs_bps is not None and obs_bps > 0 else _get_assumed_aggregate_bandwidth_bps()
+    target_bytes = int(bandwidth_bps * _CONCURRENCY_PIPELINE_SECONDS)
     bandwidth_model = max(1, target_bytes // median)
+
     # Size-gate: Little's-law arm is for request-overhead-bound tiny objects only.
     if median < _LATENCY_MODEL_MAX_MEDIAN_BYTES:
-        latency_model = max(1, int(_ASSUMED_REQUEST_RATE * _ASSUMED_REQUEST_LATENCY_S))
+        req_rate = _get_assumed_request_rate()
+        req_lat = obs_lat if obs_lat is not None and obs_lat > 0 else _get_assumed_request_latency_s()
+        latency_model = max(1, int(req_rate * req_lat))
     else:
         latency_model = 0
+
     raw = max(bandwidth_model, latency_model)
-    return max(_AGGREGATE_CONCURRENCY_BUDGET_FLOOR, min(_AGGREGATE_CONCURRENCY_BUDGET_CAP, raw))
+    return max(floor, min(cap, raw))
 
 
 def _effective_concurrency(
     max_concurrent_downloads: int | None,
     num_workers: int,
     median_file_bytes: int | None = None,
+    tracker: BandwidthTracker | None = None,
 ) -> int:
-    """Per-worker download permits for the Stage 1 static clamp.
+    """Per-worker download permits for the Stage 1 static/adaptive clamp.
 
     - ``max_concurrent_downloads is None`` (default): adaptive —
       ``max(floor, budget // num_workers)`` with ``budget`` from
@@ -455,9 +585,9 @@ def _effective_concurrency(
     """
     if max_concurrent_downloads is not None:
         return 1 if max_concurrent_downloads <= 0 else max_concurrent_downloads
-    budget = _aggregate_concurrency_budget(median_file_bytes)
+    budget = _aggregate_concurrency_budget(median_file_bytes, tracker=tracker)
     if num_workers <= 1:
-        return min(budget, _SINGLE_PROCESS_CONCURRENCY_CAP)
+        return min(budget, _get_single_process_concurrency_cap())
     return max(_MIN_CONCURRENCY_PER_WORKER, budget // num_workers)
 
 
@@ -557,6 +687,7 @@ class CacheManager:
         self.storage_options = storage_options or {}
         # Index median size (bytes); set by StreamingRawDataset after discovery.
         self._median_file_bytes: int | None = None
+        self._bandwidth_tracker = BandwidthTracker()
         self._downloader: Downloader | None = None
         self._downloader_pid: int | None = None
         self._downloader_loop: asyncio.AbstractEventLoop | None = None
@@ -610,6 +741,7 @@ class CacheManager:
             "cache_dir": self.cache_dir,
             "storage_options": self.storage_options,
             "_median_file_bytes": self._median_file_bytes,
+            "_bandwidth_tracker": self._bandwidth_tracker,
             # Runtime — always fresh in the child.
             "_downloader": None,
             "_downloader_pid": None,
@@ -645,6 +777,7 @@ class CacheManager:
         self._range_executor_pid = None
         self._hedge_fired = 0
         self._median_file_bytes = state.get("_median_file_bytes")
+        self._bandwidth_tracker = state.get("_bandwidth_tracker") or BandwidthTracker()
 
     def _shutdown_range_executor(self) -> None:
         if self._range_executor is not None:
@@ -720,6 +853,14 @@ class CacheManager:
             self._downloader_loop = loop
         return self._downloader
 
+    def _record_download_observation(self, size_bytes: int, duration_s: float) -> None:
+        """Record an empirical GET transfer observation and refresh cached permits when needed."""
+        prev_count = self._bandwidth_tracker.sample_count
+        self._bandwidth_tracker.record_observation(size_bytes, duration_s)
+        new_count = self._bandwidth_tracker.sample_count
+        if (prev_count < 5 and new_count >= 5) or (new_count >= 5 and new_count % 10 == 0):
+            self._cached_permits = None
+
     def _effective_download_permits(self) -> int:
         """Worker-aware permit count for the download semaphore (Stage 1 static clamp).
 
@@ -733,6 +874,7 @@ class CacheManager:
             self.max_concurrent_downloads,
             _num_dataloader_workers(),
             self._median_file_bytes,
+            tracker=self._bandwidth_tracker,
         )
         self._cached_permits = permits
         self._cached_permits_pid = pid
@@ -750,7 +892,7 @@ class CacheManager:
         if self._semaphore is None or self._semaphore_loop is not loop or self._semaphore_permits != permits:
             n_workers = _num_dataloader_workers()
             budget = (
-                _aggregate_concurrency_budget(self._median_file_bytes)
+                _aggregate_concurrency_budget(self._median_file_bytes, tracker=self._bandwidth_tracker)
                 if self.max_concurrent_downloads is None
                 else None
             )
@@ -1021,11 +1163,15 @@ class CacheManager:
                 data = await fetch()
             return offset, data
 
+        t0 = time.monotonic()
         parts = await asyncio.gather(*(one(o, n) for o, n in ranges))
+        dur = time.monotonic() - t0
         parts.sort(key=lambda x: x[0])
         joined = b"".join(data for _, data in parts)
         if len(joined) != size:
             raise RuntimeError(f"Ranged download size mismatch for {file_path}: expected={size} got={len(joined)}")
+        if len(joined) > 0:
+            self._record_download_observation(len(joined), dur)
         return joined
 
     async def _fetch_bytes(self, file_path: str, size: int | None = None, *, gated: bool = True) -> bytes:
@@ -1048,14 +1194,24 @@ class CacheManager:
         delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
         # Pay-per-use: hedging off/ineligible → bare permit + download (batch enforces timeout).
         if delay is None:
+            t0 = time.monotonic()
             async with self._permit(gated):
-                return await self.downloader.adownload_fileobj(file_path)
+                data = await self.downloader.adownload_fileobj(file_path)
+            dur = time.monotonic() - t0
+            if len(data) > 0:
+                self._record_download_observation(len(data), dur)
+            return data
 
         async def once() -> bytes:
             async with self._permit(gated):
                 return await self.downloader.adownload_fileobj(file_path)
 
-        return await self._hedged(once, delay)
+        t0_h = time.monotonic()
+        data = await self._hedged(once, delay)
+        dur_h = time.monotonic() - t0_h
+        if len(data) > 0:
+            self._record_download_observation(len(data), dur_h)
+        return data
 
     def _schedule_write_behind(self, local_path: str, data: bytes) -> None:
         """Atomically publish ``data`` to ``local_path`` on a worker thread."""
@@ -1098,9 +1254,16 @@ class CacheManager:
         try:
             if self._path_is_cached(local_path):
                 return local_path
+            t0 = time.monotonic()
             try:
                 # Hang protection is batch-level; keep the owned path bare.
                 await self.downloader.adownload_file(file_path, tmp_path)
+                dur = time.monotonic() - t0
+                st_size = (
+                    size if size and size > 0 else (os.path.getsize(tmp_path) if os.path.exists(tmp_path) else None)
+                )
+                if st_size and st_size > 0:
+                    self._record_download_observation(st_size, dur)
             except Exception as first_exc:
                 if self._is_non_retryable_download_error(first_exc):
                     raise
@@ -1112,6 +1275,7 @@ class CacheManager:
                 with contextlib.suppress(OSError):
                     os.remove(tmp_path)
                 # Caller already holds the download semaphore — avoid nested acquire.
+                # Note: _fetch_bytes records download observation internally if successful.
                 data = await self._fetch_bytes(file_path, size=size, gated=False)
                 await asyncio.to_thread(Path(tmp_path).write_bytes, data)
             self._verify_tmp_size(tmp_path, size)

@@ -539,3 +539,95 @@ def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
     gds = GroupedDS(input_dir=str(tmp_path), transform=transform)
     gds.cache_manager.download_file_async = mock_download_file_async
     assert gds[0] == b"abc"
+
+
+def test_bandwidth_tracker_ema_and_partitioning():
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=0.2)
+    assert tracker.sample_count == 0
+
+    # Small GET (< 256 KB) updates latency EMA
+    tracker.record_observation(100_000, 0.020)
+    bps, lat, count = tracker.get_metrics()
+    assert count == 1
+    assert bps is None
+    assert pytest.approx(lat, abs=1e-6) == 0.020
+
+    tracker.record_observation(50_000, 0.010)
+    _, lat, count = tracker.get_metrics()
+    assert count == 2
+    # EMA: 0.2 * 0.010 + 0.8 * 0.020 = 0.018
+    assert pytest.approx(lat, abs=1e-6) == 0.018
+
+    # Large GET (>= 1 MiB) updates bandwidth EMA
+    tracker.record_observation(10 * 1024 * 1024, 0.118)
+    bps, lat, count = tracker.get_metrics()
+    assert count == 3
+    assert bps is not None
+    assert pytest.approx(bps, abs=1.0) == 104_857_600.0
+
+
+def test_bandwidth_tracker_pickle():
+    import pickle
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    tracker.record_observation(100_000, 0.020)
+    tracker.record_observation(10 * 1024 * 1024, 0.200)
+    blob = pickle.dumps(tracker)
+    restored = pickle.loads(blob)  # noqa: S301
+    assert restored.sample_count == tracker.sample_count
+    assert restored.bandwidth_bps_ema == tracker.bandwidth_bps_ema
+    assert restored.request_latency_s_ema == tracker.request_latency_s_ema
+
+
+def test_concurrency_budget_warmup_gating():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # 4 observations (under threshold of 5) -> uses default static budget
+    for _ in range(4):
+        tracker.record_observation(10 * 1024 * 1024, 0.001)
+
+    # Median 10MB -> default budget: (100MB/s * 0.5s) // 10MB = 5 -> floor 32
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker) == 32
+
+    # 5th observation -> warm-up gate unlocks empirical EMA
+    tracker.record_observation(10 * 1024 * 1024, 0.001)
+    # Measured bandwidth is huge -> dynamic budget scales up from 32 to 500
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker) == 500
+
+
+def test_concurrency_budget_high_and_low_bandwidth_adaptation():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    # High bandwidth scenario
+    high_tracker = BandwidthTracker()
+    for _ in range(5):
+        high_tracker.record_observation(10 * 1024 * 1024, 0.002)
+    budget_high = _aggregate_concurrency_budget(1 * 1024 * 1024, tracker=high_tracker)
+    assert budget_high == 512
+
+    # Low bandwidth scenario
+    low_tracker = BandwidthTracker()
+    for _ in range(5):
+        low_tracker.record_observation(10 * 1024 * 1024, 5.0)
+    budget_low = _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=low_tracker)
+    assert budget_low == 32
+
+
+def test_environment_variable_overrides(monkeypatch):
+    from litdata.raw.dataset import (
+        _aggregate_concurrency_budget,
+        _effective_concurrency,
+    )
+
+    monkeypatch.setenv("LITDATA_ASSUMED_BANDWIDTH_BPS", str(500 * 1024 * 1024))
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", "1024")
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", "16")
+    monkeypatch.setenv("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", "256")
+
+    assert _aggregate_concurrency_budget(100_000) == 1024
+    assert _effective_concurrency(None, num_workers=1, median_file_bytes=100_000) == 256
