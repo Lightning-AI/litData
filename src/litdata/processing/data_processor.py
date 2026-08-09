@@ -1523,7 +1523,16 @@ class DataChunkRecipe(DataRecipe):
 
         merge_cache = Cache(cache_dir, chunk_bytes=1)
         node_rank = _get_node_rank()
-        merge_cache._merge_no_wait(node_rank if num_nodes > 1 else None, getattr(self, "existing_index", None))
+        # With more than one node, every node would otherwise fold the existing
+        # index into its own {node_rank}-index.json, and the final cross-node
+        # merge below then repeats those chunks once per node. Add the existing
+        # index only once, either here for the single-node case or in the final
+        # merge for the multi-node case.
+        existing_index = getattr(self, "existing_index", None)
+        merge_cache._merge_no_wait(
+            node_rank if num_nodes > 1 else None,
+            existing_index if num_nodes == 1 else None,
+        )
 
         self._merge_and_upload_keys(output_dir, cache_dir, num_nodes, node_rank)
         self._upload_index(output_dir, cache_dir, num_nodes, node_rank)
@@ -1734,7 +1743,9 @@ class DataChunkRecipe(DataRecipe):
                     shutil.copyfile(remote_filepath, node_index_filepath)
 
             merge_cache = Cache(merge_dir, chunk_bytes=1)
-            merge_cache._merge_no_wait()
+            # The per-node index files hold only their own new chunks now, so the
+            # existing index is folded in here, once, as the node files are merged.
+            merge_cache._merge_no_wait(existing_index=getattr(self, "existing_index", None))
             self._upload_index(output_dir, merge_dir, 1, None)
 
 

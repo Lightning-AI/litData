@@ -365,3 +365,58 @@ def test_writer_filled_false_during_optimize_append(tmpdir, monkeypatch):
     writer[0] = 1
     assert writer.done()
     assert os.path.isfile(os.path.join(tmpdir, "0.index.json"))
+
+
+def test_merge_multinode_append_adds_existing_index_once(tmpdir):
+    # Regression for #865: with more than one node, optimize(mode="append") must
+    # not repeat the pre-existing chunks once per node. Folding the existing
+    # index into every node's index (the old behaviour) duplicates it at the
+    # final cross-node merge; folding it in a single time at that final merge
+    # keeps it once. This mirrors what the data processor now does.
+    import shutil
+
+    from litdata.constants import _INDEX_FILENAME
+
+    config = {
+        "chunk_bytes": None,
+        "chunk_size": 1,
+        "compression": None,
+        "data_format": ["scalar"],
+        "data_spec": None,
+        "encryption": None,
+        "item_loader": "PyTreeLoader",
+    }
+
+    def make_chunk(name):
+        return {"chunk_size": 1, "column_sizes": [4], "dim": None, "filename": name}
+
+    existing_index = {"chunks": [make_chunk("A.bin"), make_chunk("B.bin")], "config": config}
+
+    def per_node_index(node_rank, new_chunk, include_existing):
+        node_dir = tmpdir.mkdir(f"node_{node_rank}_{'old' if include_existing else 'new'}")
+        with open(os.path.join(str(node_dir), f"0.{_INDEX_FILENAME}"), "w") as f:
+            json.dump({"chunks": [make_chunk(new_chunk)], "config": config}, f, sort_keys=True)
+        writer = BinaryWriter(str(node_dir), chunk_size=1)
+        writer._is_done = True
+        writer._rank = 0
+        writer._merge_no_wait(node_rank=node_rank, existing_index=existing_index if include_existing else None)
+        return os.path.join(str(node_dir), f"{node_rank}-{_INDEX_FILENAME}")
+
+    def final_merge(node_files, existing):
+        final_dir = tmpdir.mkdir(f"final_{'old' if existing else 'new'}")
+        for src in node_files:
+            shutil.copyfile(src, os.path.join(str(final_dir), os.path.basename(src)))
+        writer = BinaryWriter(str(final_dir), chunk_size=1)
+        writer._is_done = True
+        writer._rank = 0
+        writer._merge_no_wait(existing_index=existing)
+        with open(os.path.join(str(final_dir), _INDEX_FILENAME)) as f:
+            return [c["filename"] for c in json.load(f)["chunks"]]
+
+    # Old behaviour: existing index folded in per node, none at the final merge.
+    old_files = [per_node_index(0, "C.bin", True), per_node_index(1, "D.bin", True)]
+    assert final_merge(old_files, None) == ["A.bin", "B.bin", "C.bin", "A.bin", "B.bin", "D.bin"]
+
+    # Fixed behaviour: existing index folded in once, at the final merge.
+    new_files = [per_node_index(0, "C.bin", False), per_node_index(1, "D.bin", False)]
+    assert final_merge(new_files, existing_index) == ["A.bin", "B.bin", "C.bin", "D.bin"]
