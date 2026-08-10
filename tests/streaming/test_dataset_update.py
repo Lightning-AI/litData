@@ -21,6 +21,18 @@ from litdata.utilities.keys_index import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_optimizer_cache(tmpdir, monkeypatch):
+    """Keep optimize() scratch dirs unique per test (xdist-safe).
+
+    Without this, workers share ``/tmp/chunks`` and leftover ``*.bin`` /
+    ``*-index.json`` files from other tests fail ``_done`` cleanup checks and
+    can merge inconsistent configs into the dataset under test.
+    """
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", os.path.join(str(tmpdir), "opt_chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", os.path.join(str(tmpdir), "opt_data"))
+
+
 def _fn(i: int) -> dict:
     return {"id": f"item-{i}", "value": i}
 
