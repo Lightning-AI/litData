@@ -1,4 +1,4 @@
-# MultiJoinStreamingDataset
+# TablesStreamingDataset
 
 ## Product and implementation plan
 
@@ -8,7 +8,7 @@ Scope: independently versioned tables that describe the same training entity and
 
 ## Executive summary
 
-`MultiJoinStreamingDataset` is intended for datasets in which:
+`TablesStreamingDataset` is intended for datasets in which:
 
 - Several tables or modalities describe the same logical entity.
 - One or more large tables are stable and expensive to rebuild.
@@ -21,7 +21,7 @@ The central constraint cannot be removed: if tables are not joined before traini
 
 The work is split into two deliberately different phases:
 
-- **Phase V1 — strict aligned LitData chunks.** Every table is a normal optimized LitData dataset with exactly the same logical chunk boundaries, item counts, and key order. `MultiJoinStreamingDataset` validates the layout and reuses `ParallelStreamingDataset`. This minimizes new read-path code and preserves existing LitData behavior.
+- **Phase V1 — strict aligned LitData chunks.** Every table is a normal optimized LitData dataset with exactly the same logical chunk boundaries, item counts, and key order. `TablesStreamingDataset` validates the layout and reuses `ParallelStreamingDataset`. This minimizes new read-path code and preserves existing LitData behavior.
 - **Phase V2 — logical partitions with independently compacted column families.** Logical sampling buckets remain aligned, but physical files no longer need a one-to-one correspondence. Small tables can pack many logical partitions into larger Parquet or LitData objects, while large tables keep appropriately sized binary chunks. V2 introduces one shared sampler and a coordinated multi-table reader.
 
 The public read API is designed once and remains stable across both phases. V2 is primarily an internal storage and reader improvement.
@@ -36,7 +36,7 @@ flowchart LR
   activeManifest[Atomic join manifest] --> t0
   activeManifest --> t1
   activeManifest --> t2
-  t0 --> joinedReader[MultiJoinStreamingDataset]
+  t0 --> joinedReader[TablesStreamingDataset]
   t1 --> joinedReader
   t2 --> joinedReader
   joinedReader --> training[Training batches]
@@ -55,8 +55,8 @@ The current high-throughput LitData workflow materializes the complete training 
 
 The target behavior is:
 
-1. Optimize each logical table independently.
-2. Re-optimize only the table whose values or schema changed.
+1. Optimize all required tables together from one ordered input stream so chunk alignment is guaranteed.
+2. Later, update (or add) one table with `join_update_optimize`, validating against the existing chunk alignment.
 3. Atomically publish a new combination of table versions.
 4. Stream the selected versions as one training sample.
 5. Preserve deterministic shuffle, DDP sharding, DataLoader workers, prefetch, caching, and exact resume.
@@ -140,6 +140,10 @@ V1 rejects:
 
 An empty table contribution must be represented as an explicit empty value. This keeps every table positionally aligned.
 
+**Runtime rule for builders:** In V1, a table builder must return exactly one serializable Python value for each input item. Returning `None` is always rejected and is not a representation of an empty contribution. Nullable payloads use an explicit envelope such as `{"value": None}`. Zero-row payloads use `[]`, `{}`, or a typed empty array such as `np.empty((0,), dtype=np.float32)`.
+
+A builder exception aborts the whole job and prevents snapshot publication, even if other table writers already produced partial local output.
+
 V2 can add a native offset-based representation for zero-to-many rows per key, but the canonical entity key and logical bucket alignment remain mandatory.
 
 ## 5. Design goals
@@ -170,11 +174,13 @@ V2 can add a native offset-based representation for zero-to-many rows per key, b
 
 ### API quality
 
-- Write path feels like `optimize`: independent `joint_optimize(...)` calls, including multi-node jobs.
-- No long-lived writer context manager that must wrap every table build.
-- No required `key_name` / schema-field argument; keys come from `key_fn` like existing `optimize`.
-- A simple root-path read API.
-- Named table outputs rather than positional tuples.
+- Write path feels like `optimize`: one distributed `join_optimize(...)` job writes all selected tables from a single ordered input stream.
+- Single-table updates (replace or add) use `join_update_optimize(...)`, which validates against the persisted layout.
+- Public vocabulary is consistent: `TablesStreamingDataset`, `join_optimize`, `join_update_optimize`, `validate_tables_dataset`, `TableBuild`, `Tables*Error`.
+- `key_fn` always receives the original input item, never a table output.
+- No long-lived writer context manager.
+- No required `key_name` / schema-field argument.
+- A simple root-path read API with named table outputs.
 - One shared set of sampling options.
 - No need for users to configure `align_chunking`, `reorder_files`, child seeds, or child cache directories.
 - The same user-facing read API in V1 and V2.
@@ -200,113 +206,203 @@ The full baked dataset remains the recommended default when all tables normally 
 
 The API below is the target public contract. Some advanced storage arguments become effective only in V2, but normal training code does not change.
 
-The write path mirrors existing `optimize`: each table is an independent function call that can run as a local or multi-node job. There is no `MultiJoinWriter` context manager and no `key_name` argument.
+There is no `TablesWriter` context manager and no `key_name` argument.
 
-### 7.1 Build tables with `joint_optimize`
+Alignment is enforced at write time by construction for the initial build: **one** `join_optimize` job walks a single ordered `inputs` stream and writes every selected table under its own subpath. Independent per-table optimize jobs with separate input lists are rejected as the primary API because they cannot guarantee the same entity order or chunk boundaries.
+
+### 7.1 Initial build with `join_optimize`
+
+Canonical public form: a `tables` mapping of builders (or `TableBuild` configs). There is no dual `fn=` / `fns=` create API in V1.
 
 ```python
-from litdata import joint_optimize
+from litdata import TableBuild, join_optimize
 
-# Independent jobs — each call can use num_workers / num_nodes like optimize().
-# The first successful call into an empty join root creates the shared layout
-# from the ordered inputs + key_fn. Later calls must align to that layout.
-
-joint_optimize(
-    fn=build_table_0,
-    inputs=inputs_0,
-    output_dir="s3://bucket/multi-join-dataset",
-    table="table_0",
+join_optimize(
+    inputs=canonical_inputs,
+    output_dir="s3://bucket/tables-dataset",
+    key_fn=lambda item: item["entity_id"],
     chunk_size=2048,
-    key_fn=lambda sample: sample["id"],
+    tables={
+        "images": TableBuild(fn=build_images, compression="zstd"),
+        "labels": TableBuild(fn=build_labels, compression="zstd"),
+        "metadata": TableBuild(fn=build_metadata),
+    },
     num_workers=32,
     num_nodes=8,
-    compression="zstd",
-)
-
-joint_optimize(
-    fn=build_table_1,
-    inputs=inputs_1,
-    output_dir="s3://bucket/multi-join-dataset",
-    table="table_1",
-    chunk_size=2048,
-    key_fn=lambda sample: sample["id"],
-    num_workers=8,
+    snapshot="baseline",
 )
 ```
 
-`joint_optimize` accepts the same core knobs as `optimize` (`fn`, `inputs`, `output_dir`, `chunk_size`, `key_fn`, `num_workers`, `num_nodes`, `compression`, `encryption`, `storage_options`, …) plus join-specific arguments:
+Callables are accepted as shorthand and normalized to `TableBuild` internally:
 
-- `table`: logical table name under the join root (for example `"table_0"`).
-- `version`: optional immutable table-version name; defaults to an auto-generated unique version.
+```python
+tables={
+    "images": build_images,
+    "labels": build_labels,
+}
+```
+
+`join_optimize` accepts the same core knobs as `optimize` (`inputs`, `output_dir`, `chunk_size`, `key_fn`, `num_workers`, `num_nodes`, `storage_options`, …) plus:
+
+- `tables`: ordered mapping `{name: TableBuild | Callable}`. Insertion order becomes the snapshot `table_order`.
+- `version` / per-table versions: optional; default is an auto-generated unique version shared by all tables in the job, or a mapping `{table: version}`.
 - `snapshot`: optional human-readable snapshot name to publish on success.
-- `expected_snapshot`: optional concurrency guard against the currently active snapshot.
+- `expected_snapshot`: optional concurrency guard when updating an existing root.
+
+#### `key_fn` contract
+
+`key_fn(input_item)` extracts the canonical entity key from the **source input item before any table builder runs**. It is invoked exactly once per logical input entity. Table outputs are **not** required to contain the key. A later schema change may remove or rename an ID field inside a table without changing alignment behavior.
+
+#### Semantics
+
+- One distributed-capable job, same execution model as `optimize` (workers, nodes, upload, index merge).
+- For each input item, every table builder in `tables` is invoked with that same item and must return exactly one serializable non-`None` value.
+- `input_item` is shared **read-only** input. Mutating it inside a builder is unsupported behavior (later builders must not observe different data).
+- The job uses one canonical input order. All tables share entity order, global indexes, `chunk_size` boundaries, and within-chunk key order **by construction**.
+- Chunks land under `tables/{table}/{version}/` with separate `index.json` files, identical item counts per chunk index.
+- `chunk_size` is required (item count). `chunk_bytes` is rejected for join writes.
+- Root-level `compression` / `encryption` apply as defaults; per-table `TableBuild` fields override them.
+- On success the job writes the shared layout, **proves normalized entity-key uniqueness**, validates alignment metadata, and atomically publishes `join.json`.
+- Failed jobs leave the previous active snapshot unchanged. They may leave unreferenced staging objects under unique version prefixes; those are never valid without a completion marker and snapshot reference. GC removes them only after the configured safety window.
+- Initial layout creation is **conditional**. A `join_optimize` job may initialize a root only if no active manifest and no completed layout exist. The backend must use an exclusive create, generation precondition, or publisher lease. If another initializer wins, the losing job fails with `TablesCommitConflictError`.
+- Adding a table to an existing layout uses `join_update_optimize` (see 7.3).
+
+### 7.2 Why not one optimize call per table
+
+```python
+# Rejected as the primary write API
+optimize(..., inputs=inputs_0)  # into tables/table_0/...
+optimize(..., inputs=inputs_1)  # into tables/table_1/...
+```
+
+Separate input lists or separate distributed schedules can diverge in order, filtering, retries, or worker assignment. Digests can detect mismatch after the fact, but they cannot invent a shared chunk layout. V1 therefore builds alignment by writing all tables together in one `join_optimize` job.
+
+### 7.3 Update or add one table with `join_update_optimize`
+
+| Operation | Alignment property |
+|---|---|
+| `join_optimize` initial build | Guaranteed by one canonical traversal and synchronized writers |
+| `join_update_optimize` | Validated against the persisted canonical layout |
+| Future layout-driven update (post-V1) | Guaranteed by streaming persisted layout keys through `lookup_fn` |
+
+`join_update_optimize` does **not** infer or repair entity order. It validates that the provided input stream reproduces the persisted layout exactly. A key mismatch, missing entity, duplicate displacement, extra entity, or different final length fails the job before snapshot publication.
+
+```python
+from litdata import join_update_optimize
+
+join_update_optimize(
+    inputs=canonical_inputs,
+    output_dir="s3://bucket/tables-dataset",
+    table="metadata",
+    fn=build_metadata_v2,
+    key_fn=lambda item: item["entity_id"],
+    version="v2",
+    base_snapshot="baseline",
+    expected_snapshot="baseline",
+    snapshot="metadata-v2",
+    num_workers=8,
+)
+```
 
 Semantics:
 
-- Each call is a complete, distributed-capable job. Jobs do not share a process-local writer session.
-- `inputs` order is the stream / layout order. Shuffle or otherwise curate inputs before calling when source order has structure.
-- `key_fn` works like existing `optimize(..., key_fn=...)`: it extracts an opaque key from each sample for the alignment sidecar. There is no separate `key_name` schema field.
-- `chunk_size` is required (item count). `chunk_bytes` is rejected.
-- The first table that successfully initializes an empty join root writes the shared layout (ordered keys, bucket boundaries, digests).
-- Later `joint_optimize` calls for other tables must reproduce the same length, bucket sizes, and ordered-key digests.
-- On success, the job validates alignment and atomically publishes a new snapshot that includes this table version, keeping previously published sibling table versions from the prior active snapshot.
-- Failed jobs leave the previous active snapshot unchanged.
-- Rebuilding one table later is just another `joint_optimize` into a new `version=` under the same `table=`.
-
-### 7.2 Same ordered inputs across tables
-
-Every table must be optimized from inputs that follow the same entity order. Typical patterns:
+- Reads `base_snapshot` (default: the active snapshot observed at job start) and its canonical layout.
+- In V1, `base_snapshot` identifies both the input dependency set and the snapshot from which sibling table versions are inherited. When `expected_snapshot` is provided, it **must equal** `base_snapshot`. Publication succeeds only if the active snapshot still equals that value at compare-and-swap time. Differing values are rejected because it would be unclear which snapshot supplies inherited siblings, and a merge from a stale base could silently discard newer sibling updates. A stale base always raises `TablesCommitConflictError`; LitData does not perform automatic snapshot merges.
+- `key_fn` always receives the original input item (read-only).
+- Forces the layout `chunk_size` and aligned write settings.
+- Writes only `tables/{table}/{new_version}/`.
+- During the write, every work unit validates by **streaming** expected keys for its assigned contiguous global-index range (not random per-item metadata lookup):
 
 ```python
-# inputs_0 / inputs_1 are already aligned to the same entity order
-joint_optimize(fn=build_table_0, inputs=inputs_0, output_dir=root, table="table_0", chunk_size=2048, key_fn=get_id)
-joint_optimize(fn=build_table_1, inputs=inputs_1, output_dir=root, table="table_1", chunk_size=2048, key_fn=get_id)
+for global_index, expected_key, input_item in zip(
+    assigned_positions,
+    layout.iter_keys(start=range_start, stop=range_stop),
+    assigned_inputs,
+):
+    actual_key = key_fn(input_item)
+    if actual_key != expected_key:
+        raise TablesAlignmentError(
+            table=table,
+            global_index=global_index,
+            expected_key=expected_key,
+            actual_key=actual_key,
+        )
 ```
 
-Contract:
+The conceptual `layout.key_at(global_index)` idea is implemented as sequential `layout.iter_keys(start, stop)` over each assigned range. Implementations must not perform one remote random key-index lookup per input item.
 
-- Do not silently reorder inputs inside `joint_optimize`.
-- A key mismatch reports table, global index, expected key, and actual key.
-- Users may prepare inputs by joining against the published layout key store and sorting by `global_index`.
-- Parallel first-time builds of multiple tables into an empty root are unsafe without a shared layout. Create the layout with one `joint_optimize` (or a small driver table) first, then launch sibling table jobs.
+- At stream end for each range / overall: fail if inputs ended early (missing expected position) or continued past layout length (extra input).
+- After merge, also verify length, chunk counts, per-chunk item counts, and ordered-key digests (compact completion / deep-validation metadata).
+- Uniqueness is **not** recomputed on update/add if the base layout was already validated as unique; sequential reproduction is sufficient.
+- On success, publishes a new snapshot that inherits sibling versions from `base_snapshot` and points `table` at the new version.
+- Reject overwrite of an existing published version path before writing.
+- Reject `fn` returning `None` immediately.
+- On any failure, leave no completion marker and do not advance `join.json`. Failed jobs may leave unreferenced staging objects under the unique version prefix; they are unreachable without a completion marker and snapshot reference.
 
-### 7.3 Re-optimize one table after a schema change
+#### Adding a new table (supported in V1)
 
 ```python
-from litdata import joint_optimize
-
-joint_optimize(
-    fn=build_table_1_v2,
-    inputs=inputs_1,
-    output_dir="s3://bucket/multi-join-dataset",
-    table="table_1",
-    version="v2",
-    chunk_size=2048,
-    key_fn=lambda sample: sample["id"],
-    num_workers=8,
-    expected_snapshot="snap-baseline",
-    snapshot="snap-table1-v2",
+join_update_optimize(
+    inputs=canonical_inputs,
+    output_dir=root,
+    table="new_table",
+    fn=build_new_table,
+    key_fn=lambda item: item["entity_id"],
+    base_snapshot="baseline",
+    expected_snapshot="baseline",
+    snapshot="snap-add-new-table",
 )
 ```
 
-Only the new `table_1` version prefix and a new snapshot document are written. Other tables keep their previously published versions.
+Adding a table creates a new snapshot containing inherited sibling versions plus the new table. Existing snapshots remain valid and do **not** retroactively gain the table. A reader requesting a table absent from its pinned snapshot raises during construction (`TablesManifestError`).
 
-`expected_snapshot` / `snapshot` are **human-readable names** (for example `"snap-baseline"`), not hashes of chunk bytes. `expected_snapshot` is an optimistic concurrency guard: if another publisher advances the active snapshot first, this job fails rather than overwriting that change. LitData does not compute content hashes of chunk payloads to form snapshot IDs.
+`table_order` for the new snapshot is the previous order with the new table appended.
+
+#### Future layout-driven update (out of scope for V1)
+
+```python
+# Post-V1 sketch — alignment by construction for updates
+join_update_optimize(
+    output_dir=root,
+    base_snapshot="baseline",
+    table="metadata",
+    lookup_fn=lookup_entity,  # key -> source payload
+    fn=build_metadata_v2,
+    version="v2",
+)
+
+# layout position i -> key ki -> lookup_fn(ki) -> table builder
+```
+
+V1 still requires users to supply `inputs` in layout order. Documenting this future mode clarifies the long-term path without expanding V1 scope.
+
+`expected_snapshot` / `snapshot` / `base_snapshot` are **human-readable names**, not hashes of chunk bytes.
+
+#### Concurrency example
+
+```python
+# Valid: base and expected are the same parent
+join_update_optimize(..., base_snapshot="baseline", expected_snapshot="baseline", ...)
+
+# Rejected in V1: unclear inheritance / possible silent sibling loss
+join_update_optimize(..., base_snapshot="baseline", expected_snapshot="metadata-v2", ...)
+```
 
 ### 7.4 Stream the active snapshot
 
 ```python
-from litdata import MultiJoinStreamingDataset, StreamingDataLoader
+from litdata import TablesStreamingDataset, StreamingDataLoader
 
-dataset = MultiJoinStreamingDataset(
-    "s3://bucket/multi-join-dataset",
-    tables=("table_0", "table_1"),
+dataset = TablesStreamingDataset(
+    "s3://bucket/tables-dataset",
+    tables=("images", "labels", "metadata"),
     shuffle=True,
     seed=42,
     drop_last=True,
     transform=lambda parts: {
-        **parts["table_0"],
-        **parts["table_1"],
+        **parts["images"],
+        **parts["labels"],
+        **parts["metadata"],
     },
     max_cache_size="200GB",
     max_pre_download=4,
@@ -323,8 +419,9 @@ Default output without `transform`:
 
 ```python
 {
-    "table_0": <table_0 sample>,
-    "table_1": <table_1 sample>,
+    "images": <images sample>,
+    "labels": <labels sample>,
+    "metadata": <metadata sample>,
 }
 ```
 
@@ -333,10 +430,10 @@ The table namespace is preserved by default. LitData does not implicitly merge d
 ### 7.5 Pin an exact snapshot
 
 ```python
-dataset = MultiJoinStreamingDataset(
-    "s3://bucket/multi-join-dataset",
-    snapshot="snap-baseline",
-    tables=("table_0", "table_1"),
+dataset = TablesStreamingDataset(
+    "s3://bucket/tables-dataset",
+    snapshot="baseline",
+    tables=("images", "labels", "metadata"),
     shuffle=True,
     seed=42,
 )
@@ -354,9 +451,9 @@ dataset.tables
 ### 7.6 Select only required tables
 
 ```python
-dataset = MultiJoinStreamingDataset(
+dataset = TablesStreamingDataset(
     root,
-    tables=("table_0", "table_1"),
+    tables=("images", "metadata"),
 )
 ```
 
@@ -369,12 +466,12 @@ Unknown, duplicated, or inactive table names raise a clear error during construc
 Sampling options cannot vary by table. Decoding-specific options may:
 
 ```python
-dataset = MultiJoinStreamingDataset(
+dataset = TablesStreamingDataset(
     root,
-    tables=("table_0", "table_1"),
+    tables=("images", "metadata"),
     table_options={
-        "table_0": {"encryption": table_0_key},
-        "table_1": {"serializers": custom_serializers},
+        "images": {"encryption": images_key},
+        "metadata": {"serializers": custom_serializers},
     },
 )
 ```
@@ -386,18 +483,19 @@ The following are always shared and cannot appear in `table_options`:
 - `drop_last`
 - `subsample`
 - epoch
-- number of workers
-- batch size
+- number of DataLoader workers
 - distributed rank and world size
+
+Batch size is owned by `StreamingDataLoader`, not by each child `StreamingDataset`. The invariant is that all children observe the same DataLoader / worker topology and therefore the same batch semantics.
 
 ### 7.8 Validate without training
 
 ```python
-from litdata import validate_multi_join
+from litdata import validate_tables_dataset
 
-report = validate_multi_join(
-    "s3://bucket/multi-join-dataset",
-    snapshot="snap-baseline",
+report = validate_tables_dataset(
+    "s3://bucket/tables-dataset",
+    snapshot="baseline",
     deep=True,
 )
 
@@ -407,9 +505,9 @@ report.raise_for_errors()
 Validation levels:
 
 - Construction always performs mandatory constant-size metadata validation.
-- `deep=False` verifies manifests, table indexes, counts, layout IDs, and alignment roots.
+- `deep=False` verifies manifests, table indexes, counts, layout IDs, `table_order`, and alignment roots.
 - `deep=True` streams partition alignment metadata and verifies every ordered-key digest.
-- Writer / `joint_optimize` success always performs the validation required to prove a newly published table matches the canonical layout.
+- `join_optimize` / `join_update_optimize` success always performs the validation required to prove published table(s) match the canonical layout.
 
 ### 7.9 Keyed debugging access
 
@@ -426,11 +524,11 @@ For integer entity keys, `get_by_key()` remains explicit so integer positional i
 The root is a versioned store:
 
 ```text
-multi-join-dataset/
+tables-dataset/
   join.json
   snapshots/
-    snap-baseline.json
-    snap-table1-v2.json
+    baseline.json
+    metadata-v2.json
   layouts/
     layout-entity-v1/
       index.json
@@ -439,13 +537,19 @@ multi-join-dataset/
         shard-00001.parquet
       partitions.parquet
   tables/
-    table_0/
+    images/
       v1/
         index.json
         alignment.parquet
         chunk-0-0.bin
         ...
-    table_1/
+    labels/
+      v1/
+        index.json
+        alignment.parquet
+        chunk-0-0.bin
+        ...
+    metadata/
       v1/
         index.json
         alignment.parquet
@@ -464,9 +568,9 @@ multi-join-dataset/
 
 ```json
 {
-  "format": "litdata-multi-join",
+  "format": "litdata-tables-dataset",
   "format_version": 1,
-  "active_snapshot": "snap-table1-v2",
+  "active_snapshot": "metadata-v2",
   "updated_at": "2026-08-17T10:42:11Z"
 }
 ```
@@ -475,10 +579,10 @@ multi-join-dataset/
 
 ```json
 {
-  "format": "litdata-multi-join-snapshot",
+  "format": "litdata-tables-snapshot",
   "format_version": 1,
-  "snapshot_id": "snap-table1-v2",
-  "parent_snapshot_id": "snap-baseline",
+  "snapshot_id": "metadata-v2",
+  "parent_snapshot_id": "baseline",
   "created_at": "2026-08-17T10:42:10Z",
   "layout": {
     "id": "layout-entity-v1",
@@ -489,18 +593,27 @@ multi-join-dataset/
     "num_chunks": 488282,
     "alignment_root": "blake2b-256:..."
   },
+  "table_order": ["images", "labels", "metadata"],
   "tables": {
-    "table_0": {
+    "images": {
       "version": "v1",
-      "path": "tables/table_0/v1",
+      "path": "tables/images/v1",
       "format": "litdata",
       "layout_id": "layout-entity-v1",
       "alignment_root": "blake2b-256:...",
       "schema_fingerprint": "sha256:..."
     },
-    "table_1": {
+    "labels": {
+      "version": "v1",
+      "path": "tables/labels/v1",
+      "format": "litdata",
+      "layout_id": "layout-entity-v1",
+      "alignment_root": "blake2b-256:...",
+      "schema_fingerprint": "sha256:..."
+    },
+    "metadata": {
       "version": "v2",
-      "path": "tables/table_1/v2",
+      "path": "tables/metadata/v2",
       "format": "litdata",
       "layout_id": "layout-entity-v1",
       "alignment_root": "blake2b-256:...",
@@ -510,12 +623,28 @@ multi-join-dataset/
 }
 ```
 
+`table_order` is explicit and immutable within a snapshot. JSON object key order is not relied upon for:
+
+- `ParallelStreamingDataset` child ordering;
+- state-dict compatibility;
+- transform / diagnostics determinism;
+- manifest serialization stability.
+
+Rules:
+
+- Snapshot `table_order` lists every active table exactly once.
+- Dataset `tables=(...)` is an ordered selection from that set.
+- State dict records the requested table order; reordering selected tables is state-incompatible unless the caller explicitly starts a new data epoch.
+- Default named output preserves the requested selection order.
+- Adding a table appends it to `table_order` in the new snapshot.
+
 All paths are relative to the root in V1. Manifest parsing rejects:
 
 - Absolute paths.
 - Parent traversal.
 - A different URI scheme or bucket.
 - Duplicate normalized table names.
+- Missing / inconsistent `table_order`.
 - Unknown format versions.
 
 This keeps one snapshot within one trust and credential boundary.
@@ -537,11 +666,41 @@ The key store must be sharded and streamed. Creating or validating a billion-row
 
 The canonical key order, rather than lexical key order, defines training positions. Key-index shards may be physically sorted or hash-partitioned for lookup as long as the stored `global_index`, `chunk_index`, and `chunk_offset` preserve the canonical order.
 
+The layout key store must expose efficient sequential range iteration for update validation:
+
+```python
+layout.iter_keys(start: int, stop: int)  # contiguous global indexes
+```
+
+`get_by_key()` may use a separately optimized key-sorted or hash-partitioned index. That debugging path is distinct from sequential update validation.
+
+### 8.3.1 Initial key uniqueness (required before first publish)
+
+Encounter-order recording alone does not prove uniqueness. An accidental duplicate in the initial layout would still be reproducible by later updates and would match digests.
+
+Before an initial snapshot is published, the canonical layout builder must prove that every normalized entity key occurs **exactly once**. At billion-row scale this cannot use an in-memory Python set. Suitable approaches:
+
+1. **External sort validation** — emit `(normalized_key, global_index)` records, externally sort by key, detect adjacent equals, report both positions.
+2. **Hash partition plus local sort** — hash-partition keys into bounded shards, sort each shard, detect duplicates within each shard.
+3. **Existing scalable key-index infrastructure** — if LitData already has a distributed sorted key index, use it as the uniqueness authority.
+
+Canonical training order remains encounter order. Sorting is only for uniqueness verification and keyed lookup index construction.
+
+```text
+TablesAlignmentError:
+  duplicate entity key: "entity-123"
+  first_global_index: 1024
+  duplicate_global_index: 8439921
+  layout_id: layout-entity-v1
+```
+
+Update and add-table jobs do not recompute uniqueness when the base layout was already validated.
+
 ### 8.4 Identifiers vs digests
 
 Three different identifiers appear in the format. They must not be confused:
 
-- **Snapshot ID** (for example `snap-baseline`): a human-readable name for one published combination of table versions. Assigned when a `joint_optimize` job publishes successfully. It is **not** a hash of chunk bytes.
+- **Snapshot ID** (for example `snap-baseline`): a human-readable name for one published combination of table versions. Assigned when a `join_optimize` or `join_update_optimize` job publishes successfully (create, replace, or add-table). It is **not** a hash of chunk bytes.
 - **Table version** (for example `v1`, `v2`): a human-readable name for one immutable build of a single table.
 - **Ordered-key digest / alignment root**: a compact fingerprint of the **canonical entity-key order** inside each logical bucket. Used only to prove tables are aligned. LitData does **not** compute content hashes of chunk payloads for this purpose.
 
@@ -569,13 +728,13 @@ Every table version contains an `alignment.parquet` sidecar with:
 - `num_items`
 - `ordered_key_digest`
 
-The table `index.json` gains a backward-compatible `multi_join` section:
+The table `index.json` gains a backward-compatible `tables_dataset` section:
 
 ```json
 {
-  "multi_join": {
+  "tables_dataset": {
     "format_version": 1,
-    "table": "table_1",
+    "table": "metadata",
     "table_version": "v2",
     "layout_id": "layout-entity-v1",
     "length": 1000000000,
@@ -591,22 +750,22 @@ Per-chunk digests live in compact Parquet rather than expanding an already large
 
 ### 9.1 Publication protocol
 
-Each successful `joint_optimize(...)` publishes as part of the same job (no separate writer `commit()`):
+Each successful `join_optimize` / `join_update_optimize` publishes as part of the same job (no separate writer `commit()`):
 
 01. Read and retain the expected active snapshot when `expected_snapshot` is set.
-02. Write new table data to a unique immutable version path.
+02. Write new table data to unique immutable version path(s) under `tables/{table}/{version}/`.
 03. Upload all chunk objects (existing multi-worker / multi-node optimize upload path).
-04. Upload table alignment metadata.
-05. Upload the table `index.json` and completion marker last.
-06. If this is the first table in an empty join root, publish the shared layout from the ordered `key_fn` stream.
-07. Validate the table against the canonical layout.
-08. Write a new immutable snapshot document that merges this table version with sibling versions from the previous active snapshot.
+04. Upload table alignment metadata for every rewritten table.
+05. Upload each rewritten table `index.json` and completion marker last.
+06. For an initial `join_optimize`, publish the shared layout from the single ordered `key_fn` stream over canonical inputs.
+07. Validate rewritten table(s) against the layout (position checks during update; counts + per-chunk ordered-key digests at completion).
+08. Write a new immutable snapshot document: the base snapshot's table set plus newly written or replaced table versions (`table_order` preserved; new tables appended).
 09. Recheck the active snapshot or storage generation.
 10. Atomically replace `join.json` with the new active snapshot.
 
-If any operation fails before step 10, the active snapshot remains unchanged. Unreferenced objects are safe to garbage-collect later.
+If any operation fails before step 10, the active snapshot remains unchanged. Failed jobs may leave unreferenced staging objects under unique version prefixes; they are never considered valid without a completion marker and snapshot reference. Garbage collection removes them only after the configured safety window.
 
-Because each `joint_optimize` is an independent distributed job, publication must be safe across machines and processes. There is no process-local `MultiJoinWriter` session holding uncommitted state.
+Jobs remain distributed-capable like `optimize`. There is no process-local writer session holding uncommitted state across tables outside the single job.
 
 ### 9.2 Backend behavior
 
@@ -619,7 +778,7 @@ The storage abstraction must expose the precondition required for `expected_snap
 
 ### 9.3 Reader behavior
 
-`MultiJoinStreamingDataset` resolves the active snapshot exactly once during construction. It never polls `join.json` during iteration.
+`TablesStreamingDataset` resolves the active snapshot exactly once during construction. It never polls `join.json` during iteration.
 
 Therefore:
 
@@ -641,7 +800,7 @@ In V1:
 - One physical LitData chunk is one logical sampling bucket.
 - Corresponding table chunks contain the same keys in the same order.
 - Chunk byte sizes, schemas, compression, serializers, and payload types may differ.
-- `MultiJoinStreamingDataset` is a validated named wrapper around `ParallelStreamingDataset`.
+- `TablesStreamingDataset` is a validated named wrapper around `ParallelStreamingDataset`.
 
 ### 10.2 V1 hard invariants
 
@@ -666,38 +825,95 @@ For the read configuration:
 4. All children receive the same `drop_last`.
 5. All children receive the same `subsample`.
 6. All children see the same distributed environment.
-7. All children receive the same DataLoader worker count and batch size.
+7. All children observe the same DataLoader worker topology and batch semantics (batch size is owned by the DataLoader).
 8. A loaded state dict references the same snapshot and ordered table list.
 
 ### 10.3 V1 write path
 
-`joint_optimize(...)` wraps the existing optimize pipeline with required safe settings:
+#### Canonical input planning (required capability)
 
-- `chunk_size` is required and becomes the shared logical bucket size.
-- `align_chunking=True`.
-- `reorder_files=False`.
-- `keep_data_ordered=True`.
-- Static ordered inputs.
-- One output sample per input.
-- `key_fn` required so alignment digests can be computed (same mechanism as `optimize(..., key_fn=...)`).
-- Output lands under `tables/{table}/{version}/` inside the join root rather than a standalone dataset root.
+The indexing invariant below is not implementable for an arbitrary Python generator without materializing or indexing the input stream. V1 therefore requires inputs that support deterministic planning:
 
-The following are hidden or rejected:
+1. A deterministic **indexable sequence** (list-like: `__len__` + positional access); or
+2. A deterministic **shard manifest** whose shard order and per-shard item order are fixed, from which LitData can derive canonical global-index ranges before workers execute; or
+3. A previously materialized **canonical input plan** produced by LitData.
+
+**Policy:** distributed `join_optimize` / `join_update_optimize` requires deterministic static inputs. Arbitrary generators / streaming iterables are rejected unless running locally with `num_workers=1` and `num_nodes=1`.
+
+Optional helpers (same semantics):
+
+```python
+plan = create_canonical_input_plan(
+    inputs=inputs,
+    key_fn=lambda item: item["entity_id"],
+    output_dir=root,
+)
+join_optimize(inputs=inputs, input_plan=plan, ...)
+```
+
+Without this contract, preassigning `work unit 0 -> positions 0..16383` remains aspirational rather than enforceable.
+
+#### Canonical distributed indexing (hard invariant)
+
+Before table builders execute, `join_optimize` / `join_update_optimize` deterministically assigns **canonical global-index ranges and complete logical chunks** to work units from the input plan. A retry retains the same assigned range. Worker completion order never determines canonical layout order or chunk numbering.
+
+```text
+canonical input positions:
+  work unit 0 -> chunks 0..7
+  work unit 1 -> chunks 8..15
+  work unit 2 -> chunks 16..23
+```
+
+Not:
+
+```text
+worker 0 -> whichever inputs it happens to receive next
+worker 1 -> whichever inputs it happens to receive next
+```
+
+Each distributed work unit owns fixed ranges of global positions. Within a range, the worker invokes every selected table builder for each input item and writes each table contribution at the same logical position. Outputs are merged by canonical chunk index, never task completion order.
+
+V1 must not rely on workers independently calling `enumerate(inputs)`, queue scheduling, task stealing, shard-discovery order, or completion order to define layout positions.
+
+#### `join_optimize` (initial multi-table build)
+
+One optimize-style job opens one writer per table under `tables/{table}/{version}/` and advances them together:
+
+- Deterministic partition of planned canonical input positions into complete chunk ranges.
+- Shared `chunk_size` flush points: when the item count hits `chunk_size`, every table writer closes its current chunk.
+- Shared `key_fn(input_item)` stream recorded once into the layout.
+- Scalable uniqueness validation before first publish (see 8.3.1).
+- `align_chunking=True`, `reorder_files=False`, `keep_data_ordered=True`.
+- `num_nodes` / Studio multi-node execution works like `optimize`.
+- Conditional root initialization (exclusive create / lease / generation precondition).
+
+Because chunk boundaries and indexes are assigned before builders run, tables cannot drift.
+
+#### `join_update_optimize` (single-table rewrite or add)
+
+A later job rewrites or adds one table subpath:
+
+- Loads the existing layout's length, `chunk_size`, and alignment metadata.
+- Uses the same canonical range assignment model as create.
+- Streams `layout.iter_keys(start, stop)` for each assigned range and compares against `key_fn(input_item)` sequentially (fail immediately on first mismatch).
+- Writes `tables/{table}/{new_version}/` with the same chunk item counts.
+- Rejects the publish if any position, digest, or length differs from the layout.
+- Does not recompute global uniqueness against the base layout.
+
+This is how a schema change on one table avoids rewriting siblings while still keeping native bucket sampling. Adding a table uses the same validation path and snapshot-merge publication.
+
+#### Rejected / hidden settings
 
 - `chunk_bytes`
-- `weights`
-- shared dynamic work queue
-- `keep_data_ordered=False`
-- `reorder_files=True`
-- filtering with `None`
-- variable-yield generators
-- append into an existing table version
-- overwrite of a published table version
+- Independent per-table input lists as the primary create API
+- Dual create APIs (`fn` returning a mapping **and** `fns=...`) — V1 uses only `tables={...}`
+- Distributed jobs over arbitrary generators / non-plannable streaming iterables
+- `weights` / shared dynamic work queues that reorder items
+- `keep_data_ordered=False`, `reorder_files=True`
+- filtering / variable-yield generators / builders returning `None`
+- append into an existing table version / overwrite of a published version
 - a `key_name` / schema-field argument
-
-`align_chunking=True` is important because it makes logical chunk boundaries independent of the number of optimize workers or nodes. Workers receive complete item-count chunks, and rank-index merge order reconstructs the canonical sequence.
-
-A small table may therefore be rebuilt with 8 workers while a large table was originally built with 256 workers, provided both consume the same canonical ordered inputs and logical `chunk_size`. Because each call is a normal optimize-style job, `num_nodes` / Studio multi-node execution works the same way as `optimize`.
+- `base_snapshot != expected_snapshot` when both are set
 
 ### 10.4 V1 read path
 
@@ -719,7 +935,7 @@ Iteration:
 3. Existing in-chunk shuffle computes the same item permutation.
 4. Each child `BinaryReader` prefetches its corresponding chunks.
 5. `ParallelStreamingDataset` pulls one aligned value from each child.
-6. `MultiJoinStreamingDataset` creates the named table mapping.
+6. `TablesStreamingDataset` creates the named table mapping.
 7. The optional transform creates the final training sample.
 
 No key lookup occurs on this path.
@@ -784,7 +1000,7 @@ cache/
 
 This prevents same-named LitData chunk files from different tables from colliding.
 
-`max_cache_size` is defined as the aggregate user budget. V1 approximates this by assigning per-table budgets in proportion to average chunk bytes, with a documented minimum and an optional per-table override.
+In V1, `max_cache_size` is an **aggregate target** rather than a strict global limit. The wrapper derives per-table child budgets from table chunk-size estimates. Temporary overage is possible because existing child readers retain independent prefetch, refcount, and eviction behavior. V2 introduces strict shared aggregate cache ownership.
 
 Peak in-flight storage is approximately:
 
@@ -814,11 +1030,11 @@ These limitations are the primary motivation for V2.
 
 Introduce specific public exceptions:
 
-- `MultiJoinError`
-- `MultiJoinManifestError`
-- `MultiJoinAlignmentError`
-- `MultiJoinSnapshotMismatchError`
-- `MultiJoinCommitConflictError`
+- `TablesDatasetError`
+- `TablesManifestError`
+- `TablesAlignmentError`
+- `TablesSnapshotMismatchError`
+- `TablesCommitConflictError`
 
 An alignment error includes:
 
@@ -849,29 +1065,34 @@ Do not add a heavy schema dependency solely for these small metadata models.
 
 #### Write API
 
-Add `joint_optimize` in `src/litdata/processing/functions.py` (or a thin wrapper module re-exported from `__init__.py`):
+Add `join_optimize`, `join_update_optimize`, and `TableBuild` in `src/litdata/processing/functions.py` (re-exported from `__init__.py`):
 
 - Same distributed execution path as `optimize` (`DataProcessor`, `num_nodes`, uploaders, index merge).
-- Extra args: `table`, optional `version`, `snapshot`, `expected_snapshot`.
+- `join_optimize`: `tables={name: TableBuild|callable}`, deterministic canonical chunk-range assignment, N synchronized writers, shared layout publish.
+- `join_update_optimize`: one table writer (replace or add), position-by-position layout key checks, digest checks, snapshot merge publish.
 - Force aligned write settings listed above.
-- After merge, validate against the join layout and publish/update the snapshot atomically.
-- No `MultiJoinWriter` context manager and no process-local uncommitted session.
+- No writer context manager.
 
 Extend the optimize internals where necessary to:
 
-- Stream ordered `(global_index, key)` metadata from `key_fn`.
-- Compute per-chunk key digests.
-- Avoid materializing all keys during alignment generation.
-- Attach the backward-compatible `multi_join` section to `index.json`.
-- Create the shared layout on first publish into an empty join root.
+- Assign canonical global-index / chunk ranges to work units before builders run; retries keep the same ranges; merge by chunk index.
+- Fan out one input item to multiple table caches / writers.
+- Synchronize chunk closes across table writers on item-count boundaries.
+- Call `key_fn` once per input item before builders; stream ordered `(global_index, key)` into the layout.
+- On update, compare keys at every global index and fail immediately on mismatch.
+- Attach the backward-compatible `tables_dataset` section to each table `index.json`.
+- Create the shared layout during the initial `join_optimize`.
+
+Public modules may keep internal filenames such as `multi_join.py` initially; public names use the tables vocabulary.
 
 Likely integration points:
 
 - `src/litdata/processing/functions.py`
 - `src/litdata/processing/data_processor.py`
 - `src/litdata/streaming/writer.py`
+- `src/litdata/streaming/cache.py`
 - `src/litdata/utilities/keys_index.py`
-- `src/litdata/utilities/multi_join.py`
+- `src/litdata/utilities/multi_join.py` (internal; public API is tables-named)
 
 #### Read API
 
@@ -928,7 +1149,7 @@ Cover:
 - Full and partial final chunks.
 - Different table payload byte sizes.
 - Different schemas and serializers.
-- Different compression settings.
+- Different compression settings via `TableBuild`.
 - Different optimize worker counts.
 - Different optimize node counts.
 - Stable boundaries with `align_chunking=True`.
@@ -936,7 +1157,7 @@ Cover:
 - Missing key.
 - Duplicate key.
 - Extra key.
-- `fn` returning `None`.
+- Builder returning `None`.
 - Variable-yield generator rejection.
 - Corrupt layout ID.
 - Corrupt per-chunk digest.
@@ -944,6 +1165,32 @@ Cover:
 - Incomplete table version.
 - Manifest path traversal.
 - Unsupported manifest format version.
+- Add-table snapshot merge; old snapshot cannot select the new table.
+- Explicit `table_order` vs selection order / state incompatibility.
+- Initial duplicate key detection (external-sort / hash-partition path).
+- Distributed rejection of non-plannable generators.
+- `base_snapshot != expected_snapshot` rejection.
+- Concurrent initializer conflict.
+
+Deterministic distributed write ordering:
+
+- Workers complete canonical chunks in reverse order.
+- A failed chunk is retried after later chunks complete.
+- Different node counts produce identical layout digest and aligned chunk numbering.
+- Worker assignment differs between create and update jobs.
+- Source shard listing order differs but explicit canonical input position assignment remains stable.
+
+Early update validation:
+
+- First key mismatches at global index 0.
+- Key mismatches at a chunk boundary.
+- Key mismatches in the final partial chunk.
+- Input ends before layout end.
+- Input has one extra entity after layout end.
+- Repeated key appears where a later canonical key is expected.
+- Update builder emits `None`.
+- Update builder raises midway through a chunk.
+- Failure leaves no completion marker and no active-manifest change.
 
 Read-path matrix:
 
@@ -969,7 +1216,7 @@ Snapshot tests:
 - A reader opened after commit sees the new snapshot.
 - `table_0` objects are not rewritten by a `table_1`-only update.
 - Rollback activates the previous immutable snapshot.
-- Concurrent stale `joint_optimize` publish fails.
+- Concurrent stale `join_optimize` / `join_update_optimize` publish fails.
 - Failure before active-manifest publication leaves the old snapshot active.
 
 Remote tests:
@@ -1011,8 +1258,8 @@ No production throughput claim should be made before this benchmark runs on a re
 
 V1 is complete when:
 
-1. A two-table and a many-table dataset can be created through independent `joint_optimize` jobs.
-2. Re-optimizing one table does not write under unchanged table-version prefixes.
+1. A two-table and a many-table dataset can be created through one `join_optimize` job.
+2. Updating one table with `join_update_optimize` (or adding a table) does not write under unchanged sibling table-version prefixes.
 3. A new table snapshot is atomically activated.
 4. Old readers continue without observing mixed versions.
 5. Every tested shuffle, worker, DDP, and resume configuration preserves key alignment.
@@ -1055,7 +1302,7 @@ V2 allows many small-table buckets to be packed into one appropriately sized obj
 ### 11.3 V2 storage model
 
 ```text
-multi-join-dataset/
+tables-dataset/
   join.json
   snapshots/
   layouts/
@@ -1128,9 +1375,9 @@ V2 replaces the V1 `ParallelStreamingDataset` composition internally with a shar
 
 Potential internal components:
 
-- `MultiJoinChunksConfig`
-- `MultiJoinShuffle`
-- `MultiJoinReader`
+- `TablesChunksConfig`
+- `TablesShuffle`
+- `TablesReader`
 - `PrepareJoinPartitionsThread`
 - `ColumnFamilyLoader`
 - `LitDataColumnFamilyLoader`
@@ -1152,47 +1399,41 @@ The shared reader owns one aggregate cache budget:
 
 This eliminates V1’s approximate per-child budget split.
 
-### 11.7 V2 `joint_optimize` storage extension
+### 11.7 V2 storage extension on `join_optimize` / `join_update_optimize`
 
-`joint_optimize` gains optional per-table storage configuration:
+Per-table physical packing lives on `TableBuild` / update kwargs while the logical layout stays shared:
 
 ```python
-from litdata import joint_optimize, TableStorage
+from litdata import TableBuild, join_optimize, join_update_optimize, TableStorage
 
-joint_optimize(
-    fn=build_table_1_v3,
-    inputs=inputs_1,
+join_optimize(
+    inputs=inputs,
     output_dir=root,
-    table="table_1",
+    key_fn=lambda item: item["entity_id"],
     chunk_size=2048,
-    key_fn=get_id,
-    storage=TableStorage(
-        format="parquet",
-        target_chunk_bytes="128MB",
-        pack_logical_chunks=True,
-    ),
+    tables={
+        "images": TableBuild(
+            fn=build_images,
+            storage=TableStorage(format="litdata", target_chunk_bytes="256MB", pack_logical_chunks=False),
+        ),
+        "metadata": TableBuild(
+            fn=build_metadata,
+            storage=TableStorage(format="parquet", target_chunk_bytes="128MB", pack_logical_chunks=True),
+        ),
+    },
+)
+
+join_update_optimize(
+    inputs=inputs,
+    output_dir=root,
+    table="metadata",
+    fn=build_metadata_v3,
+    key_fn=lambda item: item["entity_id"],
+    storage=TableStorage(format="parquet", target_chunk_bytes="128MB", pack_logical_chunks=True),
 )
 ```
 
-Large table (`table_0`):
-
-```python
-joint_optimize(
-    fn=build_table_0,
-    inputs=inputs_0,
-    output_dir=root,
-    table="table_0",
-    chunk_size=2048,
-    key_fn=get_id,
-    storage=TableStorage(
-        format="litdata",
-        target_chunk_bytes="256MB",
-        pack_logical_chunks=False,
-    ),
-)
-```
-
-The normal `MultiJoinStreamingDataset` construction remains unchanged.
+The normal `TablesStreamingDataset` construction remains unchanged.
 
 ### 11.8 V2 variable-cardinality column families
 
@@ -1338,21 +1579,20 @@ V2 does not accept arbitrary unrelated table sharding and repair it with per-sam
 
 ### One-time migration
 
-01. Choose the entity key extraction (`key_fn`).
-02. Produce unique ordered inputs for every table (same entity order).
-03. Intentionally choose that training order before the first `joint_optimize`.
+01. Choose `key_fn` over the **source input item** (`entity_id` or equivalent).
+02. Build one ordered `inputs` stream that can feed every table builder.
+03. Intentionally shuffle / curate that order before `join_optimize` when source order has structure.
 04. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
-05. Run `joint_optimize` for the first / driver table to create the join root and layout.
-06. Run independent `joint_optimize` jobs for the remaining tables (local or multi-node).
-07. Validate the published snapshot.
-08. Benchmark against the current baked dataset.
+05. Run one `join_optimize` job with `tables={name: TableBuild(...)}` (local or multi-node).
+06. Validate the published snapshot with `validate_tables_dataset`.
+07. Benchmark against the current baked dataset.
 
-### Small-table schema update
+### Small-table schema update or add-table
 
 01. Keep existing sibling table versions as-is.
-02. Run `joint_optimize(..., table=..., version=..., expected_snapshot=...)` for the changed table only.
+02. Run `join_update_optimize(..., table=..., version=..., base_snapshot=..., expected_snapshot=...)` with inputs in layout order and `key_fn(input_item)` checks.
 03. Start new training jobs on the newly published snapshot.
-04. Leave existing jobs pinned to their original snapshot.
+04. Leave existing jobs pinned to their original snapshot (they cannot see newly added tables).
 
 ### Rollback
 
@@ -1387,7 +1627,7 @@ A future append-only layout extension could preserve complete existing buckets a
 
 Initial behavior:
 
-- Successful `joint_optimize` jobs never delete previous table versions.
+- Successful `join_optimize` / `join_update_optimize` jobs never delete previous table versions.
 - Rollback remains possible while snapshots and versions are retained.
 - Failed staging outputs are recorded as unreachable.
 
@@ -1399,7 +1639,7 @@ Later garbage collection:
 4. Delete only unreferenced immutable prefixes.
 5. Support dry-run output before deletion.
 
-Garbage collection is never part of `joint_optimize` publication.
+Garbage collection is never part of `join_optimize` / `join_update_optimize` publication.
 
 ### Observability
 
@@ -1448,20 +1688,21 @@ Risk: independent V1 child readers each reserve and prefetch data.
 Mitigation:
 
 - Namespace caches.
-- Interpret the public cache budget as aggregate.
+- Treat the public cache budget as an aggregate target in V1; strict shared ownership is V2.
 - Allocate proportional child budgets.
 - Move to one shared cache coordinator in V2.
 
 ### Concurrent publisher race
 
-Risk: two updates overwrite each other’s active snapshot.
+Risk: two updates overwrite each other’s active snapshot, or two initializers create different layouts.
 
 Mitigation:
 
-- `expected_snapshot`.
-- Conditional object-store publication.
+- `base_snapshot == expected_snapshot` in V1 (no automatic sibling merge).
+- Conditional object-store publication / CAS.
+- Exclusive create or lease for first layout initialization.
 - Immutable snapshots.
-- Explicit commit-conflict error.
+- Explicit `TablesCommitConflictError`.
 
 ### Metadata size at billion-row scale
 
@@ -1477,15 +1718,15 @@ Mitigation:
 
 ### Optimize worker-count dependence
 
-Risk: independent table runs use different worker or node counts.
+Risk: a `join_update_optimize` run uses different worker or node counts than the original `join_optimize`.
 
 Mitigation:
 
-- Force item-count chunking.
-- Force ordered static inputs.
+- Force item-count chunking from the layout.
+- Force ordered static inputs and `key_fn` position checks.
 - Use `align_chunking=True`.
-- Verify merged chunk counts and digests.
-- Test all worker-count combinations.
+- Verify merged chunk counts and ordered-key digests against the layout.
+- Test update jobs with different worker / node counts than the create job.
 
 ### Manifest or path injection
 
@@ -1509,10 +1750,21 @@ Mitigation:
 07. V2 introduces one shared sampler and coordinated reader.
 08. Table versions and snapshots are immutable.
 09. `join.json` is published last and readers pin one snapshot.
-10. Each `joint_optimize` job validates and publishes atomically; no writer context / deferred `commit()`.
-11. Training iteration performs no per-sample key lookup.
-12. The public `MultiJoinStreamingDataset` API remains stable across V1 and V2.
-13. Keys come from `key_fn`, not from a `key_name` schema-field argument.
+10. `join_optimize` writes all selected tables from one input stream with deterministic canonical chunk-range assignment so alignment is by construction.
+11. `join_update_optimize` replaces or adds one table and validates against the persisted layout (position checks + digests) before publishing.
+12. Each job validates and publishes atomically; no writer context / deferred `commit()`.
+13. Training iteration performs no per-sample key lookup.
+14. The public `TablesStreamingDataset` API remains stable across V1 and V2.
+15. `key_fn` always receives the original input item; table outputs need not contain the key.
+16. Public naming uses the tables vocabulary (`join_update_optimize`, `validate_tables_dataset`, `TableBuild`, `Tables*Error`).
+17. Snapshots store explicit `table_order`.
+18. Builder `None` is always rejected; empty contributions use explicit empty values.
+19. Distributed V1 writes require deterministic static input planning; arbitrary streaming iterables cannot define canonical positions across workers.
+20. Update validation streams expected canonical keys sequentially by assigned global-index range; it never performs per-item remote key-index lookup.
+21. Initial layout publication proves normalized entity-key uniqueness using a scalable external-sort or hash-partitioned validation pass.
+22. In V1, `base_snapshot` and `expected_snapshot` identify the same parent snapshot; stale updates fail rather than automatically merging snapshot changes.
+23. `input_item` is shared read-only across builders; mutation inside a builder is unsupported.
+24. Initial root creation is exclusive/conditional; losing initializers raise `TablesCommitConflictError`.
 
 ## 17. Recommended delivery order
 
@@ -1520,8 +1772,8 @@ Mitigation:
 
 01. Freeze manifest, layout, digest, and API specifications.
 02. Implement metadata models and validation.
-03. Implement scalable canonical layout creation.
-04. Implement `joint_optimize` with strict aligned optimize settings and multi-node support.
+03. Implement scalable canonical layout creation, input planning, uniqueness validation, and `layout.iter_keys(start, stop)`.
+04. Implement `TableBuild`, `join_optimize` (canonical ranges + synchronized writers), and `join_update_optimize` (replace/add with layout validation).
 05. Implement atomic immutable snapshots.
 06. Implement the validated `ParallelStreamingDataset` wrapper.
 07. Add snapshot-aware state and resume.
