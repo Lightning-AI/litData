@@ -2,9 +2,9 @@
 
 ## Customer-facing product and implementation plan
 
-Status: proposed design  
-Audience: customers, ML infrastructure engineers, LitData maintainers  
-Scope: independently versioned tables that describe the same training entity and must be joined while streaming  
+Status: proposed design
+Audience: customers, ML infrastructure engineers, LitData maintainers
+Scope: independently versioned tables that describe the same training entity and must be joined while streaming
 
 ## Executive summary
 
@@ -584,15 +584,15 @@ Per-chunk digests live in compact Parquet rather than expanding an already large
 
 `MultiJoinWriter.commit()` follows this order:
 
-1. Read and retain the expected active snapshot.
-2. Write new table data to a unique immutable version path.
-3. Upload all chunk objects.
-4. Upload table alignment metadata.
-5. Upload the table `index.json` and completion marker last.
-6. Validate the table against the canonical layout.
-7. Write a new immutable snapshot document.
-8. Recheck the active snapshot or storage generation.
-9. Atomically replace `join.json` with the new active snapshot.
+01. Read and retain the expected active snapshot.
+02. Write new table data to a unique immutable version path.
+03. Upload all chunk objects.
+04. Upload table alignment metadata.
+05. Upload the table `index.json` and completion marker last.
+06. Validate the table against the canonical layout.
+07. Write a new immutable snapshot document.
+08. Recheck the active snapshot or storage generation.
+09. Atomically replace `join.json` with the new active snapshot.
 10. Mark the writer committed and reject further mutation.
 
 If any operation fails before step 9, the active snapshot remains unchanged. Unreferenced objects are safe to garbage-collect later.
@@ -636,15 +636,15 @@ In V1:
 
 For every active table:
 
-1. `layout_id` matches the snapshot layout.
-2. Total logical length matches.
-3. Number of chunks matches.
-4. Chunk `i` has the canonical item count.
-5. Chunk `i` has the canonical ordered-key digest.
-6. The final partial chunk appears in the same position.
-7. Every canonical key appears exactly once.
-8. No additional key appears.
-9. One input produces one logical table sample.
+01. `layout_id` matches the snapshot layout.
+02. Total logical length matches.
+03. Number of chunks matches.
+04. Chunk `i` has the canonical item count.
+05. Chunk `i` has the canonical ordered-key digest.
+06. The final partial chunk appears in the same position.
+07. Every canonical key appears exactly once.
+08. No additional key appears.
+09. One input produces one logical table sample.
 10. Table paths and versions are immutable.
 
 For the read configuration:
@@ -1320,15 +1320,15 @@ V2 does not accept arbitrary unrelated table sharding and repair it with per-sam
 
 ### One-time migration
 
-1. Choose the entity key.
-2. Produce a unique canonical key list.
-3. Intentionally choose its training order.
-4. Choose the logical bucket item count based primarily on feature bytes and desired bucket sampling.
-5. Create the immutable layout.
-6. Group each source table into one logical contribution per key.
-7. Align each table input to canonical `global_index`.
-8. Optimize stable large tables once.
-9. Optimize schema-volatile tables.
+01. Choose the entity key.
+02. Produce a unique canonical key list.
+03. Intentionally choose its training order.
+04. Choose the logical bucket item count based primarily on feature bytes and desired bucket sampling.
+05. Create the immutable layout.
+06. Group each source table into one logical contribution per key.
+07. Align each table input to canonical `global_index`.
+08. Optimize stable large tables once.
+09. Optimize schema-volatile tables.
 10. Validate and publish the first snapshot.
 11. Benchmark against the current baked dataset.
 
@@ -1487,15 +1487,15 @@ Mitigation:
 
 ## 16. Decision summary
 
-1. Alignment is required; arbitrary random keyed joins are not the product direction.
-2. The entity key and canonical order are immutable within one layout.
-3. One logical table contribution per entity is the V1 contract.
-4. V1 uses standard LitData datasets with exactly aligned physical chunks.
-5. V1 reuses `ParallelStreamingDataset` and existing read/prefetch infrastructure.
-6. V2 retains logical alignment but permits independent physical compaction and formats.
-7. V2 introduces one shared sampler and coordinated reader.
-8. Table versions and snapshots are immutable.
-9. `join.json` is published last and readers pin one snapshot.
+01. Alignment is required; arbitrary random keyed joins are not the product direction.
+02. The entity key and canonical order are immutable within one layout.
+03. One logical table contribution per entity is the V1 contract.
+04. V1 uses standard LitData datasets with exactly aligned physical chunks.
+05. V1 reuses `ParallelStreamingDataset` and existing read/prefetch infrastructure.
+06. V2 retains logical alignment but permits independent physical compaction and formats.
+07. V2 introduces one shared sampler and coordinated reader.
+08. Table versions and snapshots are immutable.
+09. `join.json` is published last and readers pin one snapshot.
 10. Writer publication requires explicit `commit()`.
 11. Training iteration performs no per-sample key lookup.
 12. The public `MultiJoinStreamingDataset` API remains stable across V1 and V2.
@@ -1504,28 +1504,27 @@ Mitigation:
 
 ### Phase V1
 
-1. Freeze manifest, layout, digest, and API specifications.
-2. Implement metadata models and validation.
-3. Implement scalable canonical layout creation.
-4. Implement `MultiJoinWriter` with strict aligned optimize settings.
-5. Implement atomic immutable snapshots.
-6. Implement the validated `ParallelStreamingDataset` wrapper.
-7. Add snapshot-aware state and resume.
-8. Add local, remote, DDP, worker, cache, and failure tests.
-9. Validate with Lightning Storage.
+01. Freeze manifest, layout, digest, and API specifications.
+02. Implement metadata models and validation.
+03. Implement scalable canonical layout creation.
+04. Implement `MultiJoinWriter` with strict aligned optimize settings.
+05. Implement atomic immutable snapshots.
+06. Implement the validated `ParallelStreamingDataset` wrapper.
+07. Add snapshot-aware state and resume.
+08. Add local, remote, DDP, worker, cache, and failure tests.
+09. Validate with Lightning Storage.
 10. Run the representative customer benchmark.
 11. Publish documentation and migration tooling.
 
 ### Phase V2
 
-1. Freeze logical-to-physical mapping format.
-2. Define the column-family loader protocol.
-3. Implement one canonical sampler.
-4. Implement coordinated dependency prefetch.
-5. Implement shared aggregate cache ownership.
-6. Add LitData packed-object support.
-7. Add Parquet column-family support.
-8. Add optional offset-based variable-cardinality tables.
-9. Run comparative V1, V2, and baked benchmarks.
+01. Freeze logical-to-physical mapping format.
+02. Define the column-family loader protocol.
+03. Implement one canonical sampler.
+04. Implement coordinated dependency prefetch.
+05. Implement shared aggregate cache ownership.
+06. Add LitData packed-object support.
+07. Add Parquet column-family support.
+08. Add optional offset-based variable-cardinality tables.
+09. Run comparative V1, V2, and baked benchmarks.
 10. Migrate internals while keeping the public read API unchanged.
-
