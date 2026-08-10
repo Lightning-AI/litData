@@ -1093,8 +1093,11 @@ class DataChunkRecipe(DataRecipe):
         def _enrich_if_index(dataset_dir: str) -> None:
             index_path = os.path.join(cache_dir, _INDEX_FILENAME)
             if os.path.isfile(index_path):
+                # Close before enrich: enrich rewrites index.json, and Windows cannot
+                # replace a path that still has an open handle.
                 with open(index_path, encoding="utf-8") as f:
-                    enrich_keys_with_chunks(dataset_dir, json.load(f))
+                    index_json = json.load(f)
+                enrich_keys_with_chunks(dataset_dir, index_json)
 
         # Single-node (or per-node partial): merge rank files present in this cache.
         if num_nodes <= 1:

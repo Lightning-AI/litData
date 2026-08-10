@@ -50,6 +50,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Iterator, Sequence
+from time import sleep
 from typing import Any
 from urllib import parse
 
@@ -73,6 +74,25 @@ def _require_polars() -> Any:
     import polars as pl
 
     return pl
+
+
+def _atomic_replace(tmp_path: str, dest_path: str) -> None:
+    """Replace ``dest_path`` with ``tmp_path``, retrying Windows file-lock races.
+
+    On Windows, ``os.replace`` fails with ``PermissionError`` if another handle
+    still has ``dest_path`` open (or antivirus briefly locks it). Retry with a
+    short backoff instead of failing the write.
+    """
+    last_err: PermissionError | None = None
+    for _ in range(20):
+        try:
+            os.replace(tmp_path, dest_path)
+            return
+        except PermissionError as e:
+            last_err = e
+            sleep(0.05)
+    assert last_err is not None
+    raise last_err
 
 
 def normalize_key(key: Any) -> str | int:
@@ -176,7 +196,7 @@ def set_keys_config_in_index(
     tmp = f"{index_path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, sort_keys=True)
-    os.replace(tmp, index_path)
+    _atomic_replace(tmp, index_path)
 
 
 def read_keys_config(dataset_dir: str, storage_options: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -389,7 +409,7 @@ def save_keys(
         os.makedirs(parent, exist_ok=True)
     tmp = f"{path}.tmp"
     df.write_parquet(tmp, compression="zstd", row_group_size=min(1_000_000, max(df.height, 1)))
-    os.replace(tmp, path)
+    _atomic_replace(tmp, path)
 
 
 def write_keys_store(
@@ -425,7 +445,7 @@ def write_keys_store(
             df = df.sort("key")
         tmp = f"{path}.tmp"
         df.write_parquet(tmp, compression="zstd", row_group_size=min(1_000_000, max(df.height, 1)))
-        os.replace(tmp, path)
+        _atomic_replace(tmp, path)
     else:
         shard_ids = [key_shard(k, num_shards) for k in df["key"].to_list()]
         pl = _require_polars()
@@ -437,7 +457,7 @@ def write_keys_store(
             path = shard_path(dataset_dir, shard)
             tmp = f"{path}.tmp"
             part.write_parquet(tmp, compression="zstd", row_group_size=min(1_000_000, max(part.height, 1)))
-            os.replace(tmp, path)
+            _atomic_replace(tmp, path)
 
     set_keys_config_in_index(dataset_dir, num_shards=num_shards)
     # Drop legacy single-file sidecar if present so readers prefer the store.
@@ -832,7 +852,10 @@ def build_keys_index(
 
     write_keys_store(dataset_dir, keys, indices=indices, num_shards=num_shards)
 
+    # Load+close before enrich: enrich rewrites index.json via write_keys_store, and
+    # Windows cannot os.replace a file that still has an open handle.
     index_path = os.path.join(resolved.path, _INDEX_FILENAME)
     with open(index_path, encoding="utf-8") as f:
-        enrich_keys_with_chunks(dataset_dir, json.load(f))
+        index_json = json.load(f)
+    enrich_keys_with_chunks(dataset_dir, index_json)
     return out

@@ -35,6 +35,7 @@ from litdata.streaming.resolver import _resolve_dir
 from litdata.streaming.writer import BinaryWriter
 from litdata.utilities.keys_index import (
     KeyIndex,
+    _atomic_replace,
     has_keys_index,
     normalize_key,
 )
@@ -156,7 +157,7 @@ class DatasetUpdate:
         tmp_index = f"{index_path}.tmp"
         with open(tmp_index, "w", encoding="utf-8") as f:
             json.dump(self._index, f, sort_keys=True)
-        os.replace(tmp_index, index_path)
+        _atomic_replace(tmp_index, index_path)
 
         # keys/ store unchanged for whole-sample replace (same key set / indices)
         self._pending.clear()
@@ -255,7 +256,7 @@ class DatasetUpdate:
             dest = os.path.join(self._dir, filename)
             tmp_dest = dest + ".tmp"
             shutil.copyfile(new_chunk_path, tmp_dest)
-            os.replace(tmp_dest, dest)
+            _atomic_replace(tmp_dest, dest)
 
             new_size = os.path.getsize(dest)
             chunk_info["filename"] = filename
