@@ -309,6 +309,13 @@ def test_build_keys_index_backfills_sidecar(tmpdir):
 
     ds = StreamingDataset(out, shuffle=False)
     assert ds["item-5"]["value"] == 5
+    # Release chunk mmaps before in-place rewrite (required on Windows).
+    item_loader = getattr(getattr(ds, "cache", None), "_reader", None)
+    item_loader = getattr(item_loader, "_item_loader", None) if item_loader is not None else None
+    close_open = getattr(item_loader, "_close_open_chunk", None)
+    if callable(close_open):
+        close_open()
+    del ds
 
     with dataset_update(out) as update:
         update["item-5"] = {"id": "item-5", "value": 50}

@@ -20,6 +20,7 @@ Only local dataset directories are supported in v1.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -40,7 +41,11 @@ from litdata.utilities.keys_index import (
     normalize_key,
 )
 
-_CHUNK_NAME_RE = re.compile(r"^chunk-(?P<rank>\d+)-(?P<chunk_index>\d+)(?:\.(?P<compression>[^.]+))?\.bin$")
+_CHUNK_NAME_RE = re.compile(
+    r"^chunk-(?P<rank>\d+)-(?P<chunk_index>\d+)"
+    r"(?:-u(?P<update>\d+))?"
+    r"(?:\.(?P<compression>[^.]+))?\.bin$"
+)
 
 
 def dataset_update(input_dir: str) -> DatasetUpdate:
@@ -268,7 +273,23 @@ class DatasetUpdate:
             dest = os.path.join(self._dir, filename)
             tmp_dest = dest + ".tmp"
             shutil.copyfile(new_chunk_path, tmp_dest)
-            _atomic_replace(tmp_dest, dest)
+            try:
+                _atomic_replace(tmp_dest, dest)
+            except PermissionError:
+                # Destination still locked (e.g. another StreamingDataset mmap on Windows).
+                # Publish under a new filename and retarget the index entry.
+                compression_part = match.group("compression")
+                update_token = int(time() * 1000) % 1_000_000_000
+                if compression_part:
+                    filename = f"chunk-{rank}-{chunk_index}-u{update_token}.{compression_part}.bin"
+                else:
+                    filename = f"chunk-{rank}-{chunk_index}-u{update_token}.bin"
+                dest = os.path.join(self._dir, filename)
+                _atomic_replace(tmp_dest, dest)
+                old_path = os.path.join(self._dir, chunk_info["filename"])
+                with contextlib.suppress(OSError, PermissionError):
+                    if old_path != dest and os.path.isfile(old_path):
+                        os.remove(old_path)
 
             new_size = os.path.getsize(dest)
             chunk_info["filename"] = filename
