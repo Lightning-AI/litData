@@ -554,10 +554,7 @@ class KeyIndex:
     def _scan(self, paths: str | Sequence[str] | None = None) -> Any:
         pl = _require_polars()
         target = self._paths if paths is None else paths
-        if isinstance(target, str):
-            target_list = [target]
-        else:
-            target_list = list(target)
+        target_list = [target] if isinstance(target, str) else list(target)
         cloud_paths, cloud_opts = _polars_cloud_paths_and_options(target_list, self._storage_options)
         if cloud_opts is not None:
             return pl.scan_parquet(cloud_paths if len(cloud_paths) > 1 else cloud_paths[0], storage_options=cloud_opts)

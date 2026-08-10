@@ -254,9 +254,10 @@ def test_dataset_update_unknown_key_raises(tmpdir):
         num_workers=1,
         key_fn=_key_fn,
     )
-    with pytest.raises(KeyError, match="Unknown dataset key"), dataset_update(out) as update:
+    with dataset_update(out) as update:
         update["missing"] = {"id": "missing", "value": 0}
-        update.commit()
+        with pytest.raises(KeyError, match="Unknown dataset key"):
+            update.commit()
 
 
 def test_dataset_update_requires_keys_file(tmpdir):
