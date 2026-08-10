@@ -1,9 +1,9 @@
 # MultiJoinStreamingDataset
 
-## Customer-facing product and implementation plan
+## Product and implementation plan
 
 Status: proposed design
-Audience: customers, ML infrastructure engineers, LitData maintainers
+Audience: LitData users, ML infrastructure engineers, LitData maintainers
 Scope: independently versioned tables that describe the same training entity and must be joined while streaming
 
 ## Executive summary
@@ -32,17 +32,17 @@ flowchart LR
   canonicalKeys --> logicalBuckets[Shared logical sampling buckets]
   logicalBuckets --> features[Features table version]
   logicalBuckets --> labels[Labels table version]
-  logicalBuckets --> tracking[Tracking table version]
+  logicalBuckets --> metadata[Metadata table version]
   activeManifest[Atomic join manifest] --> features
   activeManifest --> labels
-  activeManifest --> tracking
+  activeManifest --> metadata
   features --> joinedReader[MultiJoinStreamingDataset]
   labels --> joinedReader
-  tracking --> joinedReader
+  metadata --> joinedReader
   joinedReader --> training[Training batches]
 ```
 
-## 1. Customer problem
+## 1. Problem
 
 The current high-throughput LitData workflow materializes the complete training sample before or during `optimize()`. This is efficient at training time because one sample is stored in one streaming layout, but it couples the lifecycle of every source table:
 
@@ -53,7 +53,7 @@ The current high-throughput LitData workflow materializes the complete training 
 
 `dataset_update` is complementary but does not solve the schema-change case. It is useful when a bounded set of existing samples can be replaced under a compatible optimized schema. If every entity in a table gains or loses columns, that table must be re-optimized.
 
-The requested behavior is:
+The target behavior is:
 
 1. Optimize each logical table independently.
 2. Re-optimize only the table whose values or schema changed.
@@ -81,7 +81,7 @@ Without alignment, one sampled key needs a location in every table:
 entity-123:
   features -> chunk 42, offset 731
   labels   -> chunk 3,  offset 18
-  tracking -> chunk 91, offset 204
+  metadata -> chunk 91, offset 204
 ```
 
 Successive shuffled keys are likely to reference unrelated object combinations. The system then needs to:
@@ -105,7 +105,7 @@ The reader can fetch bucket group `42`, apply one item permutation, and read pos
 
 ## 3. Terminology
 
-- **Entity key:** Stable identifier used to correlate tables, such as `sumer_play_id`.
+- **Entity key:** Stable identifier used to correlate tables, such as `entity_id`.
 - **Canonical key order:** Immutable ordered sequence of entity keys for one layout.
 - **Logical item:** One training entity in the canonical order.
 - **Table sample:** The value contributed by one table for one logical item.
@@ -129,7 +129,7 @@ This does not require every source table to contain one physical row per key. A 
 - An Arrow-like or serialized tabular bundle.
 - An explicit empty collection when that table has no source rows for the entity.
 
-For example, a player-frame table may contribute a variable-length bundle containing every player-frame row for one play. The logical join remains one-to-one even though the source table is one-to-many.
+For example, a nested events table may contribute a variable-length bundle containing every event row for one parent entity. The logical join remains one-to-one even though the source table is one-to-many.
 
 V1 rejects:
 
@@ -203,18 +203,18 @@ The API below is the target public contract. Some advanced storage arguments bec
 ```python
 from litdata import MultiJoinWriter
 
-play_ids = load_canonical_play_ids()
+entity_ids = load_canonical_entity_ids()
 
 with MultiJoinWriter.create(
-    "s3://bucket/football-training",
-    keys=play_ids,
-    key_name="sumer_play_id",
+    "s3://bucket/multi-join-dataset",
+    keys=entity_ids,
+    key_name="entity_id",
     chunk_size=2048,
 ) as writer:
     writer.optimize_table(
         "features",
         fn=build_features,
-        version="features-2026-08-10",
+        version="features-v1",
         num_workers=32,
         num_nodes=8,
         compression="zstd",
@@ -222,7 +222,7 @@ with MultiJoinWriter.create(
     writer.optimize_table(
         "labels",
         fn=build_labels,
-        version="labels-2026-08-10",
+        version="labels-v1",
         num_workers=8,
     )
     snapshot = writer.commit()
@@ -248,15 +248,15 @@ Large pipelines may already produce one grouped input object per entity:
 ```python
 with MultiJoinWriter.create(
     output_dir,
-    keys=play_ids,
-    key_name="sumer_play_id",
+    keys=entity_ids,
+    key_name="entity_id",
     chunk_size=2048,
 ) as writer:
     writer.optimize_table(
-        "tracking",
-        fn=encode_tracking_group,
-        inputs=tracking_groups,
-        input_key=lambda group: group.sumer_play_id,
+        "metadata",
+        fn=encode_metadata_group,
+        inputs=metadata_groups,
+        input_key=lambda group: group.entity_id,
     )
     writer.commit()
 ```
@@ -275,13 +275,13 @@ Contract:
 from litdata import MultiJoinWriter
 
 with MultiJoinWriter.open(
-    "s3://bucket/football-training",
+    "s3://bucket/multi-join-dataset",
     expected_snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
 ) as writer:
     writer.optimize_table(
         "labels",
         fn=build_labels_v2,
-        version="labels-2026-08-17",
+        version="labels-v2",
         num_workers=8,
     )
     new_snapshot = writer.commit()
@@ -297,7 +297,7 @@ Only the new labels prefix and new snapshot metadata are written. The active fea
 from litdata import MultiJoinStreamingDataset, StreamingDataLoader
 
 dataset = MultiJoinStreamingDataset(
-    "s3://bucket/football-training",
+    "s3://bucket/multi-join-dataset",
     tables=("features", "labels"),
     shuffle=True,
     seed=42,
@@ -332,7 +332,7 @@ The table namespace is preserved by default. LitData does not implicitly merge d
 
 ```python
 dataset = MultiJoinStreamingDataset(
-    "s3://bucket/football-training",
+    "s3://bucket/multi-join-dataset",
     snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
     tables=("features", "labels"),
     shuffle=True,
@@ -394,7 +394,7 @@ The following are always shared and cannot appear in `table_options`:
 from litdata import validate_multi_join
 
 report = validate_multi_join(
-    "s3://bucket/football-training",
+    "s3://bucket/multi-join-dataset",
     snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
     deep=True,
 )
@@ -412,7 +412,7 @@ Validation levels:
 ### 7.9 Keyed debugging access
 
 ```python
-sample = dataset.get_by_key("play-123")
+sample = dataset.get_by_key("entity-123")
 ```
 
 Keyed lookup is intended for inspection, debugging, and bounded retrieval. It is not used by the iterative training path.
@@ -424,7 +424,7 @@ For integer entity keys, `get_by_key()` remains explicit so integer positional i
 The root is a versioned store:
 
 ```text
-football-training/
+multi-join-dataset/
   join.json
   snapshots/
     01J4Y7M4VPH6V9B8P3N6K5W2HQ.json
@@ -438,18 +438,18 @@ football-training/
       partitions.parquet
   tables/
     features/
-      features-2026-08-10/
+      features-v1/
         index.json
         alignment.parquet
         chunk-0-0.bin
         ...
     labels/
-      labels-2026-08-10/
+      labels-v1/
         index.json
         alignment.parquet
         chunk-0-0.bin
         ...
-      labels-2026-08-17/
+      labels-v2/
         index.json
         alignment.parquet
         chunk-0-0.bin
@@ -481,7 +481,7 @@ football-training/
   "layout": {
     "id": "6ce6f3...",
     "path": "layouts/6ce6f3...",
-    "key_name": "sumer_play_id",
+    "key_name": "entity_id",
     "key_type": "string",
     "length": 1000000000,
     "chunk_size": 2048,
@@ -490,16 +490,16 @@ football-training/
   },
   "tables": {
     "features": {
-      "version": "features-2026-08-10",
-      "path": "tables/features/features-2026-08-10",
+      "version": "features-v1",
+      "path": "tables/features/features-v1",
       "format": "litdata",
       "layout_id": "6ce6f3...",
       "alignment_root": "blake2b-256:...",
       "schema_fingerprint": "sha256:..."
     },
     "labels": {
-      "version": "labels-2026-08-17",
-      "path": "tables/labels/labels-2026-08-17",
+      "version": "labels-v2",
+      "path": "tables/labels/labels-v2",
       "format": "litdata",
       "layout_id": "6ce6f3...",
       "alignment_root": "blake2b-256:...",
@@ -567,7 +567,7 @@ The table `index.json` gains a backward-compatible `multi_join` section:
   "multi_join": {
     "format_version": 1,
     "table": "labels",
-    "table_version": "labels-2026-08-17",
+    "table_version": "labels-v2",
     "layout_id": "6ce6f3...",
     "length": 1000000000,
     "num_chunks": 488282,
@@ -993,7 +993,7 @@ Measure:
 - CPU decode time.
 - Cost and elapsed time to rebuild only the changed table.
 
-No production throughput claim should be made before this benchmark runs on the customer-shaped workload. Correctness and independent table replacement are hard release gates; throughput is a measured release gate agreed from the baseline.
+No production throughput claim should be made before this benchmark runs on a representative multi-table workload. Correctness and independent table replacement are hard release gates; throughput is a measured release gate agreed against the baseline.
 
 ### 10.13 V1 completion criteria
 
@@ -1006,7 +1006,7 @@ V1 is complete when:
 5. Every tested shuffle, worker, DDP, and resume configuration preserves key alignment.
 6. Intentional misalignment fails before iteration.
 7. The Lightning Storage end-to-end test is green.
-8. Customer-shaped cold-cache benchmarks are documented.
+8. Representative cold-cache benchmarks are documented.
 9. API documentation includes creation, update, rollback, training, and troubleshooting.
 
 ## 11. Phase V2 — logical partitions and independent physical compaction
@@ -1043,7 +1043,7 @@ V2 allows many label buckets to be packed into one appropriately sized object wh
 ### 11.3 V2 storage model
 
 ```text
-football-training/
+multi-join-dataset/
   join.json
   snapshots/
   layouts/
@@ -1237,7 +1237,7 @@ Add or evolve:
 - `src/litdata/processing/multi_join.py`
 - Format-specific column-family loaders.
 
-Refactor the V1 implementation behind internal protocols so the public class and state schema can evolve without breaking customer code.
+Refactor the V1 implementation behind internal protocols so the public class and state schema can evolve without breaking user code.
 
 ### 11.12 V2 test matrix
 
@@ -1286,7 +1286,7 @@ V2 is complete when:
 5. Aggregate cache usage is bounded by the configured budget.
 6. Resume reproduces exactly the same logical entity sequence.
 7. Mixed LitData and Parquet column families pass local, cloud, worker, and DDP tests.
-8. V2 meets the customer-agreed throughput target relative to the baked baseline.
+8. V2 meets the agreed throughput target relative to the baked baseline.
 
 ## 12. V1 and V2 boundary
 
@@ -1316,7 +1316,7 @@ A new shared sampler and mapping-aware reader are required.
 
 V2 does not accept arbitrary unrelated table sharding and repair it with per-sample random joins. Logical key order and bucket membership remain shared. This is the requirement that preserves predictable training I/O.
 
-## 13. Customer migration workflow
+## 13. Migration workflow
 
 ### One-time migration
 
@@ -1401,7 +1401,7 @@ Expose structured diagnostics for:
 - Bucket wait on the slowest table.
 - Keyed debug lookup latency.
 
-Tracing should identify table and version without including customer entity keys by default.
+Tracing should identify table and version without including entity keys by default.
 
 ## 15. Risks and mitigations
 
@@ -1513,7 +1513,7 @@ Mitigation:
 07. Add snapshot-aware state and resume.
 08. Add local, remote, DDP, worker, cache, and failure tests.
 09. Validate with Lightning Storage.
-10. Run the representative customer benchmark.
+10. Run the representative multi-table benchmark.
 11. Publish documentation and migration tooling.
 
 ### Phase V2
