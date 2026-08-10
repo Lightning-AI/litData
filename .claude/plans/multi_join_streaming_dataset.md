@@ -1338,21 +1338,21 @@ V2 does not accept arbitrary unrelated table sharding and repair it with per-sam
 
 ### One-time migration
 
-01. Choose the entity key extraction (`key_fn`).
-02. Produce unique ordered inputs for every table (same entity order).
-03. Intentionally choose that training order before the first `joint_optimize`.
-04. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
-05. Run `joint_optimize` for the first / driver table to create the join root and layout.
-06. Run independent `joint_optimize` jobs for the remaining tables (local or multi-node).
-07. Validate the published snapshot.
-08. Benchmark against the current baked dataset.
+1. Choose the entity key extraction (`key_fn`).
+2. Produce unique ordered inputs for every table (same entity order).
+3. Intentionally choose that training order before the first `joint_optimize`.
+4. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
+5. Run `joint_optimize` for the first / driver table to create the join root and layout.
+6. Run independent `joint_optimize` jobs for the remaining tables (local or multi-node).
+7. Validate the published snapshot.
+8. Benchmark against the current baked dataset.
 
 ### Small-table schema update
 
-01. Keep existing sibling table versions as-is.
-02. Run `joint_optimize(..., table=..., version=..., expected_snapshot=...)` for the changed table only.
-03. Start new training jobs on the newly published snapshot.
-04. Leave existing jobs pinned to their original snapshot.
+1. Keep existing sibling table versions as-is.
+2. Run `joint_optimize(..., table=..., version=..., expected_snapshot=...)` for the changed table only.
+3. Start new training jobs on the newly published snapshot.
+4. Leave existing jobs pinned to their original snapshot.
 
 ### Rollback
 
