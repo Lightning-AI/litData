@@ -536,9 +536,7 @@ class StreamingDataset(IterableDataset):
             elif remote_root and has_keys_index(remote_root, self.storage_options):
                 root = remote_root
             if root is None:
-                raise KeyError(
-                    f"Keyed access requires a keys/ index next to the dataset. Missing for key={key!r}."
-                )
+                raise KeyError(f"Keyed access requires a keys/ index next to the dataset. Missing for key={key!r}.")
             self._key_index = KeyIndex(root, storage_options=self.storage_options)
 
         global_index, chunk_index, chunk_offset = self._key_index.resolve(key)

@@ -254,10 +254,9 @@ def test_dataset_update_unknown_key_raises(tmpdir):
         num_workers=1,
         key_fn=_key_fn,
     )
-    with pytest.raises(KeyError, match="Unknown dataset key"):
-        with dataset_update(out) as update:
-            update["missing"] = {"id": "missing", "value": 0}
-            update.commit()
+    with pytest.raises(KeyError, match="Unknown dataset key"), dataset_update(out) as update:
+        update["missing"] = {"id": "missing", "value": 0}
+        update.commit()
 
 
 def test_dataset_update_requires_keys_file(tmpdir):
@@ -326,8 +325,9 @@ def test_legacy_keys_parquet_still_readable(tmpdir):
 
 def test_remote_key_index_scans_without_full_download(monkeypatch, tmpdir):
     """Remote KeyIndex should scan cloud URIs with storage_options, not cache shards locally."""
-    import litdata.streaming.fs_provider as fs_mod
     import polars as pl
+
+    import litdata.streaming.fs_provider as fs_mod
 
     dataset_url = "s3://bucket/dataset"
     with open(os.path.join(tmpdir, _INDEX_FILENAME), "w", encoding="utf-8") as f:

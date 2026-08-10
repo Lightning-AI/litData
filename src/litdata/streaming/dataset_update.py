@@ -39,12 +39,10 @@ from litdata.utilities.keys_index import (
     normalize_key,
 )
 
-_CHUNK_NAME_RE = re.compile(
-    r"^chunk-(?P<rank>\d+)-(?P<chunk_index>\d+)(?:\.(?P<compression>[^.]+))?\.bin$"
-)
+_CHUNK_NAME_RE = re.compile(r"^chunk-(?P<rank>\d+)-(?P<chunk_index>\d+)(?:\.(?P<compression>[^.]+))?\.bin$")
 
 
-def dataset_update(input_dir: str) -> "DatasetUpdate":
+def dataset_update(input_dir: str) -> DatasetUpdate:
     """Open a keyed update session for an optimized dataset.
 
     Example::
@@ -81,9 +79,7 @@ class DatasetUpdate:
         self._dir = resolved.path
         index_path = os.path.join(self._dir, _INDEX_FILENAME)
         if not os.path.isfile(index_path):
-            raise FileNotFoundError(
-                f"Missing {_INDEX_FILENAME} in {self._dir}. Did you run optimize()?"
-            )
+            raise FileNotFoundError(f"Missing {_INDEX_FILENAME} in {self._dir}. Did you run optimize()?")
         if not has_keys_index(self._dir):
             raise FileNotFoundError(
                 f"Missing {_KEYS_DIRNAME}/ key index in {self._dir}. "
@@ -105,7 +101,7 @@ class DatasetUpdate:
             start += int(chunk["chunk_size"])
         self._length = start
 
-    def __enter__(self) -> "DatasetUpdate":
+    def __enter__(self) -> DatasetUpdate:
         self._entered = True
         return self
 

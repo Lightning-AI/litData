@@ -68,8 +68,7 @@ from litdata.constants import (
 def _require_polars() -> Any:
     if not _POLARS_AVAILABLE:
         raise ModuleNotFoundError(
-            "Polars is required for optimize(key_fn=...) / dataset_update. "
-            "Install with `pip install 'polars>1.0.0'`."
+            "Polars is required for optimize(key_fn=...) / dataset_update. Install with `pip install 'polars>1.0.0'`."
         )
     import polars as pl
 
@@ -150,9 +149,7 @@ def has_keys_index(dataset_dir: str, storage_options: dict[str, Any] | None = No
 
         fs = _get_fs_provider(dataset_dir, storage_options)
         return fs.exists(shard_path(dataset_dir, 0)) or fs.exists(_join_uri(dataset_dir, _KEYS_FILENAME))
-    return os.path.isfile(shard_path(dataset_dir, 0)) or os.path.isfile(
-        os.path.join(dataset_dir, _KEYS_FILENAME)
-    )
+    return os.path.isfile(shard_path(dataset_dir, 0)) or os.path.isfile(os.path.join(dataset_dir, _KEYS_FILENAME))
 
 
 def keys_config(num_shards: int, sharding: str = "hash") -> dict[str, Any]:
@@ -182,9 +179,7 @@ def set_keys_config_in_index(
     os.replace(tmp, index_path)
 
 
-def read_keys_config(
-    dataset_dir: str, storage_options: dict[str, Any] | None = None
-) -> dict[str, Any] | None:
+def read_keys_config(dataset_dir: str, storage_options: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Read the ``keys`` section from ``index.json`` (local or remote)."""
     index_path = _join_uri(dataset_dir, _INDEX_FILENAME)
     if _is_remote_uri(dataset_dir):
@@ -248,9 +243,7 @@ def _read_remote_json(url: str, storage_options: dict[str, Any] | None) -> dict[
             os.remove(local_path)
 
 
-def _resolve_remote_key_paths(
-    dataset_url: str, storage_options: dict[str, Any] | None
-) -> tuple[list[str], int, str]:
+def _resolve_remote_key_paths(dataset_url: str, storage_options: dict[str, Any] | None) -> tuple[list[str], int, str]:
     """Resolve remote shard URIs using ``index.json``'s ``keys`` section."""
     from litdata.streaming.fs_provider import _get_fs_provider
 
@@ -268,14 +261,10 @@ def _resolve_remote_key_paths(
     if fs.exists(legacy_url):
         return [legacy_url], 1, "none"
 
-    raise FileNotFoundError(
-        f"No key index under {dataset_url!r} (expected {_KEYS_DIRNAME}/ or {_KEYS_FILENAME})"
-    )
+    raise FileNotFoundError(f"No key index under {dataset_url!r} (expected {_KEYS_DIRNAME}/ or {_KEYS_FILENAME})")
 
 
-def _resolve_key_paths(
-    path: str, storage_options: dict[str, Any] | None = None
-) -> tuple[list[str], int, str]:
+def _resolve_key_paths(path: str, storage_options: dict[str, Any] | None = None) -> tuple[list[str], int, str]:
     """Resolve a dataset dir/URL, ``keys/`` dir, or parquet file into shard paths/URIs."""
     if _is_remote_uri(path):
         # Remote parquet file directly, or dataset / keys prefix.
@@ -308,9 +297,7 @@ def _resolve_key_paths(
             legacy = os.path.join(path, _KEYS_FILENAME)
             if os.path.isfile(legacy):
                 return [legacy], 1, "none"
-            raise FileNotFoundError(
-                f"No key index under {path!r} (expected {_KEYS_DIRNAME}/ or {_KEYS_FILENAME})"
-            )
+            raise FileNotFoundError(f"No key index under {path!r} (expected {_KEYS_DIRNAME}/ or {_KEYS_FILENAME})")
 
     shards = list_shard_files(keys_directory)
     if not shards:
@@ -449,9 +436,7 @@ def write_keys_store(
                 part = part.sort("key")
             path = shard_path(dataset_dir, shard)
             tmp = f"{path}.tmp"
-            part.write_parquet(
-                tmp, compression="zstd", row_group_size=min(1_000_000, max(part.height, 1))
-            )
+            part.write_parquet(tmp, compression="zstd", row_group_size=min(1_000_000, max(part.height, 1)))
             os.replace(tmp, path)
 
     set_keys_config_in_index(dataset_dir, num_shards=num_shards)
@@ -471,14 +456,13 @@ def save_rank_keys(path: str, index_key_pairs: Sequence[tuple[int, str | int]]) 
     indices = [i for i, _ in ordered]
     keys = [k for _, k in ordered]
     if indices != list(range(len(indices))):
-        raise ValueError(
-            f"Rank key indexes must be contiguous from 0. Found {indices[:5]}... "
-            f"(len={len(indices)})"
-        )
+        raise ValueError(f"Rank key indexes must be contiguous from 0. Found {indices[:5]}... (len={len(indices)})")
     save_keys(path, keys, indices=indices, sort_by_key=False)
 
 
-def _chunk_columns_for_indices(global_indices: Sequence[int], index_json: dict[str, Any]) -> tuple[list[int], list[int]]:
+def _chunk_columns_for_indices(
+    global_indices: Sequence[int], index_json: dict[str, Any]
+) -> tuple[list[int], list[int]]:
     chunk_starts: list[int] = []
     start = 0
     for chunk in index_json["chunks"]:
@@ -648,10 +632,7 @@ class KeyIndex:
                 if shard >= len(self._paths):
                     continue
                 frames.append(
-                    self._scan(self._paths[shard])
-                    .filter(pl.col("key").is_in(shard_keys))
-                    .select(cols)
-                    .collect()
+                    self._scan(self._paths[shard]).filter(pl.col("key").is_in(shard_keys)).select(cols).collect()
                 )
             df = pl.concat(frames) if frames else pl.DataFrame({c: [] for c in cols})
 
@@ -783,9 +764,7 @@ def iter_key_indexes(
 
     index_path = os.path.join(resolved.path, _INDEX_FILENAME)
     if not os.path.isfile(index_path):
-        raise FileNotFoundError(
-            f"Missing {_INDEX_FILENAME} in {resolved.path}. Did you run optimize()?"
-        )
+        raise FileNotFoundError(f"Missing {_INDEX_FILENAME} in {resolved.path}. Did you run optimize()?")
 
     cache = Cache(resolved.path, chunk_bytes=1)
     intervals = cache.get_chunk_intervals()
@@ -820,9 +799,7 @@ def iter_key_indexes(
             pbar.close()
 
     if global_index != total:
-        raise RuntimeError(
-            f"Key scan produced {global_index} samples but index reports {total}."
-        )
+        raise RuntimeError(f"Key scan produced {global_index} samples but index reports {total}.")
 
 
 def build_keys_index(
@@ -848,9 +825,7 @@ def build_keys_index(
     dataset_dir = output_dir or resolved.path
     out = keys_dir(dataset_dir)
     if has_keys_index(dataset_dir) and not overwrite:
-        raise FileExistsError(
-            f"Key index already exists under {dataset_dir}. Pass overwrite=True to replace it."
-        )
+        raise FileExistsError(f"Key index already exists under {dataset_dir}. Pass overwrite=True to replace it.")
 
     keys: list[str | int] = []
     indices: list[int] = []

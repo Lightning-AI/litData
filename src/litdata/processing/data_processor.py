@@ -25,13 +25,14 @@ import tempfile
 import traceback
 import warnings
 from abc import abstractmethod
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from urllib import parse
 
 import numpy as np
@@ -887,9 +888,7 @@ class BaseWorker:
                 if key_fn is not None:
                     from litdata.utilities.keys_index import normalize_key
 
-                    self._key_pairs.append(
-                        (sample_index, normalize_key(key_fn(item_data_or_generator)))
-                    )
+                    self._key_pairs.append((sample_index, normalize_key(key_fn(item_data_or_generator))))
                 chunk_filepath = self.cache._add_item(sample_index, item_data_or_generator)
                 self._try_upload(chunk_filepath)
                 self._index_counter += 1
@@ -1077,9 +1076,7 @@ class DataChunkRecipe(DataRecipe):
             size=size,
         )
 
-    def _merge_and_upload_keys(
-        self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None
-    ) -> None:
+    def _merge_and_upload_keys(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None) -> None:
         """Merge per-rank key sidecars and publish ``keys/shard-*.parquet`` next to ``index.json``."""
         if getattr(self, "key_fn", None) is None:
             return
