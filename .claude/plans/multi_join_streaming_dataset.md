@@ -22,7 +22,7 @@ The central constraint cannot be removed: if tables are not joined before traini
 The work is split into two deliberately different phases:
 
 - **Phase V1 — strict aligned LitData chunks.** Every table is a normal optimized LitData dataset with exactly the same logical chunk boundaries, item counts, and key order. `MultiJoinStreamingDataset` validates the layout and reuses `ParallelStreamingDataset`. This minimizes new read-path code and preserves existing LitData behavior.
-- **Phase V2 — logical partitions with independently compacted column families.** Logical sampling buckets remain aligned, but physical files no longer need a one-to-one correspondence. Small tables can pack many logical partitions into larger Parquet or LitData objects, while large feature tables keep appropriately sized binary chunks. V2 introduces one shared sampler and a coordinated multi-table reader.
+- **Phase V2 — logical partitions with independently compacted column families.** Logical sampling buckets remain aligned, but physical files no longer need a one-to-one correspondence. Small tables can pack many logical partitions into larger Parquet or LitData objects, while large tables keep appropriately sized binary chunks. V2 introduces one shared sampler and a coordinated multi-table reader.
 
 The public read API is designed once and remains stable across both phases. V2 is primarily an internal storage and reader improvement.
 
@@ -30,15 +30,15 @@ The public read API is designed once and remains stable across both phases. V2 i
 flowchart LR
   canonicalKeys[Canonical ordered entity keys]
   canonicalKeys --> logicalBuckets[Shared logical sampling buckets]
-  logicalBuckets --> features[Features table version]
-  logicalBuckets --> labels[Labels table version]
-  logicalBuckets --> metadata[Metadata table version]
-  activeManifest[Atomic join manifest] --> features
-  activeManifest --> labels
-  activeManifest --> metadata
-  features --> joinedReader[MultiJoinStreamingDataset]
-  labels --> joinedReader
-  metadata --> joinedReader
+  logicalBuckets --> t0[table_0 version]
+  logicalBuckets --> t1[table_1 version]
+  logicalBuckets --> t2[table_2 version]
+  activeManifest[Atomic join manifest] --> t0
+  activeManifest --> t1
+  activeManifest --> t2
+  t0 --> joinedReader[MultiJoinStreamingDataset]
+  t1 --> joinedReader
+  t2 --> joinedReader
   joinedReader --> training[Training batches]
 ```
 
@@ -49,7 +49,7 @@ The current high-throughput LitData workflow materializes the complete training 
 1. A small table changes.
 2. The joined sample schema changes.
 3. The complete optimized dataset is rebuilt.
-4. Large unchanged feature tables are read, serialized, and uploaded again.
+4. Large unchanged tables are read, serialized, and uploaded again.
 
 `dataset_update` is complementary but does not solve the schema-change case. It is useful when a bounded set of existing samples can be replaced under a compatible optimized schema. If every entity in a table gains or loses columns, that table must be re-optimized.
 
@@ -79,9 +79,9 @@ Without alignment, one sampled key needs a location in every table:
 
 ```text
 entity-123:
-  features -> chunk 42, offset 731
-  labels   -> chunk 3,  offset 18
-  metadata -> chunk 91, offset 204
+  table_0 -> chunk 42, offset 731
+  table_1 -> chunk 3,  offset 18
+  table_2 -> chunk 91, offset 204
 ```
 
 Successive shuffled keys are likely to reference unrelated object combinations. The system then needs to:
@@ -212,17 +212,17 @@ with MultiJoinWriter.create(
     chunk_size=2048,
 ) as writer:
     writer.optimize_table(
-        "features",
-        fn=build_features,
-        version="features-v1",
+        "table_0",
+        fn=build_table_0,
+        version="v1",
         num_workers=32,
         num_nodes=8,
         compression="zstd",
     )
     writer.optimize_table(
-        "labels",
-        fn=build_labels,
-        version="labels-v1",
+        "table_1",
+        fn=build_table_1,
+        version="v1",
         num_workers=8,
     )
     snapshot = writer.commit()
@@ -253,9 +253,9 @@ with MultiJoinWriter.create(
     chunk_size=2048,
 ) as writer:
     writer.optimize_table(
-        "metadata",
-        fn=encode_metadata_group,
-        inputs=metadata_groups,
+        "table_2",
+        fn=encode_table_2_group,
+        inputs=table_2_groups,
         input_key=lambda group: group.entity_id,
     )
     writer.commit()
@@ -276,20 +276,20 @@ from litdata import MultiJoinWriter
 
 with MultiJoinWriter.open(
     "s3://bucket/multi-join-dataset",
-    expected_snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
+    expected_snapshot="snap-baseline",
 ) as writer:
     writer.optimize_table(
-        "labels",
-        fn=build_labels_v2,
-        version="labels-v2",
+        "table_1",
+        fn=build_table_1_v2,
+        version="v2",
         num_workers=8,
     )
     new_snapshot = writer.commit()
 ```
 
-Only the new labels prefix and new snapshot metadata are written. The active features version is referenced unchanged.
+Only the new `table_1` version prefix and a new snapshot document are written. The active `table_0` version is referenced unchanged.
 
-`expected_snapshot` provides optimistic concurrency protection. If another publisher changes the active snapshot first, commit fails rather than overwriting that change.
+`expected_snapshot` is the **name** of the currently active snapshot (for example `"snap-baseline"`), not a hash of chunk bytes. Writers pass it as an optimistic concurrency guard: if another publisher advances the active snapshot first, commit fails rather than overwriting that change. Snapshot IDs are opaque human-readable identifiers assigned at publish time; LitData does not compute content hashes of chunk payloads to form them.
 
 ### 7.4 Stream the active snapshot
 
@@ -298,13 +298,13 @@ from litdata import MultiJoinStreamingDataset, StreamingDataLoader
 
 dataset = MultiJoinStreamingDataset(
     "s3://bucket/multi-join-dataset",
-    tables=("features", "labels"),
+    tables=("table_0", "table_1"),
     shuffle=True,
     seed=42,
     drop_last=True,
     transform=lambda parts: {
-        **parts["features"],
-        **parts["labels"],
+        **parts["table_0"],
+        **parts["table_1"],
     },
     max_cache_size="200GB",
     max_pre_download=4,
@@ -321,8 +321,8 @@ Default output without `transform`:
 
 ```python
 {
-    "features": <features sample>,
-    "labels": <labels sample>,
+    "table_0": <table_0 sample>,
+    "table_1": <table_1 sample>,
 }
 ```
 
@@ -333,8 +333,8 @@ The table namespace is preserved by default. LitData does not implicitly merge d
 ```python
 dataset = MultiJoinStreamingDataset(
     "s3://bucket/multi-join-dataset",
-    snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
-    tables=("features", "labels"),
+    snapshot="snap-baseline",
+    tables=("table_0", "table_1"),
     shuffle=True,
     seed=42,
 )
@@ -354,7 +354,7 @@ dataset.tables
 ```python
 dataset = MultiJoinStreamingDataset(
     root,
-    tables=("features", "labels"),
+    tables=("table_0", "table_1"),
 )
 ```
 
@@ -369,10 +369,10 @@ Sampling options cannot vary by table. Decoding-specific options may:
 ```python
 dataset = MultiJoinStreamingDataset(
     root,
-    tables=("features", "labels"),
+    tables=("table_0", "table_1"),
     table_options={
-        "features": {"encryption": feature_key},
-        "labels": {"serializers": custom_serializers},
+        "table_0": {"encryption": table_0_key},
+        "table_1": {"serializers": custom_serializers},
     },
 )
 ```
@@ -395,7 +395,7 @@ from litdata import validate_multi_join
 
 report = validate_multi_join(
     "s3://bucket/multi-join-dataset",
-    snapshot="01J4Y7M4VPH6V9B8P3N6K5W2HQ",
+    snapshot="snap-baseline",
     deep=True,
 )
 
@@ -427,29 +427,29 @@ The root is a versioned store:
 multi-join-dataset/
   join.json
   snapshots/
-    01J4Y7M4VPH6V9B8P3N6K5W2HQ.json
-    01J5A1QGMGT8P4J8Q1Z0AXEF3R.json
+    snap-baseline.json
+    snap-table1-v2.json
   layouts/
-    6ce6f3.../
+    layout-entity-v1/
       index.json
       keys/
         shard-00000.parquet
         shard-00001.parquet
       partitions.parquet
   tables/
-    features/
-      features-v1/
+    table_0/
+      v1/
         index.json
         alignment.parquet
         chunk-0-0.bin
         ...
-    labels/
-      labels-v1/
+    table_1/
+      v1/
         index.json
         alignment.parquet
         chunk-0-0.bin
         ...
-      labels-v2/
+      v2/
         index.json
         alignment.parquet
         chunk-0-0.bin
@@ -464,7 +464,7 @@ multi-join-dataset/
 {
   "format": "litdata-multi-join",
   "format_version": 1,
-  "active_snapshot": "01J5A1QGMGT8P4J8Q1Z0AXEF3R",
+  "active_snapshot": "snap-table1-v2",
   "updated_at": "2026-08-17T10:42:11Z"
 }
 ```
@@ -475,12 +475,12 @@ multi-join-dataset/
 {
   "format": "litdata-multi-join-snapshot",
   "format_version": 1,
-  "snapshot_id": "01J5A1QGMGT8P4J8Q1Z0AXEF3R",
-  "parent_snapshot_id": "01J4Y7M4VPH6V9B8P3N6K5W2HQ",
+  "snapshot_id": "snap-table1-v2",
+  "parent_snapshot_id": "snap-baseline",
   "created_at": "2026-08-17T10:42:10Z",
   "layout": {
-    "id": "6ce6f3...",
-    "path": "layouts/6ce6f3...",
+    "id": "layout-entity-v1",
+    "path": "layouts/layout-entity-v1",
     "key_name": "entity_id",
     "key_type": "string",
     "length": 1000000000,
@@ -489,19 +489,19 @@ multi-join-dataset/
     "alignment_root": "blake2b-256:..."
   },
   "tables": {
-    "features": {
-      "version": "features-v1",
-      "path": "tables/features/features-v1",
+    "table_0": {
+      "version": "v1",
+      "path": "tables/table_0/v1",
       "format": "litdata",
-      "layout_id": "6ce6f3...",
+      "layout_id": "layout-entity-v1",
       "alignment_root": "blake2b-256:...",
       "schema_fingerprint": "sha256:..."
     },
-    "labels": {
-      "version": "labels-v2",
-      "path": "tables/labels/labels-v2",
+    "table_1": {
+      "version": "v2",
+      "path": "tables/table_1/v2",
       "format": "litdata",
-      "layout_id": "6ce6f3...",
+      "layout_id": "layout-entity-v1",
       "alignment_root": "blake2b-256:...",
       "schema_fingerprint": "sha256:..."
     }
@@ -536,9 +536,17 @@ The key store must be sharded and streamed. Creating or validating a billion-row
 
 The canonical key order, rather than lexical key order, defines training positions. Key-index shards may be physically sorted or hash-partitioned for lookup as long as the stored `global_index`, `chunk_index`, and `chunk_offset` preserve the canonical order.
 
-### 8.4 Digest encoding
+### 8.4 Identifiers vs digests
 
-Digest computation must be deterministic across Python versions and machines:
+Three different identifiers appear in the format. They must not be confused:
+
+- **Snapshot ID** (for example `snap-baseline`): a human-readable name for one published combination of table versions. Assigned at commit time. It is **not** a hash of chunk bytes.
+- **Table version** (for example `v1`, `v2`): a human-readable name for one immutable build of a single table.
+- **Ordered-key digest / alignment root**: a compact fingerprint of the **canonical entity-key order** inside each logical bucket. Used only to prove tables are aligned. LitData does **not** compute content hashes of chunk payloads for this purpose.
+
+### 8.5 Digest encoding
+
+Digest computation (for ordered keys only) must be deterministic across Python versions and machines:
 
 1. Normalize the key to the supported integer or UTF-8 string representation.
 2. Prefix each key with a type tag.
@@ -551,7 +559,7 @@ The initial algorithm is `BLAKE2b-256`. The manifest stores the algorithm and ca
 
 Using `str(key)` concatenation without type and length framing is not acceptable because it can create ambiguous encodings.
 
-### 8.5 Table alignment metadata
+### 8.6 Table alignment metadata
 
 Every table version contains an `alignment.parquet` sidecar with:
 
@@ -566,9 +574,9 @@ The table `index.json` gains a backward-compatible `multi_join` section:
 {
   "multi_join": {
     "format_version": 1,
-    "table": "labels",
-    "table_version": "labels-v2",
-    "layout_id": "6ce6f3...",
+    "table": "table_1",
+    "table_version": "v2",
+    "layout_id": "layout-entity-v1",
     "length": 1000000000,
     "num_chunks": 488282,
     "alignment_root": "blake2b-256:..."
@@ -684,7 +692,7 @@ The following are hidden or rejected:
 
 `align_chunking=True` is important because it makes logical chunk boundaries independent of the number of optimize workers or nodes. Workers receive complete item-count chunks, and rank-index merge order reconstructs the canonical sequence.
 
-A labels table may therefore be rebuilt with 8 workers while a feature table was originally built with 256 workers, provided both consume the same canonical ordered inputs and logical `chunk_size`.
+A small table may therefore be rebuilt with 8 workers while a large table was originally built with 256 workers, provided both consume the same canonical ordered inputs and logical `chunk_size`.
 
 ### 10.4 V1 read path
 
@@ -763,9 +771,9 @@ An explicit join cache root is namespaced:
 ```text
 cache/
   <snapshot-id>/
-    features/
+    table_0/
       <version>/
-    labels/
+    table_1/
       <version>/
 ```
 
@@ -955,7 +963,7 @@ Snapshot tests:
 
 - A reader opened before commit continues on the old snapshot.
 - A reader opened after commit sees the new snapshot.
-- Features objects are not rewritten by a labels-only update.
+- `table_0` objects are not rewritten by a `table_1`-only update.
 - Rollback activates the previous immutable snapshot.
 - Concurrent stale writer commit fails.
 - Failure before active-manifest publication leaves the old snapshot active.
@@ -1026,10 +1034,10 @@ This permits small or schema-volatile tables to use an efficient physical repres
 
 Assume the canonical bucket contains 2,048 entities:
 
-- A feature bucket may be 64–256 MB.
-- A label bucket may be only tens or hundreds of KB.
+- A large `table_0` bucket may be 64–256 MB.
+- A small `table_1` bucket may be only tens or hundreds of KB.
 
-V1 writes one object for each in both tables. At very large scale, the labels table may have hundreds of thousands of tiny objects. This increases:
+V1 writes one object for each in both tables. At very large scale, a small table may have hundreds of thousands of tiny objects. This increases:
 
 - Object listing and metadata cost.
 - GET request count.
@@ -1038,7 +1046,7 @@ V1 writes one object for each in both tables. At very large scale, the labels ta
 - Cache bookkeeping.
 - Publication and garbage-collection overhead.
 
-V2 allows many label buckets to be packed into one appropriately sized object while preserving the original logical bucket boundaries for sampling.
+V2 allows many small-table buckets to be packed into one appropriately sized object while preserving the original logical bucket boundaries for sampling.
 
 ### 11.3 V2 storage model
 
@@ -1052,14 +1060,14 @@ multi-join-dataset/
       keys/
       partitions.parquet
   tables/
-    features/
+    table_0/
       <version>/
         table.json
         mapping.parquet
         objects/
           pack-00000.bin
           pack-00001.bin
-    labels/
+    table_1/
       <version>/
         table.json
         mapping.parquet
@@ -1149,8 +1157,8 @@ from litdata import MultiJoinWriter, TableStorage
 
 with MultiJoinWriter.open(root) as writer:
     writer.optimize_table(
-        "labels",
-        fn=build_labels_v3,
+        "table_1",
+        fn=build_table_1_v3,
         storage=TableStorage(
             format="parquet",
             target_chunk_bytes="128MB",
@@ -1160,12 +1168,12 @@ with MultiJoinWriter.open(root) as writer:
     writer.commit()
 ```
 
-Large feature table:
+Large table (`table_0`):
 
 ```python
 writer.optimize_table(
-    "features",
-    fn=build_features,
+    "table_0",
+    fn=build_table_0,
     storage=TableStorage(
         format="litdata",
         target_chunk_bytes="256MB",
@@ -1306,8 +1314,8 @@ The existing LitData sampler and independent readers can be reused.
 
 ```text
 logical buckets 0..9:
-  features -> 10 feature objects
-  labels   -> 1 packed label object
+  table_0 -> 10 objects
+  table_1 -> 1 packed object
 ```
 
 A new shared sampler and mapping-aware reader are required.
@@ -1323,12 +1331,12 @@ V2 does not accept arbitrary unrelated table sharding and repair it with per-sam
 01. Choose the entity key.
 02. Produce a unique canonical key list.
 03. Intentionally choose its training order.
-04. Choose the logical bucket item count based primarily on feature bytes and desired bucket sampling.
+04. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
 05. Create the immutable layout.
 06. Group each source table into one logical contribution per key.
 07. Align each table input to canonical `global_index`.
-08. Optimize stable large tables once.
-09. Optimize schema-volatile tables.
+08. Optimize large stable tables once.
+09. Optimize schema-volatile tables (for example `table_1`).
 10. Validate and publish the first snapshot.
 11. Benchmark against the current baked dataset.
 
