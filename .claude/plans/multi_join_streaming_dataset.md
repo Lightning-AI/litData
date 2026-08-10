@@ -1303,9 +1303,9 @@ The boundary is intentionally simple:
 ### V1 aligns physical chunks
 
 ```text
-logical bucket 0 -> features chunk 0 -> labels chunk 0
-logical bucket 1 -> features chunk 1 -> labels chunk 1
-logical bucket 2 -> features chunk 2 -> labels chunk 2
+logical bucket 0 -> table_0 chunk 0 -> table_1 chunk 0
+logical bucket 1 -> table_0 chunk 1 -> table_1 chunk 1
+logical bucket 2 -> table_0 chunk 2 -> table_1 chunk 2
 ```
 
 The existing LitData sampler and independent readers can be reused.
