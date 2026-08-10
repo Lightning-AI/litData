@@ -20,6 +20,12 @@ import torch
 from lightning_utilities.core.imports import RequirementCache
 
 _INDEX_FILENAME = "index.json"
+_KEYS_DIRNAME = "keys"
+_KEYS_SHARD_TEMPLATE = "shard-{:05d}.parquet"
+# Legacy single-file sidecar (still read if present).
+_KEYS_FILENAME = "keys.parquet"
+_RANK_KEYS_SUFFIX = ".keys.parquet"
+_DEFAULT_KEYS_NUM_SHARDS = 1
 _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")

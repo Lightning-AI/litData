@@ -183,6 +183,8 @@ class StreamingDataset(IterableDataset):
         # Upcoming in-chunk sample indexes for this worker. ``deque`` keeps ``popleft`` O(1);
         # a list ``pop(0)`` would be O(n) per sample for large chunks.
         self.upcoming_indexes: deque[int] = deque()
+        # Lazy parquet key index (``keys/shard-*.parquet``) for ``dataset[key]`` lookups.
+        self._key_index: Any | None = None
 
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
@@ -484,11 +486,15 @@ class StreamingDataset(IterableDataset):
         # bump the chunk_index
         self.worker_next_chunk_index += 1
 
-    def __getitem__(self, index: ChunkedIndex | int | slice) -> Any:
+    def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
             self.shuffler = self._create_shuffler(self.cache)
+        # String keys go through the keys/ store. Int remains a global sample index;
+        # use ``get_by_key`` for int entity keys.
+        if isinstance(index, str):
+            return self.get_by_key(index)
         if isinstance(index, int):
             index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
         elif isinstance(index, slice):
@@ -506,6 +512,41 @@ class StreamingDataset(IterableDataset):
                 item = self.transform(item)
 
         return item
+
+    def get_by_key(self, key: Any) -> Any:
+        """Load a sample by entity key from the ``keys/`` store (str or int keys).
+
+        The key store is read from the dataset root (local cache if present, else
+        the remote URL). Remote lookups use Polars ``scan_parquet`` with predicate
+        pushdown so shards stay in object storage.
+        """
+        from litdata.utilities.keys_index import KeyIndex, has_keys_index
+
+        if self.cache is None:
+            self.worker_env = _WorkerEnv.detect()
+            self.cache = self._create_cache(worker_env=self.worker_env)
+            self.shuffler = self._create_shuffler(self.cache)
+
+        if self._key_index is None:
+            local_root = self.input_dir.path
+            remote_root = self.input_dir.url
+            root: str | None = None
+            if local_root and has_keys_index(local_root):
+                root = local_root
+            elif remote_root and has_keys_index(remote_root, self.storage_options):
+                root = remote_root
+            if root is None:
+                raise KeyError(
+                    f"Keyed access requires a keys/ index next to the dataset. Missing for key={key!r}."
+                )
+            self._key_index = KeyIndex(root, storage_options=self.storage_options)
+
+        global_index, chunk_index, chunk_offset = self._key_index.resolve(key)
+        if chunk_index >= 0:
+            chunked = ChunkedIndex(index=chunk_offset, chunk_index=chunk_index)
+        else:
+            chunked = ChunkedIndex(*self.cache._get_chunk_index_from_index(global_index))
+        return self[chunked]
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)

@@ -169,6 +169,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
+        key_fn: Callable[[Any], Any] | None = None,
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -176,6 +177,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
             compression=compression,
             encryption=encryption,
             storage_options=storage_options,
+            key_fn=key_fn,
         )
         self._fn = fn
         self._inputs = inputs
@@ -220,6 +222,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
+        key_fn: Callable[[Any], Any] | None = None,
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -227,6 +230,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
             compression=compression,
             encryption=encryption,
             storage_options=storage_options,
+            key_fn=key_fn,
         )
         self._fn = fn
         self._queue = queue
@@ -422,6 +426,7 @@ def optimize(
     keep_data_ordered: bool = True,
     verbose: bool = True,
     broadcast_paths: bool = False,
+    key_fn: Callable[[Any], Any] | None = None,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -473,6 +478,9 @@ def optimize(
         broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
             Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template so ranks
             share one expanded path. When off, each rank uses its locally resolved path.
+        key_fn: Optional callable ``sample -> key`` (str or int). When set, writes a ``keys/``
+            sidecar mapping each key to its sample ``index`` (and chunk location) for
+            ``dataset[key]`` / ``dataset_update``.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -608,6 +616,7 @@ def optimize(
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
+                    key_fn=key_fn,
                 )
             else:
                 assert queue is not None
@@ -620,6 +629,7 @@ def optimize(
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
+                    key_fn=key_fn,
                 )
             assert recipe is not None, "Recipe should be defined at this point."
             data_processor.run(recipe)

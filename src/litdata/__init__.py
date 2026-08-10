@@ -19,11 +19,13 @@ from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
+from litdata.streaming.dataset_update import dataset_update
 from litdata.streaming.item_loader import TokensLoader
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
+from litdata.utilities.keys_index import build_keys_index
 from litdata.utilities.train_test_split import train_test_split
 
 warnings.filterwarnings(
@@ -41,6 +43,8 @@ __all__ = [
     "ParallelStreamingDataset",
     "map",
     "optimize",
+    "dataset_update",
+    "build_keys_index",
     "walk",
     "train_test_split",
     "merge_datasets",

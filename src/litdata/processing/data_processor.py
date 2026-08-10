@@ -31,7 +31,7 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
 from time import sleep, time
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 from urllib import parse
 
 import numpy as np
@@ -566,6 +566,8 @@ class BaseWorker:
         self.checkpoint_next_index: int | None = checkpoint_next_index
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
+        # Explicit (writer_sample_index, key) pairs — index is the same value passed to Cache._add_item.
+        self._key_pairs: list[tuple[int, Any]] = []
 
     def run(self) -> None:
         try:
@@ -868,14 +870,27 @@ class BaseWorker:
                 return
 
             item_data_or_generator = self.data_recipe.prepare_item(current_item)
+            key_fn = getattr(self.data_recipe, "key_fn", None)
             if self.data_recipe.is_generator:
                 for item_data in item_data_or_generator:
                     if item_data is not None:
-                        chunk_filepath = self.cache._add_item(self._index_counter, item_data)
+                        sample_index = self._index_counter
+                        if key_fn is not None:
+                            from litdata.utilities.keys_index import normalize_key
+
+                            self._key_pairs.append((sample_index, normalize_key(key_fn(item_data))))
+                        chunk_filepath = self.cache._add_item(sample_index, item_data)
                         self._try_upload(chunk_filepath)
                         self._index_counter += 1
             elif item_data_or_generator is not None:
-                chunk_filepath = self.cache._add_item(self._index_counter, item_data_or_generator)
+                sample_index = self._index_counter
+                if key_fn is not None:
+                    from litdata.utilities.keys_index import normalize_key
+
+                    self._key_pairs.append(
+                        (sample_index, normalize_key(key_fn(item_data_or_generator)))
+                    )
+                chunk_filepath = self.cache._add_item(sample_index, item_data_or_generator)
                 self._try_upload(chunk_filepath)
                 self._index_counter += 1
                 if self.use_checkpoint:
@@ -895,6 +910,15 @@ class BaseWorker:
             for i, chunk_filepath in enumerate(chunks_filepaths):
                 if isinstance(chunk_filepath, str) and os.path.exists(chunk_filepath):
                     self.to_upload_queues[i % self.num_uploaders].put(chunk_filepath)
+
+        if getattr(self.data_recipe, "key_fn", None) is not None:
+            from litdata.utilities.keys_index import save_rank_keys
+
+            # Keep rank key files in the cache until `_merge_and_upload_keys` runs.
+            # Do not `_try_upload` them — upload removes the local file and merge would miss them.
+            rank = _get_node_rank() * self.num_workers + self.worker_index
+            keys_filepath = os.path.join(self.cache_chunks_dir, f"{rank}.keys.parquet")
+            save_rank_keys(keys_filepath, self._key_pairs)
 
         if self.use_checkpoint and not self.data_recipe.is_generator:
             checkpoint_filepath = self.cache.save_checkpoint()
@@ -986,6 +1010,7 @@ class DataChunkRecipe(DataRecipe):
         compression: str | None = None,
         encryption: Encryption | None = None,
         storage_options: dict[str, Any] = {},
+        key_fn: Callable[[Any], Any] | None = None,
     ):
         super().__init__(storage_options)
         if chunk_size is not None and chunk_bytes is not None:
@@ -995,6 +1020,7 @@ class DataChunkRecipe(DataRecipe):
         self.chunk_bytes = 1 << 26 if chunk_size is None and chunk_bytes is None else chunk_bytes  # 1<<26 = 64 MB
         self.compression = compression
         self.encryption = encryption
+        self.key_fn = key_fn
 
     @abstractmethod
     def prepare_structure(self, input_dir: str | None) -> list[T]:
@@ -1020,6 +1046,7 @@ class DataChunkRecipe(DataRecipe):
         node_rank = _get_node_rank()
         merge_cache._merge_no_wait(node_rank if num_nodes > 1 else None, getattr(self, "existing_index", None))
 
+        self._merge_and_upload_keys(output_dir, cache_dir, num_nodes, node_rank)
         self._upload_index(output_dir, cache_dir, num_nodes, node_rank)
 
         if num_nodes == node_rank + 1:
@@ -1049,6 +1076,123 @@ class DataChunkRecipe(DataRecipe):
         return _Result(
             size=size,
         )
+
+    def _merge_and_upload_keys(
+        self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None
+    ) -> None:
+        """Merge per-rank key sidecars and publish ``keys/shard-*.parquet`` next to ``index.json``."""
+        if getattr(self, "key_fn", None) is None:
+            return
+
+        from litdata.constants import _INDEX_FILENAME
+        from litdata.utilities.keys_index import (
+            concatenate_key_files,
+            enrich_keys_with_chunks,
+            has_keys_index,
+            list_key_parquet_files,
+            merge_rank_key_files,
+        )
+
+        def _enrich_if_index(dataset_dir: str) -> None:
+            index_path = os.path.join(cache_dir, _INDEX_FILENAME)
+            if os.path.isfile(index_path):
+                with open(index_path, encoding="utf-8") as f:
+                    enrich_keys_with_chunks(dataset_dir, json.load(f))
+
+        # Single-node (or per-node partial): merge rank files present in this cache.
+        if num_nodes <= 1:
+            merged = merge_rank_key_files(cache_dir)
+            if merged is None:
+                return
+            existing = getattr(self, "existing_index", None)
+            # Append mode: prepend keys from the previous dataset if present on output_dir.
+            if existing is not None and output_dir.path and has_keys_index(output_dir.path):
+                concatenate_key_files(
+                    list_key_parquet_files(output_dir.path) + list_key_parquet_files(cache_dir),
+                    cache_dir,
+                )
+            _enrich_if_index(cache_dir)
+            self._upload_keys_store(output_dir, cache_dir)
+            return
+
+        # Multi-node: each node merges local rank keys into ``{node_rank}-keys.parquet``,
+        # then the last node concatenates into the final ``keys/`` store.
+        assert node_rank is not None
+        node_keys_name = f"{node_rank}-keys.parquet"
+        merged = merge_rank_key_files(cache_dir, output_filename=node_keys_name)
+        if merged is None:
+            return
+        self._upload_file(output_dir, cache_dir, node_keys_name)
+
+        if num_nodes != node_rank + 1:
+            return
+
+        obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
+        local_paths: list[str] = []
+        for nr in range(num_nodes):
+            name = f"{nr}-keys.parquet"
+            local_path = os.path.join(cache_dir, name)
+            if nr != node_rank:
+                remote_base = output_dir.url if output_dir.url else output_dir.path
+                assert remote_base
+                remote_filepath = os.path.join(remote_base, name)
+                if obj.scheme in _SUPPORTED_PROVIDERS:
+                    merged_storage_options = construct_storage_options(self.storage_options, output_dir)
+                    _wait_for_file_to_exist(remote_filepath, storage_options=merged_storage_options)
+                    fs_provider = _get_fs_provider(remote_filepath, merged_storage_options)
+                    fs_provider.download_file(remote_filepath, local_path)
+                elif output_dir.path and os.path.isdir(output_dir.path):
+                    shutil.copyfile(remote_filepath, local_path)
+            local_paths.append(local_path)
+
+        concatenate_key_files(local_paths, cache_dir)
+        _enrich_if_index(cache_dir)
+        self._upload_keys_store(output_dir, cache_dir)
+
+    def _upload_keys_store(self, output_dir: Dir, cache_dir: str) -> None:
+        """Upload ``keys/shard-*.parquet`` next to the dataset (layout lives in ``index.json``)."""
+        from litdata.constants import _KEYS_DIRNAME
+        from litdata.utilities.keys_index import keys_dir, list_shard_files
+
+        if output_dir.path is None and output_dir.url is None:
+            return
+        local_keys = keys_dir(cache_dir)
+        if not os.path.isdir(local_keys):
+            return
+
+        rel_files = [os.path.basename(p) for p in list_shard_files(local_keys)]
+        obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
+        for name in rel_files:
+            local_filepath = os.path.join(local_keys, name)
+            if not os.path.isfile(local_filepath):
+                continue
+            remote_rel = os.path.join(_KEYS_DIRNAME, name)
+            if obj.scheme in _SUPPORTED_PROVIDERS:
+                assert output_dir.url
+                merged_storage_options = construct_storage_options(self.storage_options, output_dir)
+                fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
+                fs_provider.upload_file(local_filepath, os.path.join(output_dir.url, remote_rel))
+            elif output_dir.path and os.path.isdir(output_dir.path):
+                dest_dir = os.path.join(output_dir.path, _KEYS_DIRNAME)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, name)
+                if os.path.abspath(local_filepath) != os.path.abspath(dest):
+                    shutil.copyfile(local_filepath, dest)
+
+    def _upload_file(self, output_dir: Dir, cache_dir: str, filename: str) -> None:
+        if output_dir.path is None and output_dir.url is None:
+            return
+        local_filepath = os.path.join(cache_dir, filename)
+        if not os.path.isfile(local_filepath):
+            return
+        obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
+        if obj.scheme in _SUPPORTED_PROVIDERS:
+            assert output_dir.url
+            merged_storage_options = construct_storage_options(self.storage_options, output_dir)
+            fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
+            fs_provider.upload_file(local_filepath, os.path.join(output_dir.url, filename))
+        elif output_dir.path and os.path.isdir(output_dir.path):
+            shutil.copyfile(local_filepath, os.path.join(output_dir.path, filename))
 
     def _upload_index(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None) -> None:
         """Upload the index file to the remote cloud directory."""

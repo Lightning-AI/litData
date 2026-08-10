@@ -51,7 +51,7 @@ def _get_tqdm_iterator_if_available() -> Any:
 
         return _tqdm
 
-    def _pass_through(iterator: Any) -> Any:
+    def _pass_through(iterator: Any, *args: Any, **kwargs: Any) -> Any:
         yield from iterator
 
     return _pass_through
