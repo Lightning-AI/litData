@@ -279,10 +279,10 @@ Separate input lists or separate distributed schedules can diverge in order, fil
 
 ### 7.3 Update or add one table with `join_update_optimize`
 
-| Operation | Alignment property |
-|---|---|
-| `join_optimize` initial build | Guaranteed by one canonical traversal and synchronized writers |
-| `join_update_optimize` | Validated against the persisted canonical layout |
+| Operation                             | Alignment property                                                |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `join_optimize` initial build         | Guaranteed by one canonical traversal and synchronized writers    |
+| `join_update_optimize`                | Validated against the persisted canonical layout                  |
 | Future layout-driven update (post-V1) | Guaranteed by streaming persisted layout keys through `lookup_fn` |
 
 `join_update_optimize` does **not** infer or repair entity order. It validates that the provided input stream reproduces the persisted layout exactly. A key mismatch, missing entity, duplicate displacement, extra entity, or different final length fails the job before snapshot publication.
@@ -1579,20 +1579,20 @@ V2 does not accept arbitrary unrelated table sharding and repair it with per-sam
 
 ### One-time migration
 
-01. Choose `key_fn` over the **source input item** (`entity_id` or equivalent).
-02. Build one ordered `inputs` stream that can feed every table builder.
-03. Intentionally shuffle / curate that order before `join_optimize` when source order has structure.
-04. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
-05. Run one `join_optimize` job with `tables={name: TableBuild(...)}` (local or multi-node).
-06. Validate the published snapshot with `validate_tables_dataset`.
-07. Benchmark against the current baked dataset.
+1. Choose `key_fn` over the **source input item** (`entity_id` or equivalent).
+2. Build one ordered `inputs` stream that can feed every table builder.
+3. Intentionally shuffle / curate that order before `join_optimize` when source order has structure.
+4. Choose the logical bucket item count based primarily on the largest table's bytes and desired bucket sampling.
+5. Run one `join_optimize` job with `tables={name: TableBuild(...)}` (local or multi-node).
+6. Validate the published snapshot with `validate_tables_dataset`.
+7. Benchmark against the current baked dataset.
 
 ### Small-table schema update or add-table
 
-01. Keep existing sibling table versions as-is.
-02. Run `join_update_optimize(..., table=..., version=..., base_snapshot=..., expected_snapshot=...)` with inputs in layout order and `key_fn(input_item)` checks.
-03. Start new training jobs on the newly published snapshot.
-04. Leave existing jobs pinned to their original snapshot (they cannot see newly added tables).
+1. Keep existing sibling table versions as-is.
+2. Run `join_update_optimize(..., table=..., version=..., base_snapshot=..., expected_snapshot=...)` with inputs in layout order and `key_fn(input_item)` checks.
+3. Start new training jobs on the newly published snapshot.
+4. Leave existing jobs pinned to their original snapshot (they cannot see newly added tables).
 
 ### Rollback
 
