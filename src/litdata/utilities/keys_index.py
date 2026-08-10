@@ -814,6 +814,13 @@ def iter_key_indexes(
     finally:
         if pbar is not None:
             pbar.close()
+        # Release Windows file locks from mmap before callers rewrite chunks.
+        item_loader = getattr(cache._reader, "_item_loader", None)
+        close_open = getattr(item_loader, "_close_open_chunk", None)
+        if callable(close_open):
+            close_open()
+        elif item_loader is not None and hasattr(item_loader, "close") and intervals:
+            item_loader.close(len(intervals) - 1)
 
     if global_index != total:
         raise RuntimeError(f"Key scan produced {global_index} samples but index reports {total}.")

@@ -218,7 +218,19 @@ class DatasetUpdate:
         global_start = self._chunk_starts[chunk_i]
 
         cache = Cache(self._dir, chunk_bytes=1)
-        samples = [cache[global_start + i] for i in range(chunk_size)]
+        samples: list[Any]
+        try:
+            samples = [cache[global_start + i] for i in range(chunk_size)]
+        finally:
+            # Windows cannot replace a chunk that still has an open mmap/handle.
+            item_loader = getattr(cache._reader, "_item_loader", None)
+            close_open = getattr(item_loader, "_close_open_chunk", None)
+            if callable(close_open):
+                close_open()
+            elif item_loader is not None and hasattr(item_loader, "close"):
+                item_loader.close(chunk_i)
+            del cache
+
         for local_i, sample in local_updates.items():
             samples[local_i] = sample
 
