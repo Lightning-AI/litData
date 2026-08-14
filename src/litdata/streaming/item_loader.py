@@ -977,12 +977,12 @@ class TokensLoader(BaseItemLoader):
         # while creating the memory map.
         offset = self._dtype.itemsize * (index - begin) * self._block_size
 
+        # Copy out of the memmap. ``close()`` unmaps the previous chunk on the next sample, and
+        # DataLoader may still be pickling the last items — a view into a closed mmap is SIGSEGV.
         if self._serializer_name == "no_header_tensor":
-            # count: number of tokens to read from buffer => `self._block_size`
-            data = torch.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset)
+            data = torch.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset).clone()
         else:
-            # count: number of tokens to read from buffer => `self._block_size`
-            data = np.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset)  # type: ignore
+            data = np.frombuffer(buffer, dtype=self._dtype, count=self._block_size, offset=offset).copy()  # type: ignore
 
         return data
 
@@ -1001,6 +1001,13 @@ class TokensLoader(BaseItemLoader):
     def close(self, chunk_index: int) -> None:
         """Release the memory-mapped file for a specific chunk index."""
         self._counter[chunk_index] -= 1
+
+        if self._posix_fast:
+            # Keep mappings in the LRU; unmapping here races DataLoader IPC (SIGSEGV in CI).
+            if self._counter[chunk_index] <= 0:
+                self._counter.pop(chunk_index, None)
+            self._evict_token_mmaps()
+            return
 
         if self._counter[chunk_index] <= 0:
             if chunk_index in self._buffers:
