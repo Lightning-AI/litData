@@ -28,7 +28,7 @@ def test_get_log_msg_sanitizes_semicolons_and_newlines():
 
 
 def test_one_line_trace_formatter_drops_traceback():
-    from litdata.debugger import _OneLineTraceFormatter, _get_log_msg
+    from litdata.debugger import _get_log_msg, _OneLineTraceFormatter
 
     formatter = _OneLineTraceFormatter("ts:%(asctime)s;PID:%(process)d; TID:%(thread)d; %(message)s")
     try:
