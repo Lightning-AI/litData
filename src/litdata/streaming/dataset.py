@@ -697,7 +697,9 @@ class StreamingDataset(IterableDataset):
         self.stop_length = sum(len(items) for items in self._elastic_item_lists)
         self.num_chunks = len(self.worker_chunks)
         if replay_workers and state:
-            indexes = _replay_sampling(local_yielded, int(state.get("batch_size", self.batch_size)), self.worker_env.world_size)
+            indexes = _replay_sampling(
+                local_yielded, int(state.get("batch_size", self.batch_size)), self.worker_env.world_size
+            )
             self._skip_elastic_worker_prefix(indexes.get(self.worker_env.rank, 0))
         if drop_first:
             logger.info(
