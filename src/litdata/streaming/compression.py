@@ -11,16 +11,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14, _ZSTD_AVAILABLE
-from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.debugger import CAT_DECOMPRESS, trace_span
 
 TCompressor = TypeVar("TCompressor", bound="Compressor")
-
-logger = logging.getLogger("litdata.streaming.compression")
 
 
 class Compressor(ABC):
@@ -68,9 +65,8 @@ class ZSTDCompressor(Compressor):
         else:
             import zstd
 
-        logger.debug(_get_log_msg({"name": "decompress", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
-        decompressed_data = zstd.decompress(data)
-        logger.debug(_get_log_msg({"name": "decompress", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
+        with trace_span("decompress", CAT_DECOMPRESS):
+            decompressed_data = zstd.decompress(data)
         return decompressed_data
 
     @classmethod

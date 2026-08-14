@@ -29,7 +29,7 @@ import numpy as np
 from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
-from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.debugger import CAT_CRASH, CAT_DOWNLOAD, CAT_READ, emit_trace, trace_span
 from litdata.streaming.async_prefetch import (
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
@@ -593,33 +593,13 @@ class PrepareChunksThread(Thread):
                 deferred.append(idx)
 
         t0 = self._timing.start()
-        for chunk_index in pending:
-            logger.debug(
-                _get_log_msg(
-                    {
-                        "name": f"prefetch_download_chunk_{chunk_index}",
-                        "ph": "B",
-                        "cname": ChromeTraceColors.TEAL,
-                    }
-                )
-            )
-        if pending:
-            if self._async_prefetch() and len(pending) > 1:
-                download_chunk_indexes_concurrently(self._config, pending)
-            else:
-                for chunk_index in pending:
-                    self._config.download_chunk_from_index(chunk_index)
-
-        for chunk_index in pending:
-            logger.debug(
-                _get_log_msg(
-                    {
-                        "name": f"prefetch_download_chunk_{chunk_index}",
-                        "ph": "E",
-                        "cname": ChromeTraceColors.TEAL,
-                    }
-                )
-            )
+        with trace_span("prefetch", CAT_DOWNLOAD, chunks=len(pending)):
+            if pending:
+                if self._async_prefetch() and len(pending) > 1:
+                    download_chunk_indexes_concurrently(self._config, pending)
+                else:
+                    for chunk_index in pending:
+                        self._config.download_chunk_from_index(chunk_index)
         self._timing.record("chunk_download_s", t0)
         # Finalize only chunks we own / already had — not deferred ones.
         for chunk_index, was_there in existed.items():
@@ -638,11 +618,12 @@ class PrepareChunksThread(Thread):
         return self._error
 
     def _report_crash(self, exc: BaseException) -> None:
-        """Make a prefetch-thread death obvious in worker logs, then stash it for waiters.
+        """Make a prefetch-thread death obvious in stderr and in the LitData tracer.
 
-        DataLoader workers often do not surface ``logger.exception`` from a daemon
-        thread. Print a flushed traceback to stderr so the original error shows up
-        in the training log instead of only a later ``FileNotFoundError``.
+        DataLoader workers often swallow ``logger.exception`` from a daemon thread.
+        Print a flushed traceback to stderr for the training log. Also emit a
+        one-line Chrome-trace instant event (``ph: I``) so ``enable_tracer()`` /
+        Litracer is not corrupted by a multi-line traceback.
         """
         rank = self._rank if self._rank is not None else self._distributed_env.global_rank
         worker = self._worker_env.rank
@@ -652,10 +633,16 @@ class PrepareChunksThread(Thread):
             "Chunk downloads have stopped. The reader will fail with this error "
             "instead of waiting until FileNotFoundError."
         )
-        logger.exception(header)
         print(header, file=sys.stderr, flush=True)
         traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
         sys.stderr.flush()
+        emit_trace(
+            "crash",
+            "I",
+            CAT_CRASH,
+            exception=type(exc).__name__,
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
     def run(self) -> None:
         try:
@@ -962,15 +949,9 @@ class BinaryReader:
 
         if index.chunk_index != self._last_chunk_index:
             if self._last_chunk_index is not None:
-                # 2. Log the "End" event for the previous chunk.
-                logger.debug(
-                    _get_log_msg(
-                        {"name": f"read_chunk_{self._last_chunk_index}_size_{self._last_chunk_size}", "ph": "E"}
-                    )
-                )
+                emit_trace("read", "E", CAT_READ, chunk=self._last_chunk_index, size=self._last_chunk_size)
 
-            # 2. Log the "Begin" event for the NEW chunk.
-            logger.debug(_get_log_msg({"name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}", "ph": "B"}))
+            emit_trace("read", "B", CAT_READ, chunk=index.chunk_index, size=index.chunk_size)
 
             # Close the memory-mapped file for the last chunk index.
             # PyTreeLoader is intentionally excluded: it keeps only one open chunk and already
@@ -984,6 +965,9 @@ class BinaryReader:
             self._last_chunk_size = index.chunk_size
 
         if index.is_last_index and self._prepare_thread:
+            if self._last_chunk_index is not None:
+                emit_trace("read", "E", CAT_READ, chunk=self._last_chunk_index, size=self._last_chunk_size)
+
             # Close the item loader's handle on the last chunk before requesting
             # deletion.  On Windows, os.remove fails if the file is still open.
             self._item_loader.close(self._last_chunk_index)

@@ -49,9 +49,11 @@ Code: `streaming/async_prefetch.py`. Cache interaction: [cache-and-chunk-lifecyc
 | `PRINT_DEBUG_LOGS`              | `0`                 | Print debug logs to stdout                 |
 | `LITDATA_LOG_FILE`              | `litdata_debug.log` | Trace log path (`enable_tracer`)           |
 | `LITDATA_LOG_LEVEL`             | `DEBUG`             | Trace log level                            |
-| `LITDATA_LOG_ITERATING_DATASET` | `True`              | Include iterate events                     |
-| `LITDATA_LOG_GETITEM`           | `True`              | Include getitem events                     |
-| `LITDATA_LOG_ITEM_LOADER`       | `True`              | Include item-loader events                 |
+| `LITDATA_TRACE_LEVEL`           | unset               | `batch` / `chunk` / `sample` / `debug` / `off` |
+| `LITDATA_TRACE_CATEGORIES`      | from level          | Comma-separated cats: `download,read,delete,batch,sample,...` |
+| `LITDATA_LOG_ITERATING_DATASET` | from level          | Legacy include flag for epoch events       |
+| `LITDATA_LOG_GETITEM`           | from level          | Legacy include flag for sample events      |
+| `LITDATA_LOG_ITEM_LOADER`       | from level          | Legacy include flag for sample events      |
 | `ENABLE_STATUS_REPORT`          | `0`                 | Extra Studio progress JSON during optimize |
 
 ## `optimize` / `map` multi-node **(usually set by the platform)**

@@ -33,7 +33,7 @@ from litdata.constants import (
     _INDEX_FILENAME,
     _OBSTORE_AVAILABLE,
 )
-from litdata.debugger import _get_log_msg
+from litdata.debugger import CAT_DOWNLOAD, CAT_LOCK, emit_trace
 from litdata.streaming.client import R2Client, S3Client
 
 if TYPE_CHECKING:
@@ -215,12 +215,12 @@ class Downloader(ABC):
                 curr_count = 0
             curr_count += 1
             with open(countpath, "w+") as count_f:
-                logger.debug(_get_log_msg({"name": f"increment_lock_chunk_{chunk_index}_to_{curr_count}", "ph": "B"}))
+                emit_trace("lock", "B", CAT_LOCK, op="increment", chunk=chunk_index, count=curr_count)
                 count_f.write(str(curr_count))
-                logger.debug(_get_log_msg({"name": f"increment_lock_chunk_{chunk_index}_to_{curr_count}", "ph": "E"}))
+                emit_trace("lock", "E", CAT_LOCK, op="increment", chunk=chunk_index, count=curr_count)
 
     def download_chunk_from_index(self, chunk_index: int) -> None:
-        logger.debug(_get_log_msg({"name": f"download_chunk_{chunk_index}", "ph": "B"}))
+        emit_trace("download", "B", CAT_DOWNLOAD, chunk=chunk_index)
 
         chunk_filename = self._chunks[chunk_index]["filename"]
         local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
@@ -228,7 +228,7 @@ class Downloader(ABC):
 
         self.download_file(remote_chunkpath, local_chunkpath)
 
-        logger.debug(_get_log_msg({"name": f"download_chunk_{chunk_index}", "ph": "E"}))
+        emit_trace("download", "E", CAT_DOWNLOAD, chunk=chunk_index)
 
     def download_chunk_bytes_from_index(self, chunk_index: int, offset: int, length: int) -> bytes:
         chunk_filename = self._chunks[chunk_index]["filename"]

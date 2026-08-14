@@ -12,14 +12,17 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Introduced `CHANGELOG.md` to track changes across releases ([#733](https://github.com/lightning-ai/litdata/pull/733))
 - Add environment variable `LITDATA_DISABLE_VERSION_CHECK` to disable PyPI version check ([#737](https://github.com/Lightning-AI/litData/pull/737))
+- Leveled pipeline tracing: `enable_tracer(level="batch"|"chunk"|"sample"|"debug")` or `categories=["download", "read", "delete"]`. Events use stable names (`download`, `read`, `delete`, `batch`, `sample`) with indexes in args so Perfetto groups download vs read vs delete.
 
 ### Changed
+
+- Tracer log timestamps are Chrome/Perfetto microseconds (`created * 1e6`). `enable_tracer(log_file=...)` selects the Litracer input file. Close the last `read` span when a worker finishes so Litracer B/E pairs match. Tracer calls are no-ops when tracing is off.
 
 ### Removed
 
 ### Fixed
 
-- Fix async S3/R2 chunk prefetch crashing the prepare thread when `storage_options` contains LitData metadata (`data_connection_id`) or client-only keys (`endpoint_url`). The wait loop now surfaces that crash immediately instead of timing out as `FileNotFoundError`. Prepare-thread deaths also print a traceback to stderr with rank and worker so DataLoader logs show the original error.
+- Fix async S3/R2 chunk prefetch crashing the prepare thread when `storage_options` contains LitData metadata (`data_connection_id`) or client-only keys (`endpoint_url`). The wait loop now surfaces that crash immediately instead of timing out as `FileNotFoundError`. Prepare-thread deaths print a traceback to stderr and emit a one-line Litracer instant event (`ph: I`) instead of a multi-line `logger.exception` that breaks `litdata_debug.log`.
 - Fix multi-worker `StreamingDataLoader` `FileNotFoundError` on `s3://` datasets: obstore's tokio runtime is not fork-safe, so `index.json` is fetched with boto3 in the parent and workers lazy-init a fresh obstore store. If the parent already started obstore, workers fall back to boto3 instead of hanging until the chunk wait times out.
 
 

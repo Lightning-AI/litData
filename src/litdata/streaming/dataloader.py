@@ -35,7 +35,7 @@ from torch.utils.data.dataloader import (
 from torch.utils.data.sampler import BatchSampler, Sampler
 
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
-from litdata.debugger import _get_log_msg
+from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
@@ -715,22 +715,27 @@ class StreamingDataLoader(DataLoader):
             self.current_epoch += 1
 
         self.dataset.set_epoch(self.current_epoch)
-        logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "B"}))
+        emit_trace("dataloader", "B", CAT_EPOCH, epoch=self.current_epoch)
+        batch_idx = 0
 
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
             timing = StreamingTimingStats.instance()
             for batch in super().__iter__():
+                emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
                 t0 = timing.start()
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
                 self._num_samples_yielded_streaming += self.batch_size
                 timing.record("dataloader_yield_s", t0)
                 yield batch
+                emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                batch_idx += 1
         else:
             self.dataset._set_use_streaming_dataloader(True)
             assert self.batch_size
             # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
             for batch in super().__iter__():
+                emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
                 if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
                     self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
@@ -748,6 +753,8 @@ class StreamingDataLoader(DataLoader):
                     yield batch[__SAMPLES_KEY__]
                 else:
                     yield batch
+                emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                batch_idx += 1
 
         # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
         # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
@@ -756,7 +763,7 @@ class StreamingDataLoader(DataLoader):
         # that the *next* `__iter__` call keeps skipping `reset_state_dict()` and replays from the
         # loaded state (see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). `restore` is
         # only toggled back to `False` here, once the loop above completes a full epoch normally.
-        logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
+        emit_trace("dataloader", "E", CAT_EPOCH, epoch=self.current_epoch)
         self.restore = False
 
     def __len__(self) -> int:

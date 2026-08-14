@@ -339,8 +339,10 @@ def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
         assert item == i
 
 
-def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, capsys):
+def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, capsys, caplog):
     """A download exception must be stored on the thread instead of dying silently."""
+    from litdata.debugger import CAT_CRASH, _set_active_categories
+
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
     config = mock.MagicMock()
@@ -356,7 +358,12 @@ def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, cap
         raise TypeError("Session.__init__() got an unexpected keyword argument 'data_connection_id'")
 
     thread._run_loop = boom  # type: ignore[method-assign]
-    thread.run()
+    _set_active_categories(frozenset({CAT_CRASH}))
+    try:
+        with caplog.at_level("DEBUG", logger="litdata"):
+            thread.run()
+    finally:
+        _set_active_categories(frozenset())
 
     err = thread.prefetch_error()
     assert isinstance(err, TypeError)
@@ -368,3 +375,8 @@ def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, cap
     assert "rank=0" in logged
     assert "data_connection_id" in logged
     assert "Traceback (most recent call last)" in logged
+
+    tracer_msgs = [rec.getMessage() for rec in caplog.records if "name: crash;" in rec.getMessage()]
+    assert tracer_msgs
+    assert all("ph: I;" in msg and "cat: crash;" in msg for msg in tracer_msgs)
+    assert all("\n" not in msg and "Traceback" not in msg for msg in tracer_msgs)

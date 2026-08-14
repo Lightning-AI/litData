@@ -42,7 +42,10 @@ Run with `num_workers=0` first when you can — it keeps everything in the main 
 import litdata as ld
 from litdata.debugger import enable_tracer
 
-enable_tracer()   # WARNING: delete an existing litdata_debug.log first, or traces mix
+enable_tracer(level="chunk")  # download / read / delete / decompress / batch
+# enable_tracer(level="batch")
+# enable_tracer(level="sample")
+# enable_tracer(categories=["download", "read", "delete"])
 
 if __name__ == "__main__":
     dataset = ld.StreamingDataset("s3://my-bucket/my-data", shuffle=True)
@@ -59,7 +62,7 @@ litracer litdata_debug.log -o litdata_trace.json -w 100
 # open litdata_trace.json in ui.perfetto.dev (preferred) or chrome://tracing
 ```
 
-`enable_tracer(flush_interval=5, item_loader=True, iterating_dataset=True, getitem_dataset_for_chunk_index=True)` sets the `LITDATA_LOG_*` env vars and returns a singleton `LitDataLogger`. `TimedFlushFileHandler` flushes every N seconds from a daemon thread. `env_info()` auto-injects distributed + worker rank/world-size into every event. `ChromeTraceColors` holds trace phase colors.
+`enable_tracer(level="chunk")` (`debugger.py`) logs the streaming pipeline to a file. Levels: `batch` (epoch + per-batch), `chunk` (default: + download/read/delete/decompress), `sample` (+ per-item), `debug` (+ locks). Or pass `categories=["download", "read", "delete"]`. Stable event names (`download`, `read`, `delete`) group in Perfetto; chunk/sample indexes live in args. `TimedFlushFileHandler` flushes every N seconds. `env_info()` injects rank/worker into every event.
 
 ## Environment variables
 
@@ -83,7 +86,7 @@ Cache CLI: `litdata cache path` · `litdata cache clear`.
 **Streaming (read) — see streaming.md**
 
 - **"did you optimize?" / `FileNotFoundError`** → no `index.json` at the path (`dataset.py:322`); the data wasn't optimized, or you pointed at raw files (use `StreamingRawDataset`).
-- **Hang/timeout on chunk download** → raise `MAX_WAIT_TIME`; check credentials/`storage_options`; confirm the URL prefix matches a registered `Downloader`. If the error is `FileNotFoundError: The …/chunk-*.bin hasn't been found` after ~120s with `num_workers>0` on **`s3://`**, the parent likely started obstore before DataLoader fork and worker GETs hung. Current LitData fetches `index.json` with boto3 (no parent tokio) so workers can lazy-init obstore; boto3 fallback remains if the parent already started the runtime. The same symptom on `lightning_storage` / R2 can still be a prefetch-thread crash (`data_connection_id` / `endpoint_url` into `boto3.Session`) — that path prints `[litdata] PrepareChunksThread CRASHED (rank=…, worker=…)` and re-raises as `RuntimeError: Chunk prefetch thread crashed…`.
+- **Hang/timeout on chunk download** → raise `MAX_WAIT_TIME`; check credentials/`storage_options`; confirm the URL prefix matches a registered `Downloader`. If the error is `FileNotFoundError: The …/chunk-*.bin hasn't been found` after ~120s with `num_workers>0` on **`s3://`**, the parent likely started obstore before DataLoader fork and worker GETs hung. Current LitData fetches `index.json` with boto3 (no parent tokio) so workers can lazy-init obstore; boto3 fallback remains if the parent already started the runtime. The same symptom on `lightning_storage` / R2 can still be a prefetch-thread crash (`data_connection_id` / `endpoint_url` into `boto3.Session`) — that path prints `[litdata] PrepareChunksThread CRASHED (rank=…, worker=…)` to stderr, emits a one-line tracer instant (`ph: I`, `prepare_chunks_thread_crashed_*`), and re-raises as `RuntimeError: Chunk prefetch thread crashed…`.
 - **Hang under tiny `max_cache_size` (CI 120s)** → often `max_pre_download` capped to 1 + delete-when-processed deadlock, or prepare-thread stuck in `shutdown_default_executor`. See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) § Prefetch & eviction. Look for log `capping max_pre_download … → 1`.
 - **Cache grows without bound** → set `max_cache_size` (default `"100GB"`); eviction is gated by `.cnt` refcount + `FileLock`. Stale `.lock`/`.cnt` files from a crash can block deletion — `litdata cache clear`. Peak disk ≈ `num_workers × max_pre_download × chunk_size` (async floor often makes `max_pre` 4).
 - **Deadlock: parquet + workers** → `ParquetLoader` under `fork` with `num_workers>0` raises by design (`dataloader.py:629`); use `spawn`/`forkserver`.

@@ -22,7 +22,7 @@ from typing import Any, Optional
 from filelock import FileLock, Timeout
 
 from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
-from litdata.debugger import _get_log_msg
+from litdata.debugger import CAT_LOCK, emit_trace
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -177,9 +177,9 @@ class ChunksConfig:
                     remove_lock = True
                 else:
                     with open(countpath, "w+") as count_f:
-                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "B"}))
+                        emit_trace("lock", "B", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
                         count_f.write(str(curr_count))
-                        logger.debug(_get_log_msg({"name": f"decrement_lock_{chunk_index}_to_{curr_count}", "ph": "E"}))
+                        emit_trace("lock", "E", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
             else:
                 remove_lock = True
         # FileLock doesn't delete its lock file on release — we clean it up manually.

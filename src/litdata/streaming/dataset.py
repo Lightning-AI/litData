@@ -23,6 +23,7 @@ from torch.utils.data import IterableDataset
 
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
+from litdata.debugger import CAT_SAMPLE, emit_trace, is_tracing
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
@@ -503,6 +504,15 @@ class StreamingDataset(IterableDataset):
             _my_indices = list(range(start, stop, step))
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
             return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
+        tracing_sample = is_tracing(CAT_SAMPLE)
+        if tracing_sample:
+            emit_trace(
+                "sample",
+                "B",
+                CAT_SAMPLE,
+                chunk=getattr(index, "chunk_index", ""),
+                index=getattr(index, "index", index),
+            )
         item = self.cache[index]
         if hasattr(self, "transform"):
             if isinstance(self.transform, list):
@@ -510,6 +520,14 @@ class StreamingDataset(IterableDataset):
                     item = transform_fn(item)
             else:
                 item = self.transform(item)
+        if tracing_sample:
+            emit_trace(
+                "sample",
+                "E",
+                CAT_SAMPLE,
+                chunk=getattr(index, "chunk_index", ""),
+                index=getattr(index, "index", index),
+            )
 
         return item
 
