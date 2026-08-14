@@ -32,7 +32,7 @@ import torch
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
 from litdata.helpers import _check_version_and_prompt_upgrade
-from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, MapRecipe
+from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, MapRecipe, _is_studio_fuse_path
 from litdata.processing.readers import BaseReader
 from litdata.processing.utilities import (
     _get_work_dir,
@@ -83,7 +83,8 @@ def _get_indexed_paths(data: Any) -> dict[int, str]:
     return {
         index: element
         for index, element in enumerate(flattened_item)
-        if isinstance(element, str) and (os.path.exists(element) or _is_remote_file(element))
+        if isinstance(element, str)
+        and (_is_remote_file(element) or _is_studio_fuse_path(element) or os.path.exists(element))
     }
 
 
@@ -104,6 +105,10 @@ def _get_input_dir(inputs: Sequence[Any]) -> str | None:
     path = list(indexed_paths.values())[0]
     if _is_remote_file(path):
         return os.path.dirname(path)
+    if _is_studio_fuse_path(path) or path.startswith("/teamspace"):
+        if "/.project" in path:
+            return "/" + os.path.join(*path.split("/")[:4])
+        return "/" + os.path.join(*path.split("/")[:4])
     absolute_path = str(Path(path).resolve())
 
     if _IS_IN_STUDIO or absolute_path.startswith("/teamspace"):
@@ -276,7 +281,7 @@ def map(
     start_method: str | None = None,
     optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
-    keep_data_ordered: bool = True,
+    keep_data_ordered: bool | None = None,
     broadcast_paths: bool = False,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
@@ -303,11 +308,9 @@ def map(
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
-        keep_data_ordered (bool): Whether to use a shared queue for item distribution among workers.
-            If False, all workers will fetch items dynamically from a shared queue, which helps balance
-            workload and reduce idle time when some workers finish early. This may lead to unordered
-            processing of items. If True, each worker processes a statically assigned subset of items
-            in order.
+        keep_data_ordered: If False (default), shard items per node then share one work queue among
+            that node's workers. Faster when workers finish at different times; item order is not
+            preserved. If True, each worker processes a static slice in order. ``None`` uses False.
         broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
             Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template.
     """
@@ -437,7 +440,7 @@ def optimize(
     start_method: str | None = None,
     optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
-    keep_data_ordered: bool = True,
+    keep_data_ordered: bool | None = None,
     verbose: bool = True,
     broadcast_paths: bool = False,
     key_fn: Callable[[Any], Any] | None = None,
@@ -486,11 +489,10 @@ def optimize(
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
-        keep_data_ordered (bool): Whether to use a shared queue for item distribution among workers.
-            If False, all workers will fetch items dynamically from a shared queue, which helps balance
-            workload and reduce idle time when some workers finish early. This may lead to unordered
-            processing of items. If True, each worker processes a statically assigned subset of items
-            in order.
+        keep_data_ordered: If False (default), shard items per node then share one work queue among
+            that node's workers. Faster when workers finish at different times; item order is not
+            preserved. If True, each worker processes a static slice in order. ``None`` uses False
+            unless ``use_checkpoint`` or ``align_chunking`` is set (those require order).
         verbose: Whether to print the progress of the optimization. Defaults to True.
         broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
             Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template so ranks

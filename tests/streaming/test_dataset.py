@@ -829,6 +829,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
         reorder_files=False,
         num_downloaders=1,
         item_loader=TokensLoader(),
+        keep_data_ordered=True,
     )
 
     assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10
@@ -1096,6 +1097,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
         num_workers=4,
         num_uploaders=1,
         item_loader=TokensLoader(block_size=10),
+        keep_data_ordered=True,
     )
     assert set(os.listdir(data_dir)) == {
         "chunk-0-0.bin",
@@ -1471,6 +1473,7 @@ def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
         reorder_files=False,
         num_downloaders=1,
         item_loader=TokensLoader(),
+        keep_data_ordered=True,
     )
 
     assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10

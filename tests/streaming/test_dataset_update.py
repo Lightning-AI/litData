@@ -322,6 +322,7 @@ def test_build_keys_index_backfills_sidecar(tmpdir):
         chunk_size=4,
         num_workers=2,
         reorder_files=False,
+        keep_data_ordered=True,
     )
     assert not os.path.isfile(shard_path(out, 0))
 

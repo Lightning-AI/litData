@@ -251,7 +251,7 @@ ______________________________________________________________________
 | `item_loader`                       | `None`          | e.g. `TokensLoader()`                                                                           |
 | `start_method` / `optimize_dns`     | spawn† / `None` | MP start; DNS tweak                                                                             |
 | `storage_options`                   | `{}`            | Cloud creds                                                                                     |
-| `keep_data_ordered`                 | `True`          | `False` = shared work queue                                                                     |
+| `keep_data_ordered`                 | `False`         | Shared work queue. `True` = static per-worker slice. Forced `True` with checkpoint / align.     |
 | `broadcast_paths`                   | `False`         | Auto-on for `{%strftime}` paths                                                                 |
 | `key_fn`                            | `None`          | `sample -> str\|int` key; writes `keys/` for `ds["id"]` / `dataset_update`                      |
 | `verbose`                           | `True`          | Progress                                                                                        |

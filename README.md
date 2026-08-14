@@ -940,6 +940,8 @@ dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True, num_canonical
 
 If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
 
+Work is first split **per node** (file-size / weight packing, or sequential slices). Every worker on that node then pulls from the same queue, so slower workers do not sit idle while others still have items.
+
 This is especially useful when optimizing large datasets in parallel, where some workers may be slower than others.
 
 It can also improve fault tolerance when workers fail due to out-of-memory (OOM) errors.
@@ -965,7 +967,7 @@ if __name__ == "__main__":
         output_dir="fast_data",             # optimized data is stored here
         num_workers=4,                      # The number of workers on the same machine
         chunk_bytes="64MB" ,                 # size of each chunk
-        keep_data_ordered=False,             # Use a shared queue to speed up the process
+        keep_data_ordered=False,             # default: shared queue (set True to keep input order)
     )
 ```
 
@@ -976,8 +978,8 @@ if __name__ == "__main__":
 
 | Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
 |------------------|---------------------|---------------------|---------------------|
-| shared_queue (`keep_data_ordered=False`)     | 1281                | 5392                | 5732                |
-| no shared_queue (`keep_data_ordered=True (default)`)  | 1187                | 5257                | 5746                |
+| shared_queue (`keep_data_ordered=False` (default))     | 1281                | 5392                | 5732                |
+| no shared_queue (`keep_data_ordered=True`)  | 1187                | 5257                | 5746                |
 
 📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
 > While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
@@ -2286,7 +2288,7 @@ if __name__ == "__main__":
 | `start_method` | spawn† | Multiprocessing start method (†spawn unless IPython) |
 | `optimize_dns` | `None` | Optimized DNS (Studio / cloud) |
 | `storage_options` | `{}` | Cloud credentials / endpoints |
-| `keep_data_ordered` | `True` | `False` = shared work queue (better for uneven/slow workers) |
+| `keep_data_ordered` | `False` | Shared work queue (faster for uneven workers). `True` keeps a static per-worker slice. Forced `True` with `use_checkpoint` / `align_chunking`. |
 
 </details>
 
@@ -2322,7 +2324,7 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `start_method` | spawn† | Multiprocessing start method |
 | `optimize_dns` | `None` | Optimized DNS |
 | `storage_options` | `{}` | Cloud credentials / endpoints |
-| `keep_data_ordered` | `True` | `False` = shared queue among workers |
+| `keep_data_ordered` | `False` | Shared queue among workers. `True` keeps input order. Forced `True` with `use_checkpoint` / `align_chunking`. |
 | `verbose` | `True` | Progress logging |
 
 Related features: [shared queue](#shared-queue), [queue input](#queue-input), [append/overwrite](#modify-datasets), [compression](#compression), [TokensLoader / LLM](#llm-training), [filter](#filter-data).

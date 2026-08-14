@@ -15,7 +15,7 @@ All paths under `src/litdata/`. This pipeline fans work across workers (and mach
 
 User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `#optimize-kwargs` / `#map` / `#walk`.
 
-- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (shared queue), `encryption`, `item_loader=TokensLoader()`, `key_fn` (writes `keys/` — [keyed-lookup.md](keyed-lookup.md)), `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`, `broadcast_paths=False` (auto-on for `{%strftime}` paths — see [multi-node.md](multi-node.md) §3.4). → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`. Last node merges key shards via `_merge_and_upload_keys` (append uses `concatenate_key_files`). **No multi-node key tests yet.**
+- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (default shared queue; `True` for static slices), `encryption`, `item_loader=TokensLoader()`, `key_fn` (writes `keys/` — [keyed-lookup.md](keyed-lookup.md)), `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`, `broadcast_paths=False` (auto-on for `{%strftime}` paths — see [multi-node.md](multi-node.md) §3.4). → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`. Last node merges key shards via `_merge_and_upload_keys` (append uses `concatenate_key_files`). **No multi-node key tests yet.**
 - **`map(...)`** — `functions.py` `map`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty` + `broadcast_paths`. → `LambdaMapRecipe`.
 - **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — Copy chunks + concat `index.json`; matching `data_format`/compression required.
 - **walk** — Threaded local/`os.listdir` listing (Studio-oriented). **Not** cloud `os.walk`. Order ≠ depth-first.
@@ -71,7 +71,7 @@ Worker main loop (`_loop`): `ready_to_process_queue.get()` → `_handle_data_chu
 
 Exhaustive I/O (path rewrite, disk wait 25 GB, index upload vs chunk uploaders, error modes) → **[data-movement.md](data-movement.md)**.
 
-**Ordered vs shared-queue** (`keep_data_ordered`): `True` (default) → each worker consumes its static slice in order. `False` → all workers share one `Queue`; termination uses `ALL_DONE` (re-inserted so peers stop). Multi-node: shared queue is **per node**, not global — [multi-node.md](multi-node.md).
+**Ordered vs shared-queue** (`keep_data_ordered`): `False` (default) → items are packed **per node**, then that node’s workers share one bounded queue (plus a node-level downloader pool). `True` → each worker consumes its static slice in order. `use_checkpoint` and `align_chunking` force ordered. Termination uses `ALL_DONE` (one per worker on the unordered path). Multi-node: shared queue is **per node**, not global — [multi-node.md](multi-node.md). `use_checkpoint` is unsupported when unordered.
 
 ## Cross-process queues
 
@@ -125,7 +125,7 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
 02. `map` recipes' `prepare_item` must return `None` (`:913`); `optimize` recipes' return value is serialized.
 03. Start method forced globally: `set_start_method(..., force=True)` (`:1177`), `fork` in notebooks else `spawn`. Under `spawn`, worker args must be picklable.
 04. Distribution is env-var driven (`DATA_OPTIMIZER_*`); mappers slice by `world_size = num_nodes * num_workers`.
-05. `keep_data_ordered=False` switches to a shared queue + `ALL_DONE` sentinel; early-exit paths must keep re-inserting `ALL_DONE` or peers hang. Timeout is lower (200s vs 300s).
+05. `keep_data_ordered=False` shards per node then uses a shared queue + `ALL_DONE` sentinel; early-exit paths must keep re-inserting `ALL_DONE` or peers hang.
 06. `FakeQueue` is not a real queue — no inter-process/blocking semantics.
 07. Path detection is heuristic (`_is_path`/`_to_path`, `functions.py:439`); an item with zero detected file paths raises (`:775`).
 08. `align_chunking` requires `chunk_size` (not bytes) (`:497`, `:1275`).
