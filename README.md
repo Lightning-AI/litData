@@ -2074,12 +2074,12 @@ Env overrides: `LITDATA_LOG_FILE`, `LITDATA_TRACE_LEVEL`, `LITDATA_TRACE_CATEGOR
 3. Convert and open in Perfetto:
 
     ```bash
-    litracer --quiet --validate -o litdata_trace.json litdata_debug.log
-    litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
-    # open the json at https://ui.perfetto.dev (preferred) or chrome://tracing
+    litracer --quiet --validate -o litdata_trace.json.gz litdata_debug.log
+    litracer --quiet --cat download,read,delete -o io.json.gz litdata_debug.log
+    # open the .json.gz at https://ui.perfetto.dev (preferred) or chrome://tracing
     ```
 
-    `--quiet` prints a one-line summary (per-category durations, unmatched B/E, crashes). `--cat` keeps only those categories. Matched B/E pairs become complete (`ph: X`) spans unless `--no-complete`.
+    `--quiet` prints a one-line summary (per-category durations, unmatched B/E, crashes). `--cat` keeps only those categories. Matched B/E pairs become complete (`ph: X`) spans unless `--no-complete`. Default output is gzip Chrome JSON (`.json.gz`) — both Perfetto and `chrome://tracing` open it; pass `-o file.json` for uncompressed.
 
 - For trace files `> 2GB`, see [Perfetto large traces](https://perfetto.dev/docs/visualization/large-traces).
 - If you connect Perfetto to the RPC server, prefer Chrome over Brave (Brave often does not autodetect the RPC server).

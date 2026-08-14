@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Tracer log timestamps are Chrome/Perfetto microseconds (`created * 1e6`). `enable_tracer(log_file=...)` selects the Litracer input file. Close the last `read` span when a worker finishes so Litracer B/E pairs match. Tracer calls are no-ops when tracing is off.
+- Tracer log timestamps are Chrome/Perfetto microseconds (`created * 1e6`). `enable_tracer(log_file=...)` selects the Litracer input file. Close the last `read` span when a worker finishes so Litracer B/E pairs match. Tracer calls are no-ops when tracing is off. Litracer writes gzip Chrome JSON (`.json.gz`) by default; Perfetto and `chrome://tracing` both open it.
 
 ### Removed
 

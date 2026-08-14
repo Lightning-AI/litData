@@ -500,8 +500,8 @@ enable_tracer(level="chunk", log_file="litdata_debug.log")  # delete existing lo
 ```
 
 ```bash
-litracer --quiet --validate -o litdata_trace.json litdata_debug.log
-litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
+litracer --quiet --validate -o litdata_trace.json.gz litdata_debug.log
+litracer --quiet --cat download,read,delete -o io.json.gz litdata_debug.log
 ```
 
 Stable names: `download`, `read`, `delete`, `batch`, `sample`, `crash` (indexes in args). One line per event; crashes also print a traceback to **stderr**. `num_workers>0` only `FileNotFoundError` on `s3://` → obstore-after-fork; Studio R2 `data_connection_id` → [debugging.md](debugging.md).

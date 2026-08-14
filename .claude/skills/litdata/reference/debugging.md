@@ -59,12 +59,14 @@ if __name__ == "__main__":
 ```bash
 python train.py
 # clone https://github.com/Lightning-AI/litracer && go build -o litracer .
-litracer --quiet --validate -o litdata_trace.json litdata_debug.log
-litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
+litracer --quiet --validate -o litdata_trace.json.gz litdata_debug.log
+litracer --quiet --cat download,read,delete -o io.json.gz litdata_debug.log
 # open in https://ui.perfetto.dev
 ```
 
 `go install github.com/deependujha/litracer@latest` still works (Go module path). `go install github.com/Lightning-AI/litracer@latest` does not until `go.mod` is renamed.
+
+Default Litracer output is **gzip Chrome JSON** (`.json.gz`). Both Perfetto and `chrome://tracing` open it (gzip magic). That is the Chrome-compatible compact format — typically far smaller than raw JSON. Perfetto protobuf (`.pftrace`) is smaller still but **not** accepted by `chrome://tracing`. Pass `-o file.json` for uncompressed JSON.
 
 ### Levels vs categories
 
