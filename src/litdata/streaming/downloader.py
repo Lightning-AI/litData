@@ -74,7 +74,7 @@ def obstore_usable() -> bool:
     """
     if not _OBSTORE_AVAILABLE:
         return False
-    return _OBSTORE_INIT_PID is None or _OBSTORE_INIT_PID == os.getpid()
+    return _OBSTORE_INIT_PID is None or os.getpid() == _OBSTORE_INIT_PID
 
 
 def _use_obstore_for_s3_key(object_path: str) -> bool:
