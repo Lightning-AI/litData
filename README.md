@@ -925,7 +925,7 @@ for batch_idx, batch in enumerate(dataloader):
         torch.save(dataloader.state_dict(), "dataloader_state.pt")
 ```
 
-Same `seed` and `shuffle` are required. **`num_workers` and `world_size` may change**: LitData drops a global `sample_in_epoch` prefix and restripes the rest (never duplicates remaining IDs). For a matching loss curve keep **global batch size** (`world_size * batch_size`) constant and DDP ranks in lockstep. Optional `num_canonical_nodes` (default: first-run `world_size`) freezes shuffle buckets. POSIX `WindowShuffle` resumes whole remaining chunks.
+Same `seed` and `shuffle` are required. For a **`StreamingDataset`**, **`num_workers` and `world_size` may change**: LitData drops a global `sample_in_epoch` prefix and restripes the rest (never duplicates remaining IDs). For a matching loss curve keep **global batch size** (`world_size * batch_size`) constant and DDP ranks in lockstep. `num_canonical_nodes` (default: first-run `world_size`) is frozen in the checkpoint. POSIX `WindowShuffle` resumes whole remaining chunks. **`CombinedStreamingDataset` and `ParallelStreamingDataset` resume only with the same `world_size`, `num_workers`, and `batch_size`.**
 
 ```python
 dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True, num_canonical_nodes=8)

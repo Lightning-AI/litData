@@ -736,6 +736,7 @@ def test_parallel_dataset_with_dataloader_2_epochs(
                 "initial_world_size": ANY,
                 "initial_num_workers": ANY,
                 "initial_batch_size": ANY,
+                "initial_num_nodes": ANY,
             },
             "1": {
                 "num_samples_yielded": 0,
@@ -758,6 +759,7 @@ def test_parallel_dataset_with_dataloader_2_epochs(
                 "initial_world_size": ANY,
                 "initial_num_workers": ANY,
                 "initial_batch_size": ANY,
+                "initial_num_nodes": ANY,
             },
         },
         "current_epoch": 1,

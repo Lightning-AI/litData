@@ -23,6 +23,7 @@ from litdata.streaming.elastic import (
     _round_down_drop_first,
     canonical_chunk_order,
     canonical_item_stream,
+    lockstep_stream_from_worker_seqs,
     restripe_items,
     sample_in_epoch_from_state,
     topology_changed,
@@ -50,6 +51,15 @@ def test_topology_changed_and_sample_in_epoch():
     assert topology_changed(state, world_size=8, num_workers=2, batch_size=8) is True
     assert sample_in_epoch_from_state(state) == 80
     assert sample_in_epoch_from_state({"sample_in_epoch": 12, "num_samples_yielded": 3, "world_size": 8}) == 12
+
+
+def test_lockstep_stream_keeps_unequal_worker_tails():
+    short = [(0, i) for i in range(10)]
+    long = [(1, i) for i in range(50)]
+    stream = lockstep_stream_from_worker_seqs([short, long], world_size=1, num_workers=2, batch_size=1)
+    assert len(stream) == 60
+    assert len(set(stream)) == 60
+    assert set(stream) == set(short) | set(long)
 
 
 def test_restripe_item_no_duplicates_and_drop_prefix():
@@ -566,6 +576,28 @@ def test_num_canonical_nodes_frozen_across_resume(tmpdir, monkeypatch):
     rest = _all_ids_from_loader(loader_b)
     assert rest
     assert loader_b.state_dict()["dataset"]["num_canonical_nodes"] == 4
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_num_canonical_nodes_defaults_to_initial_world_size(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=3)
+    state = loader.state_dict()
+    assert state["dataset"]["num_canonical_nodes"] == 1
+    assert state["dataset"]["initial_world_size"] == 1
+    assert state["dataset"]["initial_num_nodes"] == 1
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert rest
+    saved = loader_b.state_dict()["dataset"]
+    assert saved["num_canonical_nodes"] == 1
+    assert saved["initial_world_size"] == 1
+    assert saved["initial_num_nodes"] == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")

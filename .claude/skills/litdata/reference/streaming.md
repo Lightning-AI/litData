@@ -86,7 +86,7 @@ Sketch:
 
 ## Resume / checkpointing
 
-`_replay_sampling` (`dataset.py:755`) + `_replay_chunks_sampling` (`dataset.py:778`) reconstruct where each worker stopped from `num_samples_yielded`/`num_workers`/`batch_size`. `_resume` (`dataset.py:425`) re-shuffles the current chunk and skips consumed indexes. `_validate_state_dict` (`dataset.py:607`) hard-fails if shuffle/num_workers/seed/input_dir/item_loader/drop_last changed (unless `force_override_state_dict`). `state_dict` raises if called inside a worker (`dataset.py:574`).
+`_replay_sampling` + `_replay_chunks_sampling` reconstruct where each worker stopped when topology is unchanged. Changing `num_workers` / `world_size` / `batch_size` on **`StreamingDataset`** restripes remaining IDs from `sample_in_epoch`. `_validate_state_dict` still hard-fails if shuffle/seed/input_dir/item_loader/`drop_last` changed (unless `force_override_state_dict`). Worker-count mismatch is elastic, not an error. `state_dict` raises if called inside a worker.
 
 ## CombinedStreamingDataset & ParallelStreamingDataset
 
@@ -94,6 +94,7 @@ Both subclass `_BaseStreamingDatasetWrapper` (`utilities/base.py:27`) which fans
 
 - **`CombinedStreamingDataset`** (`combined.py:40`) — samples **one** dataset per step by weight (seeded `random.Random`). `iterate_over_all=True` iterates until all exhausted, re-normalizing weights; `batching_method` is `"stratified"` (mix within a batch) or `"per_stream"` (whole batch from one dataset). Weights default to inverse dataset length.
 - **`ParallelStreamingDataset`** (`parallel.py:44`) — pulls **one sample from every dataset per step**, yields a tuple or `transform(samples[, rngs])`. Supports cycling (`length` = None/int/`inf`), resumable per-worker RNGs seeded via SHA-256 from `(seed, worker_rank, samples_yielded, cycles)`, and `reset_rngs`.
+- Combined / Parallel **resume only with the same** `world_size`, `num_workers`, and `batch_size` (no elastic restripe).
 
 ## Gotchas (read before editing)
 

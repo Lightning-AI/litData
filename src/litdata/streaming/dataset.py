@@ -107,8 +107,9 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
-            num_canonical_nodes: Frozen shuffle buckets for elastic resume. ``None``
-                uses the first-run ``world_size``. Keep this stable when changing GPU count.
+            num_canonical_nodes: Frozen first-run node count recorded in checkpoints
+                (default: first-run ``world_size``). Elastic resume rebuilds remaining
+                IDs from that first-run shuffler assignment, not a different bucket layout.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -419,6 +420,8 @@ class StreamingDataset(IterableDataset):
         init_world = max(1, init_world)
         init_nw = max(1, init_nw)
         init_bs = max(1, init_bs)
+        init_nodes = int(state.get("initial_num_nodes", getattr(self.distributed_env, "num_nodes", 1)))
+        init_nodes = max(1, init_nodes)
         ncn = state.get("num_canonical_nodes")
         if ncn is None:
             ncn = self.num_canonical_nodes if self.num_canonical_nodes is not None else init_world
@@ -428,7 +431,7 @@ class StreamingDataset(IterableDataset):
         if granularity == "item":
             drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, batch_size)
         seed = int(state.get("seed", self.seed))
-        init_env = _DistributedEnv(init_world, 0, max(1, int(getattr(self.distributed_env, "num_nodes", 1))))
+        init_env = _DistributedEnv(init_world, 0, init_nodes)
         workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
             init_env, init_nw, init_bs, self.current_epoch
         )
@@ -675,7 +678,7 @@ class StreamingDataset(IterableDataset):
                 ncn = (
                     self.num_canonical_nodes
                     if self.num_canonical_nodes is not None
-                    else self.distributed_env.world_size
+                    else state.get("initial_world_size", self.distributed_env.world_size)
                 )
             if topology_changed(
                 state,
@@ -871,7 +874,9 @@ class StreamingDataset(IterableDataset):
         world_size = self.distributed_env.world_size
         ncn = self.num_canonical_nodes
         if ncn is None:
-            ncn = (self._state_dict or {}).get("num_canonical_nodes") or world_size
+            ncn = (self._state_dict or {}).get("num_canonical_nodes") or (
+                self._state_dict or {}
+            ).get("initial_world_size", world_size)
         sample_in_epoch = (self._elastic_drop_first or 0) + num_samples_yielded * world_size
 
         payload = {
@@ -895,6 +900,9 @@ class StreamingDataset(IterableDataset):
             "initial_world_size": (self._state_dict or {}).get("initial_world_size", world_size),
             "initial_num_workers": (self._state_dict or {}).get("initial_num_workers", num_workers or 1),
             "initial_batch_size": (self._state_dict or {}).get("initial_batch_size", batch_size),
+            "initial_num_nodes": (self._state_dict or {}).get(
+                "initial_num_nodes", max(1, int(self.distributed_env.num_nodes))
+            ),
         }
         if self._elastic_item_lists is not None or (self._state_dict or {}).get("resume_mode") == "elastic":
             payload["resume_mode"] = "elastic"

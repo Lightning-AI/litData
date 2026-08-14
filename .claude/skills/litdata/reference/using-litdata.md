@@ -127,8 +127,8 @@ ______________________________________________________________________
 - Default `seed=42`. Keep it fixed across ranks and when resuming.
 - `drop_last=None` → **True under DDP**, else False. Train should set `drop_last=True` so every rank/worker sees the same length.
 - `StreamingDataLoader(shuffle=..., drop_last=...)` **overrides** the dataset.
-- Resume: `torch.save(loader.state_dict(), ...)`; `loader.load_state_dict(...)`. Matching `seed` / shuffle required. **`num_workers` / `world_size` may change** (elastic restripe via `sample_in_epoch`; remaining samples are never duplicated). New runs use a topology-independent canonical order so a later restripe matches what was already trained. v1 checkpoints with the same topology still use prefix replay. Keep global batch size constant for a matching loss curve. `force_override_state_dict=True` overrides seed/shuffle/paths/`drop_last`, not worker count (that is always elastic).
-- `num_canonical_nodes`: frozen shuffle buckets for elastic resume (default = first-run `world_size`). WindowShuffle uses chunk-level restripe.
+- Resume: `torch.save(loader.state_dict(), ...)`; `loader.load_state_dict(...)`. Matching `seed` / shuffle required. For **`StreamingDataset`**, **`num_workers` / `world_size` may change** (elastic restripe via `sample_in_epoch`; remaining samples are never duplicated). Fresh epochs keep the usual shuffler assignment; a topology change restripes the unconsumed suffix. v1 checkpoints with the same topology still use prefix replay. Keep global batch size constant for a matching loss curve. `force_override_state_dict=True` overrides seed/shuffle/paths/`drop_last`, not worker count (that is always elastic). **Combined / Parallel resume only with the same topology.**
+- `num_canonical_nodes`: frozen first-run `world_size` recorded in the checkpoint (constructor override optional). WindowShuffle uses chunk-level restripe.
 
 **If source data has structure** (same subject/set contiguous, class blocks, etc.) and you cannot embed that grouping as the sample unit:
 
@@ -155,7 +155,7 @@ ______________________________________________________________________
 | `storage_options` / `session_options` | `{}`                        | Cloud creds / boto3 session                                |
 | `index_path`                          | `None`                      | Parquet/HF index file or directory                         |
 | `force_override_state_dict`           | `False`                     | Local args win for seed/shuffle/paths/`drop_last`          |
-| `num_canonical_nodes`                 | `None`                      | Frozen elastic-resume buckets (default first `world_size`) |
+| `num_canonical_nodes`                 | `None`                      | Frozen first-run `world_size` in checkpoints               |
 | `transform`                           | `None`                      | Callable or list applied per sample                        |
 
 ______________________________________________________________________

@@ -844,12 +844,26 @@ class StreamingDataLoader(DataLoader):
         """
         self.current_epoch = obj["current_epoch"]
 
+        world_size = _DistributedEnv.detect().world_size
+        num_workers = self.num_workers or 1
+        batch_size = int(self.batch_size or 1)
+        if isinstance(self.dataset, (CombinedStreamingDataset, ParallelStreamingDataset)):
+            children = obj.get("dataset")
+            if isinstance(children, dict):
+                for child in children.values():
+                    if isinstance(child, dict) and ("world_size" in child or "num_workers" in child):
+                        if topology_changed(
+                            child, world_size=world_size, num_workers=num_workers, batch_size=batch_size
+                        ):
+                            raise ValueError(
+                                "CombinedStreamingDataset and ParallelStreamingDataset support resume only "
+                                "when world_size, num_workers, and batch_size match the checkpoint. "
+                                "Elastic restripe is implemented for StreamingDataset."
+                            )
+
         elastic = False
         if isinstance(self.dataset, StreamingDataset):
             ds_state = obj["dataset"]
-            world_size = _DistributedEnv.detect().world_size
-            num_workers = self.num_workers or 1
-            batch_size = int(self.batch_size or 1)
             elastic = ds_state.get("resume_mode") == "elastic" or topology_changed(
                 ds_state,
                 world_size=world_size,

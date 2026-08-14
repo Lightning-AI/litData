@@ -204,7 +204,6 @@ def lockstep_stream_from_worker_seqs(
     world_size = max(1, int(world_size))
     num_workers = max(1, int(num_workers))
     batch_size = max(1, int(batch_size))
-    global_workers = world_size * num_workers
     heads = [0] * len(seqs)
     total = sum(len(s) for s in seqs)
     stream: list[tuple[int, int]] = []
@@ -218,8 +217,6 @@ def lockstep_stream_from_worker_seqs(
             stream.append(seqs[gw][heads[gw]])
             heads[gw] += 1
         i += 1
-        if i > total * max(batch_size, 1) + global_workers:
-            break
     return stream
 
 
