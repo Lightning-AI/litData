@@ -36,7 +36,7 @@ _VAST_MARKERS = ("vast", "vastdata")
 
 
 def _is_object_url(value: str | None) -> bool:
-    return bool(value) and value.startswith(_OBJECT_PREFIXES)
+    return value is not None and value.startswith(_OBJECT_PREFIXES)
 
 
 @dataclass(frozen=True)
