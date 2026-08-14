@@ -415,26 +415,26 @@ class StreamingDataset(IterableDataset):
         self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
 
         # Handle restart
+        use_canonical = True
         if self._state_dict:
             self._validate_state_dict()
             state: dict[str, Any] = self._state_dict
             self.current_epoch = state["current_epoch"]
-
-        use_elastic = bool(self._state_dict) and (
-            self._state_dict.get("resume_mode") == "elastic"
-            or topology_changed(
-                self._state_dict,
+            v1_same_topology = int(state.get("state_version", 1)) < 2 and state.get("resume_mode") != "elastic"
+            if v1_same_topology and not topology_changed(
+                state,
                 world_size=self.distributed_env.world_size,
                 num_workers=self.worker_env.world_size,
                 batch_size=self.batch_size,
-            )
-        )
+            ):
+                use_canonical = False
+
         self._elastic_item_lists = None
-        if not use_elastic:
+        if not use_canonical:
             self._elastic_drop_first = None
 
         workers_intervals: list[Any] | None = None
-        if use_elastic:
+        if use_canonical:
             workers_chunks = self._setup_elastic_resume()
         else:
             workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
@@ -483,7 +483,7 @@ class StreamingDataset(IterableDataset):
             self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
 
         # Handle restart (strict replay). Elastic already applied drop_first in _setup_elastic_resume.
-        if self._state_dict and not use_elastic:
+        if self._state_dict and not use_canonical:
             self._resume(workers_chunks, workers_intervals)
         else:
             self.num_chunks = len(self.worker_chunks)
@@ -557,12 +557,11 @@ class StreamingDataset(IterableDataset):
             self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
 
     def _setup_elastic_resume(self) -> list[list[int]]:
-        """Drop ``sample_in_epoch`` from the frozen canonical stream and restripe onto this grid."""
-        assert self._state_dict is not None
+        """Build this worker's plan from the frozen canonical stream (fresh epoch or resume)."""
         assert self.cache is not None
         assert self.worker_env is not None
 
-        state = self._state_dict
+        state = self._state_dict or {}
         intervals = self.cache.get_chunk_intervals()
         ncn = state.get("num_canonical_nodes")
         if ncn is None:
@@ -570,12 +569,19 @@ class StreamingDataset(IterableDataset):
         ncn = max(1, int(ncn))
         window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
         granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
-        drop_first = sample_in_epoch_from_state(state)
+        drop_first = sample_in_epoch_from_state(state) if state else int(self._elastic_drop_first or 0)
         if granularity == "item":
             drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, self.batch_size)
         self._elastic_drop_first = drop_first
-        state["resume_mode"] = "elastic"
-        state["num_canonical_nodes"] = ncn
+        if state:
+            if topology_changed(
+                state,
+                world_size=self.distributed_env.world_size,
+                num_workers=self.worker_env.world_size,
+                batch_size=self.batch_size,
+            ):
+                state["resume_mode"] = "elastic"
+            state["num_canonical_nodes"] = ncn
         seed = int(state.get("seed", self.seed))
 
         stream = canonical_item_stream(
@@ -604,15 +610,16 @@ class StreamingDataset(IterableDataset):
         self.worker_chunks, self.worker_intervals, self._elastic_item_lists = worker_plan_to_chunks(plans[worker_rank])
         self.stop_length = sum(len(items) for items in self._elastic_item_lists)
         self.num_chunks = len(self.worker_chunks)
-        logger.info(
-            "Elastic resume: dropped %s samples from the canonical stream; "
-            "this worker has %s remaining (world_size=%s, num_workers=%s, granularity=%s).",
-            drop_first,
-            self.stop_length,
-            self.distributed_env.world_size,
-            self.worker_env.world_size,
-            granularity,
-        )
+        if drop_first:
+            logger.info(
+                "Elastic resume: dropped %s samples from the canonical stream; "
+                "this worker has %s remaining (world_size=%s, num_workers=%s, granularity=%s).",
+                drop_first,
+                self.stop_length,
+                self.distributed_env.world_size,
+                self.worker_env.world_size,
+                granularity,
+            )
         return workers_chunks
 
     def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
@@ -839,18 +846,11 @@ class StreamingDataset(IterableDataset):
             )
 
         if state["num_workers"] != self.worker_env.world_size:
-            if self._force_override_state_dict:
-                logger.warning(
-                    f"Overriding num workers {state['num_workers']} to {self.worker_env.world_size}. "
-                    "This may lead to repeated or skipped datapoints within an episode due to different shuffles."
-                )
-                state["num_workers"] = self.worker_env.world_size
-            else:
-                logger.info(
-                    "num_workers changed from %s to %s; using elastic resume (no duplicates).",
-                    state["num_workers"],
-                    self.worker_env.world_size,
-                )
+            logger.info(
+                "num_workers changed from %s to %s; using elastic resume (no duplicates).",
+                state["num_workers"],
+                self.worker_env.world_size,
+            )
 
         # Note: We need to check whether the path has been resolved to its associated cache.
         # In this case, validate the cache folder is the same.

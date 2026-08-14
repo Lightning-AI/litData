@@ -1364,7 +1364,7 @@ def test_dataset_valid_state_override(tmpdir, monkeypatch):
     state_dict["num_workers"] = "8"
     dataset.load_state_dict(state_dict)
     dataset._validate_state_dict()
-    assert state_dict["num_workers"] == 1, "num_workers not overridden"
+    assert state_dict["num_workers"] == "8", "num_workers is not force-overridden; elastic resume handles it"
 
     state_dict["shuffle"] = True
     dataset.load_state_dict(state_dict)

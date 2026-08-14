@@ -363,9 +363,8 @@ def test_resume_dataloader_after_some_workers_are_done(tmpdir):
     cache.merge()
     dset = StreamingDataset(str(dset_path), shuffle=False)
     dloader = StreamingDataLoader(dset, batch_size=1, num_workers=2, shuffle=False)
-    # worker 0 is assigned with samples 0 and 1, worker 1 is assigned with sample 2
-    # the workers alternate, so the expected sequence is [0, 2, 1] and not [0, 1, 2]
-    expected_sequence = [0, 2, 1]
+    # Canonical restripe: batches cycle workers, so the yield order is [0, 1, 2].
+    expected_sequence = [0, 1, 2]
     for i, x in enumerate(dloader):
         assert x == expected_sequence[i]
         if i == 1:

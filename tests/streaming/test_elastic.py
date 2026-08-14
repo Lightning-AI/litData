@@ -144,7 +144,7 @@ def test_dataloader_strict_resume_same_workers_not_elastic(tmpdir, monkeypatch):
     loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
     _all_ids_from_loader(loader, max_batches=5)
     state = loader.state_dict()
-    assert state["dataset"].get("resume_mode") != "elastic"
+    assert state["dataset"].get("state_version") == 2
     dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
     loader_b = StreamingDataLoader(dataset_b, num_workers=0, batch_size=4)
     loader_b.load_state_dict(state)
@@ -453,3 +453,155 @@ def test_v1_checkpoint_without_sample_in_epoch_still_restripes(tmpdir, monkeypat
     rest = _all_ids_from_loader(loader_b)
     assert rest
     assert len(rest) == len(set(rest))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_same_topology_pause_resume_equals_full_epoch(tmpdir, monkeypatch, shuffle):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    full = _all_ids_from_loader(
+        StreamingDataLoader(StreamingDataset(data_dir, shuffle=shuffle, seed=42), num_workers=0, batch_size=4)
+    )
+    dataset = StreamingDataset(data_dir, shuffle=shuffle, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    first = _all_ids_from_loader(loader, max_batches=5)
+    dataset_b = StreamingDataset(data_dir, shuffle=shuffle, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=0, batch_size=4)
+    loader_b.load_state_dict(loader.state_dict())
+    rest = _all_ids_from_loader(loader_b)
+    assert first + rest == full
+    assert len(full) == len(set(full))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_worker_change_does_not_repeat_consumed_samples(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=96, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    first = _all_ids_from_loader(loader, max_batches=7)
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=6, batch_size=4)
+    loader_b.load_state_dict(loader.state_dict())
+    rest = _all_ids_from_loader(loader_b)
+    assert set(first).isdisjoint(set(rest))
+    assert len(rest) == len(set(rest))
+    assert set(first) | set(rest) <= set(range(96))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_world_size_2_to_1_from_fresh_canonical_epoch(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=80, chunk_size=8)
+
+    def make_ds(world, rank, state=None):
+        ds = StreamingDataset(data_dir, shuffle=True, seed=42, drop_last=True)
+        ds.distributed_env = _DistributedEnv(world, rank, 1)
+        ds.batch_size = 4
+        ds.num_workers = 1
+        if state is not None:
+            ds.load_state_dict(state)
+        return ds
+
+    consumed = []
+    local_n = 8
+    rank0_state = None
+    for rank in (0, 1):
+        ds = make_ds(2, rank)
+        it = iter(ds)
+        for _ in range(local_n):
+            consumed.append(int(next(it)))
+        if rank == 0:
+            rank0_state = ds.state_dict(local_n, 1, 4)
+    assert len(consumed) == len(set(consumed))
+    assert rank0_state is not None
+    rank0_state["sample_in_epoch"] = local_n * 2
+    rank0_state["world_size"] = 2
+
+    rest = [int(x) for x in make_ds(1, 0, rank0_state)]
+    assert len(rest) == len(set(rest))
+    assert set(consumed).isdisjoint(set(rest))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_force_override_still_restripes_worker_mismatch(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    first = _all_ids_from_loader(loader, max_batches=4)
+    state = loader.state_dict()
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42, force_override_state_dict=True)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert set(first).isdisjoint(set(rest))
+    assert rest
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_shuffled_epochs_are_different(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=48, chunk_size=8)
+    loader = StreamingDataLoader(StreamingDataset(data_dir, shuffle=True, seed=42), num_workers=0, batch_size=4)
+    epoch1 = _all_ids_from_loader(loader)
+    epoch2 = _all_ids_from_loader(loader)
+    assert epoch1 != epoch2
+    assert sorted(epoch1) == sorted(epoch2)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_num_canonical_nodes_frozen_across_resume(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42, num_canonical_nodes=4)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=3)
+    state = loader.state_dict()
+    assert state["dataset"]["num_canonical_nodes"] == 4
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42, num_canonical_nodes=4)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=2, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert rest
+    assert loader_b.state_dict()["dataset"]["num_canonical_nodes"] == 4
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_v1_same_topology_prefix_replay_still_runs(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=48, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=3)
+    state = loader.state_dict()
+    ds_state = dict(state["dataset"])
+    ds_state.pop("state_version", None)
+    ds_state.pop("resume_mode", None)
+    ds_state.pop("sample_in_epoch", None)
+    ds_state["num_workers"] = 1
+    state["dataset"] = ds_state
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=0, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert rest
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_drop_last_keeps_ranks_equal_length(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+
+    def drain(rank):
+        ds = StreamingDataset(data_dir, shuffle=True, seed=7, drop_last=True)
+        ds.distributed_env = _DistributedEnv(2, rank, 1)
+        ds.batch_size = 4
+        ds.num_workers = 1
+        return [int(x) for x in ds]
+
+    a, b = drain(0), drain(1)
+    assert len(a) == len(b)
+    assert len(a) == len(set(a))
+    assert set(a).isdisjoint(set(b))
