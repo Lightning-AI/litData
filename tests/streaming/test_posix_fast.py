@@ -9,9 +9,11 @@ from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.posix_fast import (
     advise_willneed,
+    available_ram_bytes,
     detect_posix_fast,
     parse_proc_mounts,
     posix_page_bytes,
+    posix_prefetch_fits_ram,
 )
 from litdata.streaming.shuffle import FullShuffle, WindowShuffle, posix_shuffle_window
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
@@ -179,6 +181,24 @@ def test_posix_env_helpers(monkeypatch):
 
 def test_advise_willneed_missing_file(tmp_path):
     advise_willneed(str(tmp_path / "missing.bin"))
+
+
+def test_available_ram_bytes_parses_meminfo():
+    text = "MemTotal:       1000000 kB\nMemFree:          1000 kB\nMemAvailable:    500000 kB\nCached: 0 kB\n"
+    assert available_ram_bytes(text) == 500000 * 1024
+
+
+def test_posix_prefetch_fits_ram_skips_when_window_crowds_memory(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
+    monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
+    chunk = 64 * 1024 * 1024
+    # 208 workers × 4 keep × 64MiB ≈ 53GiB vs 40GiB available
+    assert not posix_prefetch_fits_ram(keep=4, chunk_bytes=chunk, num_readers=208, ram_bytes=40 * 1024**3)
+    assert posix_prefetch_fits_ram(keep=4, chunk_bytes=chunk, num_readers=8, ram_bytes=40 * 1024**3)
+    monkeypatch.setenv("LITDATA_POSIX_WILLNEED", "0")
+    assert not posix_prefetch_fits_ram(keep=1, chunk_bytes=1, num_readers=1, ram_bytes=10**12)
+    monkeypatch.setenv("LITDATA_POSIX_WILLNEED", "1")
+    assert posix_prefetch_fits_ram(keep=4, chunk_bytes=chunk, num_readers=208, ram_bytes=40 * 1024**3)
 
 
 def test_window_shuffle_does_not_share_chunks(tmpdir, monkeypatch):

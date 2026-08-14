@@ -215,8 +215,9 @@ class BaseItemLoader(ABC):
         if force_download_queue:
             force_download_queue.put(chunk_index)
 
-    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+    def set_posix_fast(self, enabled: bool, keep: int = 4, *, willneed: bool = True) -> None:
         """Enable in-place parallel-FS reads (Vast/NFS). Default loaders ignore this."""
+        del keep, willneed
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         """Advise and mmap ``chunk_filepath`` without making it the current item (POSIX-fast)."""
@@ -394,9 +395,11 @@ class PyTreeLoader(BaseItemLoader):
         self._page_byte0 = 0
         self._page_bytes = 0
         self._mmap_view: memoryview | None = None
+        self._posix_willneed = True
 
-    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+    def set_posix_fast(self, enabled: bool, keep: int = 4, *, willneed: bool = True) -> None:
         self._posix_fast = enabled
+        self._posix_willneed = willneed
         self._mmap_keep = max(1, keep) if enabled else 1
         self._page_bytes = posix_page_bytes() if enabled else 0
         self._clear_item_page()
@@ -427,7 +430,7 @@ class PyTreeLoader(BaseItemLoader):
         return intervals
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        if self._posix_fast:
+        if self._posix_fast and self._posix_willneed:
             advise_willneed(chunk_filepath)
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
@@ -679,7 +682,7 @@ class PyTreeLoader(BaseItemLoader):
                 f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
             )
         offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
-        madvise_mmap(chunk_mmap)
+        madvise_mmap(chunk_mmap, willneed=self._posix_willneed)
         self._mapped[chunk_index] = (chunk_mmap, offsets, chunk_filepath)
         self._mapped.move_to_end(chunk_index)
         self._evict_mapped_chunks(protect=None if make_current else chunk_index)
@@ -821,6 +824,8 @@ class PyTreeLoader(BaseItemLoader):
             self._page_bytes = 0
         if not hasattr(self, "_mmap_view"):
             self._mmap_view = None
+        if not hasattr(self, "_posix_willneed"):
+            self._posix_willneed = True
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)
@@ -841,6 +846,7 @@ class TokensLoader(BaseItemLoader):
         # keeps track of number of readers for each chunk (can be more than 1 if multiple workers are reading)
         self._counter = defaultdict(int)
         self._posix_fast = False
+        self._posix_willneed = True
         self._mmap_keep = 1
         self._dtype: torch.dtype | None = None
         self._chunk_filepaths: dict[str, bool] = {}
@@ -890,14 +896,16 @@ class TokensLoader(BaseItemLoader):
             begin += num_blocks
         return intervals
 
-    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+    def set_posix_fast(self, enabled: bool, keep: int = 4, *, willneed: bool = True) -> None:
         self._posix_fast = enabled
+        self._posix_willneed = willneed
         self._mmap_keep = max(1, keep) if enabled else 1
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         """Page-cache hint only. Mapping every upcoming chunk leaked fds (CI EMFILE)."""
         del chunk_index
-        advise_willneed(chunk_filepath)
+        if self._posix_willneed:
+            advise_willneed(chunk_filepath)
 
     def _evict_token_mmaps(self, protect: int | None = None) -> None:
         if not self._posix_fast or self._mmap_keep <= 0:

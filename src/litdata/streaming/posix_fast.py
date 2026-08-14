@@ -169,6 +169,89 @@ def detect_posix_fast(
 
 
 _DEFAULT_PAGE_BYTES = 256 * 1024
+_DEFAULT_RAM_FRACTION = 0.5
+
+
+def available_ram_bytes(meminfo_text: str | None = None) -> int | None:
+    """``MemAvailable`` in bytes from ``/proc/meminfo``, or ``None`` if unknown."""
+    text = meminfo_text
+    if text is None:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return None
+    available = None
+    fallback = 0
+    for line in text.splitlines():
+        if line.startswith("MemAvailable:"):
+            parts = line.split()
+            available = int(parts[1]) * 1024
+            break
+        if line.startswith("MemFree:") or line.startswith("Cached:"):
+            parts = line.split()
+            fallback += int(parts[1]) * 1024
+    if available is not None:
+        return available
+    return fallback or None
+
+
+def posix_ram_fraction() -> float:
+    raw = os.getenv("LITDATA_POSIX_RAM_FRACTION")
+    if raw is None or not raw.strip():
+        return _DEFAULT_RAM_FRACTION
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_RAM_FRACTION
+    return min(1.0, max(0.0, value))
+
+
+def posix_prefetch_fits_ram(
+    *,
+    keep: int,
+    chunk_bytes: int,
+    num_readers: int,
+    ram_bytes: int | None = None,
+    ram_fraction: float | None = None,
+) -> bool:
+    """Whether ``WILLNEED`` of ``keep`` chunks per reader fits in a fraction of RAM.
+
+    H100 boxes often set ``num_workers`` to all CPUs. Prefaulting
+    ``workers × ranks × keep × 64MiB`` into the page cache thrashes when that
+    window is close to ``MemAvailable``.
+    """
+    force = os.getenv("LITDATA_POSIX_WILLNEED")
+    if force is not None:
+        return force.strip() not in {"0", "false", "False", ""}
+    ram = ram_bytes if ram_bytes is not None else available_ram_bytes()
+    projected = max(1, keep) * max(1, chunk_bytes) * max(1, num_readers)
+    if ram is None:
+        return projected < 8 * 1024 * 1024 * 1024
+    frac = posix_ram_fraction() if ram_fraction is None else ram_fraction
+    return projected <= int(ram * frac)
+
+
+def mean_chunk_bytes(config: Any) -> int:
+    chunks = getattr(config, "_chunks", None) or []
+    if not chunks:
+        return 64 * 1024 * 1024
+    total = 0
+    n = 0
+    for chunk in chunks:
+        size = chunk.get("chunk_bytes")
+        if size:
+            total += int(size)
+            n += 1
+    if n:
+        return max(1, total // n)
+    try:
+        num_bytes = int(config.num_bytes)
+    except (AttributeError, TypeError, ValueError):
+        return 64 * 1024 * 1024
+    if num_bytes <= 0:
+        return 64 * 1024 * 1024
+    return max(1, num_bytes // len(chunks))
 
 
 def posix_page_bytes() -> int:
@@ -205,13 +288,14 @@ def advise_willneed(path: str) -> None:
         os.close(fd)
 
 
-def madvise_mmap(mapping: Any) -> None:
-    """Hint sequential / will-need on an ``mmap.mmap`` (Linux)."""
+def madvise_mmap(mapping: Any, *, willneed: bool = True) -> None:
+    """Hint sequential access; ``WILLNEED`` only when the prefetch window fits in RAM."""
     madvise = getattr(mapping, "madvise", None)
     if madvise is None:
         return
     mmap_mod = __import__("mmap")
-    for name in ("MADV_SEQUENTIAL", "MADV_WILLNEED"):
+    names = ("MADV_SEQUENTIAL",) + (("MADV_WILLNEED",) if willneed else ())
+    for name in names:
         flag = getattr(mmap_mod, name, None)
         if flag is None:
             continue

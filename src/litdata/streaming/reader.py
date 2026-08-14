@@ -38,7 +38,7 @@ from litdata.streaming.async_prefetch import (
 )
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
-from litdata.streaming.posix_fast import advise_willneed
+from litdata.streaming.posix_fast import advise_willneed, mean_chunk_bytes, posix_prefetch_fits_ram
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
@@ -789,6 +789,7 @@ class BinaryReader:
         self.on_demand_bytes = on_demand_bytes
         self._posix_fast = False
         self._posix_keep = 4
+        self._posix_willneed = True
 
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
@@ -840,13 +841,34 @@ class BinaryReader:
         """
         self._item_loader.set_mmap_allowed_chunks(chunk_indexes)
 
+    def _posix_node_readers(self) -> int:
+        worker_env = getattr(self, "_worker_env", None) or _WorkerEnv.detect()
+        self._worker_env = worker_env
+        workers = max(1, worker_env.world_size)
+        dist = self._distributed_env
+        ranks_per_node = max(1, dist.world_size // max(1, dist.num_nodes))
+        return workers * ranks_per_node
+
     def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4, *, prefetch: bool = True) -> None:
         """Read chunks from the dataset directory in place (Vast/NFS). Never delete sources."""
         self._posix_fast = True
         self._posix_keep = max(1, keep)
+        chunk_b = mean_chunk_bytes(self._config)
+        self._posix_willneed = posix_prefetch_fits_ram(
+            keep=self._posix_keep,
+            chunk_bytes=chunk_b,
+            num_readers=self._posix_node_readers(),
+        )
+        if not self._posix_willneed:
+            logger.info(
+                "POSIX-fast: skipping WILLNEED prefetch (%d readers × %d chunks × %d bytes would crowd RAM)",
+                self._posix_node_readers(),
+                self._posix_keep,
+                chunk_b,
+            )
         setter = getattr(self._item_loader, "set_posix_fast", None)
         if setter is not None:
-            setter(True, keep=self._posix_keep)
+            setter(True, keep=self._posix_keep, willneed=self._posix_willneed)
         self._item_loader.set_mmap_allowed_chunks(set(chunk_indexes))
         if prefetch:
             self.prefetch_posix_window(chunk_indexes[: self._posix_keep])
@@ -864,7 +886,8 @@ class BinaryReader:
             chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
             if not os.path.isfile(chunk_filepath):
                 continue
-            advise_willneed(chunk_filepath)
+            if self._posix_willneed:
+                advise_willneed(chunk_filepath)
             if warmer is not None:
                 warmer(chunk_index, chunk_filepath)
             else:
