@@ -28,6 +28,13 @@ from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
+from litdata.streaming.elastic import (
+    canonical_item_stream,
+    restripe_items,
+    sample_in_epoch_from_state,
+    topology_changed,
+    worker_plan_to_chunks,
+)
 from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, posix_fast_supports_config
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
@@ -69,6 +76,7 @@ class StreamingDataset(IterableDataset):
         index_path: str | None = None,
         force_override_state_dict: bool = False,
         transform: Callable | list[Callable] | None = None,
+        num_canonical_nodes: int | None = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -96,6 +104,8 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
+            num_canonical_nodes: Frozen shuffle buckets for elastic resume (Mosaic-style). ``None``
+                uses the first-run ``world_size``. Keep this stable when changing GPU count.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -204,6 +214,9 @@ class StreamingDataset(IterableDataset):
         self.serializers = serializers
         self._state_dict: dict[str, Any] | None = None
         self._force_override_state_dict = force_override_state_dict
+        self.num_canonical_nodes = num_canonical_nodes
+        self._elastic_item_lists: list[list[int]] | None = None
+        self._elastic_drop_first: int | None = None
         # Has slightly different meaning in the context of the dataset
         # We consider `num_workers = 0` from `torch.utils.DataLoader` still as 1 worker (the main process)
         self.num_workers: int = 1
@@ -406,16 +419,33 @@ class StreamingDataset(IterableDataset):
             state: dict[str, Any] = self._state_dict
             self.current_epoch = state["current_epoch"]
 
-        workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
-            self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
+        use_elastic = bool(self._state_dict) and (
+            self._state_dict.get("resume_mode") == "elastic"
+            or topology_changed(
+                self._state_dict,
+                world_size=self.distributed_env.world_size,
+                num_workers=self.worker_env.world_size,
+                batch_size=self.batch_size,
+            )
         )
+        self._elastic_item_lists = None
+        if not use_elastic:
+            self._elastic_drop_first = None
 
-        worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
-        self.worker_chunks = workers_chunks[worker_rank]
-        self.worker_intervals = workers_intervals[worker_rank]
+        workers_intervals: list[Any] | None = None
+        if use_elastic:
+            workers_chunks = self._setup_elastic_resume()
+        else:
+            workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
+                self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
+            )
 
-        # The max number of samples to return from `__next__` (in worker)
-        self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
+            worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
+            self.worker_chunks = workers_chunks[worker_rank]
+            self.worker_intervals = workers_intervals[worker_rank]
+
+            # The max number of samples to return from `__next__` (in worker)
+            self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
 
         # Eagerly reference-count the chunks this worker shares with other workers on the node.
         # A chunk can straddle worker boundaries and therefore be read by several workers; if a
@@ -450,8 +480,8 @@ class StreamingDataset(IterableDataset):
             }
             self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
 
-        # Handle restart
-        if self._state_dict:
+        # Handle restart (strict replay). Elastic already applied drop_first in _setup_elastic_resume.
+        if self._state_dict and not use_elastic:
             self._resume(workers_chunks, workers_intervals)
         else:
             self.num_chunks = len(self.worker_chunks)
@@ -524,6 +554,65 @@ class StreamingDataset(IterableDataset):
             keep = max(4, self.max_pre_download)
             start = max(self.worker_next_chunk_index - 1, 0)
             self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
+
+    def _setup_elastic_resume(self) -> list[list[int]]:
+        """Drop ``sample_in_epoch`` from the frozen canonical stream and restripe onto this grid."""
+        assert self._state_dict is not None
+        assert self.cache is not None
+        assert self.worker_env is not None
+
+        state = self._state_dict
+        intervals = self.cache.get_chunk_intervals()
+        ncn = int(
+            state.get("num_canonical_nodes")
+            or self.num_canonical_nodes
+            or self.distributed_env.world_size
+        )
+        window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
+        granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
+        drop_first = sample_in_epoch_from_state(state)
+        self._elastic_drop_first = drop_first
+        state["resume_mode"] = "elastic"
+        state["num_canonical_nodes"] = ncn
+
+        stream = canonical_item_stream(
+            intervals,
+            seed=self.seed,
+            epoch=self.current_epoch,
+            shuffle=self.shuffle,
+            num_canonical_nodes=ncn,
+            window=window,
+        )
+        plans = restripe_items(
+            stream,
+            world_size=self.distributed_env.world_size,
+            num_workers=self.worker_env.world_size,
+            batch_size=self.batch_size,
+            drop_first=drop_first,
+            drop_last=self.drop_last,
+            granularity=granularity,
+        )
+        workers_chunks: list[list[int]] = []
+        for visits in plans:
+            chunks, _, _ = worker_plan_to_chunks(visits)
+            workers_chunks.append(chunks)
+
+        worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
+        self.worker_chunks, self.worker_intervals, self._elastic_item_lists = worker_plan_to_chunks(
+            plans[worker_rank]
+        )
+        self.stop_length = sum(len(items) for items in self._elastic_item_lists)
+        self.num_chunks = len(self.worker_chunks)
+        logger.info(
+            "Elastic resume: dropped %s samples from the canonical stream; "
+            "this worker has %s remaining (world_size=%s, num_workers=%s, granularity=%s).",
+            drop_first,
+            self.stop_length,
+            self.distributed_env.world_size,
+            self.worker_env.world_size,
+            granularity,
+        )
+        return workers_chunks
 
     def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
         if self.cache is None:
@@ -631,14 +720,16 @@ class StreamingDataset(IterableDataset):
             self.consumed_sample_count_in_curr_chunk = 0
 
             # `next_worker_chunks_index` is the index of the chunk that we will be working on now
-            interval = self.worker_intervals[self.worker_next_chunk_index]
-            current_indexes = np.arange(interval[1], interval[2])
-
-            assert self.shuffler is not None
             assert self.num_chunks is not None
-            self.upcoming_indexes = deque(
-                self.shuffler(current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index)
-            )
+            if self._elastic_item_lists is not None:
+                self.upcoming_indexes = deque(self._elastic_item_lists[self.worker_next_chunk_index])
+            else:
+                interval = self.worker_intervals[self.worker_next_chunk_index]
+                current_indexes = np.arange(interval[1], interval[2])
+                assert self.shuffler is not None
+                self.upcoming_indexes = deque(
+                    self.shuffler(current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index)
+                )
 
             self.worker_next_chunk_index += 1  # bump the chunk_index
             if self.posix_fast is not None and self.posix_fast.in_place and self.cache is not None:
@@ -679,12 +770,13 @@ class StreamingDataset(IterableDataset):
         if _is_in_dataloader_worker():
             raise RuntimeError("The method `state_dict` should only be called in the main process.")
 
-        if self._state_dict is not None:
-            self._state_dict["num_samples_yielded"] = num_samples_yielded
-            self._state_dict["current_epoch"] = self.current_epoch
-            return self._state_dict
+        world_size = self.distributed_env.world_size
+        ncn = self.num_canonical_nodes
+        if ncn is None:
+            ncn = (self._state_dict or {}).get("num_canonical_nodes") or world_size
+        sample_in_epoch = (self._elastic_drop_first or 0) + num_samples_yielded * world_size
 
-        return {
+        payload = {
             "num_samples_yielded": num_samples_yielded,
             "num_workers": num_workers or 1,
             "batch_size": batch_size,
@@ -695,11 +787,22 @@ class StreamingDataset(IterableDataset):
             "item_loader": self.item_loader.state_dict() if self.item_loader else None,
             "drop_last": self.drop_last,
             "seed": self.seed,
-            "world_size": self.distributed_env.world_size,
+            "world_size": world_size,
             "shuffle": self.shuffle,
             "subsampled_files": self.subsampled_files,
             "region_of_interest": self.region_of_interest,
+            "state_version": 2,
+            "sample_in_epoch": sample_in_epoch,
+            "num_canonical_nodes": int(ncn),
+            "initial_world_size": (self._state_dict or {}).get("initial_world_size", world_size),
         }
+        if self._elastic_item_lists is not None or (self._state_dict or {}).get("resume_mode") == "elastic":
+            payload["resume_mode"] = "elastic"
+
+        if self._state_dict is not None:
+            self._state_dict.update(payload)
+            return self._state_dict
+        return payload
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if state_dict:
@@ -708,6 +811,8 @@ class StreamingDataset(IterableDataset):
 
     def reset_state_dict(self) -> None:
         self._state_dict = None
+        self._elastic_item_lists = None
+        self._elastic_drop_first = None
 
     def _validate_state_dict(self) -> None:
         if self._force_override_state_dict:
@@ -733,16 +838,18 @@ class StreamingDataset(IterableDataset):
             )
 
         if state["num_workers"] != self.worker_env.world_size:
-            if not self._force_override_state_dict:
-                raise ValueError(
-                    "The provided `num_workers` state doesn't match the current one. "
-                    f"Found `{self.worker_env.world_size}` instead of `{state['num_workers']}`."
+            if self._force_override_state_dict:
+                logger.warning(
+                    f"Overriding num workers {state['num_workers']} to {self.worker_env.world_size}. "
+                    "This may lead to repeated or skipped datapoints within an episode due to different shuffles."
                 )
-            state["num_workers"] = self.worker_env.world_size
-            logger.warning(
-                f"Overriding num workers {state['num_workers']} to {self.worker_env.world_size}. "
-                "This may lead to repeated or skipped datapoints within an episode due to different shuffles."
-            )
+                state["num_workers"] = self.worker_env.world_size
+            else:
+                logger.info(
+                    "num_workers changed from %s to %s; using elastic resume (no duplicates).",
+                    state["num_workers"],
+                    self.worker_env.world_size,
+                )
 
         # Note: We need to check whether the path has been resolved to its associated cache.
         # In this case, validate the cache folder is the same.

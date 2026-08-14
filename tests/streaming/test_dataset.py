@@ -1193,6 +1193,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
     sleep(1)
 
     state_dict = dataset.state_dict(0, 1, 2)
+    orig_state = dict(state_dict)
 
     dataset.load_state_dict(state_dict)
     dataset.worker_env = _WorkerEnv(world_size=1, rank=0)
@@ -1251,13 +1252,11 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
     ):
         dataset._validate_state_dict()
 
-    state_dict["num_workers"] = "8"
-    dataset.load_state_dict(state_dict)
-    with pytest.raises(
-        ValueError,
-        match="The provided `num_workers` state doesn't match the current one. Found `1` instead of `8`.",
-    ):
-        dataset._validate_state_dict()
+    nw_state = dict(orig_state)
+    nw_state["num_workers"] = "8"
+    dataset.load_state_dict(nw_state)
+    dataset._validate_state_dict()  # worker mismatch uses elastic resume, not an error
+    assert nw_state["num_workers"] == "8"
 
     state_dict["shuffle"] = True
     dataset.load_state_dict(state_dict)

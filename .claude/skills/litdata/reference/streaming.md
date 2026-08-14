@@ -132,7 +132,7 @@ combined = CombinedStreamingDataset(datasets=[ds1, ds2], weights=(0.5, 0.5),
 
 # Pause & resume (README:573) — StreamingDataLoader exposes state_dict()/load_state_dict()
 state = dataloader.state_dict()          # in the main process
-dataloader.load_state_dict(state)        # resume exactly where you stopped
+dataloader.load_state_dict(state)        # resume; workers/world_size may change (elastic)
 ```
 
 README feature sections (from `grep -n '<summary>' README.md`): multi-GPU/multi-node (483), multiple providers (515), pause/resume (573), combine (846), parallel streaming (918), cycle (968), subsets (1115), parquet (1192), compression (1251), on-demand access (1284), transforms (1302), cache limits (1386).

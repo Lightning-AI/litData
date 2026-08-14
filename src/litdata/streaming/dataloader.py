@@ -39,6 +39,7 @@ from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
+from litdata.streaming.elastic import sample_in_epoch_from_state, topology_changed
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.posix_fast import posix_max_data_workers, raise_nofile_limit
 from litdata.streaming.sampler import CacheBatchSampler
@@ -843,8 +844,24 @@ class StreamingDataLoader(DataLoader):
         """
         self.current_epoch = obj["current_epoch"]
 
+        elastic = False
         if isinstance(self.dataset, StreamingDataset):
-            self._num_samples_yielded_streaming = obj["num_samples_yielded"]
+            ds_state = obj["dataset"]
+            world_size = _DistributedEnv.detect().world_size
+            num_workers = self.num_workers or 1
+            batch_size = int(self.batch_size or 1)
+            elastic = ds_state.get("resume_mode") == "elastic" or topology_changed(
+                ds_state,
+                world_size=world_size,
+                num_workers=num_workers,
+                batch_size=batch_size,
+            )
+            if elastic:
+                # Local yielded count is for the new grid; the canonical cursor lives on the dataset.
+                self._num_samples_yielded_streaming = 0
+                self.dataset._elastic_drop_first = sample_in_epoch_from_state(ds_state)
+            else:
+                self._num_samples_yielded_streaming = obj["num_samples_yielded"]
         else:
             self._num_samples_yielded_wrapper = obj["num_samples_yielded"]
 
@@ -852,7 +869,10 @@ class StreamingDataLoader(DataLoader):
             self._num_cycles = obj["num_cycles"]
 
         # Used to restart on the next DataLoader worker from the previous run.
-        self._latest_worker_idx = obj["latest_worker_idx"] + 1
+        if elastic:
+            self._latest_worker_idx = 0
+        else:
+            self._latest_worker_idx = obj["latest_worker_idx"] + 1
         # Initialize _worker_idx if not already set (e.g., when loading state before first iteration)
         if self._worker_idx is None:
             self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
@@ -910,7 +930,9 @@ class StreamingDataLoader(DataLoader):
             self.dataset.load_state_dict(obj["dataset"])
 
             # Inform that the dataloader is resuming.
-            if self._num_samples_yielded_streaming > 0 and self._num_samples_yielded_streaming < len(self.dataset):
+            if elastic or (
+                self._num_samples_yielded_streaming > 0 and self._num_samples_yielded_streaming < len(self.dataset)
+            ):
                 self.restore = True
         else:
             raise RuntimeError(
