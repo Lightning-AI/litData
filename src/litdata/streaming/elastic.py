@@ -34,6 +34,7 @@ Granularity = Literal["item", "chunk"]
 
 def topology_changed(state: dict[str, Any], *, world_size: int, num_workers: int, batch_size: int) -> bool:
     """True when resume cannot use per-worker prefix replay."""
+
     def _workers(value: Any) -> int:
         n = int(value)
         return n if n > 0 else 1
