@@ -264,7 +264,8 @@ def _is_local_write_through(output_dir: Dir | None) -> bool:
 def _chunks_dir(output_dir: Dir | None) -> str:
     """Directory that receives ``chunk-*.bin`` files (output path when local, else the cache)."""
     if _is_local_write_through(output_dir):
-        assert output_dir is not None and output_dir.path
+        assert output_dir is not None
+        assert output_dir.path
         os.makedirs(output_dir.path, exist_ok=True)
         return output_dir.path
     return _get_cache_dir()
@@ -968,7 +969,7 @@ class BaseWorker:
         self._set_environ_variables()
         if self.items is None and self._items_lookup_path:
             with open(self._items_lookup_path, "rb") as handle:
-                loaded_items, loaded_paths = pickle.load(handle)
+                loaded_items, loaded_paths = pickle.load(handle)  # noqa: S301
             self.items = loaded_items
             self.num_items = len(loaded_items)
             if loaded_paths:

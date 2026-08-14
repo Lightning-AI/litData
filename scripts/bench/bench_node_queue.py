@@ -38,6 +38,11 @@ from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 HEAVY_BYTES = 1 << 20  # 1 MiB
 LIGHT_BYTES = 8 << 10  # 8 KiB
 _STUDIO_ROOT = "/teamspace/lightning_storage/testing"
+_GIT = shutil.which("git") or "git"
+
+
+def _git(*args: str) -> str:
+    return subprocess.check_output([_GIT, *args], cwd=REPO_ROOT, text=True)
 
 
 def _process_file(path: str) -> tuple[int, str, str]:
@@ -153,9 +158,8 @@ def _run_one_io(
             elapsed = _optimize(inputs, bench_input_dir, out, args.workers, ordered=ordered)
             n = _verify_dataset(out, args.files)
             rows.append((kind, f"keep_data_ordered={ordered}", elapsed, n))
-            print(
-                f"{kind:16s} keep_data_ordered={str(ordered):5s}  {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}"
-            )
+            rate = args.files / elapsed
+            print(f"{kind:16s} ordered={ordered!s:5s}  {elapsed:7.2f}s  {rate:7.1f} files/s  n={n}")
     finally:
         shutil.rmtree(local_root, ignore_errors=True)
         if studio_root is not None:
@@ -267,21 +271,21 @@ def _spawn_child(src: Path, input_dir: Path, output_dir: Path, workers: int, onl
 
 
 def _run_before_after(args: argparse.Namespace) -> None:
-    worktree = Path("/tmp/litdata-before-node-queue")
+    worktree = Path(tempfile.gettempdir()) / "litdata-before-node-queue"
     if worktree.exists():
-        subprocess.check_call(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT)
-    subprocess.check_call(["git", "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
+        subprocess.check_call([_GIT, "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT)
+    subprocess.check_call([_GIT, "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
     before_src = worktree / "src"
     after_src = REPO_ROOT / "src"
 
     root = Path(tempfile.mkdtemp(prefix="litdata-node-queue-ba-"))
     input_dir = root / "input"
     n_heavy = max(args.workers, args.files // args.workers)
+    short = _git("rev-parse", "--short", "HEAD").strip()
+    print(f"before=git HEAD ({short})")
     print(
-        f"before=git HEAD ({subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=REPO_ROOT, text=True).strip()})"
-    )
-    print(
-        f"after =working tree  files={args.files} workers={args.workers}  first {n_heavy} files are {HEAVY_BYTES // 1024}KiB"
+        f"after =working tree  files={args.files} workers={args.workers}  "
+        f"first {n_heavy} files are {HEAVY_BYTES // 1024}KiB"
     )
     t_gen = time.perf_counter()
     _make_inputs(input_dir, args.files, args.workers)
@@ -298,7 +302,7 @@ def _run_before_after(args: argparse.Namespace) -> None:
                 print(f"{tree_name:6s} {label:28s} {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
-        subprocess.check_call(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT)
+        subprocess.check_call([_GIT, "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT)
 
     print("\n## Before vs after (same files, same machine)\n")
     print("| Tree | Mode | Time | Throughput | Samples |")
@@ -410,9 +414,8 @@ def main() -> None:
         by_kind.setdefault(kind, {})[label] = elapsed
     for kind, times in by_kind.items():
         if "keep_data_ordered=True" in times and "keep_data_ordered=False" in times:
-            print(
-                f"{kind} speedup  {times['keep_data_ordered=True'] / times['keep_data_ordered=False']:.2f}x  (ordered / shared)"
-            )
+            speedup = times["keep_data_ordered=True"] / times["keep_data_ordered=False"]
+            print(f"{kind} speedup  {speedup:.2f}x  (ordered / shared)")
 
 
 if __name__ == "__main__":

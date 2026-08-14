@@ -2478,7 +2478,7 @@ def test_studio_lightning_storage_shared_node_queue(tmpdir):
         env["DATA_OPTIMIZER_CACHE_FOLDER"] = os.path.join(tmpdir, f"chunks-{rank}")
         env["DATA_OPTIMIZER_DATA_CACHE_FOLDER"] = os.path.join(tmpdir, f"data-{rank}")
         procs.append(
-            subprocess.Popen(
+            subprocess.Popen(  # noqa: S603
                 [sys.executable, worker, input_dir, output_dir],
                 env=env,
                 cwd=os.path.join(os.path.dirname(__file__), "..", ".."),

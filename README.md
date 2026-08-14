@@ -938,13 +938,9 @@ dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True, num_canonical
   <summary> ✅ Use shared queue for Optimizing <a id="shared-queue" href="#shared-queue">🔗</a> </summary>
 &nbsp;
 
-If you are using multiple workers to optimize your dataset, you can use a shared queue to speed up the process.
+`optimize` / `map` default to a **shared per-node queue** (`keep_data_ordered=False`). Work is packed per node, then every worker on that node pulls the next item, so a slow worker does not leave others idle. Set `keep_data_ordered=True` to keep a static per-worker slice (required for `use_checkpoint` and `align_chunking`).
 
-Work is first split **per node** (file-size / weight packing, or sequential slices). Every worker on that node then pulls from the same queue, so slower workers do not sit idle while others still have items.
-
-This is especially useful when optimizing large datasets in parallel, where some workers may be slower than others.
-
-It can also improve fault tolerance when workers fail due to out-of-memory (OOM) errors.
+Local `output_dir` writes chunks in place. Remote inputs and outputs use the streaming downloader (`adownload_file` / `aupload_file`, obstore when available).
 
 ```python
 import numpy as np
@@ -972,23 +968,31 @@ if __name__ == "__main__":
 ```
 
 
-### Performance Difference between using a shared queue and not using it:
+### Shared queue vs ordered (skewed local files)
 
-**Note**: The following benchmarks were collected using the ImageNet dataset on an A10G machine with 16 workers.
+`scripts/bench/bench_node_queue.py --files 4000 --workers 8` (first 500 files are 1 MiB). On `main`, unordered optimize sat on a 200s empty-queue timeout after work finished.
 
-| Configuration    | Optimize Time (sec) | Stream 1 (img/sec) | Stream 2 (img/sec) |
-|------------------|---------------------|---------------------|---------------------|
-| shared_queue (`keep_data_ordered=False` (default))     | 1281                | 5392                | 5732                |
-| no shared_queue (`keep_data_ordered=True`)  | 1187                | 5257                | 5746                |
+| Tree | Mode | Time | Throughput |
+|------|------|-----:|-----------:|
+| `main` (old default) | `keep_data_ordered=True` | 23.7s | 169 files/s |
+| `main` | `keep_data_ordered=False` | 223.6s | 18 files/s |
+| this tree | `keep_data_ordered=True` | 22.9s | 175 files/s |
+| this tree (**new default**) | `keep_data_ordered=False` | **18.8s** | 213 files/s |
 
-📌 Note: The **shared_queue** option impacts optimization time, not streaming speed.
-> While the streaming numbers may appear slightly different, this variation is incidental and not caused by shared_queue.
->
-> Streaming happens after optimization and does not involve inter-process communication where shared_queue plays a role.
+Shared-queue **before → after: ~12×**. New default vs old ordered default: **1.22×**.
 
-- 📄 Using a shared queue helps balance the load across workers, though it may slightly increase optimization time due to the overhead of pickling items sent between processes.
+### Local / remote input × output
 
-- ⚡ However, it can significantly improve optimizing performance — especially when some workers are slower than others.
+`python scripts/bench/bench_node_queue.py --files 200 --workers 4 --io-matrix` (first 50 files are 1 MiB).
+
+| Topology | Ordered | Shared | Speedup |
+|----------|--------:|-------:|--------:|
+| local → local | 6.55s | **2.96s** | 2.21× |
+| remote → local | 7.44s | **3.48s** | 2.14× |
+| local → remote | 10.98s | **6.51s** | 1.69× |
+| remote → remote | 11.48s | **8.55s** | 1.34× |
+
+Shared queue balances uneven workers. It does not change later `StreamingDataset` throughput.
 
 </details>
 
