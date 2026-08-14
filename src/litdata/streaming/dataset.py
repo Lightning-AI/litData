@@ -105,7 +105,7 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
-            num_canonical_nodes: Frozen shuffle buckets for elastic resume (Mosaic-style). ``None``
+            num_canonical_nodes: Frozen shuffle buckets for elastic resume. ``None``
                 uses the first-run ``world_size``. Keep this stable when changing GPU count.
         """
         _check_version_and_prompt_upgrade(__version__)

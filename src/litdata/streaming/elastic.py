@@ -11,13 +11,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mosaic-style elastic resume: frozen canonical item order + global sample_in_epoch.
+"""Elastic resume: frozen canonical item order + global sample_in_epoch.
 
 The epoch is a 1D stream of ``(chunk_index, item_index)`` that does not depend on
 ``world_size`` or ``num_workers``. Resume drops a prefix (``sample_in_epoch``) and
 restripes the suffix onto the new ``(world_size, num_workers, batch_size)`` grid.
 
-``granularity="item"`` matches Mosaic (batch-stripe). ``granularity="chunk"`` keeps
+``granularity="item"`` restripes at batch boundaries. ``granularity="chunk"`` keeps
 whole remaining chunks together (POSIX-fast / WindowShuffle).
 """
 
@@ -42,7 +42,7 @@ def topology_changed(state: dict[str, Any], *, world_size: int, num_workers: int
 
 
 def sample_in_epoch_from_state(state: dict[str, Any]) -> int:
-    """Global samples already taken in this epoch (Mosaic ``sample_in_epoch``)."""
+    """Global samples already taken in this epoch."""
     if "sample_in_epoch" in state:
         return max(0, int(state["sample_in_epoch"]))
     yielded = int(state.get("num_samples_yielded", 0))
@@ -116,7 +116,7 @@ def canonical_item_stream(
 
 
 def _round_down_drop_first(drop_first: int, world_size: int, batch_size: int) -> int:
-    """Align the prefix to a global batch so every rank stays in lockstep (Mosaic)."""
+    """Align the prefix to a global batch so every rank stays in lockstep."""
     drop_first = max(0, int(drop_first))
     stride = max(1, int(world_size) * max(1, int(batch_size)))
     return drop_first - (drop_first % stride)
@@ -175,7 +175,7 @@ def restripe_items(
         stride = global_workers * batch_size
         remaining = remaining[: (len(remaining) // stride) * stride]
 
-    # Mosaic-style: consecutive batches cycle ranks, then workers within a rank.
+    # Consecutive batches cycle ranks, then workers within a rank.
     for i, pair in enumerate(remaining):
         batch_idx = i // batch_size
         rank = batch_idx % world_size
