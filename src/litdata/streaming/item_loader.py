@@ -944,6 +944,14 @@ class TokensLoader(BaseItemLoader):
                 self._mmaps[chunk_index]._mmap.close()
                 del self._mmaps[chunk_index]
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = super().__getstate__()
+        # ``np.memmap`` / ``memoryview`` are not picklable. POSIX-fast warms these in the parent
+        # before DataLoader workers spawn; drop them and remap after unpickle.
+        state["_mmaps"] = {}
+        state["_buffers"] = {}
+        return state
+
     @classmethod
     def encode_data(cls, data: list[bytes], _: list[int], flattened: list[Any]) -> tuple[bytes, int | None]:
         r"""Encodes tokenized data into a raw byte format while preserving dimensional information.

@@ -232,6 +232,29 @@ def test_pytree_loader_mmap_pickle_roundtrip(tmpdir):
     assert restored_dataset[6] == 6
 
 
+def test_tokens_loader_posix_warmup_is_picklable(tmpdir):
+    """POSIX-fast warms TokensLoader memmaps in the parent; DataLoader must still pickle the dataset."""
+    cache = Cache(str(tmpdir), chunk_size=40, item_loader=TokensLoader(10))
+    counter = 0
+    for i in range(4):
+        cache[i] = torch.arange(counter, counter + 20).to(torch.int)
+        counter += 20
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(str(tmpdir), item_loader=TokensLoader(10), shuffle=False)
+    assert len(dataset) == 8
+    warmed = dataset.shuffler.cache._reader._item_loader
+    assert isinstance(warmed, TokensLoader)
+    assert warmed._buffers, "posix-fast should have warmed at least one token chunk"
+
+    restored = pickle.loads(pickle.dumps(dataset))  # noqa: S301
+    restored_loader = restored.shuffler.cache._reader._item_loader
+    assert restored_loader._buffers == {}
+    assert restored_loader._mmaps == {}
+    assert torch.equal(restored[0], torch.arange(0, 10).to(torch.int))
+
+
 def test_shared_chunks_excluded_from_mmap_allow_set():
     """Only exclusive chunks are candidates for mmap; shared ones must be omitted."""
     workers_chunks = [[0, 1, 2], [2, 3, 4]]
