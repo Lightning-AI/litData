@@ -1916,3 +1916,66 @@ def test_optimize_broadcast_paths_explicit_true(tmpdir, monkeypatch):
     )
 
     assert captured["broadcast_paths"] is True
+
+
+def test_multinode_done_append_no_duplication(tmpdir, monkeypatch):
+    """Test that existing_index is not duplicated when merging index files across multiple nodes in append mode."""
+    existing_index = {
+        "chunks": [{"filename": "chunk-existing-0.bin", "chunk_size": 5, "chunk_bytes": 50, "dim": None}],
+        "config": None,
+    }
+
+    # Setup directories
+    output_dir_path = str(tmpdir / "output")
+    cache_dir_node0 = str(tmpdir / "cache_node0")
+    cache_dir_node1 = str(tmpdir / "cache_node1")
+    os.makedirs(output_dir_path, exist_ok=True)
+    os.makedirs(cache_dir_node0, exist_ok=True)
+    os.makedirs(cache_dir_node1, exist_ok=True)
+
+    # Node 0 worker index
+    node0_worker_index = {
+        "chunks": [{"filename": "chunk-node0-0.bin", "chunk_size": 5, "chunk_bytes": 50, "dim": None}],
+        "config": None,
+    }
+    with open(os.path.join(cache_dir_node0, "0-0-index.json"), "w") as f:
+        json.dump(node0_worker_index, f)
+
+    # Node 1 worker index
+    node1_worker_index = {
+        "chunks": [{"filename": "chunk-node1-0.bin", "chunk_size": 5, "chunk_bytes": 50, "dim": None}],
+        "config": None,
+    }
+    with open(os.path.join(cache_dir_node1, "1-0-index.json"), "w") as f:
+        json.dump(node1_worker_index, f)
+
+    # Node 0 execution
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 2)
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda: cache_dir_node0)
+
+    recipe_node0 = DataChunkRecipe()
+    recipe_node0.existing_index = existing_index
+    recipe_node0._done(size=None, delete_cached_files=False, output_dir=Dir(path=output_dir_path))
+
+    # Verify 0-index.json only contains node 0 chunks (not existing_index)
+    with open(os.path.join(output_dir_path, "0-index.json")) as f:
+        node0_merged = json.load(f)
+    assert len(node0_merged["chunks"]) == 1
+    assert node0_merged["chunks"][0]["filename"] == "chunk-node0-0.bin"
+
+    # Node 1 execution
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 1)
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda: cache_dir_node1)
+
+    recipe_node1 = DataChunkRecipe()
+    recipe_node1.existing_index = existing_index
+    recipe_node1._done(size=None, delete_cached_files=False, output_dir=Dir(path=output_dir_path))
+
+    # Verify final merged index.json in output_dir_path
+    with open(os.path.join(output_dir_path, "index.json")) as f:
+        final_index = json.load(f)
+
+    filenames = [c["filename"] for c in final_index["chunks"]]
+    # Should contain existing chunk ONCE followed by node 0 and node 1 chunks
+    assert filenames == ["chunk-existing-0.bin", "chunk-node0-0.bin", "chunk-node1-0.bin"]

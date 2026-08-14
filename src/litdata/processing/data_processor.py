@@ -1058,7 +1058,8 @@ class DataChunkRecipe(DataRecipe):
 
         merge_cache = Cache(cache_dir, chunk_bytes=1)
         node_rank = _get_node_rank()
-        merge_cache._merge_no_wait(node_rank if num_nodes > 1 else None, getattr(self, "existing_index", None))
+        existing_index = getattr(self, "existing_index", None)
+        merge_cache._merge_no_wait(node_rank if num_nodes > 1 else None, None if num_nodes > 1 else existing_index)
 
         self._merge_and_upload_keys(output_dir, cache_dir, num_nodes, node_rank)
         self._upload_index(output_dir, cache_dir, num_nodes, node_rank)
@@ -1252,7 +1253,7 @@ class DataChunkRecipe(DataRecipe):
                     shutil.copyfile(remote_filepath, node_index_filepath)
 
             merge_cache = Cache(cache_dir, chunk_bytes=1)
-            merge_cache._merge_no_wait()
+            merge_cache._merge_no_wait(existing_index=getattr(self, "existing_index", None))
             self._upload_index(output_dir, cache_dir, 1, None)
 
 
