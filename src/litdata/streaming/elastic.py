@@ -187,6 +187,42 @@ def restripe_items(
     return [_group_visits(pairs) for pairs in pair_plans]
 
 
+def lockstep_stream_from_worker_seqs(
+    seqs: list[list[tuple[int, int]]],
+    *,
+    world_size: int,
+    num_workers: int,
+    batch_size: int,
+) -> list[tuple[int, int]]:
+    """Rebuild the global 1D order implied by DDP lockstep + worker cycling.
+
+    This is the inverse of ``restripe_items`` (item granularity): consecutive
+    ``batch_size`` items go to rank ``batch_idx % world_size``, then workers
+    cycle. Used so elastic ``drop_first`` skips the same IDs that were served
+    under the original shuffler assignment.
+    """
+    world_size = max(1, int(world_size))
+    num_workers = max(1, int(num_workers))
+    batch_size = max(1, int(batch_size))
+    global_workers = world_size * num_workers
+    heads = [0] * len(seqs)
+    total = sum(len(s) for s in seqs)
+    stream: list[tuple[int, int]] = []
+    i = 0
+    while len(stream) < total:
+        batch_idx = i // batch_size
+        rank = batch_idx % world_size
+        worker = (batch_idx // world_size) % num_workers
+        gw = rank * num_workers + worker
+        if gw < len(seqs) and heads[gw] < len(seqs[gw]):
+            stream.append(seqs[gw][heads[gw]])
+            heads[gw] += 1
+        i += 1
+        if i > total * max(batch_size, 1) + global_workers:
+            break
+    return stream
+
+
 def worker_plan_to_chunks(
     visits: list[tuple[int, list[int]]],
 ) -> tuple[list[int], list[list[int]], list[list[int]]]:
