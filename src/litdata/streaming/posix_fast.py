@@ -27,6 +27,7 @@ See ``WindowShuffle``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from dataclasses import dataclass
@@ -284,10 +285,8 @@ def posix_max_data_workers(
     rss = rss_bytes if rss_bytes is not None else _DEFAULT_WORKER_RSS
     raw_rss = os.getenv("LITDATA_POSIX_WORKER_RSS")
     if raw_rss and rss_bytes is None:
-        try:
+        with contextlib.suppress(ValueError):
             rss = max(1, int(raw_rss))
-        except ValueError:
-            pass
     budget = max(1, int(ram * posix_ram_fraction()))
     capped = max(1, budget // max(1, rss))
     return min(requested, capped)
