@@ -436,3 +436,16 @@ def test_window_shuffle_chunks_keeps_worker_sets():
     assert epoch2[0] != new_chunks[0]
     for worker_chunks, worker_intervals in zip(new_chunks, new_intervals):
         assert len(worker_chunks) == len(worker_intervals)
+
+
+def test_window_shuffle_item_order_is_local():
+    from litdata.streaming.shuffle import WindowShuffle
+
+    shuffler = WindowShuffle(cache=object(), seed=42, drop_last=False, window=8)  # type: ignore[arg-type]
+    order = shuffler(np.arange(64), num_chunks=1, current_epoch=1, chunk_index=0)
+    assert sorted(order) == list(range(64))
+    assert order != list(range(64))
+    jumps = [abs(order[i] - order[i - 1]) for i in range(1, len(order))]
+    full = list(np.random.RandomState(42).permutation(64))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)

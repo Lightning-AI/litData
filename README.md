@@ -723,7 +723,7 @@ The permutation depends on `seed`, the epoch, and chunk metadata — the same se
 
 **Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
 
-**Vast / NFS / local disk** (POSIX-fast) does **not** globally permute chunks. Each worker is assigned a sequential stripe, then shuffles only inside a sliding window of upcoming chunks (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). That is the FFCV-style tradeoff: enough mix for SGD, while `mmap` + `posix_fadvise` still see sequential files and the page cache stays hot. In-chunk item order is still fully shuffled. `LITDATA_POSIX_FAST=0` restores global `FullShuffle` (and disables in-place mmap).
+**Vast / NFS / local disk** (POSIX-fast) does **not** globally permute chunks. Each worker is assigned a sequential stripe, then shuffles only inside a sliding window of upcoming chunks (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). The same window is applied **inside** each chunk so the item loader can copy ~256KiB of sequential payload (`LITDATA_POSIX_PAGE_BYTES`) and split samples from that buffer — one memcpy instead of a random slice per JPEG. That is the FFCV-style tradeoff: enough mix for SGD, while `mmap` + `posix_fadvise` still see sequential files. `LITDATA_POSIX_FAST=0` restores global `FullShuffle` (and disables in-place mmap).
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader

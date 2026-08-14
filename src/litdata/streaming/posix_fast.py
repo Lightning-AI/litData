@@ -20,8 +20,9 @@ the reader. Shared-chunk mmap is safe because source objects are never deleted.
 
 This is automatic for any local ``input_dir`` (no ``s3://`` URL). Users do not pass a flag.
 
-When ``shuffle=True``, chunk order is a per-worker sliding-window permute (not a global
-chunk permutation) so sequential POSIX reads stay in the page cache. See ``WindowShuffle``.
+When ``shuffle=True``, chunk **and** in-chunk item order use a sliding-window permute
+so the loader can copy a contiguous byte span (a page) and split samples from it.
+See ``WindowShuffle``.
 """
 
 from __future__ import annotations
@@ -143,6 +144,20 @@ def detect_posix_fast(
                     kind = from_fs.kind
 
     return PosixFastProfile(kind=kind)
+
+
+_DEFAULT_PAGE_BYTES = 256 * 1024
+
+
+def posix_page_bytes() -> int:
+    """Payload bytes to copy from a mapped chunk in one go (then split into items)."""
+    raw = os.getenv("LITDATA_POSIX_PAGE_BYTES")
+    if raw is None or not raw.strip():
+        return _DEFAULT_PAGE_BYTES
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_PAGE_BYTES
 
 
 def advise_willneed(path: str) -> None:

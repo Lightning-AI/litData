@@ -23,6 +23,7 @@ from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _associate_chunks_and_intervals_to_workers,
     _intra_node_chunk_shuffle,
+    _window_shuffle,
     _window_shuffle_chunks_and_intervals,
 )
 
@@ -164,8 +165,9 @@ class WindowShuffle(Shuffle):
     random IOPS and fights ``posix_fadvise`` / page cache.
 
     ``WindowShuffle`` keeps NoShuffle-style assignment (each worker a contiguous-ish stripe),
-    then window-shuffles **that worker's list** (default window 16). In-chunk item order still
-    uses the same permutation as ``FullShuffle``.
+    then window-shuffles **that worker's list** (default window 16). Item order *inside* a
+    chunk uses the same window so the loader can copy one contiguous byte span (a "page")
+    and split samples from it instead of random mmap slices.
     """
 
     def __init__(self, cache: Cache, seed: int, drop_last: bool, window: int | None = None):
@@ -186,4 +188,5 @@ class WindowShuffle(Shuffle):
         )
 
     def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
-        return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()
+        rng = np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index])
+        return _window_shuffle(array.tolist(), self.window, rng)

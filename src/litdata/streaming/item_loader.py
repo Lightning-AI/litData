@@ -40,7 +40,7 @@ from litdata.constants import (
     _TORCH_DTYPES_MAPPING,
 )
 from litdata.debugger import CAT_DELETE, trace_span
-from litdata.streaming.posix_fast import advise_willneed, madvise_mmap
+from litdata.streaming.posix_fast import advise_willneed, madvise_mmap, posix_page_bytes
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
@@ -381,10 +381,25 @@ class PyTreeLoader(BaseItemLoader):
         self._posix_fast = False
         self._mmap_keep = 1
         self._mapped: OrderedDict[int, tuple[mmap.mmap, FileIO, list[int], str]] = OrderedDict()
+        self._page: bytes | None = None
+        self._page_chunk: int | None = None
+        self._page_start = 0
+        self._page_end = 0
+        self._page_byte0 = 0
+        self._page_bytes = 0
 
     def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
         self._posix_fast = enabled
         self._mmap_keep = max(1, keep) if enabled else 1
+        self._page_bytes = posix_page_bytes() if enabled else 0
+        self._clear_item_page()
+
+    def _clear_item_page(self) -> None:
+        self._page = None
+        self._page_chunk = None
+        self._page_start = 0
+        self._page_end = 0
+        self._page_byte0 = 0
 
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
         self._mmap_allowed_chunks = chunk_indexes
@@ -487,7 +502,7 @@ class PyTreeLoader(BaseItemLoader):
             # `mmap[start:end]` returns a fresh `bytes` object directly — no memoryview hop.
             assert self._offsets is not None
             table_idx = offset // 4 - 1
-            data = self._mmap[self._offsets[table_idx] : self._offsets[table_idx + 1]]
+            data = self._slice_item_bytes(table_idx, chunk_index)
         else:
             assert self._open_handle
             # load the data from raw bytes using the offset for the item we want to load
@@ -543,6 +558,43 @@ class PyTreeLoader(BaseItemLoader):
 
         fp.seek(begin)  # move the file pointer to the offset_start where the item starts
         return fp.read(end - begin)  # read the item
+
+    def _slice_item_bytes(self, table_idx: int, chunk_index: int) -> bytes:
+        """Copy one item, or split it out of a cached contiguous page (POSIX-fast)."""
+        assert self._mmap is not None
+        assert self._offsets is not None
+        start = self._offsets[table_idx]
+        end = self._offsets[table_idx + 1]
+        if self._posix_fast and self._page_bytes > 0:
+            if (
+                self._page is None
+                or self._page_chunk != chunk_index
+                or table_idx < self._page_start
+                or table_idx >= self._page_end
+            ):
+                self._fill_item_page(table_idx, chunk_index)
+            assert self._page is not None
+            rel0 = start - self._page_byte0
+            rel1 = end - self._page_byte0
+            return self._page[rel0:rel1]
+        return self._mmap[start:end]
+
+    def _fill_item_page(self, table_idx: int, chunk_index: int) -> None:
+        """Pull sequential item payloads covering ``posix_page_bytes`` in one mmap copy."""
+        assert self._mmap is not None
+        assert self._offsets is not None
+        n_items = len(self._offsets) - 1
+        byte0 = self._offsets[table_idx]
+        limit = byte0 + self._page_bytes
+        end_idx = table_idx + 1
+        while end_idx < n_items and self._offsets[end_idx] <= limit:
+            end_idx += 1
+        byte1 = self._offsets[end_idx]
+        self._page = self._mmap[byte0:byte1]
+        self._page_chunk = chunk_index
+        self._page_start = table_idx
+        self._page_end = end_idx
+        self._page_byte0 = byte0
 
     def mds_deserialize(self, raw_item_data: bytes, chunk_index: int) -> "PyTree":
         """Deserialize the mds raw bytes into their python equivalent."""
@@ -610,6 +662,7 @@ class PyTreeLoader(BaseItemLoader):
 
     def _close_open_chunk(self) -> None:
         """Release the memory-map / file handle for the currently open chunk (if any)."""
+        self._clear_item_page()
         self._offsets = None
         self._mmap = None
         self._open_handle = None
@@ -682,12 +735,21 @@ class PyTreeLoader(BaseItemLoader):
         state["_mmap"] = None
         state["_offsets"] = None
         state["_mapped"] = OrderedDict()
+        state["_page"] = None
+        state["_page_chunk"] = None
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
+        if not hasattr(self, "_page"):
+            self._page = None
+            self._page_chunk = None
+            self._page_start = 0
+            self._page_end = 0
+            self._page_byte0 = 0
+            self._page_bytes = 0
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)

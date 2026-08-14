@@ -82,6 +82,29 @@ def test_posix_fast_shuffle_uses_window_shuffle(tmpdir):
     assert items != list(range(80))
 
 
+def test_posix_fast_loads_a_page_of_items(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=40)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    items = list(iter(dataset))
+    assert sorted(items) == list(range(80))
+    loader = dataset.cache._reader._item_loader
+    assert isinstance(loader, PyTreeLoader)
+    assert loader._page is not None
+    assert loader._page_end > loader._page_start
+    assert loader._page_bytes > 0
+
+
+def test_posix_fast_page_bytes_zero_still_reads(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_PAGE_BYTES", "0")
+    data_dir = _write_int_dataset(tmpdir, num_items=30, chunk_size=10)
+    dataset = StreamingDataset(data_dir, shuffle=True)
+    items = list(iter(dataset))
+    assert sorted(items) == list(range(30))
+    loader = dataset.cache._reader._item_loader
+    assert isinstance(loader, PyTreeLoader)
+    assert loader._page is None
+
+
 def test_posix_fast_disabled_keeps_full_shuffle(tmpdir, monkeypatch):
     monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=5)
