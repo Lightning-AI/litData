@@ -398,10 +398,9 @@ class StreamingDataset(IterableDataset):
         self.set_num_workers(num_workers)
         self.set_batch_size(batch_size)
         worker_env = _WorkerEnv.detect()
-        if self.cache is None:
-            self.cache = self._create_cache(worker_env=worker_env)
         if self.shuffler is None:
-            self.shuffler = self._create_shuffler(self.cache)
+            cache = self._create_cache(worker_env=worker_env)
+            self.shuffler = self._create_shuffler(cache)
         return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
 
     def _canonical_plans(
