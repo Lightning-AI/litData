@@ -154,7 +154,7 @@ ______________________________________________________________________
 | `encryption`                          | `None`                      | `FernetEncryption` / `RSAEncryption` / custom              |
 | `storage_options` / `session_options` | `{}`                        | Cloud creds / boto3 session                                |
 | `index_path`                          | `None`                      | Parquet/HF index file or directory                         |
-| `force_override_state_dict`           | `False`                     | Local args win for seed/shuffle/paths/`drop_last`         |
+| `force_override_state_dict`           | `False`                     | Local args win for seed/shuffle/paths/`drop_last`          |
 | `num_canonical_nodes`                 | `None`                      | Frozen elastic-resume buckets (default first `world_size`) |
 | `transform`                           | `None`                      | Callable or list applied per sample                        |
 
