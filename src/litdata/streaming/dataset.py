@@ -28,6 +28,7 @@ from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.elastic import (
+    _round_down_drop_first,
     canonical_item_stream,
     restripe_items,
     sample_in_epoch_from_state,
@@ -456,10 +457,11 @@ class StreamingDataset(IterableDataset):
         # BinaryReader.acquire_shared_locks). This runs for BOTH fresh and resumed epochs.
         node_size = self.distributed_env.world_size // self.distributed_env.num_nodes
         first_rank_this_node = (self.distributed_env.global_rank // node_size) * node_size
-        num_workers_per_node = node_size * self.num_workers
+        workers_per_rank = self.worker_env.world_size
+        num_workers_per_node = node_size * workers_per_rank
         # `workers_chunks` is a flat list indexed by `rank * num_workers + worker`, so the workers
-        # belonging to this node begin at `first_rank_this_node * self.num_workers`.
-        worker_start = first_rank_this_node * self.num_workers
+        # belonging to this node begin at `first_rank_this_node * workers_per_rank`.
+        worker_start = first_rank_this_node * workers_per_rank
         worker_end = worker_start + num_workers_per_node
 
         shared_chunks = _get_shared_chunks(workers_chunks[worker_start:worker_end])
@@ -505,7 +507,6 @@ class StreamingDataset(IterableDataset):
         num_workers = state["num_workers"]
         batch_size = state["batch_size"]
 
-        # TODO: Implement elastic sampling where the number of workers, ranks can change.
         num_samples_yielded = self._state_dict["num_samples_yielded"]
 
         worker_start = self.distributed_env.global_rank * num_workers
@@ -563,17 +564,23 @@ class StreamingDataset(IterableDataset):
 
         state = self._state_dict
         intervals = self.cache.get_chunk_intervals()
-        ncn = int(state.get("num_canonical_nodes") or self.num_canonical_nodes or self.distributed_env.world_size)
+        ncn = state.get("num_canonical_nodes")
+        if ncn is None:
+            ncn = self.num_canonical_nodes if self.num_canonical_nodes is not None else self.distributed_env.world_size
+        ncn = max(1, int(ncn))
         window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
         granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
         drop_first = sample_in_epoch_from_state(state)
+        if granularity == "item":
+            drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, self.batch_size)
         self._elastic_drop_first = drop_first
         state["resume_mode"] = "elastic"
         state["num_canonical_nodes"] = ncn
+        seed = int(state.get("seed", self.seed))
 
         stream = canonical_item_stream(
             intervals,
-            seed=self.seed,
+            seed=seed,
             epoch=self.current_epoch,
             shuffle=self.shuffle,
             num_canonical_nodes=ncn,

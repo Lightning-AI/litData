@@ -124,7 +124,7 @@ def test_dataloader_elastic_workers_2_to_8(tmpdir, monkeypatch):
     data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=128, chunk_size=8)
     dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
     loader = StreamingDataLoader(dataset, num_workers=2, batch_size=4)
-    first = _all_ids_from_loader(loader, max_batches=6)
+    _all_ids_from_loader(loader, max_batches=6)
     state = loader.state_dict()
     assert "sample_in_epoch" in state["dataset"]
 
@@ -281,9 +281,7 @@ def test_restripe_unaligned_drop_first_skips_remainder():
 
 def test_restripe_drop_last_equal_per_worker():
     stream = [(i // 3, i % 3) for i in range(50)]
-    plans = restripe_items(
-        stream, world_size=2, num_workers=2, batch_size=4, drop_first=0, drop_last=True
-    )
+    plans = restripe_items(stream, world_size=2, num_workers=2, batch_size=4, drop_first=0, drop_last=True)
     counts = [len(_flatten_plan([p])) for p in plans]
     assert len(set(counts)) == 1
     assert counts[0] % 4 == 0
@@ -296,12 +294,8 @@ def test_restripe_constant_global_batch_size_same_set():
     intervals = [[0, 0, 8, 8] for _ in range(8)]
     stream = canonical_item_stream(intervals, seed=42, epoch=1, shuffle=True, num_canonical_nodes=4)
     drop_first = 16
-    a = set(
-        _flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first))
-    )
-    b = set(
-        _flatten_plan(restripe_items(stream, world_size=4, num_workers=1, batch_size=8, drop_first=drop_first))
-    )
+    a = set(_flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first)))
+    b = set(_flatten_plan(restripe_items(stream, world_size=4, num_workers=1, batch_size=8, drop_first=drop_first)))
     assert a == b
 
 
@@ -379,6 +373,26 @@ def test_elastic_second_checkpoint_advances_cursor(tmpdir, monkeypatch):
     assert len(rest1) == len(set(rest1))
     assert len(rest2) == len(set(rest2))
     assert set(rest1).isdisjoint(set(rest2))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_unaligned_sample_in_epoch_is_rounded_before_save(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=2)
+    state = loader.state_dict()
+    state["dataset"]["sample_in_epoch"] = 13
+    state["dataset"]["num_workers"] = 2
+
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=0, batch_size=4)
+    loader_b.load_state_dict(state)
+    # world_size=1, batch_size=4 → stride 4, 13 rounds down to 12 even before the first batch.
+    assert dataset_b._elastic_drop_first == 12
+    _all_ids_from_loader(loader_b, max_batches=1)
+    assert loader_b.state_dict()["dataset"]["sample_in_epoch"] == 16
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")

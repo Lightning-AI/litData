@@ -39,7 +39,7 @@ from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
-from litdata.streaming.elastic import sample_in_epoch_from_state, topology_changed
+from litdata.streaming.elastic import _round_down_drop_first, sample_in_epoch_from_state, topology_changed
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.posix_fast import posix_max_data_workers, raise_nofile_limit
 from litdata.streaming.sampler import CacheBatchSampler
@@ -859,7 +859,11 @@ class StreamingDataLoader(DataLoader):
             if elastic:
                 # Local yielded count is for the new grid; the canonical cursor lives on the dataset.
                 self._num_samples_yielded_streaming = 0
-                self.dataset._elastic_drop_first = sample_in_epoch_from_state(ds_state)
+                drop_first = sample_in_epoch_from_state(ds_state)
+                posix = getattr(self.dataset, "posix_fast", None)
+                if posix is None or not posix.window_shuffle:
+                    drop_first = _round_down_drop_first(drop_first, world_size, batch_size)
+                self.dataset._elastic_drop_first = drop_first
             else:
                 self._num_samples_yielded_streaming = obj["num_samples_yielded"]
         else:
