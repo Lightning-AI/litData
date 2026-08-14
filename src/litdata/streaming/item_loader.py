@@ -10,13 +10,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import contextlib
 import functools
 import logging
 import mmap
 import os
 import struct
 from abc import ABC, abstractmethod
-from collections import defaultdict, namedtuple
+from collections import OrderedDict, defaultdict, namedtuple
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
@@ -39,6 +40,7 @@ from litdata.constants import (
     _TORCH_DTYPES_MAPPING,
 )
 from litdata.debugger import CAT_DELETE, trace_span
+from litdata.streaming.posix_fast import advise_willneed, madvise_mmap
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
@@ -212,6 +214,9 @@ class BaseItemLoader(ABC):
         if force_download_queue:
             force_download_queue.put(chunk_index)
 
+    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+        """Enable in-place parallel-FS reads (Vast/NFS). Default loaders ignore this."""
+
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
         """Declare which chunks are safe to memory-map (i.e. not shared with another worker).
 
@@ -373,6 +378,13 @@ class PyTreeLoader(BaseItemLoader):
         # Owned copy of the chunk offset table as plain ints (not a view into the mmap).
         self._offsets: list[int] | None = None
         self._mmap_allowed_chunks: set[int] = set()
+        self._posix_fast = False
+        self._mmap_keep = 1
+        self._mapped: OrderedDict[int, tuple[mmap.mmap, FileIO, list[int], str]] = OrderedDict()
+
+    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+        self._posix_fast = enabled
+        self._mmap_keep = max(1, keep) if enabled else 1
 
     def set_mmap_allowed_chunks(self, chunk_indexes: set[int]) -> None:
         self._mmap_allowed_chunks = chunk_indexes
@@ -393,7 +405,8 @@ class PyTreeLoader(BaseItemLoader):
         return intervals
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        pass
+        if self._posix_fast:
+            advise_willneed(chunk_filepath)
 
     def load_item_from_bytes(
         self,
@@ -450,18 +463,21 @@ class PyTreeLoader(BaseItemLoader):
             if _DEBUG and time() - start_time > 5:
                 print("WAIT TIME", time() - start_time)
 
-            self._chunk_filepath = chunk_filepath
-
-            # Release the previous chunk's handle / memory-map before opening the new one.
-            self._close_open_chunk()
-
-            # Only memory-map chunks that are safe: not encrypted (encrypted chunks are read and
-            # decrypted whole) and not shared with another worker (a shared chunk can be
-            # deleted/replaced by a co-worker while mapped -> SIGSEGV; see issues #459, #756).
-            if self._config.get("encryption") or chunk_index not in self._mmap_allowed_chunks:
-                self._open_handle = _open_chunk_file(chunk_filepath)
+            cached = self._mapped.get(chunk_index)
+            if cached is not None and cached[3] == chunk_filepath:
+                self._chunk_filepath = chunk_filepath
+                self._mmap, self._open_handle, self._offsets, _ = cached
+                self._mapped.move_to_end(chunk_index)
             else:
-                self._open_chunk_mmap(chunk_filepath, chunk_index)
+                self._chunk_filepath = chunk_filepath
+                if not self._posix_fast:
+                    self._close_open_chunk()
+                if self._config.get("encryption") or chunk_index not in self._mmap_allowed_chunks:
+                    self._open_handle = _open_chunk_file(chunk_filepath)
+                    self._mmap = None
+                    self._offsets = None
+                else:
+                    self._open_chunk_mmap(chunk_filepath, chunk_index)
 
         if self._config.get("encryption"):
             data = self._load_encrypted_data(chunk_filepath, chunk_index, offset, encryption)
@@ -582,16 +598,27 @@ class PyTreeLoader(BaseItemLoader):
         self._offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
         self._open_handle = handle
         self._mmap = chunk_mmap
+        madvise_mmap(chunk_mmap)
+        self._mapped[chunk_index] = (chunk_mmap, handle, self._offsets, chunk_filepath)
+        self._mapped.move_to_end(chunk_index)
+        while len(self._mapped) > self._mmap_keep:
+            _, (old_mmap, old_handle, _, _) = self._mapped.popitem(last=False)
+            with contextlib.suppress(BufferError):
+                old_mmap.close()
+            with contextlib.suppress(OSError):
+                old_handle.close()
 
     def _close_open_chunk(self) -> None:
         """Release the memory-map / file handle for the currently open chunk (if any)."""
         self._offsets = None
-        if self._mmap is not None:
-            self._mmap.close()
-            self._mmap = None
-        if self._open_handle is not None:
-            self._open_handle.close()
-            self._open_handle = None
+        self._mmap = None
+        self._open_handle = None
+        for idx in list(self._mapped):
+            mm, handle, _, _ = self._mapped.pop(idx)
+            with contextlib.suppress(BufferError, ValueError):
+                mm.close()
+            with contextlib.suppress(OSError):
+                handle.close()
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle / memory-map for the current chunk."""
@@ -599,6 +626,8 @@ class PyTreeLoader(BaseItemLoader):
         self._chunk_filepath = None
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
+        if getattr(self, "_posix_fast", False):
+            return
         with trace_span("delete", CAT_DELETE, chunk=chunk_index):
             if os.path.exists(chunk_filepath):
                 if _DEBUG:
@@ -652,6 +681,7 @@ class PyTreeLoader(BaseItemLoader):
         state["_chunk_filepath"] = None
         state["_mmap"] = None
         state["_offsets"] = None
+        state["_mapped"] = OrderedDict()
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
         return state

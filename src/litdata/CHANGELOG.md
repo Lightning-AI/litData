@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Introduced `CHANGELOG.md` to track changes across releases ([#733](https://github.com/lightning-ai/litdata/pull/733))
 - Add environment variable `LITDATA_DISABLE_VERSION_CHECK` to disable PyPI version check ([#737](https://github.com/Lightning-AI/litData/pull/737))
-- Leveled pipeline tracing: `enable_tracer(level="batch"|"chunk"|"sample"|"debug")` or `categories=["download", "read", "delete"]`. Events use stable names (`download`, `read`, `delete`, `batch`, `sample`) with indexes in args so Perfetto groups download vs read vs delete. Convert with [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer) (`--quiet --validate --cat`).
+- In-place POSIX reads (mmap + `posix_fadvise`) are **automatic** for local / Vast / NFS datasets. Object URLs (`s3://`) still GET compacted chunks. Disable with `LITDATA_POSIX_FAST=0`.
 
 ### Changed
 

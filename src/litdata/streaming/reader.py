@@ -38,6 +38,7 @@ from litdata.streaming.async_prefetch import (
 )
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
+from litdata.streaming.posix_fast import advise_willneed
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
@@ -786,6 +787,7 @@ class BinaryReader:
         self._session_options = session_options
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
+        self._posix_fast = False
 
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
@@ -836,6 +838,22 @@ class BinaryReader:
         while it is mapped, which crashes with SIGSEGV rather than a recoverable error.
         """
         self._item_loader.set_mmap_allowed_chunks(chunk_indexes)
+
+    def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4) -> None:
+        """Read chunks from the dataset directory in place (Vast/NFS). Never delete sources."""
+        self._posix_fast = True
+        setter = getattr(self._item_loader, "set_posix_fast", None)
+        if setter is not None:
+            setter(True, keep=keep)
+        self._item_loader.set_mmap_allowed_chunks(set(chunk_indexes))
+        if self._config is None:
+            self._try_load_config()
+        if self._config is None:
+            return
+        for chunk_index in chunk_indexes[:keep]:
+            chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+            advise_willneed(chunk_filepath)
+            self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
     def _release_shared_locks(self) -> None:
         """Release any eagerly-acquired shared-chunk locks this worker still holds."""

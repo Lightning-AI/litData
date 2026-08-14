@@ -28,6 +28,7 @@ from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
+from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
@@ -215,6 +216,16 @@ class StreamingDataset(IterableDataset):
         elif input_dir.data_connection_id and storage_options is None:
             storage_options = {"data_connection_id": input_dir.data_connection_id}
         self.storage_options = storage_options
+        self.posix_fast: PosixFastProfile | None = detect_posix_fast(
+            input_dir.path,
+            storage_options,
+            remote_url=input_dir.url,
+        )
+        if self.posix_fast is not None:
+            logger.info(
+                "StreamingDataset POSIX-fast %s: mmap chunks in place (no cache copy, no source delete).",
+                self.posix_fast.kind,
+            )
         self.session_options = session_options
         self.max_pre_download = max_pre_download
         if transform is not None:
@@ -277,7 +288,8 @@ class StreamingDataset(IterableDataset):
             self.current_epoch = current_epoch
 
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
-        if _should_replace_path(self.input_dir.path):
+        skip_copy = self.posix_fast is not None and self.posix_fast.skip_cache_copy
+        if not skip_copy and _should_replace_path(self.input_dir.path):
             cache_path = _try_create_cache_dir(
                 input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
                 cache_dir=self.cache_dir.path,
@@ -332,6 +344,10 @@ class StreamingDataset(IterableDataset):
                 f"The provided dataset `{self.input_dir}` doesn't contain any {_INDEX_FILENAME} file."
                 "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
             )
+
+        if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
+            chunks = cache._reader._config._chunks or []
+            cache._reader.enable_posix_fast(list(range(len(chunks))), keep=max(4, self.max_pre_download))
 
         return cache
 
@@ -409,12 +425,21 @@ class StreamingDataset(IterableDataset):
 
         shared_chunks = _get_shared_chunks(workers_chunks[worker_start:worker_end])
         my_shared_chunks = {chunk_index for chunk_index in self.worker_chunks if chunk_index in shared_chunks}
-        self.cache._reader.acquire_shared_locks(my_shared_chunks)
 
-        # Chunks this worker owns exclusively are safe to memory-map for faster reads; shared chunks
-        # are not (a co-worker could delete/replace one while it is mapped -> SIGSEGV).
-        my_nonshared_chunks = {chunk_index for chunk_index in self.worker_chunks if chunk_index not in shared_chunks}
-        self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
+        posix = self.posix_fast is not None and self.posix_fast.in_place
+        if posix:
+            # Source chunks are never deleted, so shared mmap is safe (FFCV OS-cache model).
+            # Skip .cnt lock files — they are extra metadata IOPS on Vast/NFS.
+            self.cache._reader.enable_posix_fast(
+                list(dict.fromkeys(self.worker_chunks)),
+                keep=max(4, self.max_pre_download),
+            )
+        else:
+            self.cache._reader.acquire_shared_locks(my_shared_chunks)
+            my_nonshared_chunks = {
+                chunk_index for chunk_index in self.worker_chunks if chunk_index not in shared_chunks
+            }
+            self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
 
         # Handle restart
         if self._state_dict:
