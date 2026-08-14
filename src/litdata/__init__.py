@@ -14,6 +14,7 @@ import warnings
 
 from litdata.__about__ import *  # noqa: F403
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
+from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.processing.functions import map, merge_datasets, optimize, walk
 from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
@@ -51,6 +52,7 @@ __all__ = [
     "index_parquet_dataset",
     "index_hf_dataset",
     "breakpoint",
+    "ChunkWaitTimeoutError",
 ]
 
 if _LIGHTNING_SDK_AVAILABLE:

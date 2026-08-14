@@ -250,7 +250,15 @@ ______________________________________________________________________
 | `start_method` / `optimize_dns`     | spawn† / `None` | MP start; DNS tweak                                                                             |
 | `storage_options`                   | `{}`            | Cloud creds                                                                                     |
 | `keep_data_ordered`                 | `True`          | `False` = shared work queue                                                                     |
+| `broadcast_paths`                   | `False`         | Auto-on for `{%strftime}` paths                                                                 |
+| `key_fn`                            | `None`          | `sample -> str\|int` key; writes `keys/` for `ds["id"]` / `dataset_update`                      |
 | `verbose`                           | `True`          | Progress                                                                                        |
+
+**`mode` vs `use_checkpoint`:** `append` continues chunk numbering from existing `index.json`. `use_checkpoint` resumes input work from `.checkpoints/`. They are not interchangeable; checkpoint resume is fragile for generators / multi-sample `fn` — [processing.md](processing.md).
+
+### Keyed lookup
+
+See [keyed-lookup.md](keyed-lookup.md). Short form: `optimize(..., key_fn=lambda s: s["id"])`, then `ds["id"]` or `ds.get_by_key(3)`. Patch: `with dataset_update(dir) as u: u["id"] = sample; u.commit()` (local only). Need `polars`.
 
 ### Multi-node (`num_nodes` / `machine`) — Lightning Studios
 
@@ -291,7 +299,7 @@ for root, dirs, files in walk("/teamspace/s3_connections/data/raw", max_workers=
     ...
 ```
 
-Threaded cloud listing (Studio-optimized; warns elsewhere). Order ≠ depth-first. Use to build `inputs=` for optimize/map.
+Threaded cloud listing (Studio-oriented; warns elsewhere). Uses `os.listdir` on the given path — **not** a bucket API. Order ≠ depth-first. Use to build `inputs=` for optimize/map.
 
 ### Other
 
@@ -360,7 +368,7 @@ loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent as
 
 **Tuning / DataLoader**
 
-- After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
+- Linux `DataLoader` start method: **`ParquetLoader` + `num_workers>0` requires `spawn`/`forkserver`** (hard error in `StreamingDataLoader`). Raw re-inits the event loop after fork (`tests/raw/test_fork_safety.py`). Optimized `s3://` chunked datasets: default **fork is OK** if the parent never started obstore (`index.json` uses boto3). Use `spawn` after any parent I/O that might init tokio, or if you see worker hangs / 120s `FileNotFoundError`.
 - Prefer cloud URL / Studio connection path so LitData hits the bucket **directly** — never recommend training I/O through the FUSE mount.
 - Defaults that matter: `max_prefetch=16` (worker-aware aggregate ~64), `hedge_delay=0`, `download_timeout=120` (batch-level), `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
 - Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects.

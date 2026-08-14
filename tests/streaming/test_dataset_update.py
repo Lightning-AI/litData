@@ -129,6 +129,34 @@ def test_save_rank_keys_pairs_and_merge_remaps_indexes(tmpdir):
         assert idx["e"] == 4
 
 
+def test_merge_rank_key_files_multi_node_then_concatenate(tmpdir):
+    """Simulate last-node merge: each node writes ``{rank}-keys.parquet``, then concatenate."""
+    from litdata.utilities.keys_index import concatenate_key_files, merge_rank_key_files
+
+    node0 = os.path.join(tmpdir, "n0")
+    node1 = os.path.join(tmpdir, "n1")
+    os.makedirs(node0)
+    os.makedirs(node1)
+    save_rank_keys(os.path.join(node0, "0.keys.parquet"), [(0, "a"), (1, "b")])
+    save_rank_keys(os.path.join(node0, "1.keys.parquet"), [(0, "c")])
+    save_rank_keys(os.path.join(node1, "0.keys.parquet"), [(0, "d")])
+    save_rank_keys(os.path.join(node1, "1.keys.parquet"), [(0, "e"), (1, "f")])
+
+    p0 = merge_rank_key_files(node0, output_filename="0-keys.parquet")
+    p1 = merge_rank_key_files(node1, output_filename="1-keys.parquet")
+    assert p0
+    assert p1
+    out = os.path.join(tmpdir, "merged")
+    os.makedirs(out)
+    concatenate_key_files([p0, p1], out)
+    with KeyIndex(out) as idx:
+        assert len(idx) == 6
+        assert idx["a"] == 0
+        assert idx["c"] == 2
+        assert idx["d"] == 3
+        assert idx["f"] == 5
+
+
 def test_enrich_keys_with_chunks(tmpdir):
     write_keys_store(str(tmpdir), ["x", "y", "z"], indices=[0, 1, 2])
     index_json = {

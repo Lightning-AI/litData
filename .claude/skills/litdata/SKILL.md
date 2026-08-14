@@ -6,9 +6,10 @@ description: >-
   StreamingRawDataset, optimize, map, CombinedStreamingDataset,
   ParallelStreamingDataset, TokensLoader, serializers, train_test_split,
   merge_datasets, index_parquet_dataset, index_hf_dataset), answering how-to
-  questions, choosing raw vs optimize vs parquet/HF/MDS, tuning cache/prefetch/
-  shuffle/seed, resolving paths (s3/gs/r2/azure/hf/local:/teamspace via
-  resolver.py), documenting or debugging optimize/map downloaders/uploaders/
+  questions, choosing raw vs optimize vs parquet/HF/MDS, keyed lookup
+  (`key_fn`, `build_keys_index`, `dataset_update`, `get_by_key`), tuning
+  cache/prefetch/shuffle/seed, resolving paths (s3/gs/r2/azure/hf/local:/teamspace
+  via resolver.py), documenting or debugging optimize/map downloaders/uploaders/
   removers, FsProvider vs Downloader, FUSE s3_connections/s3_folders, or
   multi-node DATA_OPTIMIZER_* / num_nodes jobs, or when navigating/editing
   src/litdata, tests, CI, or debugging streaming / optimize / map. Also use for
@@ -56,6 +57,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Throughput       | Rough ImageNet Studio order-of-magnitude (not guarantees): FUSE ~**600**/s · Raw (right tuning) ~**6–7k**/s · Optimized 64MB chunks ~**11k**/s — `using-litdata.md` FAQ. Raw benches: medians + provenance SHAs; never cite short-window n=1 against Stage 0 medians.                                                                                                       |
 | **Tracing**      | `from litdata.debugger import enable_tracer` then `enable_tracer(level="chunk")` (or `categories=["download","read","delete"]`). Convert with [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer): `litracer --quiet --validate -o trace.json.gz litdata_debug.log`. One line per event; crashes go to stderr + `ph: I`. Full spec: `reference/debugging.md`. |
 | **S3 workers**   | `index.json` is boto3 (no parent tokio). Workers lazy-init obstore; boto3 fallback if parent already started it. Do **not** pass `data_connection_id` / `endpoint_url` into `boto3.Session` — build obstore from `S3Client`/`R2Client`. `FileNotFoundError` after 120s with `num_workers>0` only → [debugging.md](reference/debugging.md) failure modes.                    |
+| **Keyed lookup** | `optimize(..., key_fn=...)` writes `keys/`. Read `ds["id"]` / `get_by_key`. Patch locally with `dataset_update`. Needs `polars`. [keyed-lookup.md](reference/keyed-lookup.md).                                                                                                                                                                                              |
 | Parquet / HF     | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                                                                                                                                                                                                                                                             |
 
 ## Reference map
@@ -77,20 +79,22 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Dev env, PR/CI style                                                          | `reference/contributing.md`                         |
 | Tests & fixtures                                                              | `reference/testing.md`                              |
 | Tracing (`enable_tracer`, Litracer, Perfetto), breakpoints, env knobs         | `reference/debugging.md`                            |
+| **Keyed lookup / `dataset_update` / `key_fn`**                                | `reference/keyed-lookup.md`                         |
 
 ## Public API (`src/litdata/__init__.py`)
 
-| Symbol                                                  | Purpose                             |
-| ------------------------------------------------------- | ----------------------------------- |
-| `StreamingDataset` / `StreamingDataLoader`              | Optimized stream + resumable loader |
-| `CombinedStreamingDataset` / `ParallelStreamingDataset` | Mix or zip streams                  |
-| `StreamingRawDataset`                                   | Raw file stream                     |
-| `TokensLoader`                                          | Token windows for LLMs              |
-| `optimize` / `map` / `merge_datasets` / `walk`          | Write / transform / merge / list    |
-| `train_test_split`                                      | Split by chunk ROIs                 |
-| `index_parquet_dataset` / `index_hf_dataset`            | Index for streaming                 |
-| `breakpoint`                                            | Multiprocessing-safe pdb            |
-| `enable_tracer` (`litdata.debugger`)                    | Pipeline log → Litracer / Perfetto  |
+| Symbol                                                  | Purpose                                 |
+| ------------------------------------------------------- | --------------------------------------- |
+| `StreamingDataset` / `StreamingDataLoader`              | Optimized stream + resumable loader     |
+| `CombinedStreamingDataset` / `ParallelStreamingDataset` | Mix or zip streams                      |
+| `StreamingRawDataset`                                   | Raw file stream                         |
+| `TokensLoader`                                          | Token windows for LLMs                  |
+| `optimize` / `map` / `merge_datasets` / `walk`          | Write / transform / merge / list        |
+| `dataset_update` / `build_keys_index`                   | Keyed in-place patch / backfill sidecar |
+| `train_test_split`                                      | Split by chunk ROIs                     |
+| `index_parquet_dataset` / `index_hf_dataset`            | Index for streaming                     |
+| `breakpoint`                                            | Multiprocessing-safe pdb                |
+| `enable_tracer` (`litdata.debugger`)                    | Pipeline log → Litracer / Perfetto      |
 
 Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook §6–9 for constructor args.
 
@@ -109,6 +113,13 @@ Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook
 - Ranks from env (`_DistributedEnv` / `DATA_OPTIMIZER_*`), not a custom network.
 - Shuffle deterministic from `seed`+epoch+chunk → resumable (`shuffle.py`, not `sampler.py`).
 - Design: one less thing to remember; pure PyTorch; backward compatible; test-driven.
+
+## Traps (do not “fix” by guessing)
+
+- **`FileNotFoundError` / `ChunkWaitTimeoutError` after ~120s** on chunks with `num_workers>0` is usually prefetch-thread death or wait timeout — not a missing object. Check stderr + tracer `crash`.
+- **`mode="append"` vs `use_checkpoint=True`**: append continues **chunk indices**; checkpoint resumes **input slices**. Combining them is unsafe; checkpoint filenames / `done_till_index` are known-fragile (`writer.save_checkpoint` vs `data_processor` load).
+- **Azure/HF** resolve for **read**; optimize **write** providers are `s3`/`gs`/`r2` only (`_SUPPORTED_PROVIDERS`).
+- **`dataset_update`**: local dirs only; `ds[int]` is positional.
 
 ## Quick commands
 

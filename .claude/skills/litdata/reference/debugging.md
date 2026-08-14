@@ -105,6 +105,7 @@ Indexes belong in **args**, not in `name`, so Perfetto groups all downloads toge
 
 - One line per event: `ts:%(asctime)s;PID:%(process)d; TID:%(thread)d; name: download;ph: B;cat: download;…`
 - `ts` is Chrome microseconds (`record.created * 1e6`) via `_OneLineTraceFormatter`.
+- Keyed access `KeyError` mentioning `keys/` → run `build_keys_index` or `optimize(..., key_fn=...)` ([keyed-lookup.md](keyed-lookup.md)).
 - Values are sanitized: newlines/CRs → space, `;` → `,` (`_sanitize_log_value`). **Never** `logger.exception` into this logger — a traceback splits the file into unparsable lines. Crashes print the traceback to **stderr** and emit a one-line `crash` instant.
 - `TimedFlushFileHandler` flushes every `flush_interval` seconds (default 5 via `enable_tracer`).
 
@@ -135,7 +136,7 @@ Cache CLI: `litdata cache path` · `litdata cache clear`.
 
 - **"did you optimize?" / `FileNotFoundError`** → no `index.json` at the path (`dataset.py`); the data wasn't optimized, or you pointed at raw files (use `StreamingRawDataset`).
 - **Hang/timeout on chunk download** → raise `MAX_WAIT_TIME`; check credentials/`storage_options`; confirm the URL prefix matches a registered `Downloader`.
-- **`FileNotFoundError: The …/chunk-*.bin hasn't been found` after ~120s, `num_workers>0`, `num_workers=0` never fails:**
+- **`ChunkWaitTimeoutError`** (subclass of `FileNotFoundError`) after ~120s, `num_workers>0`, `num_workers=0` never fails:
   - **Plain `s3://`:** obstore's tokio runtime is **not fork-safe**. If the DataLoader parent starts obstore (historically by fetching `index.json` via obstore), forked workers inherit a dead runtime, GETs hang, `FileLock(..., timeout=0)` skips co-workers, waiters time out. **Current code:** `index.json` always uses boto3; workers lazy-init obstore on the first chunk GET; if `_OBSTORE_INIT_PID` is the parent, workers fall back to boto3 (`obstore_usable()`). Re-creating `S3Store` after fork is **not** enough — tokio is process-global. Tests: `test_s3_index_download_does_not_start_obstore`, `test_obstore_usable_false_after_parent_init` in `tests/streaming/test_downloader.py`.
   - **Studio R2 / `lightning_storage` / connections:** prefetch thread died because `data_connection_id` / `endpoint_url` were unpacked into `boto3.Session` (`TypeError`). **Current code:** `_build_obstore_s3_store` builds the store from the existing `S3Client`/`R2Client` (credential provider + endpoint from the boto client). The crash path prints `[litdata] PrepareChunksThread CRASHED (rank=…, worker=…)` to stderr, emits `crash` (`ph: I`), and waiters raise `RuntimeError: Chunk prefetch thread crashed…` immediately instead of waiting 120s. Test: `test_build_obstore_s3_store_does_not_pass_data_connection_id_to_session`.
 - **Hang under tiny `max_cache_size` (CI 120s)** → often `max_pre_download` capped to 1 + delete-when-processed deadlock, or prepare-thread stuck in `shutdown_default_executor`. See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) § Prefetch & eviction. Look for log `capping max_pre_download … → 1`.

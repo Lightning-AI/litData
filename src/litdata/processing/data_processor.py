@@ -60,7 +60,7 @@ from litdata.utilities.dataset_utilities import load_index_file
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.packing import _pack_greedily
 
-logger = logging.Logger(__name__)
+logger = logging.getLogger(__name__)
 
 ALL_DONE = "ALL_DONE"  # sentinel value for shared queue
 
@@ -271,12 +271,16 @@ def _upload_fn(
 
                 output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
 
+                if not os.path.exists(local_filepath) and ".checkpoints" in local_filepath:
+                    continue
+
                 fs_provider.upload_file(
                     local_filepath,
                     output_filepath,
                 )
-            except Exception as e:
-                print(e)
+            except Exception:
+                logger.exception("Failed to upload %s to %s", local_filepath, output_filepath)
+                raise
 
         elif output_dir.path:
             output_filepath = output_dir.path
@@ -292,12 +296,17 @@ def _upload_fn(
             output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
 
             os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
+            if not os.path.exists(local_filepath):
+                # Checkpoint files reuse a stable name; a later save can replace a queued path.
+                if ".checkpoints" in local_filepath:
+                    continue
+                raise FileNotFoundError(local_filepath)
             shutil.copy(local_filepath, output_filepath)
         else:
             raise ValueError(f"The provided {output_dir.path} isn't supported.")
 
-        # Inform the remover to delete the file
-        if remove_queue and os.path.exists(local_filepath):
+        # Inform the remover to delete the file. Keep checkpoints so a later overwrite/upload can still read them.
+        if remove_queue and os.path.exists(local_filepath) and ".checkpoints" not in local_filepath:
             remove_queue.put([local_filepath])
 
 
@@ -522,6 +531,7 @@ class BaseWorker:
         keep_data_ordered: bool = True,
         shared_queue: "Queue | FakeQueue | None" = None,
         using_queue_optimize: bool = False,  # using queues as inputs for optimize fn
+        checkpoint_next_chunk_index: int | None = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
         self.worker_index = worker_index
@@ -565,6 +575,7 @@ class BaseWorker:
         self.use_checkpoint: bool = use_checkpoint
         self.checkpoint_chunks_info: list[dict[str, Any]] | None = checkpoint_chunks_info
         self.checkpoint_next_index: int | None = checkpoint_next_index
+        self.checkpoint_next_chunk_index: int | None = checkpoint_next_chunk_index
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
         # Explicit (writer_sample_index, key) pairs — index is the same value passed to Cache._add_item.
@@ -730,7 +741,11 @@ class BaseWorker:
             assert isinstance(self.checkpoint_chunks_info, list)
 
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
-            self.cache._writer._chunk_index += self.checkpoint_next_index
+            self.cache._writer._chunk_index = _writer_chunk_index_from_checkpoint(
+                self.writer_starting_chunk_index,
+                self.checkpoint_chunks_info,
+                self.checkpoint_next_chunk_index,
+            )
 
     def _try_upload(self, data: str | tuple[str, str] | None) -> None:
         if not data or (self.output_dir.url if self.output_dir.url else self.output_dir.path) is None:
@@ -893,7 +908,7 @@ class BaseWorker:
                 self._try_upload(chunk_filepath)
                 self._index_counter += 1
                 if self.use_checkpoint:
-                    checkpoint_filepath = self.cache.save_checkpoint()
+                    checkpoint_filepath = self.cache.save_checkpoint(inputs_done=self._index_counter)
                     self._try_upload(checkpoint_filepath)
         except Exception as e:
             raise RuntimeError(f"Failed processing {item=}; {index=}") from e
@@ -920,7 +935,7 @@ class BaseWorker:
             save_rank_keys(keys_filepath, self._key_pairs)
 
         if self.use_checkpoint and not self.data_recipe.is_generator:
-            checkpoint_filepath = self.cache.save_checkpoint()
+            checkpoint_filepath = self.cache.save_checkpoint(inputs_done=self._index_counter)
             self._try_upload(checkpoint_filepath)
 
     def _handle_data_transform_recipe(self, index: int, item: Any) -> None:
@@ -1351,6 +1366,7 @@ class DataProcessor:
         self.use_checkpoint = use_checkpoint
         self.checkpoint_chunks_info: list[list[dict[str, Any]]] | None = None
         self.checkpoint_next_index: list[int] | None = None
+        self.checkpoint_next_chunk_index: list[int | None] | None = None
         self.item_loader = item_loader
         self.storage_options = storage_options
         self.keep_data_ordered = keep_data_ordered
@@ -1633,6 +1649,9 @@ class DataProcessor:
                 self.keep_data_ordered,
                 self.shared_queue,
                 using_queue_optimize=workers_user_items is None,
+                checkpoint_next_chunk_index=(
+                    self.checkpoint_next_chunk_index[worker_idx] if self.checkpoint_next_chunk_index else None
+                ),
             )
             worker.start()
             workers.append(worker)
@@ -1732,8 +1751,9 @@ class DataProcessor:
                     temp_file_name,
                     os.path.join(prefix, "config.json"),
                 )
-        except Exception as e:
-            print(e)
+        except Exception:
+            logger.exception("Failed to persist optimize checkpoint config.json")
+            raise
 
     def _load_checkpoint_config(self, workers_user_items: list[list[Any]]) -> None:
         if not self.use_checkpoint:
@@ -1743,6 +1763,7 @@ class DataProcessor:
 
         self.checkpoint_chunks_info = [default_chunk_info for _ in range(self.num_workers)]
         self.checkpoint_next_index = [0 for _ in range(self.num_workers)]
+        self.checkpoint_next_chunk_index = [None for _ in range(self.num_workers)]
 
         if self.output_dir.url is None:
             assert self.output_dir.path
@@ -1775,8 +1796,9 @@ class DataProcessor:
                 with open(os.path.join(self.output_dir.path, ".checkpoints", checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
-                self.checkpoint_chunks_info[i] = checkpoint["chunks"]
-                self.checkpoint_next_index[i] = checkpoint["done_till_index"]
+                self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
+                    _resume_fields_from_checkpoint(checkpoint)
+                )
             return
 
         obj = parse.urlparse(self.output_dir.url)
@@ -1820,9 +1842,34 @@ class DataProcessor:
                 with open(os.path.join(saved_file_dir, checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
-                self.checkpoint_chunks_info[i] = checkpoint["chunks"]
-                self.checkpoint_next_index[i] = checkpoint["done_till_index"]
+                self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
+                    _resume_fields_from_checkpoint(checkpoint)
+                )
         return
+
+
+def _resume_fields_from_checkpoint(checkpoint: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int | None]:
+    chunks = checkpoint["chunks"]
+    inputs_done = int(checkpoint.get("inputs_done", checkpoint["done_till_index"]))
+    next_chunk_index = int(checkpoint["next_chunk_index"]) if "next_chunk_index" in checkpoint else None
+    return chunks, inputs_done, next_chunk_index
+
+
+def _writer_chunk_index_from_checkpoint(
+    writer_starting_chunk_index: int,
+    checkpoint_chunks: list[dict[str, Any]] | None,
+    checkpoint_next_chunk_index: int | None,
+) -> int:
+    """Absolute next chunk file index for the writer after loading a checkpoint.
+
+    ``next_chunk_index`` is already absolute (includes append offset). Older checkpoints
+    only stored this-run ``chunks``; continue from ``writer_starting_chunk_index + len(chunks)``.
+    Workers with no checkpoint file keep the append starting index.
+    """
+    if checkpoint_next_chunk_index is not None:
+        return checkpoint_next_chunk_index
+    n_chunks = len(checkpoint_chunks or [])
+    return writer_starting_chunk_index + n_chunks
 
 
 def in_notebook() -> bool:

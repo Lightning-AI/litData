@@ -11,10 +11,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import os
 import re
-import uuid
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
@@ -552,26 +552,39 @@ class BinaryWriter:
             )
         return out
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
-        """Save the current state of the writer to a checkpoint."""
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints", inputs_done: int | None = None) -> str | None:
+        """Save the current writer state to ``checkpoint-{rank}.json``.
+
+        ``inputs_done`` is how many *input items* this worker has processed (used to slice
+        the work list on resume). ``samples_written`` is the sum of chunk sizes.
+        ``next_chunk_index`` is the next chunk file index — not the sample count.
+        """
         checkpoint_dir = os.path.join(self._cache_dir, checkpoint_dir)
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
         if self._chunks_info == self.last_checkpoint_chunk_info:
-            # to avoid saving the same checkpoint twice
             return None
 
-        unique_id = uuid.uuid4().hex
-        done_till_index = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        samples_written = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        resolved_inputs = samples_written if inputs_done is None else inputs_done
+        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}.json")
+        tmp_filepath = checkpoint_filepath + f".tmp.{os.getpid()}"
 
-        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}-{unique_id}.json")
+        payload = {
+            "chunks": self._chunks_info,
+            "config": self.get_config(),
+            "inputs_done": resolved_inputs,
+            "samples_written": samples_written,
+            "next_chunk_index": self._chunk_index,
+            # Backward compatible alias used by older loaders.
+            "done_till_index": resolved_inputs,
+        }
 
-        checkPoint = {"chunks": self._chunks_info, "config": self.get_config(), "done_till_index": done_till_index}
-
-        with open(checkpoint_filepath, "w") as f:
-            json.dump(checkPoint, f)
-
+        with open(tmp_filepath, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp_filepath, checkpoint_filepath)
+        self.last_checkpoint_chunk_info = copy.deepcopy(self._chunks_info)
         return checkpoint_filepath
 
 
