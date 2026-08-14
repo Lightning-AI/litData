@@ -57,6 +57,16 @@ def test_detect_env_disable(monkeypatch):
     assert detect_posix_fast("/mnt/vast/data", mounts_text="x /mnt/vast nfs4 rw 0 0\n") is None
 
 
+def test_posix_fast_deserializes_strings(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=5)
+    for i in range(12):
+        cache[i] = f"row-{i}"
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    assert [dataset[i] for i in range(12)] == [f"row-{i}" for i in range(12)]
+
+
 def test_posix_fast_mmap_all_chunks_including_shared(tmpdir):
     data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=7)
     dataset = StreamingDataset(data_dir)

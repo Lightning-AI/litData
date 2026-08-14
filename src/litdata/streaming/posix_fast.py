@@ -87,12 +87,28 @@ def parse_proc_mounts(text: str) -> list[tuple[str, str, str]]:
     return rows
 
 
+def _path_match_forms(path: str) -> list[str]:
+    """Unix and Windows spellings so injected ``/proc/mounts`` text matches in CI."""
+    unix = path.replace("\\", "/")
+    forms = [unix]
+    abs_p = os.path.abspath(path).replace("\\", "/")
+    if abs_p not in forms:
+        forms.append(abs_p)
+    for form in list(forms):
+        if len(form) >= 2 and form[1] == ":":
+            rest = form[2:] if form[2:].startswith("/") else "/" + form[2:]
+            if rest not in forms:
+                forms.append(rest)
+    return forms
+
+
 def _mount_for_path(path: str, mounts: list[tuple[str, str, str]]) -> tuple[str, str, str] | None:
-    abs_path = os.path.abspath(path)
+    forms = _path_match_forms(path)
     best: tuple[str, str, str] | None = None
     for mountpoint, fstype, source in mounts:
-        if (abs_path == mountpoint or abs_path.startswith(mountpoint.rstrip("/") + "/")) and (
-            best is None or len(mountpoint) > len(best[0])
+        mp = mountpoint.replace("\\", "/").rstrip("/") or "/"
+        if any(form == mp or form.startswith(mp + "/") for form in forms) and (
+            best is None or len(mp) > len(best[0])
         ):
             best = (mountpoint, fstype, source)
     return best

@@ -631,6 +631,8 @@ class PyTreeLoader(BaseItemLoader):
         for size, data_format in zip(sizes, self._data_format):
             serializer = self._serializers[data_format]
             data_bytes = raw_item_data[idx : idx + size]
+            if not isinstance(data_bytes, (bytes, bytearray)):
+                data_bytes = bytes(data_bytes)
             data.append(serializer.deserialize(data_bytes))
             idx += size
         return tree_unflatten(data, self._config["data_spec"])
@@ -642,6 +644,8 @@ class PyTreeLoader(BaseItemLoader):
         data = []
         for size, serializer in zip(sizes, self._serializers_list):
             data_bytes = raw_item_data[idx : idx + size]
+            if not isinstance(data_bytes, (bytes, bytearray)):
+                data_bytes = bytes(data_bytes)
             data.append(serializer.deserialize(data_bytes))
             idx += size
         if self._unflatten is not None:
