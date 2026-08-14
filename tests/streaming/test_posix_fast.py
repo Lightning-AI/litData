@@ -12,8 +12,10 @@ from litdata.streaming.posix_fast import (
     available_ram_bytes,
     detect_posix_fast,
     parse_proc_mounts,
+    posix_max_data_workers,
     posix_page_bytes,
     posix_prefetch_fits_ram,
+    posix_safe_keep,
 )
 from litdata.streaming.shuffle import FullShuffle, WindowShuffle, posix_shuffle_window
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
@@ -199,6 +201,25 @@ def test_posix_prefetch_fits_ram_skips_when_window_crowds_memory(monkeypatch):
     assert not posix_prefetch_fits_ram(keep=1, chunk_bytes=1, num_readers=1, ram_bytes=10**12)
     monkeypatch.setenv("LITDATA_POSIX_WILLNEED", "1")
     assert posix_prefetch_fits_ram(keep=4, chunk_bytes=chunk, num_readers=208, ram_bytes=40 * 1024**3)
+
+
+def test_posix_max_data_workers_caps_all_cores(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
+    ram = 50 * 1024**3
+    rss = 400 * 1024 * 1024
+    capped = posix_max_data_workers(requested=208, ram_bytes=ram, rss_bytes=rss)
+    assert 1 <= capped < 208
+    monkeypatch.setenv("LITDATA_POSIX_MAX_WORKERS", "0")
+    assert posix_max_data_workers(requested=208, ram_bytes=ram, rss_bytes=rss) == 208
+    monkeypatch.setenv("LITDATA_POSIX_MAX_WORKERS", "12")
+    assert posix_max_data_workers(requested=208, ram_bytes=ram, rss_bytes=rss) == 12
+
+
+def test_posix_safe_keep_drops_to_one_when_crowded(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
+    keep = posix_safe_keep(keep=4, chunk_bytes=64 * 1024 * 1024, num_readers=208, ram_bytes=40 * 1024**3)
+    assert keep == 1
 
 
 def test_window_shuffle_does_not_share_chunks(tmpdir, monkeypatch):

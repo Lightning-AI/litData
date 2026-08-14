@@ -40,6 +40,7 @@ from litdata.streaming import Cache
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.parallel import ParallelStreamingDataset
+from litdata.streaming.posix_fast import posix_max_data_workers, raise_nofile_limit
 from litdata.streaming.sampler import CacheBatchSampler
 from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities._pytree import tree_flatten
@@ -646,6 +647,24 @@ class StreamingDataLoader(DataLoader):
 
         if drop_last is not None:
             dataset.set_drop_last(drop_last)
+
+        posix = getattr(dataset, "posix_fast", None)
+        if posix is not None and num_workers > 0:
+            capped = posix_max_data_workers(requested=num_workers)
+            if capped < num_workers:
+                logger.warning(
+                    "POSIX-fast: reducing num_workers %s → %s so worker RSS fits MemAvailable "
+                    "(set LITDATA_POSIX_MAX_WORKERS=0 to disable).",
+                    num_workers,
+                    capped,
+                )
+                num_workers = capped
+            raise_nofile_limit()
+            if num_workers >= 8:
+                try:
+                    torch.multiprocessing.set_sharing_strategy("file_system")
+                except RuntimeError:
+                    pass
 
         dataset.set_batch_size(batch_size)
         dataset.set_num_workers(num_workers)

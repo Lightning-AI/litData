@@ -170,6 +170,8 @@ def detect_posix_fast(
 
 _DEFAULT_PAGE_BYTES = 256 * 1024
 _DEFAULT_RAM_FRACTION = 0.5
+_DEFAULT_WORKER_RSS = 400 * 1024 * 1024  # JPEG decode worker: interpreter + prefetch batch
+_logged_willneed_skip = False
 
 
 def available_ram_bytes(meminfo_text: str | None = None) -> int | None:
@@ -230,6 +232,86 @@ def posix_prefetch_fits_ram(
         return projected < 8 * 1024 * 1024 * 1024
     frac = posix_ram_fraction() if ram_fraction is None else ram_fraction
     return projected <= int(ram * frac)
+
+
+def posix_safe_keep(
+    *,
+    keep: int,
+    chunk_bytes: int,
+    num_readers: int,
+    ram_bytes: int | None = None,
+) -> int:
+    """Shrink mapped-chunk LRU so ``readers × keep × chunk`` fits the RAM budget."""
+    keep = max(1, keep)
+    if posix_prefetch_fits_ram(keep=keep, chunk_bytes=chunk_bytes, num_readers=num_readers, ram_bytes=ram_bytes):
+        return keep
+    ram = ram_bytes if ram_bytes is not None else available_ram_bytes()
+    if ram is None:
+        return 1
+    budget = max(1, int(ram * posix_ram_fraction()))
+    per = max(1, num_readers) * max(1, chunk_bytes)
+    return max(1, min(keep, budget // per))
+
+
+def posix_max_data_workers(
+    *,
+    requested: int,
+    ram_bytes: int | None = None,
+    rss_bytes: int | None = None,
+) -> int:
+    """Cap DataLoader workers so process RSS fits ``MemAvailable``.
+
+    ``num_workers=os.cpu_count()`` on a loaded H100/Vast node (hundreds of cores,
+    tens of GiB free) OOMs / EMFILE even when WILLNEED is skipped.
+    ``LITDATA_POSIX_MAX_WORKERS=0`` disables the cap.
+    """
+    requested = max(0, requested)
+    if requested == 0:
+        return 0
+    raw = os.getenv("LITDATA_POSIX_MAX_WORKERS")
+    if raw is not None and raw.strip():
+        try:
+            forced = int(raw)
+        except ValueError:
+            forced = -1
+        if forced == 0:
+            return requested
+        if forced > 0:
+            return min(requested, forced)
+    ram = ram_bytes if ram_bytes is not None else available_ram_bytes()
+    if ram is None:
+        return requested
+    rss = rss_bytes if rss_bytes is not None else _DEFAULT_WORKER_RSS
+    raw_rss = os.getenv("LITDATA_POSIX_WORKER_RSS")
+    if raw_rss and rss_bytes is None:
+        try:
+            rss = max(1, int(raw_rss))
+        except ValueError:
+            pass
+    budget = max(1, int(ram * posix_ram_fraction()))
+    capped = max(1, budget // max(1, rss))
+    return min(requested, capped)
+
+
+def raise_nofile_limit(target: int = 1_048_576) -> int | None:
+    """Raise the soft ``RLIMIT_NOFILE`` toward ``target`` (best-effort)."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except OSError:
+        return None
+    inf = getattr(resource, "RLIM_INFINITY", -1)
+    ceiling = target if hard in (inf, -1) else min(target, hard)
+    if ceiling <= soft:
+        return soft
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (ceiling, hard))
+        return ceiling
+    except (ValueError, OSError):
+        return soft
 
 
 def mean_chunk_bytes(config: Any) -> int:

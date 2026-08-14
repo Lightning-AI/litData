@@ -38,7 +38,7 @@ from litdata.streaming.async_prefetch import (
 )
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
-from litdata.streaming.posix_fast import advise_willneed, mean_chunk_bytes, posix_prefetch_fits_ram
+from litdata.streaming.posix_fast import advise_willneed, mean_chunk_bytes, posix_prefetch_fits_ram, posix_safe_keep
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
@@ -852,17 +852,18 @@ class BinaryReader:
     def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4, *, prefetch: bool = True) -> None:
         """Read chunks from the dataset directory in place (Vast/NFS). Never delete sources."""
         self._posix_fast = True
-        self._posix_keep = max(1, keep)
         chunk_b = mean_chunk_bytes(self._config)
+        readers = self._posix_node_readers()
+        self._posix_keep = posix_safe_keep(keep=max(1, keep), chunk_bytes=chunk_b, num_readers=readers)
         self._posix_willneed = posix_prefetch_fits_ram(
             keep=self._posix_keep,
             chunk_bytes=chunk_b,
-            num_readers=self._posix_node_readers(),
+            num_readers=readers,
         )
-        if not self._posix_willneed:
+        if not self._posix_willneed and getattr(self._worker_env, "rank", 0) == 0:
             logger.info(
                 "POSIX-fast: skipping WILLNEED prefetch (%d readers × %d chunks × %d bytes would crowd RAM)",
-                self._posix_node_readers(),
+                readers,
                 self._posix_keep,
                 chunk_b,
             )
