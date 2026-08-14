@@ -43,6 +43,9 @@ def _is_object_url(value: str | None) -> bool:
     return value is not None and value.startswith(_OBJECT_PREFIXES)
 
 
+_WINDOW_SHUFFLE_KINDS = frozenset({"vast", "nfs", "lustre", "gpfs", "panfs", "beegfs", "forced"})
+
+
 @dataclass(frozen=True)
 class PosixFastProfile:
     """How StreamingDataset should read a local/POSIX dataset."""
@@ -52,6 +55,11 @@ class PosixFastProfile:
     mmap_shared: bool = True
     skip_cache_copy: bool = True
     skip_chunk_delete: bool = True
+
+    @property
+    def window_shuffle(self) -> bool:
+        """Sliding-window shuffle on parallel FS; local CI disks keep FullShuffle."""
+        return self.kind in _WINDOW_SHUFFLE_KINDS
 
 
 def _env_override() -> bool | None:
@@ -197,3 +205,13 @@ def madvise_mmap(mapping: Any) -> None:
             madvise(flag)
         except (OSError, OverflowError, ValueError):
             continue
+
+
+def posix_fast_supports_config(config: Any) -> bool:
+    """Compressed and Mosaic MDS chunks are not LitData mmap payloads."""
+    if config is None:
+        return False
+    if getattr(config, "_compressor", None) is not None:
+        return False
+    cfg = getattr(config, "_config", None) or {}
+    return cfg.get("format") != "mds"

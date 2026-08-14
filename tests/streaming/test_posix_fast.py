@@ -1,6 +1,10 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
+from litdata.constants import _ZSTD_AVAILABLE
+from litdata.streaming import Cache
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.posix_fast import (
@@ -79,7 +83,8 @@ def test_posix_fast_does_not_delete_source_chunks(tmpdir):
         assert os.path.exists(os.path.join(data_dir, name))
 
 
-def test_posix_fast_shuffle_uses_window_shuffle(tmpdir):
+def test_posix_fast_shuffle_uses_window_shuffle(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "1")
     data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=5)
     dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
     list(iter(dataset))
@@ -87,6 +92,15 @@ def test_posix_fast_shuffle_uses_window_shuffle(tmpdir):
     items = list(iter(dataset))
     assert sorted(items) == list(range(80))
     assert items != list(range(80))
+
+
+def test_local_posix_keeps_full_shuffle(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=5)
+    dataset = StreamingDataset(data_dir, shuffle=True)
+    list(iter(dataset))
+    assert dataset.posix_fast is not None
+    assert dataset.posix_fast.kind == "posix"
+    assert isinstance(dataset.shuffler, FullShuffle)
 
 
 def test_posix_fast_loads_a_page_of_items(tmpdir):
@@ -157,7 +171,8 @@ def test_advise_willneed_missing_file(tmp_path):
     advise_willneed(str(tmp_path / "missing.bin"))
 
 
-def test_window_shuffle_does_not_share_chunks(tmpdir):
+def test_window_shuffle_does_not_share_chunks(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "1")
     data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=10)
     dataset = StreamingDataset(data_dir, shuffle=True, drop_last=True)
     dataset.distributed_env = _DistributedEnv(2, 0, 1)
@@ -187,3 +202,16 @@ def test_posix_page_is_memoryview(tmpdir):
     assert isinstance(loader._page, memoryview) or loader._page is None
     if loader._mmap_view is not None:
         assert isinstance(loader._mmap_view, memoryview)
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="zstd required")
+def test_compressed_chunks_do_not_use_posix_mmap(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10, compression="zstd")
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    assert [dataset[i] for i in range(20)] == list(range(20))
+    assert dataset.posix_fast is None
+    assert dataset.cache._reader._posix_fast is False

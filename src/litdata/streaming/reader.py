@@ -861,6 +861,8 @@ class BinaryReader:
         warmer = getattr(self._item_loader, "warm_posix_chunk", None)
         for chunk_index in chunk_indexes:
             chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+            if not os.path.isfile(chunk_filepath):
+                continue
             advise_willneed(chunk_filepath)
             if warmer is not None:
                 warmer(chunk_index, chunk_filepath)

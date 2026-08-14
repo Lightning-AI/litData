@@ -28,7 +28,7 @@ from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
-from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast
+from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, posix_fast_supports_config
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
@@ -345,6 +345,9 @@ class StreamingDataset(IterableDataset):
                 "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
             )
 
+        if self.posix_fast is not None and not posix_fast_supports_config(cache._reader._config):
+            self.posix_fast = None
+
         if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
             chunks = cache._reader._config._chunks or []
             cache._reader.enable_posix_fast(list(range(len(chunks))), keep=max(4, self.max_pre_download))
@@ -360,7 +363,7 @@ class StreamingDataset(IterableDataset):
             drop_last = state["drop_last"]
         if not self.shuffle:
             return NoShuffle(cache, seed, drop_last)
-        if self.posix_fast is not None and self.posix_fast.in_place:
+        if self.posix_fast is not None and self.posix_fast.window_shuffle:
             return WindowShuffle(cache, seed, drop_last)
         return FullShuffle(cache, seed, drop_last)
 
