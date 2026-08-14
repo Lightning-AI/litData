@@ -3,6 +3,7 @@
 
 Prints JSON: path, url, data_connection_id, index_json.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,14 +20,7 @@ try:
     from litdata.streaming.resolver import _resolve_dir
 except ImportError as e:
     print(
-        json.dumps(
-            {
-                "error": (
-                    "litdata resolver unavailable; install litdata or set PYTHONPATH to src. "
-                    f"{e}"
-                )
-            }
-        ),
+        json.dumps({"error": (f"litdata resolver unavailable; install litdata or set PYTHONPATH to src. {e}")}),
         file=sys.stderr,
     )
     sys.exit(2)
