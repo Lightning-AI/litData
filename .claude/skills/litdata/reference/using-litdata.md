@@ -139,24 +139,24 @@ ______________________________________________________________________
 
 ## 6. StreamingDataset arguments
 
-| Arg                                   | Default                     | Notes                                                      |
-| ------------------------------------- | --------------------------- | ---------------------------------------------------------- |
-| `input_dir`                           | required                    | Path, URL, `Dir`, or parquet path with basename wildcards  |
-| `cache_dir`                           | env / `~/.lightning/chunks` | Local chunk store. Unused for POSIX-fast in-place reads.   |
-| `max_cache_size`                      | `"100GB"`                   | Eviction budget (object-store copies, not POSIX-fast)      |
-| `item_loader`                         | from index / `PyTreeLoader` | `TokensLoader`, `ParquetLoader`, …                         |
-| `shuffle`                             | `False`                     | See §5                                                     |
-| `drop_last`                           | DDP-aware                   | See §5                                                     |
-| `seed`                                | `42`                        | Shuffle + subsample RNG                                    |
-| `serializers`                         | built-ins                   | See §3                                                     |
-| `max_pre_download`                    | `2`                         | Prefetch depth; peak disk ≈ workers × this × chunk         |
-| `subsample`                           | `1.0`                       | Fraction or >1 to upsample                                 |
-| `encryption`                          | `None`                      | `FernetEncryption` / `RSAEncryption` / custom              |
-| `storage_options` / `session_options` | `{}`                        | Cloud creds / boto3 session                                |
-| `index_path`                          | `None`                      | Parquet/HF index file or directory                         |
-| `force_override_state_dict`           | `False`                     | Local args win for seed/shuffle/paths/`drop_last`          |
-| `num_canonical_nodes`                 | `None`                      | Frozen first-run `world_size` in checkpoints               |
-| `transform`                           | `None`                      | Callable or list applied per sample                        |
+| Arg                                   | Default                     | Notes                                                     |
+| ------------------------------------- | --------------------------- | --------------------------------------------------------- |
+| `input_dir`                           | required                    | Path, URL, `Dir`, or parquet path with basename wildcards |
+| `cache_dir`                           | env / `~/.lightning/chunks` | Local chunk store. Unused for POSIX-fast in-place reads.  |
+| `max_cache_size`                      | `"100GB"`                   | Eviction budget (object-store copies, not POSIX-fast)     |
+| `item_loader`                         | from index / `PyTreeLoader` | `TokensLoader`, `ParquetLoader`, …                        |
+| `shuffle`                             | `False`                     | See §5                                                    |
+| `drop_last`                           | DDP-aware                   | See §5                                                    |
+| `seed`                                | `42`                        | Shuffle + subsample RNG                                   |
+| `serializers`                         | built-ins                   | See §3                                                    |
+| `max_pre_download`                    | `2`                         | Prefetch depth; peak disk ≈ workers × this × chunk        |
+| `subsample`                           | `1.0`                       | Fraction or >1 to upsample                                |
+| `encryption`                          | `None`                      | `FernetEncryption` / `RSAEncryption` / custom             |
+| `storage_options` / `session_options` | `{}`                        | Cloud creds / boto3 session                               |
+| `index_path`                          | `None`                      | Parquet/HF index file or directory                        |
+| `force_override_state_dict`           | `False`                     | Local args win for seed/shuffle/paths/`drop_last`         |
+| `num_canonical_nodes`                 | `None`                      | Frozen first-run `world_size` in checkpoints              |
+| `transform`                           | `None`                      | Callable or list applied per sample                       |
 
 ______________________________________________________________________
 

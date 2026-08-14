@@ -874,9 +874,9 @@ class StreamingDataset(IterableDataset):
         world_size = self.distributed_env.world_size
         ncn = self.num_canonical_nodes
         if ncn is None:
-            ncn = (self._state_dict or {}).get("num_canonical_nodes") or (
-                self._state_dict or {}
-            ).get("initial_world_size", world_size)
+            ncn = (self._state_dict or {}).get("num_canonical_nodes") or (self._state_dict or {}).get(
+                "initial_world_size", world_size
+            )
         sample_in_epoch = (self._elastic_drop_first or 0) + num_samples_yielded * world_size
 
         payload = {
