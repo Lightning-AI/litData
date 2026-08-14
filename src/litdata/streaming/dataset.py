@@ -27,7 +27,6 @@ from litdata.debugger import CAT_SAMPLE, emit_trace, is_tracing
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.elastic import (
     canonical_item_stream,
     restripe_items,
@@ -35,6 +34,7 @@ from litdata.streaming.elastic import (
     topology_changed,
     worker_plan_to_chunks,
 )
+from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, posix_fast_supports_config
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
@@ -563,11 +563,7 @@ class StreamingDataset(IterableDataset):
 
         state = self._state_dict
         intervals = self.cache.get_chunk_intervals()
-        ncn = int(
-            state.get("num_canonical_nodes")
-            or self.num_canonical_nodes
-            or self.distributed_env.world_size
-        )
+        ncn = int(state.get("num_canonical_nodes") or self.num_canonical_nodes or self.distributed_env.world_size)
         window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
         granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
         drop_first = sample_in_epoch_from_state(state)
@@ -598,9 +594,7 @@ class StreamingDataset(IterableDataset):
             workers_chunks.append(chunks)
 
         worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
-        self.worker_chunks, self.worker_intervals, self._elastic_item_lists = worker_plan_to_chunks(
-            plans[worker_rank]
-        )
+        self.worker_chunks, self.worker_intervals, self._elastic_item_lists = worker_plan_to_chunks(plans[worker_rank])
         self.stop_length = sum(len(items) for items in self._elastic_item_lists)
         self.num_chunks = len(self.worker_chunks)
         logger.info(

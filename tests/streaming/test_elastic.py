@@ -57,9 +57,7 @@ def test_restripe_item_no_duplicates_and_drop_prefix():
     assert len(set(stream)) == 64
 
     drop_first = 16
-    plans = restripe_items(
-        stream, world_size=2, num_workers=2, batch_size=4, drop_first=drop_first, drop_last=False
-    )
+    plans = restripe_items(stream, world_size=2, num_workers=2, batch_size=4, drop_first=drop_first, drop_last=False)
     remaining = _flatten_plan(plans)
     assert len(remaining) == len(set(remaining))
     prefix = set(stream[:drop_first])
