@@ -207,7 +207,7 @@ def test_posix_max_data_workers_caps_all_cores(monkeypatch):
     monkeypatch.delenv("LITDATA_POSIX_MAX_WORKERS", raising=False)
     monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
     ram = 50 * 1024**3
-    rss = 400 * 1024 * 1024
+    rss = 256 * 1024 * 1024
     capped = posix_max_data_workers(requested=208, ram_bytes=ram, rss_bytes=rss)
     assert 1 <= capped < 208
     monkeypatch.setenv("LITDATA_POSIX_MAX_WORKERS", "0")

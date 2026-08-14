@@ -170,7 +170,7 @@ def detect_posix_fast(
 
 _DEFAULT_PAGE_BYTES = 256 * 1024
 _DEFAULT_RAM_FRACTION = 0.5
-_DEFAULT_WORKER_RSS = 400 * 1024 * 1024  # JPEG decode worker: interpreter + prefetch batch
+_DEFAULT_WORKER_RSS = 256 * 1024 * 1024  # process + one collated JPEG batch, not four WILLNEED chunks
 _logged_willneed_skip = False
 
 

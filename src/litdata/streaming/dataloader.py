@@ -660,11 +660,6 @@ class StreamingDataLoader(DataLoader):
                 )
                 num_workers = capped
             raise_nofile_limit()
-            if num_workers >= 8:
-                try:
-                    torch.multiprocessing.set_sharing_strategy("file_system")
-                except RuntimeError:
-                    pass
 
         dataset.set_batch_size(batch_size)
         dataset.set_num_workers(num_workers)
