@@ -53,9 +53,9 @@ from litdata.constants import (
 from litdata.processing.readers import BaseReader, StreamingDataLoaderReader
 from litdata.processing.utilities import construct_storage_options, remove_uuid_from_filename
 from litdata.streaming import Cache
+from litdata.streaming.async_prefetch import downloader_supports_adownload
 from litdata.streaming.cache import Dir
 from litdata.streaming.dataloader import StreamingDataLoader
-from litdata.streaming.async_prefetch import downloader_supports_adownload
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provider
 from litdata.streaming.item_loader import BaseItemLoader
@@ -135,6 +135,7 @@ def _download_via_streaming_downloader(
     if not jobs:
         return
     if downloader_supports_adownload(downloader):
+
         async def _all() -> None:
             sem = asyncio.Semaphore(_adaptive_download_concurrency(len(jobs)))
 
@@ -696,8 +697,10 @@ def _get_item_filesizes(items: list[Any], base_path: str = "") -> list[int]:
 
 
 def _to_path(element: str) -> str:
-    if _is_remote_path(element) or _is_studio_fuse_path(element) or (
-        _IS_IN_STUDIO and element.startswith("/teamspace")
+    if (
+        _is_remote_path(element)
+        or _is_studio_fuse_path(element)
+        or (_IS_IN_STUDIO and element.startswith("/teamspace"))
     ):
         return element
     return str(Path(element).resolve())
@@ -753,13 +756,13 @@ def _prepare_items_and_paths(
         paths = []
         for index, path in indexed_paths.items():
             paths.append(path)
-            if input_dir.path and isinstance(input_dir.path, str) and not input_dir.path.startswith(
-                "/teamspace/studios/this_studio"
+            if (
+                input_dir.path
+                and isinstance(input_dir.path, str)
+                and not input_dir.path.startswith("/teamspace/studios/this_studio")
             ):
                 flattened_item[index] = path.replace(input_dir.path, cache_data_dir)
-            elif input_dir.url and path.startswith(input_dir.url):
-                flattened_item[index] = _cache_local_path(path, input_dir, cache_data_dir)
-            elif _is_remote_path(path):
+            elif input_dir.url and path.startswith(input_dir.url) or _is_remote_path(path):
                 flattened_item[index] = _cache_local_path(path, input_dir, cache_data_dir)
         prepared.append((tree_unflatten(flattened_item, spec), paths))
     return prepared
@@ -859,9 +862,11 @@ class BaseWorker:
         self.to_download_queues: list[Queue] = []
         self.to_upload_queues: list[Queue] = []
         self.stop_queue = stop_queue
-        self.no_downloaders = self.reader is not None or (
-            items is None and not using_queue_optimize
-        ) or (self.input_dir.path is None and self.input_dir.url is None)
+        self.no_downloaders = (
+            self.reader is not None
+            or (items is None and not using_queue_optimize)
+            or (self.input_dir.path is None and self.input_dir.url is None)
+        )
 
         self.keep_data_ordered = keep_data_ordered
         if item_paths is not None:
@@ -1348,11 +1353,7 @@ class ChunkWriterProcess(Process):
                     self.upload_queue.put(chunk_filepath)
                 counter += 1
             for chunk_filepath in cache.done() or []:
-                if (
-                    self.upload_queue is not None
-                    and isinstance(chunk_filepath, str)
-                    and os.path.exists(chunk_filepath)
-                ):
+                if self.upload_queue is not None and isinstance(chunk_filepath, str) and os.path.exists(chunk_filepath):
                     self.upload_queue.put(chunk_filepath)
             if getattr(self.data_recipe, "key_fn", None) is not None:
                 from litdata.utilities.keys_index import save_rank_keys
@@ -1447,12 +1448,7 @@ class DataChunkRecipe(DataRecipe):
         cache_dir = _chunks_dir(output_dir)
 
         chunks = [file for file in os.listdir(cache_dir) if file.endswith(".bin")] if os.path.isdir(cache_dir) else []
-        if (
-            chunks
-            and delete_cached_files
-            and output_dir.path is not None
-            and not _is_local_write_through(output_dir)
-        ):
+        if chunks and delete_cached_files and output_dir.path is not None and not _is_local_write_through(output_dir):
             raise RuntimeError(f"All the chunks should have been deleted. Found {chunks} in cache: {cache_dir}")
 
         merge_cache = Cache(cache_dir, chunk_bytes=1)
@@ -1856,11 +1852,7 @@ class DataProcessor:
                     num_workers=map_workers, user_items=user_items, weights=self.weights, file_size=False
                 )
 
-            elif (
-                self.reorder_files
-                and self.input_dir.path
-                and not _is_studio_fuse_path(self.input_dir.path)
-            ):
+            elif self.reorder_files and self.input_dir.path and not _is_studio_fuse_path(self.input_dir.path):
                 # TODO: Only do this on node 0, and broadcast the item sizes to the other nodes.
                 # Skip FUSE mounts: ``stat`` / ``getsize`` on those paths is extremely slow.
                 item_sizes = _get_item_filesizes(user_items, base_path=self.input_dir.path)
@@ -2178,9 +2170,7 @@ class DataProcessor:
             self.shared_queue = Queue(maxsize=prefetch)
         cache_data_dir = _get_cache_data_dir()
         needs_download = _dir_needs_download(self.input_dir, self.reader) or any(
-            isinstance(el, str) and _is_remote_path(el)
-            for item in node_items
-            for el in tree_flatten(item)[0]
+            isinstance(el, str) and _is_remote_path(el) for item in node_items for el in tree_flatten(item)[0]
         )
         prepared = (
             _prepare_items_and_paths(node_items, self.input_dir, cache_data_dir)

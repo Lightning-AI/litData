@@ -27,24 +27,24 @@ from litdata.processing.data_processor import (
     DataRecipe,
     FakeQueue,
     MapRecipe,
+    _adaptive_download_concurrency,
     _cache_local_path,
+    _chunks_dir,
     _download_data_target,
     _get_item_filesizes,
+    _is_local_write_through,
     _is_path,
     _is_remote_path,
     _is_studio_fuse_path,
     _map_items_to_workers_sequentially,
     _map_items_to_workers_weighted,
-    _adaptive_download_concurrency,
-    _chunks_dir,
-    _is_local_write_through,
     _prefetch_maxsize,
     _remove_target,
     _to_path,
     _upload_fn,
-    resolve_keep_data_ordered,
     _wait_for_disk_usage_higher_than_threshold,
     _wait_for_file_to_exist,
+    resolve_keep_data_ordered,
 )
 from litdata.processing.functions import LambdaMapRecipe, _get_input_dir, map, optimize
 from litdata.streaming import StreamingDataLoader, StreamingDataset, resolver
@@ -998,9 +998,7 @@ def test_n_chunk_writers_and_upload_threads_write_through(tmp_path, monkeypatch)
     assert processor._n_upload_threads() == 0
     processor = DataProcessor(input_dir=Dir(), output_dir=local, num_workers=2, verbose=False)
     assert processor._n_chunk_writers() == 1
-    processor = DataProcessor(
-        input_dir=Dir(), output_dir=local, num_workers=8, keep_data_ordered=True, verbose=False
-    )
+    processor = DataProcessor(input_dir=Dir(), output_dir=local, num_workers=8, keep_data_ordered=True, verbose=False)
     assert processor._n_chunk_writers() == 0
     processor = DataProcessor(input_dir=Dir(), output_dir=local, num_workers=8, use_checkpoint=True, verbose=False)
     assert processor._n_chunk_writers() == 0
@@ -1650,9 +1648,9 @@ def test_to_path(tmpdir):
     assert _is_path("/data", "gs://bucket/a.jpg", "gs://bucket")
     assert _to_path("s3://bucket/a.jpg") == "s3://bucket/a.jpg"
     assert _to_path("r2://acc/bucket/a.jpg") == "r2://acc/bucket/a.jpg"
-    assert _cache_local_path(
-        "s3://bucket/train/a.jpg", Dir(path=None, url="s3://bucket"), "/cache"
-    ) == os.path.join("/cache", "train/a.jpg")
+    assert _cache_local_path("s3://bucket/train/a.jpg", Dir(path=None, url="s3://bucket"), "/cache") == os.path.join(
+        "/cache", "train/a.jpg"
+    )
 
 
 def test_get_input_dir_lightning_storage_does_not_stat(monkeypatch):

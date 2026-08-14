@@ -29,6 +29,7 @@ sys.path.insert(0, str(_SRC))
 import hashlib  # noqa: E402
 
 import numpy as np  # noqa: E402
+
 from litdata import optimize  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 
@@ -192,7 +193,9 @@ def _run_before_after(args: argparse.Namespace) -> None:
     print(
         f"before=git HEAD ({subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=REPO_ROOT, text=True).strip()})"
     )
-    print(f"after =working tree  files={args.files} workers={args.workers}  first {n_heavy} files are {HEAVY_BYTES // 1024}KiB")
+    print(
+        f"after =working tree  files={args.files} workers={args.workers}  first {n_heavy} files are {HEAVY_BYTES // 1024}KiB"
+    )
     t_gen = time.perf_counter()
     _make_inputs(input_dir, args.files, args.workers)
     print(f"generated in {time.perf_counter() - t_gen:.1f}s")
@@ -266,7 +269,9 @@ def main() -> None:
     os.environ["DATA_OPTIMIZER_CACHE_FOLDER"] = str(cache_root / "chunks")
     os.environ["DATA_OPTIMIZER_DATA_CACHE_FOLDER"] = str(cache_root / "data")
 
-    print(f"generating {args.files} files under {input_dir} (first {max(args.workers, args.files // args.workers)} are {HEAVY_BYTES // 1024}KiB)")
+    print(
+        f"generating {args.files} files under {input_dir} (first {max(args.workers, args.files // args.workers)} are {HEAVY_BYTES // 1024}KiB)"
+    )
     t_gen = time.perf_counter()
     inputs = _make_inputs(input_dir, args.files, args.workers)
     print(f"generated in {time.perf_counter() - t_gen:.1f}s")

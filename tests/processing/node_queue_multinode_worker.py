@@ -24,11 +24,7 @@ def main() -> None:
         with open(manifest) as handle:
             inputs = [line.strip() for line in handle if line.strip()]
     else:
-        inputs = sorted(
-            os.path.join(input_dir, name)
-            for name in os.listdir(input_dir)
-            if name.endswith(".bin")
-        )
+        inputs = sorted(os.path.join(input_dir, name) for name in os.listdir(input_dir) if name.endswith(".bin"))
     optimize(
         fn=_fn,
         inputs=inputs,
