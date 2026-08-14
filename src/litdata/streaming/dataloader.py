@@ -851,15 +851,18 @@ class StreamingDataLoader(DataLoader):
             children = obj.get("dataset")
             if isinstance(children, dict):
                 for child in children.values():
-                    if isinstance(child, dict) and "input_dir_path" in child:
-                        if topology_changed(
+                    if (
+                        isinstance(child, dict)
+                        and "input_dir_path" in child
+                        and topology_changed(
                             child, world_size=world_size, num_workers=num_workers, batch_size=batch_size
-                        ):
-                            raise ValueError(
-                                "CombinedStreamingDataset and ParallelStreamingDataset support resume only "
-                                "when world_size, num_workers, and batch_size match the checkpoint. "
-                                "Elastic restripe is implemented for StreamingDataset."
-                            )
+                        )
+                    ):
+                        raise ValueError(
+                            "CombinedStreamingDataset and ParallelStreamingDataset support resume only "
+                            "when world_size, num_workers, and batch_size match the checkpoint. "
+                            "Elastic restripe is implemented for StreamingDataset."
+                        )
 
         elastic = False
         if isinstance(self.dataset, StreamingDataset):
