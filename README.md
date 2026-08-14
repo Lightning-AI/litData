@@ -739,7 +739,7 @@ The permutation depends on `seed`, the epoch, and chunk metadata — the same se
 
 **Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
 
-**Vast / NFS / local disk** (POSIX-fast) does **not** globally permute chunks. Each worker gets **whole chunks** in a sequential stripe (files are never split across workers), then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). The same window is applied **inside** each chunk. The item loader keeps a ~256KiB mmap **view** (`LITDATA_POSIX_PAGE_BYTES`) and splits samples from it, and `posix_fadvise`s the next files in the stripe as it walks. `LITDATA_POSIX_FAST=0` restores global `FullShuffle` (and disables in-place mmap).
+**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`) for both chunk order and in-chunk items. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader

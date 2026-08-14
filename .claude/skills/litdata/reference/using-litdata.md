@@ -122,7 +122,7 @@ ______________________________________________________________________
 ## 5. Shuffle, seed, drop_last, resume
 
 - `shuffle=True` → deterministic **chunk assignment then in-chunk item order** from `seed` + epoch (+ chunk index).
-- On a **local POSIX** path (Vast/NFS/disk) this is `WindowShuffle`: workers get sequential chunk stripes, then mix only inside a small window (default 16) **for both chunks and in-chunk items** so the loader can copy a page of bytes and split samples. Object storage (`s3://`, …) still globally permutes chunks (`FullShuffle`).
+- POSIX-fast (local path, no `s3://` URL) mmaps chunks in place. **`WindowShuffle`** only on Vast/NFS/Lustre/GPFS (or `LITDATA_POSIX_FAST=1`): sequential whole-chunk stripes, then a window permute (default 16) for chunks **and** in-chunk items. Local ext4/xfs and object URLs use **`FullShuffle`**.
 - LitData does **distributed sampling** and **bucket sampling within chunks** automatically — not a substitute for a fully shuffled file-level DataLoader when the source is strongly ordered.
 - Default `seed=42`. Keep it fixed across ranks and when resuming.
 - `drop_last=None` → **True under DDP**, else False. Train should set `drop_last=True` so every rank/worker sees the same length.
@@ -141,13 +141,13 @@ ______________________________________________________________________
 | Arg                                   | Default                     | Notes                                                     |
 | ------------------------------------- | --------------------------- | --------------------------------------------------------- |
 | `input_dir`                           | required                    | Path, URL, `Dir`, or parquet path with basename wildcards |
-| `cache_dir`                           | env / `~/.lightning/chunks` | Local chunk store                                         |
+| `cache_dir`                           | env / `~/.lightning/chunks` | Local chunk store. Unused for POSIX-fast in-place reads.  |
+| `max_cache_size`                      | `"100GB"`                   | Eviction budget (object-store copies, not POSIX-fast)     |
 | `item_loader`                         | from index / `PyTreeLoader` | `TokensLoader`, `ParquetLoader`, …                        |
 | `shuffle`                             | `False`                     | See §5                                                    |
 | `drop_last`                           | DDP-aware                   | See §5                                                    |
 | `seed`                                | `42`                        | Shuffle + subsample RNG                                   |
 | `serializers`                         | built-ins                   | See §3                                                    |
-| `max_cache_size`                      | `"100GB"`                   | Eviction budget                                           |
 | `max_pre_download`                    | `2`                         | Prefetch depth; peak disk ≈ workers × this × chunk        |
 | `subsample`                           | `1.0`                       | Fraction or >1 to upsample                                |
 | `encryption`                          | `None`                      | `FernetEncryption` / `RSAEncryption` / custom             |

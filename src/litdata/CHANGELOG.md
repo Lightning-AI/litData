@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Introduced `CHANGELOG.md` to track changes across releases ([#733](https://github.com/lightning-ai/litdata/pull/733))
 - Add environment variable `LITDATA_DISABLE_VERSION_CHECK` to disable PyPI version check ([#737](https://github.com/Lightning-AI/litData/pull/737))
-- In-place POSIX reads (mmap + `posix_fadvise`) are **automatic** for local / Vast / NFS datasets. Object URLs (`s3://`) still GET compacted chunks. Disable with `LITDATA_POSIX_FAST=0`.
+- In-place POSIX reads (mmap + `posix_fadvise`) are **automatic** for local / Vast / NFS datasets. Object URLs (`s3://`) still GET compacted chunks. Disable with `LITDATA_POSIX_FAST=0`. `WindowShuffle` is used on parallel filesystems (or `LITDATA_POSIX_FAST=1`); local disks keep `FullShuffle`. `WILLNEED` and `num_workers` are capped from `MemAvailable` (`LITDATA_POSIX_MAX_WORKERS`, `LITDATA_POSIX_WILLNEED`). ([#876](https://github.com/Lightning-AI/litData/pull/876))
 - Leveled pipeline tracing: `enable_tracer(level="batch"|"chunk"|"sample"|"debug")` or `categories=["download", "read", "delete"]`. Events use stable names (`download`, `read`, `delete`, `batch`, `sample`) with indexes in args so Perfetto groups download vs read vs delete. Convert with [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer) (`--quiet --validate --cat`).
 - `ChunkWaitTimeoutError` when a chunk does not appear within `MAX_WAIT_TIME` (still a `FileNotFoundError` subclass).
 
@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 - Cloud `optimize`/`map` uploads re-raise instead of printing and continuing (which could delete the local file after a failed upload).
 - Reject `azure://` / other non-s3-gs-r2 URLs as `optimize`/`map` output with a clear error (streaming those schemes for **read** is unchanged).
 - Checkpoint resume no longer adds sample counts onto the chunk file index.
+- TokensLoader copies each token block off the memmap before DataLoader IPC so unmapping the previous chunk cannot SIGSEGV workers ([#876](https://github.com/Lightning-AI/litData/pull/876)).
 
 ## [0.2.58] - 2025-10-07
 

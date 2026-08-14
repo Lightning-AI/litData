@@ -8,6 +8,8 @@ How remote chunks land on disk, how much space they use, and how workers share/d
 remote URL / local path  →  download into cache_dir  →  deserialize sample  →  (optional) delete chunk when done
 ```
 
+**POSIX-fast exception:** a local `input_dir` (Vast, NFS, disk — not `s3://`) **mmaps the source chunks**. Nothing is copied into `cache_dir` and sources are never deleted. Peak disk for those datasets is the dataset itself, not `num_workers × max_pre_download × chunk`. `WILLNEED` / worker count still scale with RAM (`MemAvailable`; unused hugepages look like missing RAM).
+
 `StreamingDataset` builds a `Cache` (`streaming/cache.py`) that owns a `BinaryReader` (and, on the write path, a `BinaryWriter`). Users almost never construct `Cache` directly. Class APIs, `index.json` / chunk binary layout, FsProvider, sampler → [storage-format.md](storage-format.md).
 
 ### Knobs

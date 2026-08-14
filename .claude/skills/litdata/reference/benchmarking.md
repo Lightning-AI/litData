@@ -73,6 +73,8 @@ python benchmarks/stream_raw_imagenet.py --help
 
 Always state: dataset, chunk/write mode, `num_workers`, `batch_size`, `max_pre_download`, `max_cache_size`, local vs remote.
 
+For **Vast / NFS POSIX-fast**, also record whether hugepages were reserved (`MemAvailable` vs `MemTotal`), `LITDATA_POSIX_FAST`, worker cap, and decode vs augs. Published synthetic ImageNet-emu numbers live in the repo README `#benchmarks` table (48 workers ~18k decode, 208 workers ~36k after releasing idle 1 GiB hugepages). Do not compare those to FFCV JPEG-90 on different hardware.
+
 ## Fair comparison checklist
 
 1. **Wipe the chunk cache** before every cold run (`litdata cache clear` or delete the cache dir).
