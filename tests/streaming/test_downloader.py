@@ -458,7 +458,8 @@ async def test_s3_adownload_file_streams_chunks_to_disk(obstore_mock, tmpdir):
         dest = os.path.join(str(tmpdir), "out.bin")
         downloader = S3Downloader("s3://bucket", "", [])
         await downloader.adownload_file("s3://bucket/file.txt", dest)
-        assert open(dest, "rb").read() == b"chunk1chunk2"
+        with open(dest, "rb") as f:
+            assert f.read() == b"chunk1chunk2"
         resp_mock.bytes_async.assert_not_called()
 
 
