@@ -151,7 +151,6 @@ def restripe_items(
     num_workers = max(1, int(num_workers))
     batch_size = max(1, int(batch_size))
     global_workers = world_size * num_workers
-    plans: list[list[tuple[int, int]]] = [[] for _ in range(global_workers)]
 
     if granularity == "chunk":
         remaining = stream[max(0, drop_first) :]
@@ -165,9 +164,10 @@ def restripe_items(
             # Equal number of chunks per worker (trim).
             cap = len(chunk_groups) // global_workers
             chunk_groups = chunk_groups[: cap * global_workers]
+        chunk_plans: list[list[tuple[int, list[int]]]] = [[] for _ in range(global_workers)]
         for i, visit in enumerate(chunk_groups):
-            plans[i % global_workers].append(visit)
-        return plans
+            chunk_plans[i % global_workers].append(visit)
+        return chunk_plans
 
     drop_first = _round_down_drop_first(drop_first, world_size, batch_size)
     remaining = stream[drop_first:]
@@ -175,15 +175,16 @@ def restripe_items(
         stride = global_workers * batch_size
         remaining = remaining[: (len(remaining) // stride) * stride]
 
+    pair_plans: list[list[tuple[int, int]]] = [[] for _ in range(global_workers)]
     # Consecutive batches cycle ranks, then workers within a rank.
     for i, pair in enumerate(remaining):
         batch_idx = i // batch_size
         rank = batch_idx % world_size
         worker = (batch_idx // world_size) % num_workers
         global_worker = rank * num_workers + worker
-        plans[global_worker].append(pair)
+        pair_plans[global_worker].append(pair)
 
-    return [_group_visits(pairs) for pairs in plans]
+    return [_group_visits(pairs) for pairs in pair_plans]
 
 
 def worker_plan_to_chunks(

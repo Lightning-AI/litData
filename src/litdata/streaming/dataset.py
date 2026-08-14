@@ -28,6 +28,7 @@ from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.elastic import (
+    Granularity,
     _round_down_drop_first,
     canonical_item_stream,
     restripe_items,
@@ -484,6 +485,7 @@ class StreamingDataset(IterableDataset):
 
         # Handle restart (strict replay). Elastic already applied drop_first in _setup_elastic_resume.
         if self._state_dict and not use_canonical:
+            assert workers_intervals is not None
             self._resume(workers_chunks, workers_intervals)
         else:
             self.num_chunks = len(self.worker_chunks)
@@ -568,7 +570,7 @@ class StreamingDataset(IterableDataset):
             ncn = self.num_canonical_nodes if self.num_canonical_nodes is not None else self.distributed_env.world_size
         ncn = max(1, int(ncn))
         window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
-        granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
+        granularity: Granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
         drop_first = sample_in_epoch_from_state(state) if state else int(self._elastic_drop_first or 0)
         if granularity == "item":
             drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, self.batch_size)
