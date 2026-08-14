@@ -55,7 +55,7 @@ from litdata.processing.utilities import construct_storage_options, remove_uuid_
 from litdata.streaming import Cache
 from litdata.streaming.cache import Dir
 from litdata.streaming.dataloader import StreamingDataLoader
-from litdata.streaming.async_prefetch import downloader_supports_adownload
+from litdata.streaming.async_prefetch import downloader_supports_adownload, downloader_supports_aupload
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provider
 from litdata.streaming.item_loader import BaseItemLoader
@@ -122,6 +122,10 @@ def _optimize_download_batch() -> int:
     return max(1, int(os.getenv("LITDATA_OPTIMIZE_DOWNLOAD_BATCH", str(_DEFAULT_DOWNLOAD_BATCH))))
 
 
+def _optimize_upload_batch() -> int:
+    return max(1, int(os.getenv("LITDATA_OPTIMIZE_UPLOAD_BATCH", str(_DEFAULT_DOWNLOAD_BATCH))))
+
+
 def _optimize_download_concurrency() -> int:
     return max(1, int(os.getenv("LITDATA_OPTIMIZE_DOWNLOAD_CONCURRENCY", str(_DEFAULT_DOWNLOAD_CONCURRENCY))))
 
@@ -152,6 +156,68 @@ def _download_via_streaming_downloader(
     for remote, local in jobs:
         if not os.path.exists(local):
             downloader.download_file(remote, local)
+
+
+def _upload_via_streaming_downloader(
+    downloader: Any,
+    jobs: list[tuple[str, str]],
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Put ``(local, remote)`` pairs with the streaming Downloader (obstore async when usable)."""
+    if not jobs:
+        return
+    if downloader_supports_aupload(downloader):
+
+        async def _all() -> None:
+            sem = asyncio.Semaphore(_adaptive_download_concurrency(len(jobs)))
+
+            async def _one(local: str, remote: str) -> None:
+                async with sem:
+                    await downloader.aupload_file(local, remote)
+
+            await asyncio.gather(*[_one(local, remote) for local, remote in jobs])
+
+        loop.run_until_complete(_all())
+        return
+
+    raise NotImplementedError(f"{type(downloader).__name__} does not support async upload")
+
+
+def _upload_dest(output_dir: Dir, local_filepath: str, tmpdir: str | None) -> str:
+    """Remote or local destination path for an optimized chunk or sidecar file."""
+    output_filepath = output_dir.url or output_dir.path
+    assert output_filepath
+    if ".checkpoints" in local_filepath:
+        output_filepath = os.path.join(output_filepath, ".checkpoints")
+    if tmpdir is None:
+        output_filepath = os.path.join(output_filepath, os.path.basename(local_filepath))
+    else:
+        output_filepath = os.path.join(output_filepath, local_filepath.replace(tmpdir, "")[1:])
+    return remove_uuid_from_filename(output_filepath)
+
+
+def _put_files_remote(
+    output_dir: Dir,
+    jobs: list[tuple[str, str]],
+    storage_options: dict[str, Any],
+    cache_dir: str,
+    downloader: Any | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> tuple[Any, asyncio.AbstractEventLoop | None]:
+    """Upload local→remote pairs. Reuses ``downloader``/``loop`` when provided."""
+    assert output_dir.url
+    merged_storage_options = construct_storage_options(storage_options, output_dir)
+    if downloader is None:
+        downloader = get_downloader(output_dir.url, cache_dir, [], merged_storage_options)
+    if downloader_supports_aupload(downloader):
+        if loop is None:
+            loop = asyncio.new_event_loop()
+        _upload_via_streaming_downloader(downloader, jobs, loop)
+        return downloader, loop
+    fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
+    for local_filepath, output_filepath in jobs:
+        fs_provider.upload_file(local_filepath, output_filepath)
+    return downloader, loop
 
 
 def _io_thread_target(fn: Callable[..., None], error_queue: Queue, *args: Any) -> None:
@@ -413,8 +479,10 @@ def _download_data_target(
                     queue_out.put(None)
                 return
     finally:
-        if loop is not None:
-            loop.close()
+        # Do not close ``loop``: node download and upload threads share this
+        # process and obstore's tokio runtime. Closing the download loop drops
+        # in-flight PUTs with "Event loop is closed".
+        pass
 
 
 #
@@ -480,10 +548,30 @@ def _upload_fn(
 ) -> None:
     """Upload optimised chunks from a local to remote dataset directory."""
     obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
+    remote = obj.scheme in _SUPPORTED_PROVIDERS
+    downloader: Any | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+    pending: list[tuple[str, str]] = []
+    batch_limit = _optimize_upload_batch()
 
-    if obj.scheme in _SUPPORTED_PROVIDERS:
-        merged_storage_options = construct_storage_options(storage_options, output_dir)
-        fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
+    def _mark_uploaded(local_filepath: str) -> None:
+        if remove_queue and os.path.exists(local_filepath) and ".checkpoints" not in local_filepath:
+            remove_queue.put([local_filepath])
+
+    def _flush_remote() -> None:
+        nonlocal downloader, loop
+        if not pending:
+            return
+        try:
+            downloader, loop = _put_files_remote(
+                output_dir, pending, storage_options, cache_dir, downloader=downloader, loop=loop
+            )
+        except Exception:
+            logger.exception("Failed to upload %s files to %s", len(pending), output_dir.url)
+            raise
+        for local_filepath, _remote in pending:
+            _mark_uploaded(local_filepath)
+        pending.clear()
 
     while True:
         data: str | tuple[str, str] | None = upload_queue.get()
@@ -495,65 +583,34 @@ def _upload_fn(
         else:
             tmpdir, local_filepath = data
 
-        # Terminate the process if we received a termination signal
         if local_filepath is None:
+            if remote:
+                _flush_remote()
             return
 
-        # Upload the file to the target cloud storage
         if not local_filepath.startswith(cache_dir):
             local_filepath = os.path.join(cache_dir, local_filepath)
 
-        if obj.scheme in _SUPPORTED_PROVIDERS:
-            try:
-                output_filepath = output_dir.url
+        if remote:
+            if not os.path.exists(local_filepath) and ".checkpoints" in local_filepath:
+                continue
+            pending.append((local_filepath, _upload_dest(output_dir, local_filepath, tmpdir)))
+            if len(pending) >= batch_limit:
+                _flush_remote()
+            continue
 
-                if local_filepath.__contains__(".checkpoints"):
-                    output_filepath = os.path.join(output_filepath, ".checkpoints")
-                if tmpdir is None:
-                    output_filepath = os.path.join(output_filepath, os.path.basename(local_filepath))
-                else:
-                    output_filepath = os.path.join(output_filepath, local_filepath.replace(tmpdir, "")[1:])
-
-                output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
-
-                if not os.path.exists(local_filepath) and ".checkpoints" in local_filepath:
-                    continue
-
-                fs_provider.upload_file(
-                    local_filepath,
-                    output_filepath,
-                )
-            except Exception:
-                logger.exception("Failed to upload %s to %s", local_filepath, output_filepath)
-                raise
-
-        elif output_dir.path:
-            output_filepath = output_dir.path
-
-            if local_filepath.__contains__(".checkpoints"):
-                output_filepath = os.path.join(output_filepath, ".checkpoints")
-
-            if tmpdir is None:
-                output_filepath = os.path.join(output_filepath, os.path.basename(local_filepath))
-            else:
-                output_filepath = os.path.join(output_filepath, local_filepath.replace(tmpdir, "")[1:])
-
-            output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
-
+        if output_dir.path:
+            output_filepath = _upload_dest(output_dir, local_filepath, tmpdir)
             os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
             if not os.path.exists(local_filepath):
-                # Checkpoint files reuse a stable name; a later save can replace a queued path.
                 if ".checkpoints" in local_filepath:
                     continue
                 raise FileNotFoundError(local_filepath)
             if os.path.abspath(local_filepath) != os.path.abspath(output_filepath):
                 shutil.copy(local_filepath, output_filepath)
+            _mark_uploaded(local_filepath)
         else:
             raise ValueError(f"The provided {output_dir.path} isn't supported.")
-
-        # Inform the remover to delete the file. Keep checkpoints so a later overwrite/upload can still read them.
-        if remove_queue and os.path.exists(local_filepath) and ".checkpoints" not in local_filepath:
-            remove_queue.put([local_filepath])
 
 
 def _map_items_to_workers_sequentially(
@@ -753,14 +810,12 @@ def _prepare_items_and_paths(
         paths = []
         for index, path in indexed_paths.items():
             paths.append(path)
-            if input_dir.path and isinstance(input_dir.path, str) and not input_dir.path.startswith(
+            if _is_remote_path(path) or (input_dir.url and path.startswith(input_dir.url)):
+                flattened_item[index] = _cache_local_path(path, input_dir, cache_data_dir)
+            elif input_dir.path and isinstance(input_dir.path, str) and not input_dir.path.startswith(
                 "/teamspace/studios/this_studio"
             ):
                 flattened_item[index] = path.replace(input_dir.path, cache_data_dir)
-            elif input_dir.url and path.startswith(input_dir.url):
-                flattened_item[index] = _cache_local_path(path, input_dir, cache_data_dir)
-            elif _is_remote_path(path):
-                flattened_item[index] = _cache_local_path(path, input_dir, cache_data_dir)
         prepared.append((tree_unflatten(flattened_item, spec), paths))
     return prepared
 
@@ -1576,6 +1631,7 @@ class DataChunkRecipe(DataRecipe):
 
         rel_files = [os.path.basename(p) for p in list_shard_files(local_keys)]
         obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
+        remote_jobs: list[tuple[str, str]] = []
         for name in rel_files:
             local_filepath = os.path.join(local_keys, name)
             if not os.path.isfile(local_filepath):
@@ -1583,15 +1639,15 @@ class DataChunkRecipe(DataRecipe):
             remote_rel = os.path.join(_KEYS_DIRNAME, name)
             if obj.scheme in _SUPPORTED_PROVIDERS:
                 assert output_dir.url
-                merged_storage_options = construct_storage_options(self.storage_options, output_dir)
-                fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
-                fs_provider.upload_file(local_filepath, os.path.join(output_dir.url, remote_rel))
+                remote_jobs.append((local_filepath, os.path.join(output_dir.url, remote_rel)))
             elif output_dir.path and os.path.isdir(output_dir.path):
                 dest_dir = os.path.join(output_dir.path, _KEYS_DIRNAME)
                 os.makedirs(dest_dir, exist_ok=True)
                 dest = os.path.join(dest_dir, name)
                 if os.path.abspath(local_filepath) != os.path.abspath(dest):
                     shutil.copyfile(local_filepath, dest)
+        if remote_jobs:
+            _put_files_remote(output_dir, remote_jobs, self.storage_options, cache_dir)
 
     def _upload_file(self, output_dir: Dir, cache_dir: str, filename: str) -> None:
         if output_dir.path is None and output_dir.url is None:
@@ -1602,11 +1658,16 @@ class DataChunkRecipe(DataRecipe):
         obj = parse.urlparse(output_dir.url if output_dir.url else output_dir.path)
         if obj.scheme in _SUPPORTED_PROVIDERS:
             assert output_dir.url
-            merged_storage_options = construct_storage_options(self.storage_options, output_dir)
-            fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
-            fs_provider.upload_file(local_filepath, os.path.join(output_dir.url, filename))
+            _put_files_remote(
+                output_dir,
+                [(local_filepath, os.path.join(output_dir.url, filename))],
+                self.storage_options,
+                cache_dir,
+            )
         elif output_dir.path and os.path.isdir(output_dir.path):
-            shutil.copyfile(local_filepath, os.path.join(output_dir.path, filename))
+            dest = os.path.join(output_dir.path, filename)
+            if os.path.abspath(local_filepath) != os.path.abspath(dest):
+                shutil.copyfile(local_filepath, dest)
 
     def _upload_index(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None) -> None:
         """Upload the index file to the remote cloud directory."""
@@ -1620,11 +1681,11 @@ class DataChunkRecipe(DataRecipe):
             local_filepath = os.path.join(cache_dir, _INDEX_FILENAME)
 
         if obj.scheme in _SUPPORTED_PROVIDERS:
-            merged_storage_options = construct_storage_options(self.storage_options, output_dir)
-            fs_provider = _get_fs_provider(output_dir.url, merged_storage_options)
-            fs_provider.upload_file(
-                local_filepath,
-                os.path.join(output_dir.url, os.path.basename(local_filepath)),
+            _put_files_remote(
+                output_dir,
+                [(local_filepath, os.path.join(output_dir.url, os.path.basename(local_filepath)))],
+                self.storage_options,
+                cache_dir,
             )
         elif output_dir.path and os.path.isdir(output_dir.path):
             dest = os.path.join(output_dir.path, os.path.basename(local_filepath))
@@ -2165,9 +2226,13 @@ class DataProcessor:
         if self.shared_upload_queue is not None:
             for _ in range(self._n_node_uploaders):
                 self.shared_upload_queue.put(None)
+        for thread in (*self.node_downloaders, *self.node_uploaders):
+            if thread.is_alive():
+                thread.join(timeout=30)
+        # Removers must see every path uploaders enqueued on the final flush.
         if self.shared_remove_queue is not None:
             self.shared_remove_queue.put(None)
-        for thread in (*self.node_downloaders, *self.node_uploaders, *self.node_removers):
+        for thread in self.node_removers:
             if thread.is_alive():
                 thread.join(timeout=30)
 

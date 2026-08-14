@@ -7,6 +7,8 @@ per-worker assignment overloads worker 0). Then runs ``optimize`` both ways.
 Examples:
   python scripts/bench/bench_node_queue.py --files 4000 --workers 8
   python scripts/bench/bench_node_queue.py --files 800 --workers 4 --studio --nodes 2
+  python scripts/bench/bench_node_queue.py --files 200 --workers 4 --remote
+  python scripts/bench/bench_node_queue.py --files 200 --workers 4 --io-matrix
 """
 
 from __future__ import annotations
@@ -67,13 +69,96 @@ def _make_inputs(input_dir: Path, n_files: int, n_workers: int) -> list[str]:
 
 
 def _verify_dataset(output_dir: str, n_files: int) -> int:
-    dataset = StreamingDataset(output_dir)
+    from litdata.processing.utilities import construct_storage_options
+    from litdata.streaming.resolver import _resolve_dir
+
+    resolved = _resolve_dir(output_dir)
+    storage = construct_storage_options({}, resolved) if resolved.url else None
+    dataset = StreamingDataset(output_dir, storage_options=storage)
     names = [dataset[i][1] for i in range(len(dataset))]
     if len(dataset) != n_files or len(set(names)) != n_files:
         raise SystemExit(
             f"{output_dir}: expected {n_files} unique samples, got len={len(dataset)} unique={len(set(names))}"
         )
     return len(dataset)
+
+
+def _remote_output_url(output_dir: str) -> str:
+    from litdata.streaming.resolver import _resolve_dir
+
+    os.makedirs(output_dir, exist_ok=True)
+    resolved = _resolve_dir(output_dir)
+    if not resolved.url:
+        raise SystemExit(f"could not resolve object-store URL for {output_dir}")
+    print(f"remote output {resolved.url}")
+    return resolved.url
+
+
+def _rewrite_inputs_to_object_store(inputs: list[str], input_dir: Path) -> tuple[list[str], str]:
+    """Keep the Studio path as ``input_dir`` (R2 credentials) and use object-store item URLs."""
+    from litdata.streaming.resolver import _resolve_dir
+
+    resolved = _resolve_dir(str(input_dir))
+    if not resolved.url:
+        raise SystemExit(f"could not resolve object-store URL for {input_dir}")
+    rewritten = [path.replace(resolved.path or str(input_dir), resolved.url) for path in inputs]
+    print(f"remote input  {resolved.url}")
+    return rewritten, str(input_dir)
+
+
+_IO_KINDS = ("local-local", "remote-local", "local-remote", "remote-remote")
+
+
+def _run_one_io(
+    kind: str,
+    args: argparse.Namespace,
+    run_id: str,
+) -> list[tuple[str, str, float, int]]:
+    """Run ordered/shared optimize for one input→output topology."""
+    remote_in = kind.startswith("remote")
+    remote_out = kind.endswith("remote")
+    if (remote_in or remote_out) and not os.path.isdir(_STUDIO_ROOT):
+        raise SystemExit(f"missing {_STUDIO_ROOT}")
+
+    local_root = Path(tempfile.mkdtemp(prefix=f"litdata-node-queue-{kind}-{run_id}-"))
+    studio_root = Path(_STUDIO_ROOT) / "litdata_node_queue_bench" / run_id / kind if (remote_in or remote_out) else None
+    input_dir = (studio_root / "input") if remote_in and studio_root is not None else local_root / "input"
+    cache_root = Path(tempfile.mkdtemp(prefix=f"litdata-node-queue-cache-{kind}-"))
+    os.environ["DATA_OPTIMIZER_CACHE_FOLDER"] = str(cache_root / "chunks")
+    os.environ["DATA_OPTIMIZER_DATA_CACHE_FOLDER"] = str(cache_root / "data")
+
+    print(
+        f"\n=== {kind} === generating {args.files} files under {input_dir} "
+        f"(first {max(args.workers, args.files // args.workers)} are {HEAVY_BYTES // 1024}KiB)",
+        flush=True,
+    )
+    t_gen = time.perf_counter()
+    inputs = _make_inputs(input_dir, args.files, args.workers)
+    print(f"generated in {time.perf_counter() - t_gen:.1f}s")
+    bench_input_dir = str(input_dir)
+    if remote_in:
+        inputs, bench_input_dir = _rewrite_inputs_to_object_store(inputs, input_dir)
+
+    rows: list[tuple[str, str, float, int]] = []
+    try:
+        modes = [] if args.skip_ordered else [("ordered", True)]
+        modes.append(("shared", False))
+        for name, ordered in modes:
+            if remote_out and studio_root is not None:
+                out = str(studio_root / name)
+                _remote_output_url(out)
+            else:
+                out = str(local_root / name)
+            elapsed = _optimize(inputs, bench_input_dir, out, args.workers, ordered=ordered)
+            n = _verify_dataset(out, args.files)
+            rows.append((kind, f"keep_data_ordered={ordered}", elapsed, n))
+            print(f"{kind:16s} keep_data_ordered={str(ordered):5s}  {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}")
+    finally:
+        shutil.rmtree(local_root, ignore_errors=True)
+        if studio_root is not None:
+            shutil.rmtree(studio_root, ignore_errors=True)
+        shutil.rmtree(cache_root, ignore_errors=True)
+    return rows
 
 
 def _optimize(inputs: list[str], input_dir: str, output_dir: str, workers: int, ordered: bool) -> float:
@@ -231,6 +316,22 @@ def main() -> None:
         action="store_true",
         help="Write inputs/outputs under /teamspace/lightning_storage/testing",
     )
+    parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Remote-to-remote (same as --io remote-remote)",
+    )
+    parser.add_argument(
+        "--io",
+        choices=_IO_KINDS,
+        default=None,
+        help="Single input→output topology (local/remote × local/remote)",
+    )
+    parser.add_argument(
+        "--io-matrix",
+        action="store_true",
+        help="Run local-local, remote-local, local-remote, and remote-remote",
+    )
     parser.add_argument("--skip-ordered", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--input-dir", type=str, default=None)
@@ -250,57 +351,63 @@ def main() -> None:
         _run_before_after(args)
         return
 
-    if args.studio and not os.path.isdir(_STUDIO_ROOT):
+    kinds: tuple[str, ...]
+    if args.io_matrix:
+        kinds = _IO_KINDS
+    elif args.io:
+        kinds = (args.io,)
+    elif args.remote:
+        kinds = ("remote-remote",)
+    elif args.studio:
+        kinds = ("remote-remote",)
+    else:
+        kinds = ("local-local",)
+
+    if any(kind != "local-local" for kind in kinds) and not os.path.isdir(_STUDIO_ROOT):
         raise SystemExit(f"missing {_STUDIO_ROOT}")
     os.environ.pop("DATA_OPTIMIZER_NUM_NODES", None)
     os.environ.pop("DATA_OPTIMIZER_NODE_RANK", None)
 
+    if args.nodes > 1 and kinds != ("local-local",):
+        raise SystemExit("--nodes > 1 is only supported for local-local")
+
     run_id = uuid.uuid4().hex[:8]
-    if args.studio:
-        root = Path(_STUDIO_ROOT) / "litdata_node_queue_bench" / run_id
-    else:
+    if args.nodes > 1:
         root = Path(tempfile.mkdtemp(prefix=f"litdata-node-queue-{run_id}-"))
-
-    input_dir = root / "input"
-    cache_root = Path(tempfile.mkdtemp(prefix="litdata-node-queue-cache-"))
-    os.environ["DATA_OPTIMIZER_CACHE_FOLDER"] = str(cache_root / "chunks")
-    os.environ["DATA_OPTIMIZER_DATA_CACHE_FOLDER"] = str(cache_root / "data")
-
-    print(f"generating {args.files} files under {input_dir} (first {max(args.workers, args.files // args.workers)} are {HEAVY_BYTES // 1024}KiB)")
-    t_gen = time.perf_counter()
-    inputs = _make_inputs(input_dir, args.files, args.workers)
-    print(f"generated in {time.perf_counter() - t_gen:.1f}s")
-
-    results: list[tuple[str, float, int]] = []
-    try:
-        if args.nodes > 1:
+        input_dir = root / "input"
+        cache_root = Path(tempfile.mkdtemp(prefix="litdata-node-queue-cache-"))
+        os.environ["DATA_OPTIMIZER_CACHE_FOLDER"] = str(cache_root / "chunks")
+        os.environ["DATA_OPTIMIZER_DATA_CACHE_FOLDER"] = str(cache_root / "data")
+        print(f"generating {args.files} files under {input_dir}")
+        inputs = _make_inputs(input_dir, args.files, args.workers)
+        try:
             out = str(root / "shared-nodes")
             elapsed = _run_nodes(inputs, str(input_dir), out, args.workers, args.nodes, cache_root)
             n = _verify_dataset(out, args.files)
-            results.append((f"shared queue, {args.nodes} nodes x {args.workers} workers", elapsed, n))
-        else:
-            if not args.skip_ordered:
-                out_o = str(root / "ordered")
-                t_o = _optimize(inputs, str(input_dir), out_o, args.workers, ordered=True)
-                results.append(("keep_data_ordered=True", t_o, _verify_dataset(out_o, args.files)))
-            out_s = str(root / "shared")
-            t_s = _optimize(inputs, str(input_dir), out_s, args.workers, ordered=False)
-            results.append(("keep_data_ordered=False", t_s, _verify_dataset(out_s, args.files)))
-    finally:
-        if args.studio:
+            print(f"shared queue, {args.nodes} nodes x {args.workers} workers  {elapsed:7.2f}s  n={n}")
+        finally:
             shutil.rmtree(root, ignore_errors=True)
-        else:
-            shutil.rmtree(root, ignore_errors=True)
-        shutil.rmtree(cache_root, ignore_errors=True)
+            shutil.rmtree(cache_root, ignore_errors=True)
+        return
+
+    all_rows: list[tuple[str, str, float, int]] = []
+    for kind in kinds:
+        all_rows.extend(_run_one_io(kind, args, run_id))
 
     print()
-    print(f"files={args.files} workers={args.workers} nodes={args.nodes} studio={args.studio}")
-    for label, elapsed, n in results:
+    print(f"files={args.files} workers={args.workers} nodes={args.nodes}")
+    print("| Topology | Mode | Time | Throughput | Samples |")
+    print("|---|---|---:|---:|---:|")
+    for kind, label, elapsed, n in all_rows:
         if n != args.files:
-            raise SystemExit(f"{label}: expected {args.files} samples, got {n}")
-        print(f"{label:42s}  {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}")
-    if len(results) == 2:
-        print(f"speedup  {results[0][1] / results[1][1]:.2f}x  (ordered / shared)")
+            raise SystemExit(f"{kind} {label}: expected {args.files} samples, got {n}")
+        print(f"| `{kind}` | `{label}` | {elapsed:.2f}s | {args.files / elapsed:.1f} files/s | {n} |")
+    by_kind = {}
+    for kind, label, elapsed, _n in all_rows:
+        by_kind.setdefault(kind, {})[label] = elapsed
+    for kind, times in by_kind.items():
+        if "keep_data_ordered=True" in times and "keep_data_ordered=False" in times:
+            print(f"{kind} speedup  {times['keep_data_ordered=True'] / times['keep_data_ordered=False']:.2f}x  (ordered / shared)")
 
 
 if __name__ == "__main__":

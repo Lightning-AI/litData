@@ -98,6 +98,15 @@ def apply_async_pre_download_floor(max_pre_download: int, remote_dir: str | None
     return floor
 
 
+def downloader_supports_aupload(downloader: Downloader | None) -> bool:
+    """True when an async upload path is available on ``downloader``."""
+    if downloader is None:
+        return False
+    if hasattr(downloader, "_get_store") and not obstore_usable():
+        return False
+    return type(downloader).aupload_file is not Downloader.aupload_file
+
+
 def downloader_supports_adownload(downloader: Downloader | None) -> bool:
     """True when an async download path is available on ``downloader``.
 

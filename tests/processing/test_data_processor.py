@@ -39,6 +39,7 @@ from litdata.processing.data_processor import (
     _chunks_dir,
     _is_local_write_through,
     _prefetch_maxsize,
+    _prepare_items_and_paths,
     _remove_target,
     _to_path,
     _upload_fn,
@@ -141,6 +142,8 @@ def test_upload_s3_fn(tmpdir, monkeypatch):
     fs_provider.upload_file = copy_file
 
     monkeypatch.setattr(data_processor_module, "_get_fs_provider", mock.MagicMock(return_value=fs_provider))
+    monkeypatch.setattr(data_processor_module, "get_downloader", mock.MagicMock(return_value=mock.MagicMock()))
+    monkeypatch.setattr(data_processor_module, "downloader_supports_aupload", lambda _d: False)
 
     assert os.listdir(remote_output_dir) == []
 
@@ -168,9 +171,42 @@ def test_upload_fn_reraises_cloud_errors(tmpdir, monkeypatch):
     fs_provider = mock.MagicMock()
     fs_provider.upload_file.side_effect = RuntimeError("access denied")
     monkeypatch.setattr(data_processor_module, "_get_fs_provider", mock.MagicMock(return_value=fs_provider))
+    monkeypatch.setattr(data_processor_module, "get_downloader", mock.MagicMock(return_value=mock.MagicMock()))
+    monkeypatch.setattr(data_processor_module, "downloader_supports_aupload", lambda _d: False)
 
     with pytest.raises(RuntimeError, match="access denied"):
         _upload_fn(upload_queue, mock.MagicMock(), cache_dir, Dir(path=None, url="s3://bucket/out"))
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_upload_fn_async_batches(tmpdir, monkeypatch):
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+    files = []
+    for name in ("a.bin", "b.bin"):
+        path = os.path.join(cache_dir, name)
+        with open(path, "w") as handle:
+            handle.write(name)
+        files.append(path)
+
+    upload_queue = mock.MagicMock()
+    upload_queue.get = mock.Mock(side_effect=[*files, None])
+    uploaded: list[tuple[str, str]] = []
+
+    class _AsyncUploader:
+        async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+            uploaded.append((os.path.basename(local_filepath), remote_filepath))
+
+    monkeypatch.setattr(data_processor_module, "get_downloader", mock.MagicMock(return_value=_AsyncUploader()))
+    monkeypatch.setattr(data_processor_module, "downloader_supports_aupload", lambda _d: True)
+    monkeypatch.setenv("LITDATA_OPTIMIZE_UPLOAD_BATCH", "2")
+
+    _upload_fn(upload_queue, mock.MagicMock(), cache_dir, Dir(path=None, url="s3://bucket/out"))
+
+    assert {(local, remote) for local, remote in uploaded} == {
+        ("a.bin", "s3://bucket/out/a.bin"),
+        ("b.bin", "s3://bucket/out/b.bin"),
+    }
 
 
 def test_assert_supported_write_url_rejects_azure(tmpdir):
@@ -1655,6 +1691,17 @@ def test_to_path(tmpdir):
     ) == os.path.join("/cache", "train/a.jpg")
 
 
+def test_prepare_items_rewrites_remote_paths_when_input_dir_has_fuse_path():
+    input_dir = Dir(path="/teamspace/lightning_storage/testing/in", url="r2://bucket/in")
+    items, paths = _prepare_items_and_paths(
+        ["r2://bucket/in/a.bin"],
+        input_dir,
+        "/cache/data",
+    )[0]
+    assert items == os.path.join("/cache/data", "a.bin")
+    assert paths == ["r2://bucket/in/a.bin"]
+
+
 def test_get_input_dir_lightning_storage_does_not_stat(monkeypatch):
     def _boom(*_args, **_kwargs):
         raise AssertionError("must not stat Studio FUSE mounts")
@@ -1960,6 +2007,8 @@ def test_upload_fn_with_data_connection_id(tmpdir, monkeypatch):
     fs_provider = mock.MagicMock()
     get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
     monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+    monkeypatch.setattr(data_processor_module, "get_downloader", mock.MagicMock(return_value=mock.MagicMock()))
+    monkeypatch.setattr(data_processor_module, "downloader_supports_aupload", lambda _d: False)
 
     storage_options = {"region": "us-west-2"}
 

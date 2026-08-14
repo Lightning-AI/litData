@@ -28,6 +28,7 @@ from litdata.streaming.async_prefetch import (
     async_prefetch_min_pre_download,
     download_chunk_indexes_concurrently,
     downloader_supports_adownload,
+    downloader_supports_aupload,
 )
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.downloader import Downloader, S3Downloader
@@ -108,6 +109,9 @@ def test_downloader_supports_adownload_detects_override():
     assert downloader_supports_adownload(base) is False
     fake = _FakeAsyncDownloader("remote", "cache", [])
     assert downloader_supports_adownload(fake) is True
+    assert downloader_supports_aupload(None) is False
+    assert downloader_supports_aupload(base) is False
+    assert downloader_supports_aupload(S3Downloader("s3://bucket", "cache", [])) is True
 
 
 def test_downloader_supports_adownload_false_after_obstore_fork(monkeypatch, tmpdir):

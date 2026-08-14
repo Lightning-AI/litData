@@ -463,6 +463,40 @@ async def test_s3_adownload_file_streams_chunks_to_disk(obstore_mock, tmpdir):
         resp_mock.bytes_async.assert_not_called()
 
 
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_s3_aupload_file_uses_put_async(obstore_mock, tmpdir):
+    src = os.path.join(str(tmpdir), "in.bin")
+    with open(src, "wb") as handle:
+        handle.write(b"payload")
+    with mock.patch("litdata.streaming.downloader.S3Downloader._get_store") as get_store_mock:
+        store = MagicMock()
+        get_store_mock.return_value = store
+        obstore_mock.put_async = mock.AsyncMock()
+        downloader = S3Downloader("s3://bucket", "", [])
+        await downloader.aupload_file(src, "s3://bucket/file.txt")
+        obstore_mock.put_async.assert_awaited()
+        args, _kwargs = obstore_mock.put_async.await_args
+        assert args[0] is store
+        assert args[1] == "file.txt"
+        streamed = b"".join([chunk async for chunk in args[2]])
+        assert streamed == b"payload"
+
+
+@pytest.mark.asyncio
+async def test_obstore_aiter_file_chunks_matches_download_chunk_size(tmpdir, monkeypatch):
+    from litdata.streaming.downloader import _obstore_aiter_file_chunks
+
+    monkeypatch.setenv("LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB", "1")
+    src = os.path.join(str(tmpdir), "in.bin")
+    payload = b"a" * (1024 * 1024 + 10)
+    with open(src, "wb") as handle:
+        handle.write(payload)
+    chunks = [chunk async for chunk in _obstore_aiter_file_chunks(src)]
+    assert [len(chunk) for chunk in chunks] == [1024 * 1024, 10]
+    assert b"".join(chunks) == payload
+
+
 def test_write_obstore_chunk_bytes_like_and_bytes_fallback():
     from litdata.streaming.downloader import _write_obstore_chunk
 

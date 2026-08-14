@@ -100,6 +100,24 @@ async def _obstore_adownload_bytes(store: Any, key: str) -> bytes:
     return bytes(await resp.bytes_async())
 
 
+async def _obstore_aiter_file_chunks(local_filepath: str) -> Any:
+    """Yield ``local_filepath`` in the same chunk size used for download streams."""
+    chunk_size = _obstore_stream_min_chunk_size()
+    with open(local_filepath, "rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                return
+            yield chunk
+
+
+async def _obstore_aupload_file(store: Any, key: str, local_filepath: str) -> None:
+    """Stream ``local_filepath`` to ``key`` (same chunking as download-to-tmp)."""
+    import obstore as obs
+
+    await obs.put_async(store, key, _obstore_aiter_file_chunks(local_filepath))
+
+
 # Obstore default request timeout is 30s; large chunk GETs under worker
 # contention can exceed that. Speed-neutral, avoids spurious retries.
 _OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
@@ -319,6 +337,13 @@ class Downloader(ABC):
         """Download a file from remote storage directly to a file-like object asynchronously."""
         pass
 
+    async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+        """Async upload of ``local_filepath`` to ``remote_filepath``.
+
+        Cloud subclasses that have an obstore store should override this.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support async upload")
+
     async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
         """Async download of ``remote_filepath`` straight to ``local_filepath``.
 
@@ -456,6 +481,12 @@ class S3Downloader(Downloader):
 
         await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
+    async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "s3":
+            raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
+        await _obstore_aupload_file(self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+
 
 class R2Downloader(Downloader):
     def __init__(
@@ -560,6 +591,12 @@ class R2Downloader(Downloader):
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
         await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+
+    async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
+        await _obstore_aupload_file(self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class GCPDownloader(Downloader):
@@ -687,6 +724,12 @@ class GCPDownloader(Downloader):
 
         await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
+    async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+        await _obstore_aupload_file(self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+
 
 class AzureDownloader(Downloader):
     def __init__(
@@ -785,6 +828,14 @@ class AzureDownloader(Downloader):
             )
 
         await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+
+    async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+        await _obstore_aupload_file(self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class LocalDownloader(Downloader):
