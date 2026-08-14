@@ -4,17 +4,17 @@ All paths under `src/litdata/streaming/` unless noted. This is the inverse of th
 
 ## Key classes
 
-| Layer                                      | Class                                  | File                             |
-| ------------------------------------------ | -------------------------------------- | -------------------------------- |
-| User dataset (`IterableDataset`)           | `StreamingDataset`                     | `dataset.py:51`                  |
-| DataLoader (subclasses torch `DataLoader`) | `StreamingDataLoader`                  | `dataloader.py:559`              |
-| Read/write facade                          | `Cache`                                | `cache.py:35`                    |
-| Reader + background download thread        | `BinaryReader` / `PrepareChunksThread` | `reader.py:312` / `reader.py:50` |
-| Index/chunk metadata                       | `ChunksConfig`                         | `config.py:33`                   |
-| Chunk→item decoding                        | `BaseItemLoader` + subclasses          | `item_loader.py`                 |
-| Backend download                           | `Downloader` subclasses                | `downloader.py`                  |
+| Layer                                      | Class                                                 | File                             |
+| ------------------------------------------ | ----------------------------------------------------- | -------------------------------- |
+| User dataset (`IterableDataset`)           | `StreamingDataset`                                    | `dataset.py:51`                  |
+| DataLoader (subclasses torch `DataLoader`) | `StreamingDataLoader`                                 | `dataloader.py:559`              |
+| Read/write facade                          | `Cache`                                               | `cache.py:35`                    |
+| Reader + background download thread        | `BinaryReader` / `PrepareChunksThread`                | `reader.py:312` / `reader.py:50` |
+| Index/chunk metadata                       | `ChunksConfig`                                        | `config.py:33`                   |
+| Chunk→item decoding                        | `BaseItemLoader` + subclasses                         | `item_loader.py`                 |
+| Backend download                           | `Downloader` subclasses                               | `downloader.py`                  |
 | Chunk→worker assignment / shuffle          | `Shuffle` (`NoShuffle`/`FullShuffle`/`WindowShuffle`) | `shuffle.py`                     |
-| Item index                                 | `ChunkedIndex` (dataclass)             | `sampler.py:24`                  |
+| Item index                                 | `ChunkedIndex` (dataclass)                            | `sampler.py:24`                  |
 
 ## Runtime flow (single item)
 
