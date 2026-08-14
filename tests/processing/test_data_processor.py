@@ -148,6 +148,47 @@ def test_upload_s3_fn(tmpdir, monkeypatch):
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_upload_fn_reraises_cloud_errors(tmpdir, monkeypatch):
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+    test_file = os.path.join(cache_dir, "test.txt")
+    with open(test_file, "w") as f:
+        f.write("x")
+
+    upload_queue = mock.MagicMock()
+    upload_queue.get = mock.Mock(side_effect=[test_file, None])
+    fs_provider = mock.MagicMock()
+    fs_provider.upload_file.side_effect = RuntimeError("access denied")
+    monkeypatch.setattr(data_processor_module, "_get_fs_provider", mock.MagicMock(return_value=fs_provider))
+
+    with pytest.raises(RuntimeError, match="access denied"):
+        _upload_fn(upload_queue, mock.MagicMock(), cache_dir, Dir(path=None, url="s3://bucket/out"))
+
+
+def test_assert_supported_write_url_rejects_azure():
+    from litdata.processing.functions import _assert_supported_write_url
+
+    _assert_supported_write_url(Dir(path="/tmp/out", url=None))
+    _assert_supported_write_url(Dir(path=None, url="s3://bucket/out"))
+    with pytest.raises(ValueError, match="azure"):
+        _assert_supported_write_url(Dir(path=None, url="azure://container/path"))
+
+
+def test_resume_fields_from_checkpoint_old_and_new():
+    from litdata.processing.data_processor import _resume_fields_from_checkpoint
+
+    chunks = [{"chunk_size": 2}, {"chunk_size": 3}]
+    _, inputs_done, next_chunk = _resume_fields_from_checkpoint({"chunks": chunks, "done_till_index": 5})
+    assert inputs_done == 5
+    assert next_chunk == 2
+    _, inputs_done, next_chunk = _resume_fields_from_checkpoint(
+        {"chunks": chunks, "inputs_done": 4, "samples_written": 5, "next_chunk_index": 7, "done_till_index": 4}
+    )
+    assert inputs_done == 4
+    assert next_chunk == 7
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_remove_target(tmpdir):
     input_dir = os.path.join(tmpdir, "input_dir")
     os.makedirs(input_dir, exist_ok=True)

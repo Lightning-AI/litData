@@ -291,9 +291,17 @@ def test_writer_save_checkpoint(tmpdir):
     binary_writer.merge()
     binary_writer.save_checkpoint()
 
-    for file in os.listdir(os.path.join(cache_dir, ".checkpoints")):
-        assert file.__contains__("checkpoint-0")
-        assert file.endswith(".json")
+    checkpoint_dir = os.path.join(cache_dir, ".checkpoints")
+    files = os.listdir(checkpoint_dir)
+    assert files == ["checkpoint-0.json"]
+    with open(os.path.join(checkpoint_dir, "checkpoint-0.json")) as f:
+        payload = json.load(f)
+    assert payload["inputs_done"] == payload["samples_written"] == 12
+    assert payload["next_chunk_index"] == binary_writer._chunk_index
+    assert "chunks" in payload
+
+    binary_writer.save_checkpoint()  # no-op when unchanged
+    assert os.listdir(checkpoint_dir) == ["checkpoint-0.json"]
 
 
 def test_merge_natural_sort_order_with_many_workers(tmpdir):
@@ -327,3 +335,18 @@ def test_merge_natural_sort_order_with_many_workers(tmpdir):
 
     filenames = [c["filename"] for c in data["chunks"]]
     assert filenames == [f"chunk-{i}-0.bin" for i in range(n_workers)]
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_decompress_file_roundtrip(tmpdir):
+    from litdata.streaming.compression import ZSTDCompressor
+
+    compressor = ZSTDCompressor(4)
+    payload = os.urandom(80_000)
+    src = os.path.join(tmpdir, "chunk.bin.zstd")
+    dst = os.path.join(tmpdir, "chunk.bin")
+    with open(src, "wb") as f:
+        f.write(compressor.compress(payload))
+    compressor.decompress_file(src, dst)
+    with open(dst, "rb") as f:
+        assert f.read() == payload

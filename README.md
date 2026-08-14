@@ -215,6 +215,22 @@ for sample in dataloader:
     img, cls = sample["image"], sample["class"]
 ```
 
+**Keyed lookup and in-place patches** (needs `polars` and `optimize(..., key_fn=...)` or `build_keys_index`):
+
+```python
+ld.optimize(fn=fn, inputs=inputs, output_dir="fast_data", chunk_bytes="64MB", key_fn=lambda s: s["id"])
+
+ds = ld.StreamingDataset("fast_data")
+sample = ds["entity-id"]          # str keys
+sample = ds.get_by_key(42)        # int entity keys; ds[42] is still positional
+
+with ld.dataset_update("fast_data") as update:  # local directory only
+    update["entity-id"] = {"id": "entity-id", "x": 1}
+    update.commit()
+```
+
+`mode="append"` continues chunk numbering. `use_checkpoint=True` tries to resume an interrupted optimize. They are not the same.
+
 **Key benefits:**
 
 ✅ **Accelerate training:**       Optimized datasets load 20x faster.      

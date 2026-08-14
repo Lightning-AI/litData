@@ -39,6 +39,7 @@ from litdata.constants import (
     _TORCH_DTYPES_MAPPING,
 )
 from litdata.debugger import CAT_DELETE, trace_span
+from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
@@ -295,7 +296,7 @@ class BaseItemLoader(ABC):
                 requested_force_download = True
 
             if (time() - start_time) > max_wait:
-                raise FileNotFoundError(f"The {chunk_filepath} hasn't been found.")
+                raise ChunkWaitTimeoutError(chunk_filepath, time() - start_time)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()

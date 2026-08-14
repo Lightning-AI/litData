@@ -407,3 +407,34 @@ def test_wait_until_chunk_ready_raises_prefetch_crash_immediately(tmpdir):
     with pytest.raises(RuntimeError, match="prefetch thread crashed") as exc_info:
         loader._wait_until_chunk_ready(0, path, filesize_bytes=16)
     assert exc_info.value.__cause__ is crash
+
+
+def test_wait_until_chunk_ready_times_out_as_chunk_wait_timeout(tmpdir, monkeypatch):
+    from litdata.exceptions import ChunkWaitTimeoutError
+    from litdata.streaming.item_loader import BaseItemLoader
+
+    monkeypatch.setattr("litdata.streaming.item_loader._MAX_WAIT_TIME", 0.2)
+    monkeypatch.setattr("litdata.streaming.item_loader._FORCE_DOWNLOAD_TIME", 10.0)
+
+    class _Loader(BaseItemLoader):
+        def generate_intervals(self):
+            return []
+
+        def pre_load_chunk(self, chunk_index, chunk_filepath):
+            return None
+
+        def load_item_from_chunk(self, index, chunk_index, chunk_filepath, begin, filesize_bytes):
+            return None
+
+        def delete(self, chunk_index, chunk_filepath):
+            return None
+
+        def encode_data(self, data, sizes, flattened):
+            return b"", None
+
+    loader = _Loader()
+    path = os.path.join(tmpdir, "never-arrives.bin")
+    with pytest.raises(ChunkWaitTimeoutError, match="Timed out") as exc_info:
+        loader._wait_until_chunk_ready(0, path, filesize_bytes=16)
+    assert isinstance(exc_info.value, FileNotFoundError)
+    assert exc_info.value.path == path

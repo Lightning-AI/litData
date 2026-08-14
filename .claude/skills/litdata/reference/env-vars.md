@@ -69,7 +69,7 @@ Code: `streaming/async_prefetch.py`. Cache interaction: [cache-and-chunk-lifecyc
 | `DATA_OPTIMIZER_CACHE_FOLDER`      | Chunk/work cache root                                  |
 | `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | Downloaded input cache                                 |
 | `DATA_OPTIMIZER_TIMEOUT`           | Queue get timeout (≈300s; shared-queue ≈200s)          |
-| `DATA_OPTIMIZER_FAST_DEV_RUN`      | Related to `fast_dev_run` defaults                     |
+| `DATA_OPTIMIZER_FAST_DEV_RUN`      | `DataProcessor` treats missing/`None` as **on** (`"1"`). Public `optimize(fast_dev_run=False)` is safe. |
 
 Launch flow: [processing.md](processing.md).
 

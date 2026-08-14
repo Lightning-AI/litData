@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import shutil
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
@@ -30,6 +31,13 @@ class Compressor(ABC):
     @abstractmethod
     def decompress(self, data: bytes) -> bytes:
         pass
+
+    def decompress_file(self, src: str, dst: str) -> None:
+        """Decompress ``src`` onto ``dst``. Default reads the whole file."""
+        with open(src, "rb") as inf:
+            data = self.decompress(inf.read())
+        with open(dst, "wb") as outf:
+            outf.write(data)
 
     @classmethod
     @abstractmethod
@@ -67,6 +75,23 @@ class ZSTDCompressor(Compressor):
 
         with trace_span("decompress", CAT_DECOMPRESS):
             return zstd.decompress(data)
+
+    def decompress_file(self, src: str, dst: str) -> None:
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression.zstd import ZstdFile
+
+            with open(src, "rb") as inf, open(dst, "wb") as outf, ZstdFile(inf, "r") as zf:
+                shutil.copyfileobj(zf, outf, length=1024 * 1024)
+            return
+        try:
+            import zstandard
+
+            dctx = zstandard.ZstdDecompressor()
+            with open(src, "rb") as inf, open(dst, "wb") as outf:
+                dctx.copy_stream(inf, outf)
+            return
+        except ImportError:
+            super().decompress_file(src, dst)
 
     @classmethod
     def register(cls, compressors: dict[str, "Compressor"]) -> None:

@@ -23,6 +23,7 @@ from filelock import FileLock, Timeout
 
 from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
 from litdata.debugger import CAT_LOCK, emit_trace
+from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -272,7 +273,7 @@ class ChunksConfig:
         while not os.path.exists(local_chunkpath) and not os.path.exists(target_local_chunkpath):
             sleep(0.1)
             if (time() - start_time) > _MAX_WAIT_TIME:
-                raise FileNotFoundError(f"The {local_chunkpath} hasn't been found.")
+                raise ChunkWaitTimeoutError(local_chunkpath, time() - start_time)
 
         if os.path.exists(target_local_chunkpath):
             return
@@ -283,25 +284,13 @@ class ChunksConfig:
                 if os.path.exists(target_local_chunkpath):
                     return
 
-                with open(local_chunkpath, "rb") as f:
-                    data = f.read()
-
-                # delete the compressed file only if it was downloaded
-                if self._downloader is not None:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.remove(local_chunkpath)
-
-                data = self._compressor.decompress(data)
-
                 assert self._chunks is not None
                 filename = os.path.basename(local_chunkpath)
                 chunk_index = self._get_chunk_index_from_filename(filename)
                 expected_bytes = int(self._chunks[chunk_index]["chunk_bytes"])
-
                 tmp_path = f"{target_local_chunkpath}.tmp.{os.getpid()}"
                 try:
-                    with open(tmp_path, "wb") as f:
-                        f.write(data)
+                    self._compressor.decompress_file(local_chunkpath, tmp_path)
                     if os.stat(tmp_path).st_size < expected_bytes:
                         raise OSError(
                             f"Decompressed chunk {target_local_chunkpath} is smaller than expected "
@@ -312,6 +301,9 @@ class ChunksConfig:
                     with contextlib.suppress(FileNotFoundError, PermissionError):
                         os.remove(tmp_path)
                     raise
+                if self._downloader is not None:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(local_chunkpath)
         finally:
             # FileLock leaves its lock file behind; remove after release.
             with contextlib.suppress(Exception):
