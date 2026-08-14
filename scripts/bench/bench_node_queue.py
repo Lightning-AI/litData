@@ -153,7 +153,9 @@ def _run_one_io(
             elapsed = _optimize(inputs, bench_input_dir, out, args.workers, ordered=ordered)
             n = _verify_dataset(out, args.files)
             rows.append((kind, f"keep_data_ordered={ordered}", elapsed, n))
-            print(f"{kind:16s} keep_data_ordered={str(ordered):5s}  {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}")
+            print(
+                f"{kind:16s} keep_data_ordered={str(ordered):5s}  {elapsed:7.2f}s  {args.files / elapsed:7.1f} files/s  n={n}"
+            )
     finally:
         shutil.rmtree(local_root, ignore_errors=True)
         if studio_root is not None:
@@ -359,9 +361,7 @@ def main() -> None:
         kinds = _IO_KINDS
     elif args.io:
         kinds = (args.io,)
-    elif args.remote:
-        kinds = ("remote-remote",)
-    elif args.studio:
+    elif args.remote or args.studio:
         kinds = ("remote-remote",)
     else:
         kinds = ("local-local",)
@@ -410,7 +410,9 @@ def main() -> None:
         by_kind.setdefault(kind, {})[label] = elapsed
     for kind, times in by_kind.items():
         if "keep_data_ordered=True" in times and "keep_data_ordered=False" in times:
-            print(f"{kind} speedup  {times['keep_data_ordered=True'] / times['keep_data_ordered=False']:.2f}x  (ordered / shared)")
+            print(
+                f"{kind} speedup  {times['keep_data_ordered=True'] / times['keep_data_ordered=False']:.2f}x  (ordered / shared)"
+            )
 
 
 if __name__ == "__main__":
