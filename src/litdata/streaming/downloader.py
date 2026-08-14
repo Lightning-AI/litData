@@ -37,7 +37,7 @@ from litdata.debugger import _get_log_msg
 from litdata.streaming.client import R2Client, S3Client
 
 if TYPE_CHECKING:
-    from obstore.store import ClientConfig
+    from obstore.store import ClientConfig, S3Config
 
 logger = logging.getLogger("litdata.streaming.downloader")
 
@@ -153,7 +153,7 @@ def _build_obstore_s3_store(bucket: str, s3_client: S3Client) -> Any:
 
     return S3Store(
         bucket,
-        config=config or None,
+        config=cast("S3Config", config) if config else None,
         credential_provider=_obstore_credential_provider(s3_client),
         client_options=_OBSTORE_CLIENT_OPTIONS,
     )

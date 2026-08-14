@@ -434,7 +434,7 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
 
 
 def _fake_boto_s3_client(
-    access_key="AKIATEST", secret_key="test-secret", token="tok", endpoint=None, region="us-east-1"
+    access_key="AKIATEST", secret_key="test-secret", token="tok", endpoint=None, region="us-east-1"  # noqa: S107
 ):
     frozen = MagicMock()
     frozen.access_key = access_key
@@ -610,6 +610,6 @@ def test_s3_downloader_pickle_drops_obstore_store(tmpdir):
     downloader = S3Downloader("s3://bucket", str(tmpdir), [])
     downloader._store = MagicMock()
     downloader._store_pid = os.getpid()
-    restored = pickle.loads(pickle.dumps(downloader))
+    restored = pickle.loads(pickle.dumps(downloader))  # noqa: S301
     assert not hasattr(restored, "_store")
     assert not hasattr(restored, "_store_pid")

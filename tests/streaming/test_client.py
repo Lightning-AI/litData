@@ -74,7 +74,7 @@ def test_s3_client_pickle_drops_boto_client():
 
     s3 = client.S3Client()
     s3._client = mock.sentinel.live
-    restored = pickle.loads(pickle.dumps(s3))
+    restored = pickle.loads(pickle.dumps(s3))  # noqa: S301
     assert restored._client is None
     assert restored._client_lock is not None
 
