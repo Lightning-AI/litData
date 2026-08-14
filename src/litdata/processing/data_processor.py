@@ -271,6 +271,9 @@ def _upload_fn(
 
                 output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
 
+                if not os.path.exists(local_filepath) and ".checkpoints" in local_filepath:
+                    continue
+
                 fs_provider.upload_file(
                     local_filepath,
                     output_filepath,
@@ -293,12 +296,17 @@ def _upload_fn(
             output_filepath = remove_uuid_from_filename(output_filepath)  # remove unique id from checkpoints
 
             os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
+            if not os.path.exists(local_filepath):
+                # Checkpoint files reuse a stable name; a later save can replace a queued path.
+                if ".checkpoints" in local_filepath:
+                    continue
+                raise FileNotFoundError(local_filepath)
             shutil.copy(local_filepath, output_filepath)
         else:
             raise ValueError(f"The provided {output_dir.path} isn't supported.")
 
-        # Inform the remover to delete the file
-        if remove_queue and os.path.exists(local_filepath):
+        # Inform the remover to delete the file. Keep checkpoints so a later overwrite/upload can still read them.
+        if remove_queue and os.path.exists(local_filepath) and ".checkpoints" not in local_filepath:
             remove_queue.put([local_filepath])
 
 
@@ -733,10 +741,11 @@ class BaseWorker:
             assert isinstance(self.checkpoint_chunks_info, list)
 
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
-            if self.checkpoint_next_chunk_index is not None:
-                self.cache._writer._chunk_index = self.checkpoint_next_chunk_index
-            else:
-                self.cache._writer._chunk_index = len(self.checkpoint_chunks_info)
+            self.cache._writer._chunk_index = _writer_chunk_index_from_checkpoint(
+                self.writer_starting_chunk_index,
+                self.checkpoint_chunks_info,
+                self.checkpoint_next_chunk_index,
+            )
 
     def _try_upload(self, data: str | tuple[str, str] | None) -> None:
         if not data or (self.output_dir.url if self.output_dir.url else self.output_dir.path) is None:
@@ -1357,7 +1366,7 @@ class DataProcessor:
         self.use_checkpoint = use_checkpoint
         self.checkpoint_chunks_info: list[list[dict[str, Any]]] | None = None
         self.checkpoint_next_index: list[int] | None = None
-        self.checkpoint_next_chunk_index: list[int] | None = None
+        self.checkpoint_next_chunk_index: list[int | None] | None = None
         self.item_loader = item_loader
         self.storage_options = storage_options
         self.keep_data_ordered = keep_data_ordered
@@ -1754,7 +1763,7 @@ class DataProcessor:
 
         self.checkpoint_chunks_info = [default_chunk_info for _ in range(self.num_workers)]
         self.checkpoint_next_index = [0 for _ in range(self.num_workers)]
-        self.checkpoint_next_chunk_index = [0 for _ in range(self.num_workers)]
+        self.checkpoint_next_chunk_index = [None for _ in range(self.num_workers)]
 
         if self.output_dir.url is None:
             assert self.output_dir.path
@@ -1839,11 +1848,28 @@ class DataProcessor:
         return
 
 
-def _resume_fields_from_checkpoint(checkpoint: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
+def _resume_fields_from_checkpoint(checkpoint: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int | None]:
     chunks = checkpoint["chunks"]
     inputs_done = int(checkpoint.get("inputs_done", checkpoint["done_till_index"]))
-    next_chunk_index = int(checkpoint.get("next_chunk_index", len(chunks)))
+    next_chunk_index = int(checkpoint["next_chunk_index"]) if "next_chunk_index" in checkpoint else None
     return chunks, inputs_done, next_chunk_index
+
+
+def _writer_chunk_index_from_checkpoint(
+    writer_starting_chunk_index: int,
+    checkpoint_chunks: list[dict[str, Any]] | None,
+    checkpoint_next_chunk_index: int | None,
+) -> int:
+    """Absolute next chunk file index for the writer after loading a checkpoint.
+
+    ``next_chunk_index`` is already absolute (includes append offset). Older checkpoints
+    only stored this-run ``chunks``; continue from ``writer_starting_chunk_index + len(chunks)``.
+    Workers with no checkpoint file keep the append starting index.
+    """
+    if checkpoint_next_chunk_index is not None:
+        return checkpoint_next_chunk_index
+    n_chunks = len(checkpoint_chunks or [])
+    return writer_starting_chunk_index + n_chunks
 
 
 def in_notebook() -> bool:
