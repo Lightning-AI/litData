@@ -68,13 +68,13 @@ litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
 
 ### Levels vs categories
 
-| Level | Categories |
-| ----- | ---------- |
-| `off` | none |
-| `batch` | `epoch`, `batch`, `crash` |
+| Level             | Categories                                   |
+| ----------------- | -------------------------------------------- |
+| `off`             | none                                         |
+| `batch`           | `epoch`, `batch`, `crash`                    |
 | `chunk` (default) | + `download`, `read`, `delete`, `decompress` |
-| `sample` | + `sample` |
-| `debug` | + `lock` (all of `ALL_CATEGORIES`) |
+| `sample`          | + `sample`                                   |
+| `debug`           | + `lock` (all of `ALL_CATEGORIES`)           |
 
 `categories=["download", "read", "delete"]` replaces the level set. Legacy kwargs `item_loader=False` / `iterating_dataset=False` / `getitem_dataset_for_chunk_index=False` drop `sample` / `epoch`.
 
@@ -84,18 +84,18 @@ litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
 
 Indexes belong in **args**, not in `name`, so Perfetto groups all downloads together.
 
-| `name` | `cat` | Site |
-| ------ | ----- | ---- |
-| `download` | `download` | `downloader.py` chunk GET |
-| `prefetch` | `download` | `reader.py` async prefetch gather |
-| `read` | `read` | `reader.py` mmap/decode; last span is closed on worker finish |
-| `delete` | `delete` | `item_loader.py` eviction |
-| `decompress` | `decompress` | `compression.py` |
-| `batch` | `batch` | `dataloader.py` |
-| `dataloader` / `combined` | `epoch` | loader / CombinedStreamingDataset |
-| `sample` | `sample` | `dataset.py` `__getitem__` |
-| `lock` | `lock` | `.cnt` increment (`downloader.py`) / decrement (`config.py`) |
-| `crash` | `crash` | `PrepareChunksThread._report_crash` — `ph: I` |
+| `name`                    | `cat`        | Site                                                          |
+| ------------------------- | ------------ | ------------------------------------------------------------- |
+| `download`                | `download`   | `downloader.py` chunk GET                                     |
+| `prefetch`                | `download`   | `reader.py` async prefetch gather                             |
+| `read`                    | `read`       | `reader.py` mmap/decode; last span is closed on worker finish |
+| `delete`                  | `delete`     | `item_loader.py` eviction                                     |
+| `decompress`              | `decompress` | `compression.py`                                              |
+| `batch`                   | `batch`      | `dataloader.py`                                               |
+| `dataloader` / `combined` | `epoch`      | loader / CombinedStreamingDataset                             |
+| `sample`                  | `sample`     | `dataset.py` `__getitem__`                                    |
+| `lock`                    | `lock`       | `.cnt` increment (`downloader.py`) / decrement (`config.py`)  |
+| `crash`                   | `crash`      | `PrepareChunksThread._report_crash` — `ph: I`                 |
 
 `env_info()` injects `dist_*` / `worker_*` on every event. Colors: `_CAT_CNAME` in `debugger.py`.
 
