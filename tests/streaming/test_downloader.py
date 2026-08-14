@@ -433,6 +433,51 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
             assert chunk in result
 
 
+class _AsyncChunkStream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    def __aiter__(self) -> "_AsyncChunkStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_s3_adownload_file_streams_chunks_to_disk(obstore_mock, tmpdir):
+    with mock.patch("litdata.streaming.downloader.S3Downloader._get_store") as get_store_mock:
+        get_store_mock.return_value = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.bytes_async = mock.AsyncMock(side_effect=AssertionError("use stream, not bytes_async"))
+        resp_mock.stream = lambda min_chunk_size=None: _AsyncChunkStream([b"chunk1", b"chunk2"])
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        dest = os.path.join(str(tmpdir), "out.bin")
+        downloader = S3Downloader("s3://bucket", "", [])
+        await downloader.adownload_file("s3://bucket/file.txt", dest)
+        assert open(dest, "rb").read() == b"chunk1chunk2"
+        resp_mock.bytes_async.assert_not_called()
+
+
+def test_write_obstore_chunk_bytes_like_and_bytes_fallback():
+    from litdata.streaming.downloader import _write_obstore_chunk
+
+    fileobj = io.BytesIO()
+    _write_obstore_chunk(fileobj, b"ab")
+    _write_obstore_chunk(fileobj, bytearray(b"cd"))
+    _write_obstore_chunk(fileobj, memoryview(b"ef"))
+
+    class OnlyBytes:
+        def __bytes__(self) -> bytes:
+            return b"gh"
+
+    _write_obstore_chunk(fileobj, OnlyBytes())
+    assert fileobj.getvalue() == b"abcdefgh"
+
+
 def _fake_boto_s3_client(access_key="AKIATEST", secret_key="", token="", endpoint=None, region="us-east-1"):
     frozen = MagicMock()
     frozen.access_key = access_key

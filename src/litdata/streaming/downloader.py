@@ -51,6 +51,55 @@ def _obstore_stream_min_chunk_size() -> int:
     return 8 * 1024 * 1024
 
 
+def _write_obstore_chunk(fileobj: Any, chunk: Any) -> None:
+    """Write a stream yield without an extra ``bytes()`` copy when possible."""
+    if isinstance(chunk, (bytes, bytearray, memoryview)):
+        fileobj.write(chunk)
+        return
+    try:
+        fileobj.write(memoryview(chunk))
+    except TypeError:
+        fileobj.write(bytes(chunk))
+
+
+def _obstore_stream_resp_to_tmp(tmp_path: str, resp: Any) -> None:
+    with open(tmp_path, "wb") as f:
+        for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
+            _write_obstore_chunk(f, chunk)
+
+
+async def _obstore_astream_resp_to_tmp(tmp_path: str, resp: Any) -> None:
+    with open(tmp_path, "wb") as f:
+        async for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
+            _write_obstore_chunk(f, chunk)
+
+
+async def _obstore_adownload_file(downloader: "Downloader", store: Any, key: str, local_filepath: str) -> None:
+    """Stream an object to ``local_filepath`` (prefer this over :meth:`Downloader.adownload_fileobj`)."""
+    import obstore as obs
+
+    if os.path.exists(local_filepath):
+        return
+    tmp_path = downloader._temp_download_path(local_filepath)
+    try:
+        os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+        resp = await obs.get_async(store, key)
+        await _obstore_astream_resp_to_tmp(tmp_path, resp)
+        downloader._atomic_replace(tmp_path, local_filepath)
+    except Exception:
+        with suppress(FileNotFoundError, PermissionError):
+            os.remove(tmp_path)
+        raise
+
+
+async def _obstore_adownload_bytes(store: Any, key: str) -> bytes:
+    """In-memory GET. Callers that write to disk should use :func:`_obstore_adownload_file`."""
+    import obstore as obs
+
+    resp = await obs.get_async(store, key)
+    return bytes(await resp.bytes_async())
+
+
 # Obstore default request timeout is 30s; large chunk GETs under worker
 # contention can exceed that. Speed-neutral, avoids spurious retries.
 _OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
@@ -338,9 +387,7 @@ class S3Downloader(Downloader):
 
                     store = self._get_store(obj.netloc)
                     resp = obs.get(store, obj.path.lstrip("/"))
-                    with open(tmp_path, "wb", buffering=1024 * 1024) as f:
-                        for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
-                            f.write(chunk)
+                    _obstore_stream_resp_to_tmp(tmp_path, resp)
                 else:
                     from boto3.s3.transfer import TransferConfig
 
@@ -394,47 +441,20 @@ class S3Downloader(Downloader):
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
         """Download a file from S3 into memory asynchronously (prefer :meth:`adownload_file`)."""
-        import obstore as obs
-
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        bucket = obj.netloc
-        key = obj.path.lstrip("/")
-
-        store = self._get_store(bucket)
-        resp = await obs.get_async(store, key)
-        bytes_object = await resp.bytes_async()
-        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+        return await _obstore_adownload_bytes(self._get_store(obj.netloc), obj.path.lstrip("/"))
 
     async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
         """Stream an S3 object to ``local_filepath`` without buffering the full body."""
-        import obstore as obs
-
-        if os.path.exists(local_filepath):
-            return
-
         obj = parse.urlparse(remote_filepath)
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        bucket = obj.netloc
-        key = obj.path.lstrip("/")
-        store = self._get_store(bucket)
-        tmp_path = self._temp_download_path(local_filepath)
-        try:
-            os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
-            resp = await obs.get_async(store, key)
-            with open(tmp_path, "wb", buffering=1024 * 1024) as f:
-                async for chunk in resp.stream(min_chunk_size=_obstore_stream_min_chunk_size()):
-                    f.write(chunk)
-            self._atomic_replace(tmp_path, local_filepath)
-        except Exception:
-            with suppress(FileNotFoundError, PermissionError):
-                os.remove(tmp_path)
-            raise
+        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class R2Downloader(Downloader):
@@ -525,21 +545,21 @@ class R2Downloader(Downloader):
         return _cached_obstore_store(self, lambda: _build_obstore_s3_store(bucket, self._client))
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        """Download a file from R2 directly to a file-like object asynchronously."""
-        import obstore as obs
-
+        """Download a file from R2 into memory asynchronously (prefer :meth:`adownload_file`)."""
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "r2":
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        bucket = obj.netloc
-        key = obj.path.lstrip("/")
+        return await _obstore_adownload_bytes(self._get_store(obj.netloc), obj.path.lstrip("/"))
 
-        store = self._get_store(bucket)
-        resp = await obs.get_async(store, key)
-        bytes_object = await resp.bytes_async()
-        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Stream an R2 object to ``local_filepath`` without buffering the full body."""
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "r2":
+            raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
+
+        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class GCPDownloader(Downloader):
@@ -651,21 +671,21 @@ class GCPDownloader(Downloader):
         return _cached_obstore_store(self, _factory)
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        """Download a file from GCS directly to a file-like object asynchronously."""
-        import obstore as obs
-
+        """Download a file from GCS into memory asynchronously (prefer :meth:`adownload_file`)."""
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "gs":
             raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
 
-        bucket_name = obj.netloc
-        key = obj.path.lstrip("/")
+        return await _obstore_adownload_bytes(self._get_store(obj.netloc), obj.path.lstrip("/"))
 
-        store = self._get_store(bucket_name)
-        resp = await obs.get_async(store, key)
-        bytes_object = await resp.bytes_async()
-        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Stream a GCS object to ``local_filepath`` without buffering the full body."""
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "gs":
+            raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
+
+        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class AzureDownloader(Downloader):
@@ -746,9 +766,7 @@ class AzureDownloader(Downloader):
         return _cached_obstore_store(self, _factory)
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        """Download a file from Azure Blob Storage directly to a file-like object asynchronously."""
-        import obstore as obs
-
+        """Download a file from Azure into memory asynchronously (prefer :meth:`adownload_file`)."""
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "azure":
@@ -756,13 +774,17 @@ class AzureDownloader(Downloader):
                 f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
             )
 
-        bucket_name = obj.netloc
-        key = obj.path.lstrip("/")
+        return await _obstore_adownload_bytes(self._get_store(obj.netloc), obj.path.lstrip("/"))
 
-        store = self._get_store(bucket_name)
-        resp = await obs.get_async(store, key)
-        bytes_object = await resp.bytes_async()
-        return bytes(bytes_object)  # Convert obstore.Bytes to bytes
+    async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
+        """Stream an Azure object to ``local_filepath`` without buffering the full body."""
+        obj = parse.urlparse(remote_filepath)
+        if obj.scheme != "azure":
+            raise ValueError(
+                f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
+            )
+
+        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
 
 class LocalDownloader(Downloader):
