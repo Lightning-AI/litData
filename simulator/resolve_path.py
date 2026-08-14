@@ -44,6 +44,7 @@ def _index_json(path: str | None, url: str | None, user: str) -> str:
 
 
 def main() -> None:
+    """Print JSON for the resolved dataset directory and index.json path."""
     if len(sys.argv) != 2:
         print("usage: resolve_path.py <dataset-path-or-index.json>", file=sys.stderr)
         sys.exit(1)
