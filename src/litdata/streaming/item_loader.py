@@ -385,7 +385,8 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap_allowed_chunks: set[int] = set()
         self._posix_fast = False
         self._mmap_keep = 1
-        self._mapped: OrderedDict[int, tuple[mmap.mmap, FileIO, list[int], str]] = OrderedDict()
+        self._mapped: OrderedDict[int, tuple[mmap.mmap, list[int], str]] = OrderedDict()
+        self._mmap_handles: dict[int, FileIO] = {}
         self._page: memoryview | bytes | None = None
         self._page_chunk: int | None = None
         self._page_start = 0
@@ -493,7 +494,7 @@ class PyTreeLoader(BaseItemLoader):
                 print("WAIT TIME", time() - start_time)
 
             cached = self._mapped.get(chunk_index)
-            if cached is not None and cached[3] == chunk_filepath:
+            if cached is not None and cached[2] == chunk_filepath:
                 self._apply_mapped_chunk(chunk_index, cached)
             else:
                 self._chunk_filepath = chunk_filepath
@@ -650,7 +651,7 @@ class PyTreeLoader(BaseItemLoader):
     def _ensure_chunk_mmap(self, chunk_filepath: str, chunk_index: int, *, make_current: bool) -> None:
         """Map ``chunk_filepath`` into the LRU; optionally make it the active item mapping."""
         cached = self._mapped.get(chunk_index)
-        if cached is not None and cached[3] == chunk_filepath:
+        if cached is not None and cached[2] == chunk_filepath:
             if make_current:
                 self._apply_mapped_chunk(chunk_index, cached)
             else:
@@ -658,28 +659,34 @@ class PyTreeLoader(BaseItemLoader):
             return
         handle = _open_chunk_file(chunk_filepath)
         chunk_mmap = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+        if os.name == "nt":
+            self._mmap_handles[chunk_index] = handle
+        else:
+            handle.close()
         header_num_items = int(np.frombuffer(chunk_mmap, dtype=np.uint32, count=1, offset=0)[0])
         index_num_items = int(self._chunks[chunk_index]["chunk_size"])
         if header_num_items != index_num_items:
             chunk_mmap.close()
-            handle.close()
+            handle = self._mmap_handles.pop(chunk_index, None)
+            if handle is not None:
+                handle.close()
             raise RuntimeError(
                 f"Chunk {chunk_index} header item count ({header_num_items}) does not match "
                 f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
             )
         offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
         madvise_mmap(chunk_mmap)
-        self._mapped[chunk_index] = (chunk_mmap, handle, offsets, chunk_filepath)
+        self._mapped[chunk_index] = (chunk_mmap, offsets, chunk_filepath)
         self._mapped.move_to_end(chunk_index)
         self._evict_mapped_chunks(protect=None if make_current else chunk_index)
         if make_current:
             self._apply_mapped_chunk(chunk_index, self._mapped[chunk_index])
 
-    def _apply_mapped_chunk(self, chunk_index: int, cached: tuple[mmap.mmap, FileIO, list[int], str]) -> None:
+    def _apply_mapped_chunk(self, chunk_index: int, cached: tuple[mmap.mmap, list[int], str]) -> None:
         self._clear_item_page()
-        chunk_mmap, handle, offsets, chunk_filepath = cached
+        chunk_mmap, offsets, chunk_filepath = cached
         self._mmap = chunk_mmap
-        self._open_handle = handle
+        self._open_handle = None
         self._offsets = offsets
         self._chunk_filepath = chunk_filepath
         self._mmap_view = memoryview(chunk_mmap)
@@ -687,15 +694,17 @@ class PyTreeLoader(BaseItemLoader):
 
     def _evict_mapped_chunks(self, protect: int | None = None) -> None:
         while len(self._mapped) > self._mmap_keep:
-            old_idx, (old_mmap, old_handle, old_offsets, old_path) = self._mapped.popitem(last=False)
+            old_idx, (old_mmap, old_offsets, old_path) = self._mapped.popitem(last=False)
             if old_mmap is self._mmap or old_idx == protect:
-                self._mapped[old_idx] = (old_mmap, old_handle, old_offsets, old_path)
+                self._mapped[old_idx] = (old_mmap, old_offsets, old_path)
                 self._mapped.move_to_end(old_idx)
                 break
             with contextlib.suppress(BufferError, ValueError):
                 old_mmap.close()
-            with contextlib.suppress(OSError):
-                old_handle.close()
+            handle = self._mmap_handles.pop(old_idx, None)
+            if handle is not None:
+                with contextlib.suppress(OSError):
+                    handle.close()
 
     def _close_open_chunk(self) -> None:
         """Release the memory-map / file handle for the currently open chunk (if any)."""
@@ -705,11 +714,13 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap = None
         self._open_handle = None
         for idx in list(self._mapped):
-            mm, handle, _, _ = self._mapped.pop(idx)
+            mm, _, _ = self._mapped.pop(idx)
             with contextlib.suppress(BufferError, ValueError):
                 mm.close()
-            with contextlib.suppress(OSError):
-                handle.close()
+            handle = self._mmap_handles.pop(idx, None)
+            if handle is not None:
+                with contextlib.suppress(OSError):
+                    handle.close()
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle / memory-map for the current chunk."""
@@ -773,6 +784,7 @@ class PyTreeLoader(BaseItemLoader):
         state["_mmap"] = None
         state["_offsets"] = None
         state["_mapped"] = OrderedDict()
+        state["_mmap_handles"] = {}
         state["_page"] = None
         state["_page_chunk"] = None
         state["_mmap_view"] = None

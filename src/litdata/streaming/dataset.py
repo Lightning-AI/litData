@@ -350,7 +350,9 @@ class StreamingDataset(IterableDataset):
 
         if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
             chunks = cache._reader._config._chunks or []
-            cache._reader.enable_posix_fast(list(range(len(chunks))), keep=max(4, self.max_pre_download))
+            cache._reader.enable_posix_fast(
+                list(range(len(chunks))), keep=max(4, self.max_pre_download), prefetch=False
+            )
 
         return cache
 

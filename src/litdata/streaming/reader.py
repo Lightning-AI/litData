@@ -840,7 +840,7 @@ class BinaryReader:
         """
         self._item_loader.set_mmap_allowed_chunks(chunk_indexes)
 
-    def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4) -> None:
+    def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4, *, prefetch: bool = True) -> None:
         """Read chunks from the dataset directory in place (Vast/NFS). Never delete sources."""
         self._posix_fast = True
         self._posix_keep = max(1, keep)
@@ -848,7 +848,8 @@ class BinaryReader:
         if setter is not None:
             setter(True, keep=self._posix_keep)
         self._item_loader.set_mmap_allowed_chunks(set(chunk_indexes))
-        self.prefetch_posix_window(chunk_indexes[: self._posix_keep])
+        if prefetch:
+            self.prefetch_posix_window(chunk_indexes[: self._posix_keep])
 
     def prefetch_posix_window(self, chunk_indexes: list[int]) -> None:
         """``posix_fadvise`` and mmap the next files in this worker's stripe (no download thread)."""
