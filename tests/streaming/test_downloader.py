@@ -433,17 +433,11 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
             assert chunk in result
 
 
-def _fake_boto_s3_client(
-    access_key="AKIATEST",
-    secret_key="test-secret",
-    token="tok",
-    endpoint=None,
-    region="us-east-1",  # noqa: S107
-):
+def _fake_boto_s3_client(access_key="AKIATEST", secret_key="", token="", endpoint=None, region="us-east-1"):
     frozen = MagicMock()
     frozen.access_key = access_key
-    frozen.secret_key = secret_key
-    frozen.token = token
+    frozen.secret_key = secret_key or "test-secret"
+    frozen.token = token or "tok"
     creds = MagicMock()
     creds.get_frozen_credentials.return_value = frozen
     client = MagicMock()
