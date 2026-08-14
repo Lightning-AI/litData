@@ -851,7 +851,7 @@ class StreamingDataLoader(DataLoader):
             children = obj.get("dataset")
             if isinstance(children, dict):
                 for child in children.values():
-                    if isinstance(child, dict) and ("world_size" in child or "num_workers" in child):
+                    if isinstance(child, dict) and "input_dir_path" in child:
                         if topology_changed(
                             child, world_size=world_size, num_workers=num_workers, batch_size=batch_size
                         ):

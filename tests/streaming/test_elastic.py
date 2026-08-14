@@ -49,6 +49,8 @@ def test_topology_changed_and_sample_in_epoch():
     assert topology_changed(state, world_size=2, num_workers=2, batch_size=4) is True
     assert topology_changed(state, world_size=8, num_workers=8, batch_size=4) is True
     assert topology_changed(state, world_size=8, num_workers=2, batch_size=8) is True
+    assert topology_changed({"num_workers": 0, "world_size": 1, "batch_size": 1}, world_size=1, num_workers=1, batch_size=1) is False
+    assert topology_changed({"num_workers": 0, "world_size": 1, "batch_size": 1}, world_size=1, num_workers=0, batch_size=1) is False
     assert sample_in_epoch_from_state(state) == 80
     assert sample_in_epoch_from_state({"sample_in_epoch": 12, "num_samples_yielded": 3, "world_size": 8}) == 12
 
@@ -339,7 +341,8 @@ def test_v1_checkpoint_infers_sample_in_epoch():
     state = {"num_samples_yielded": 7, "world_size": 4}
     assert sample_in_epoch_from_state(state) == 28
     assert topology_changed(state, world_size=4, num_workers=2, batch_size=8) is False
-    assert topology_changed({"num_workers": 2}, world_size=1, num_workers=8, batch_size=1) is True
+    assert topology_changed({"num_workers": 0}, world_size=1, num_workers=1, batch_size=1) is False
+    assert topology_changed({"num_workers": 0}, world_size=1, num_workers=0, batch_size=1) is False
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
