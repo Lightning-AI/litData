@@ -66,8 +66,7 @@ class ZSTDCompressor(Compressor):
             import zstd
 
         with trace_span("decompress", CAT_DECOMPRESS):
-            decompressed_data = zstd.decompress(data)
-        return decompressed_data
+            return zstd.decompress(data)
 
     @classmethod
     def register(cls, compressors: dict[str, "Compressor"]) -> None:

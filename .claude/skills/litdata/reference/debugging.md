@@ -105,7 +105,7 @@ Indexes belong in **args**, not in `name`, so Perfetto groups all downloads toge
 
 - One line per event: `ts:%(asctime)s;PID:%(process)d; TID:%(thread)d; name: download;ph: B;cat: download;…`
 - `ts` is Chrome microseconds (`record.created * 1e6`) via `_OneLineTraceFormatter`.
-- Values are sanitized: newlines/CRs → space, `;` → `,` (`_sanitize_log_value`). **Never** `logger.exception` into this logger — a traceback splits the file into unparseable lines. Crashes print the traceback to **stderr** and emit a one-line `crash` instant.
+- Values are sanitized: newlines/CRs → space, `;` → `,` (`_sanitize_log_value`). **Never** `logger.exception` into this logger — a traceback splits the file into unparsable lines. Crashes print the traceback to **stderr** and emit a one-line `crash` instant.
 - `TimedFlushFileHandler` flushes every `flush_interval` seconds (default 5 via `enable_tracer`).
 
 When adding a new span: pick a stable `name` + `cat`, put indexes in kwargs, use `trace_span` / `emit_trace`, and keep values one-line.
