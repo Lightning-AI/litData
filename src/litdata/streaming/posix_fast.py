@@ -107,9 +107,7 @@ def _mount_for_path(path: str, mounts: list[tuple[str, str, str]]) -> tuple[str,
     best: tuple[str, str, str] | None = None
     for mountpoint, fstype, source in mounts:
         mp = mountpoint.replace("\\", "/").rstrip("/") or "/"
-        if any(form == mp or form.startswith(mp + "/") for form in forms) and (
-            best is None or len(mp) > len(best[0])
-        ):
+        if any(form == mp or form.startswith(mp + "/") for form in forms) and (best is None or len(mp) > len(best[0])):
             best = (mountpoint, fstype, source)
     return best
 
