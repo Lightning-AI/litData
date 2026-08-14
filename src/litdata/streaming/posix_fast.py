@@ -19,6 +19,9 @@ the chunk in place and ``posix_fadvise`` the next files so the page cache fills 
 the reader. Shared-chunk mmap is safe because source objects are never deleted.
 
 This is automatic for any local ``input_dir`` (no ``s3://`` URL). Users do not pass a flag.
+
+When ``shuffle=True``, chunk order is a per-worker sliding-window permute (not a global
+chunk permutation) so sequential POSIX reads stay in the page cache. See ``WindowShuffle``.
 """
 
 from __future__ import annotations

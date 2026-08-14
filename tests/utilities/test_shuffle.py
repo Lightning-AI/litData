@@ -1,5 +1,7 @@
 import itertools
 
+import numpy as np
+
 from litdata.streaming.item_loader import Interval
 from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
@@ -10,6 +12,8 @@ from litdata.utilities.shuffle import (
     _group_chunks_by_nodes,
     _intra_node_chunk_shuffle,
     _map_node_worker_rank_to_chunk_indexes_to_not_delete,
+    _window_shuffle,
+    _window_shuffle_chunks_and_intervals,
 )
 
 
@@ -404,3 +408,31 @@ def test_map_node_worker_rank_to_chunk_indexes_to_not_delete():
     chunks_to_workers = {10: [2, 3, 4], 20: [1, 2, 3], 30: [3, 4], 40: [4, 5, 6]}
     workers_to_chunks = _map_node_worker_rank_to_chunk_indexes_to_not_delete(chunks_to_workers)
     assert workers_to_chunks == {1: [20], 2: [10, 20], 3: [10, 20, 30], 4: [10, 30, 40], 5: [40], 6: [40]}
+
+
+def test_window_shuffle_identity_and_locality():
+    rng = np.random.RandomState(0)
+    items = list(range(64))
+    assert _window_shuffle(items, window=1, rng=rng) == items
+    shuffled = _window_shuffle(items, window=8, rng=np.random.RandomState(0))
+    assert sorted(shuffled) == items
+    assert shuffled != items
+    jumps = [abs(shuffled[i] - shuffled[i - 1]) for i in range(1, len(shuffled))]
+    full = list(np.random.RandomState(0).permutation(items))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_window_shuffle_chunks_keeps_worker_sets():
+    chunks = [list(range(0, 20)), list(range(20, 40))]
+    intervals = [[[0, 0, 1, 1]] * 20, [[0, 0, 1, 1]] * 20]
+    new_chunks, new_intervals = _window_shuffle_chunks_and_intervals(
+        chunks, intervals, seed=42, current_epoch=1, window=8
+    )
+    assert set(new_chunks[0]) == set(chunks[0])
+    assert set(new_chunks[1]) == set(chunks[1])
+    assert new_chunks[0] != chunks[0]
+    epoch2, _ = _window_shuffle_chunks_and_intervals(chunks, intervals, seed=42, current_epoch=2, window=8)
+    assert epoch2[0] != new_chunks[0]
+    for worker_chunks, worker_intervals in zip(new_chunks, new_intervals):
+        assert len(worker_chunks) == len(worker_intervals)

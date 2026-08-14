@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from typing import Any
@@ -22,7 +23,21 @@ from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _associate_chunks_and_intervals_to_workers,
     _intra_node_chunk_shuffle,
+    _window_shuffle_chunks_and_intervals,
 )
+
+_DEFAULT_POSIX_SHUFFLE_WINDOW = 16
+
+
+def posix_shuffle_window() -> int:
+    """Chunks each POSIX worker may mix among (sequential assignment, then local permute)."""
+    raw = os.getenv("LITDATA_POSIX_SHUFFLE_WINDOW")
+    if raw is None or not raw.strip():
+        return _DEFAULT_POSIX_SHUFFLE_WINDOW
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_POSIX_SHUFFLE_WINDOW
 
 
 class Shuffle(ABC):
@@ -136,6 +151,39 @@ class FullShuffle(Shuffle):
         )
 
         return workers_chunks, workers_intervals
+
+    def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
+        return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()
+
+
+class WindowShuffle(Shuffle):
+    """POSIX / Vast shuffle: sequential chunk stripes, then a sliding-window permute per worker.
+
+    ``FullShuffle`` globally permutes chunks before assignment. That is right for object storage
+    (random GETs, cache copies). On a parallel filesystem it turns sequential 64MiB files into
+    random IOPS and fights ``posix_fadvise`` / page cache.
+
+    ``WindowShuffle`` keeps NoShuffle-style assignment (each worker a contiguous-ish stripe),
+    then window-shuffles **that worker's list** (default window 16). In-chunk item order still
+    uses the same permutation as ``FullShuffle``.
+    """
+
+    def __init__(self, cache: Cache, seed: int, drop_last: bool, window: int | None = None):
+        super().__init__(cache, seed, drop_last)
+        self.window = posix_shuffle_window() if window is None else max(1, window)
+
+    @lru_cache(maxsize=10)
+    def get_chunks_and_intervals_per_workers(
+        self, distributed_env: _DistributedEnv, num_workers: int, batch_size: int, current_epoch: int
+    ) -> Any:
+        chunk_intervals = self.cache.get_chunk_intervals()
+        indexes = range(len(chunk_intervals))
+        workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
+            distributed_env, indexes, chunk_intervals, self.drop_last, num_workers, batch_size
+        )
+        return _window_shuffle_chunks_and_intervals(
+            workers_chunks, workers_intervals, self.seed, current_epoch, self.window
+        )
 
     def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()

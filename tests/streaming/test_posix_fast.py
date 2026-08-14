@@ -3,6 +3,7 @@ import os
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.posix_fast import detect_posix_fast, parse_proc_mounts
+from litdata.streaming.shuffle import FullShuffle, WindowShuffle
 from tests.streaming.test_item_loader import _write_int_dataset
 
 
@@ -69,3 +70,21 @@ def test_posix_fast_does_not_delete_source_chunks(tmpdir):
     for name in files:
         loader.delete(0, os.path.join(data_dir, name))
         assert os.path.exists(os.path.join(data_dir, name))
+
+
+def test_posix_fast_shuffle_uses_window_shuffle(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=5)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    list(iter(dataset))
+    assert isinstance(dataset.shuffler, WindowShuffle)
+    items = list(iter(dataset))
+    assert sorted(items) == list(range(80))
+    assert items != list(range(80))
+
+
+def test_posix_fast_disabled_keeps_full_shuffle(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=5)
+    dataset = StreamingDataset(data_dir, shuffle=True)
+    list(iter(dataset))
+    assert isinstance(dataset.shuffler, FullShuffle)

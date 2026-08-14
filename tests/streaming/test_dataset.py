@@ -317,7 +317,8 @@ def test_streaming_dataset_distributed_no_shuffle(drop_last, tmpdir, compression
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(input_dir=str(tmpdir), chunk_size=10, compression=compression)
@@ -370,7 +371,8 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(str(tmpdir), chunk_size=500, compression=compression)
@@ -418,7 +420,8 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(str(tmpdir), chunk_size=10, compression=compression)

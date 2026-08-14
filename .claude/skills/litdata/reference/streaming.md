@@ -13,7 +13,7 @@ All paths under `src/litdata/streaming/` unless noted. This is the inverse of th
 | Index/chunk metadata                       | `ChunksConfig`                         | `config.py:33`                   |
 | Chunk→item decoding                        | `BaseItemLoader` + subclasses          | `item_loader.py`                 |
 | Backend download                           | `Downloader` subclasses                | `downloader.py`                  |
-| Chunk→worker assignment / shuffle          | `Shuffle` (`NoShuffle`/`FullShuffle`)  | `shuffle.py`                     |
+| Chunk→worker assignment / shuffle          | `Shuffle` (`NoShuffle`/`FullShuffle`/`WindowShuffle`) | `shuffle.py`                     |
 | Item index                                 | `ChunkedIndex` (dataclass)             | `sampler.py:24`                  |
 
 ## Runtime flow (single item)
@@ -64,7 +64,7 @@ Sketch:
 - **S3 path prefers obstore**: `obstore` is a **hard** install dependency (`requirements.txt`). Chunk GETs stream via obstore when usable; boto3 remains the fallback. **`index.json` always uses boto3** so the DataLoader parent does not start tokio before fork; workers then lazy-init obstore. If the parent *did* start obstore, workers fall back to boto3 (`obstore_usable()` — re-creating `S3Store` is not enough; tokio is process-global). Pickle drops `_store` / `_store_pid`. Stream chunk size: `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` (default **8** MiB).
 - **Obstore credentials**: `_build_obstore_s3_store` copies endpoint/region from the existing `S3Client`/`R2Client` and uses a credential provider. **Never** unpack `storage_options` (`data_connection_id`, `endpoint_url`, …) into `boto3.Session` — that `TypeError` used to kill `PrepareChunksThread` and surface as a 120s `FileNotFoundError` on Studio R2.
 - **Async chunk prefetch** (`async_prefetch.py`): **not** an async DataLoader. Overlaps remote chunk downloads inside `PrepareChunksThread` via `asyncio.gather`. Default **on for remote**, off for local-only; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` overrides. When on, raises `max_pre_download` floor to 4 (`LITDATA_ASYNC_MIN_PRE_DOWNLOAD`). See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) and [env-vars.md](env-vars.md).
-- **POSIX-fast / Vast** (`posix_fast.py`): **automatic** for local paths. `StreamingDataset("/mnt/vast/ds")` mmaps chunks in place (FFCV OS-cache style), `posix_fadvise`s upcoming files, never copies into `~/.lightning/chunks`, never deletes source chunks. Studio FUSE cloud mounts that resolve to `s3://` stay on GETs. `LITDATA_POSIX_FAST=0` disables.
+- **POSIX-fast / Vast** (`posix_fast.py`): **automatic** for local paths. `StreamingDataset("/mnt/vast/ds")` mmaps chunks in place (FFCV OS-cache style), `posix_fadvise`s upcoming files, never copies into `~/.lightning/chunks`, never deletes source chunks. `shuffle=True` uses `WindowShuffle` (sequential stripes + window ~16) instead of globally permuting chunks. Studio FUSE cloud mounts that resolve to `s3://` stay on GETs + `FullShuffle`. `LITDATA_POSIX_FAST=0` disables; `LITDATA_POSIX_SHUFFLE_WINDOW` tunes the window.
 - **`fs_provider.py`** — write/management only (`s3`/`gs`/`r2`). Details + vs Downloader: [storage-format.md](storage-format.md) §5.
 - **`resolver.py`** — path/URL resolution (NOT I/O backend selection). `_resolve_dir` (`:50`) → `Dir(path, url, data_connection_id)`. Full map: [resolver.md](resolver.md), [lightning-studio.md](lightning-studio.md).
 - **`client.py`** — `S3Client`/`R2Client` wrap boto3 with credential refresh + temporary project-role credentials from the Lightning control plane.
@@ -75,7 +75,8 @@ Sketch:
 
 **Stage A — chunk→worker assignment** (`Shuffle.get_chunks_and_intervals_per_workers`):
 
-- `NoShuffle` (`shuffle.py:60`) keeps order; `FullShuffle` (`shuffle.py:83`) permutes deterministically with `np.random.RandomState([seed, seed_shift])` where `seed_shift = 1` for multi-node else `current_epoch`.
+- `NoShuffle` (`shuffle.py`) keeps order; `FullShuffle` permutes **all** chunks deterministically with `np.random.RandomState([seed, seed_shift])` where `seed_shift = 1` for multi-node else `current_epoch` — used for `s3://` / object URLs.
+- `WindowShuffle` (POSIX-fast / Vast / NFS): same sequential assignment as `NoShuffle`, then each worker window-shuffles **its own** chunk list (`LITDATA_POSIX_SHUFFLE_WINDOW`, default 16, seed `[seed, epoch, worker]`). Global permute on a parallel FS is random IOPS; a window keeps `posix_fadvise` and the page cache effective while still mixing nearby chunks. In-chunk item order is still `FullShuffle.__call__`.
 - Both call `_associate_chunks_and_intervals_to_workers` (`utilities/shuffle.py:65`), which greedily fills each worker's item budget and **splits chunk intervals** across worker boundaries — so one chunk can be shared by multiple workers (and re-downloaded by each).
 - Multi-node epoch>1 adds an intra-node reshuffle (`_intra_node_chunk_shuffle`).
 

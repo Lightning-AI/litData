@@ -32,7 +32,7 @@ from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
+from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _should_replace_path_filestores,
@@ -358,7 +358,11 @@ class StreamingDataset(IterableDataset):
             state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
-        return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
+        if not self.shuffle:
+            return NoShuffle(cache, seed, drop_last)
+        if self.posix_fast is not None and self.posix_fast.in_place:
+            return WindowShuffle(cache, seed, drop_last)
+        return FullShuffle(cache, seed, drop_last)
 
     def __len__(self) -> int:
         return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)

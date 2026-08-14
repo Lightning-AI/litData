@@ -122,6 +122,7 @@ ______________________________________________________________________
 ## 5. Shuffle, seed, drop_last, resume
 
 - `shuffle=True` → deterministic **chunk assignment then in-chunk item order** from `seed` + epoch (+ chunk index).
+- On a **local POSIX** path (Vast/NFS/disk) this is `WindowShuffle`: workers get sequential chunk stripes, then mix only inside a small window (default 16) so the kernel page cache still helps. Object storage (`s3://`, …) still globally permutes chunks (`FullShuffle`).
 - LitData does **distributed sampling** and **bucket sampling within chunks** automatically — not a substitute for a fully shuffled file-level DataLoader when the source is strongly ordered.
 - Default `seed=42`. Keep it fixed across ranks and when resuming.
 - `drop_last=None` → **True under DDP**, else False. Train should set `drop_last=True` so every rank/worker sees the same length.

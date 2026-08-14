@@ -20,6 +20,46 @@ from litdata.streaming.item_loader import Interval
 from litdata.utilities.env import _DistributedEnv
 
 
+def _window_shuffle(items: list[Any], window: int, rng: np.random.RandomState) -> list[Any]:
+    """Permute ``items`` so each swap stays inside a sliding window (FFCV-style locality).
+
+    Windowed Fisher–Yates: at index ``i`` the partner is drawn from ``[i, min(i + window, n))``.
+    ``window <= 1`` is the identity. A large window approaches a full permutation of this list.
+    """
+    n = len(items)
+    if n < 2 or window <= 1:
+        return list(items)
+    out = list(items)
+    for i in range(n - 1):
+        high = min(i + window, n)
+        j = int(rng.randint(i, high))
+        out[i], out[j] = out[j], out[i]
+    return out
+
+
+def _window_shuffle_chunks_and_intervals(
+    workers_chunks: list[list[int]],
+    workers_intervals: list[Any],
+    seed: int,
+    current_epoch: int,
+    window: int,
+) -> tuple[list[list[int]], list[Any]]:
+    """Shuffle each worker's chunk list in place-local order; keep intervals aligned."""
+    shuffled_chunks: list[list[int]] = []
+    shuffled_intervals: list[Any] = []
+    for worker_idx, (chunks, intervals) in enumerate(zip(workers_chunks, workers_intervals)):
+        rng = np.random.RandomState([seed, current_epoch, worker_idx])
+        paired = _window_shuffle(list(zip(chunks, intervals)), window, rng)
+        if paired:
+            new_chunks, new_intervals = zip(*paired)
+            shuffled_chunks.append(list(new_chunks))
+            shuffled_intervals.append(list(new_intervals))
+        else:
+            shuffled_chunks.append([])
+            shuffled_intervals.append([])
+    return shuffled_chunks, shuffled_intervals
+
+
 def _intra_node_chunk_shuffle(
     distributed_env: _DistributedEnv,
     num_workers: int,
