@@ -23,7 +23,7 @@ s3://bucket/prefix                 No Studio mount             Your AWS creds
 
 1. **`_resolve_dir`** → `Dir(path, url, data_connection_id)` — full table in [resolver.md](resolver.md)
 2. Downloads/uploads use **`url`** (object store API), **not** FUSE, for connection / datasets / other-studio paths
-3. **`data_connection_id`** → temp project-role credentials when needed (`streaming/client.py`) — always for `lightning_storage` (R2)
+3. **`data_connection_id`** → temp project-role credentials when needed (`streaming/client.py`) — always for `lightning_storage` (R2). LitData metadata: **do not** unpack it (or `endpoint_url`) into `boto3.Session`. Streaming obstore stores are built from the existing `S3Client`/`R2Client` (`_build_obstore_s3_store`).
 4. Chunk cache still under `LITDATA_CACHE_DIR` / `~/.lightning/chunks` / `cache_dir=` (benches often `/cache/chunks`)
 5. **Prep datasets** on a connection / cloud URL (or scratch outside home → `optimize` out) — see below; never fill `this_studio` with raw dumps
 
@@ -127,7 +127,7 @@ GIL-disabled Studio runs are a useful high-throughput baseline for “how fast c
 1. **Repo location** is often `/teamspace/studios/this_studio/litData` (or similar). Editable install / `PYTHONPATH=src` as in [contributing.md](contributing.md). Code in home is fine; **multi-GB datasets are not** — see prep section above.
 2. **Data** for real S3: prefer an attached connection under `/teamspace/s3_connections/…` rather than inventing buckets or dumping under `this_studio`. Canonical ImageNet-optimized path used in recent work: `/teamspace/s3_connections/optimized-imagenet-1m/lightning_data_search`.
 3. **Do not treat FUSE listing/read latency as LitData download latency.** Connection mounts are FUSE; streaming uses direct object GETs into the local cache, then decode. See [resolver.md](resolver.md).
-4. **Worker env:** DataLoader workers are separate processes. Parent-only `PYTHONSTARTUP` / one-off monkeypatches may not apply — use `sitecustomize` on `PYTHONPATH` or patch before fork/spawn when forcing boto3 vs obstore (see [benchmarking.md](benchmarking.md)).
+4. **Worker env:** DataLoader workers are separate processes. Parent-only `PYTHONSTARTUP` / one-off monkeypatches may not apply — use `sitecustomize` on `PYTHONPATH` or patch before fork/spawn when forcing boto3 vs obstore (see [benchmarking.md](benchmarking.md)). The parent must **not** start obstore before fork (`index.json` is boto3). If only `num_workers>0` fails with a 120s `FileNotFoundError`, see [debugging.md](debugging.md).
 5. **SDK optional dep:** `lightning-sdk` is in extras / Studio images; resolver and temp-cred paths need it. Pure open-source users on `s3://` + AWS credentials never hit that code.
 
 ## Optimize / write from Studio

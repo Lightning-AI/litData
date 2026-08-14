@@ -47,14 +47,16 @@ Code: `streaming/async_prefetch.py`. Cache interaction: [cache-and-chunk-lifecyc
 | ------------------------------- | ------------------- | ------------------------------------------------------------- |
 | `DEBUG_LITDATA`                 | `0`                 | Internal debug behavior                                       |
 | `PRINT_DEBUG_LOGS`              | `0`                 | Print debug logs to stdout                                    |
-| `LITDATA_LOG_FILE`              | `litdata_debug.log` | Trace log path (`enable_tracer`)                              |
-| `LITDATA_LOG_LEVEL`             | `DEBUG`             | Trace log level                                               |
+| `LITDATA_LOG_FILE`              | `litdata_debug.log` | Trace log path (`enable_tracer`). Handler **appends**         |
+| `LITDATA_LOG_LEVEL`             | `DEBUG`             | Python log level for the tracer logger                        |
 | `LITDATA_TRACE_LEVEL`           | unset               | `batch` / `chunk` / `sample` / `debug` / `off`                |
-| `LITDATA_TRACE_CATEGORIES`      | from level          | Comma-separated cats: `download,read,delete,batch,sample,...` |
+| `LITDATA_TRACE_CATEGORIES`      | from level          | Comma-separated cats; wins over level if set                  |
 | `LITDATA_LOG_ITERATING_DATASET` | from level          | Legacy include flag for epoch events                          |
 | `LITDATA_LOG_GETITEM`           | from level          | Legacy include flag for sample events                         |
 | `LITDATA_LOG_ITEM_LOADER`       | from level          | Legacy include flag for sample events                         |
 | `ENABLE_STATUS_REPORT`          | `0`                 | Extra Studio progress JSON during optimize                    |
+
+`enable_tracer(level=..., log_file=..., categories=...)` writes these env vars. Workers inherit the category set. Cats: `download`, `read`, `delete`, `decompress`, `batch`, `sample`, `epoch`, `lock`, `crash`. Delete `LITDATA_LOG_FILE` before a re-trace. Full spec: [debugging.md](debugging.md). Converter: [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer).
 
 ## `optimize` / `map` multi-node **(usually set by the platform)**
 

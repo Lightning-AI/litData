@@ -115,7 +115,7 @@ StreamingDataset("s3://bucket/optimized-dataset", cache_dir="/fast-ssd/cache/my-
 
 - **`path`** — local folder for cached `.bin` / index materialization.
 - **`url`** — where bytes are downloaded/uploaded.
-- **`data_connection_id`** — set automatically for some Studio connections (R2 / lightning_storage / cross-cloud S3); enables temporary project-role credentials. Users rarely set this by hand.
+- **`data_connection_id`** — set automatically for some Studio connections (R2 / lightning_storage / cross-cloud S3); enables temporary project-role credentials. Users rarely set this by hand. It is LitData metadata: streaming must **not** pass it into `boto3.Session` (use `S3Client`/`R2Client` → `_build_obstore_s3_store`). See [debugging.md](debugging.md).
 
 ______________________________________________________________________
 

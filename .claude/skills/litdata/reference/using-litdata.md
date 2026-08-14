@@ -189,7 +189,7 @@ StreamingDataLoader(
 | Scope       | Worker **0** only                                                                                      |
 | Output      | `{profile_dir}/result.json` — open in `chrome://tracing` or [ui.perfetto.dev](https://ui.perfetto.dev) |
 
-`int` wraps `fetcher.fetch` and stops after skip+N fetches; `True` traces until the worker loop ends. Complementary to `enable_tracer()` + Litracer (pipeline events) — see [debugging.md](debugging.md). README: `#profile-loading`.
+`int` wraps `fetcher.fetch` and stops after skip+N fetches; `True` traces until the worker loop ends. Complementary to `enable_tracer()` + [Litracer](https://github.com/Lightning-AI/litracer) (pipeline events) — see [debugging.md](debugging.md). README: `#profile-loading`.
 
 ______________________________________________________________________
 
@@ -207,6 +207,7 @@ StreamingDataset(..., cache_dir="/data/cache", max_cache_size="50GB", max_pre_do
   - `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` force off/on
   - When on, floors `max_pre_download` to `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` (default **4**; `0` disables floor)
 - Other common: `MAX_WAIT_TIME`, `FORCE_DOWNLOAD_TIME`, `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB`, `HF_TOKEN`, `LITDATA_DISABLE_VERSION_CHECK`
+- Tracing: `enable_tracer(level="chunk")` · `LITDATA_LOG_FILE` / `LITDATA_TRACE_LEVEL` / `LITDATA_TRACE_CATEGORIES` — [debugging.md](debugging.md)
 - Multi-node optimize: `DATA_OPTIMIZER_*` (platform-set) — [processing.md](processing.md)
 
 README: `#async-prefetch-env`.
@@ -488,14 +489,24 @@ ______________________________________________________________________
 
 **DataLoader worker CPU** — `StreamingDataLoader(..., profile_batches=20, num_workers=4)` → viztracer `result.json` (§7 / README `#profile-loading`).
 
-**LitData pipeline events** — `enable_tracer()` → `litdata_debug.log` → Litracer → Perfetto:
+**LitData pipeline events** — `from litdata.debugger import enable_tracer` → `litdata_debug.log` → [Litracer](https://github.com/Lightning-AI/litracer) → Perfetto:
 
 ```python
 from litdata.debugger import enable_tracer
-enable_tracer()  # delete existing litdata_debug.log before re-trace
+
+enable_tracer(level="chunk", log_file="litdata_debug.log")  # delete existing log before re-trace
+# level="batch"|"chunk"|"sample"|"debug"|"off"
+# categories=["download", "read", "delete"]
 ```
 
-`litdata.breakpoint` — safe in optimize / DataLoader workers. Full knobs → [debugging.md](debugging.md).
+```bash
+litracer --quiet --validate -o litdata_trace.json litdata_debug.log
+litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
+```
+
+Stable names: `download`, `read`, `delete`, `batch`, `sample`, `crash` (indexes in args). One line per event; crashes also print a traceback to **stderr**. `num_workers>0` only `FileNotFoundError` on `s3://` → obstore-after-fork; Studio R2 `data_connection_id` → [debugging.md](debugging.md).
+
+`litdata.breakpoint` — safe in optimize / DataLoader workers. Full knobs → [debugging.md](debugging.md). README: `#debug-profile`.
 
 ______________________________________________________________________
 

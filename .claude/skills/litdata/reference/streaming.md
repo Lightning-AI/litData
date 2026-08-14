@@ -61,7 +61,8 @@ Sketch:
 ## Backends
 
 - **`downloader.py`** — read path. `Downloader` ABC (`:41`); subclasses `S3Downloader`, `R2Downloader`, `GCPDownloader`, `AzureDownloader`, `HFDownloader`, `LocalDownloader`. Selected by URL prefix via `_DOWNLOADERS` registry + `get_downloader` (`:658`); register new ones with `register_downloader` (`:632`).
-- **S3 path prefers obstore**: `obstore` is a **hard** install dependency (`requirements.txt`). Chunk GETs stream via obstore when `_OBSTORE_AVAILABLE`; boto3 remains the fallback. **`index.json` always uses boto3** so the DataLoader parent does not start tokio before fork; workers then lazy-init obstore. If the parent *did* start obstore, workers fall back to boto3 (re-creating `S3Store` is not enough — tokio is process-global). Stream chunk size: `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` (default **8** MiB).
+- **S3 path prefers obstore**: `obstore` is a **hard** install dependency (`requirements.txt`). Chunk GETs stream via obstore when usable; boto3 remains the fallback. **`index.json` always uses boto3** so the DataLoader parent does not start tokio before fork; workers then lazy-init obstore. If the parent *did* start obstore, workers fall back to boto3 (`obstore_usable()` — re-creating `S3Store` is not enough; tokio is process-global). Pickle drops `_store` / `_store_pid`. Stream chunk size: `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` (default **8** MiB).
+- **Obstore credentials**: `_build_obstore_s3_store` copies endpoint/region from the existing `S3Client`/`R2Client` and uses a credential provider. **Never** unpack `storage_options` (`data_connection_id`, `endpoint_url`, …) into `boto3.Session` — that `TypeError` used to kill `PrepareChunksThread` and surface as a 120s `FileNotFoundError` on Studio R2.
 - **Async chunk prefetch** (`async_prefetch.py`): **not** an async DataLoader. Overlaps remote chunk downloads inside `PrepareChunksThread` via `asyncio.gather`. Default **on for remote**, off for local-only; `LITDATA_ASYNC_CHUNK_PREFETCH=0/1` overrides. When on, raises `max_pre_download` floor to 4 (`LITDATA_ASYNC_MIN_PRE_DOWNLOAD`). See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) and [env-vars.md](env-vars.md).
 - **`fs_provider.py`** — write/management only (`s3`/`gs`/`r2`). Details + vs Downloader: [storage-format.md](storage-format.md) §5.
 - **`resolver.py`** — path/URL resolution (NOT I/O backend selection). `_resolve_dir` (`:50`) → `Dir(path, url, data_connection_id)`. Full map: [resolver.md](resolver.md), [lightning-studio.md](lightning-studio.md).
@@ -97,8 +98,10 @@ Both subclass `_BaseStreamingDatasetWrapper` (`utilities/base.py:27`) which fans
 - **Item loader coupling**: `encode_data` (write) and `load_item_from_chunk`/`generate_intervals` (read) must stay consistent. Header size `len(data_format)*4` and the `(1+(index-begin))*4` offset formula are load-bearing.
 - **Chunk lifetime is fragile**: deletion gated by `.cnt` refcount + `FileLock`; `skip_chunk_indexes_deletion` (`config.py:117`) prevents deleting a chunk a same-node worker still needs. Deletion is deferred until after the next item loads (avoids mmap segfaults). Windows requires `close()` before `os.remove`.
 - **ParquetLoader + fork deadlock**: `StreamingDataLoader` raises if `ParquetLoader` is used with `num_workers>0` under `fork` — use `spawn`/`forkserver` (`dataloader.py:629`).
-- **`num_workers=0` counts as 1 worker** internally (`dataset.py:200`).
-- **Datasets are immutable**: resolver refuses to write into a non-empty output dir unless `append`/`overwrite` (`resolver.py:311`).
+- **`num_workers=0` counts as 1 worker** internally (`dataset.py`).
+- **Obstore is not fork-safe**: parent must not start tokio (`index.json` is boto3). Symptom: `FileNotFoundError` on `chunk-*.bin` after `MAX_WAIT_TIME` only when `num_workers>0`. [debugging.md](debugging.md).
+- **PrepareChunksThread crash visibility**: `_report_crash` prints to stderr, emits tracer `crash` (`ph: I`), stashes the exception so waiters raise `RuntimeError` immediately instead of timing out as `FileNotFoundError`.
+- **Datasets are immutable**: resolver refuses to write into a non-empty output dir unless `append`/`overwrite` (`resolver.py`).
 - **Two dataloaders exist**: `CacheDataLoader` (`dataloader.py:260`, write/cache path) vs `StreamingDataLoader` (read path). Don't cross-wire them.
 - Missing `index.json` in `_create_cache` raises a "did you optimize?" error (`dataset.py:322`).
 

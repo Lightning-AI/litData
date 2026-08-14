@@ -73,6 +73,6 @@ Shuffle may **split one chunk across several workers** on a node. Three guards p
 2. **`.cnt` + file lock** — refcount per chunk; delete only at zero.
 3. **Force redownload** — last resort if a reader blocks on a missing `.bin`.
 
-Debugging: multi-worker + small `max_cache_size` to force eviction; `enable_tracer()` for lock/delete timeline; `DEBUG_LITDATA=1` for tombstones. Hangs in “chunk not found” waits under tiny budgets → check prefetch floor (≥2), not only deletion.
+Debugging: multi-worker + small `max_cache_size` to force eviction; `enable_tracer(level="debug")` or `categories=["download", "read", "delete", "lock"]` for the lock/delete timeline; `DEBUG_LITDATA=1` for tombstones. Hangs in “chunk not found” waits under tiny budgets → check prefetch floor (≥2), not only deletion. Convert with Litracer `--cat download,read,delete`.
 
 Shuffle assignment details → [streaming.md](streaming.md). Fair throughput measurement → [benchmarking.md](benchmarking.md).

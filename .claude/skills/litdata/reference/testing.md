@@ -102,5 +102,7 @@ Error-path behavior is production code: do not “fix” hang recovery only in c
 - **Tiny `max_cache_size` + delete-when-processed timeouts** (`_wait_until_chunk_ready` / `thread.join`): usually `max_pre_download` capped to 1 or blocking `shutdown_default_executor`. See [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md) § Prefetch & eviction.
 - **Windows `PermissionError` on `.bin` open** after zstd decompress: expect retry via `_open_chunk_file`; close handles before delete.
 - To force the boto3 download path in a unit test when obstore is installed: `monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", False)`.
+- **Streaming S3 fork / Studio session regressions** (`tests/streaming/test_downloader.py`, `test_client.py`): keep `test_s3_index_download_does_not_start_obstore`, `test_obstore_usable_false_after_parent_init`, `test_build_obstore_s3_store_does_not_pass_data_connection_id_to_session`, pickle tests that drop `_store` / `_client`.
+- **Tracer** (`tests/test_debugger.py`, `tests/streaming/test_reader.py`): one-line formatter (no traceback bodies), microsecond timestamps, level/category filtering, crash instant `ph: I` / `name: crash`.
 - `spawn` requires picklable args; a test failing only under spawn usually means an unpicklable closure.
 - To debug inside a worker: `from litdata.utilities.breakpoint import breakpoint; breakpoint()` (see debugging.md).

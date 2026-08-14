@@ -1742,7 +1742,7 @@ Only **worker 0** is instrumented. When an `int` is used, the tracer wraps `fetc
 
 - Delete or change `profile_dir` between runs — LitData removes an existing `result.json` before starting.
 - Pair with a wiped chunk cache if you care about **cold** epoch behavior (`litdata cache clear`).
-- For deeper LitData internals (download / lock / delete timeline), use `enable_tracer()` + [Litracer](https://github.com/deependujha/litracer) instead — see [Debug & Profile LitData](#debug-profile). That path is complementary: viztracer = DataLoader worker CPU timeline; Litracer = LitData pipeline events.
+- For deeper LitData internals (download / read / delete timeline), use `enable_tracer()` + [Litracer](https://github.com/Lightning-AI/litracer) instead — see [Debug & Profile LitData](#debug-profile). That path is complementary: viztracer = DataLoader worker CPU timeline; Litracer = LitData pipeline events.
 
 </details>
 
@@ -1855,6 +1855,9 @@ export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
 | `LITDATA_DISABLE_VERSION_CHECK` | `0` | `1` skips the upgrade tip |
 | `HF_TOKEN` | — | Gated Hugging Face datasets |
 | `DEBUG_LITDATA` / `PRINT_DEBUG_LOGS` | `0` | Internal debug / stdout logs |
+| `LITDATA_LOG_FILE` | `litdata_debug.log` | `enable_tracer()` output path |
+| `LITDATA_TRACE_LEVEL` | unset | `batch` / `chunk` / `sample` / `debug` / `off` (see [Debug & Profile](#debug-profile)) |
+| `LITDATA_TRACE_CATEGORIES` | from level | Comma-separated cats, e.g. `download,read,delete` |
 
 Multi-node `optimize`/`map` on Studios also uses `DATA_OPTIMIZER_*` (set by the platform). Full catalog (debug logs, Studio injects, torchrun): see the LitData skill `reference/env-vars.md` when using agent skills, or the source modules `constants.py` / `async_prefetch.py`.
 
@@ -2020,66 +2023,68 @@ ds = StreamingDataset(input_dir=data_dir, encryption=rsa)
 
 &nbsp;
 
-LitData comes with built-in logging and profiling capabilities to help you debug and profile your data streaming workloads.
+`enable_tracer()` records the streaming pipeline (download vs read vs delete vs batch) as one-line events. [Litracer](https://github.com/Lightning-AI/litracer) converts that log into a Chrome / [Perfetto](https://ui.perfetto.dev) trace.
+
+This is complementary to [`profile_batches`](#profile-loading) (viztracer = DataLoader worker **CPU**; Litracer = LitData **pipeline** events).
 
 <img width="1439" alt="431247797-0e955e71-2f9a-4aad-b7c1-a8218fed2e2e" src="https://github.com/user-attachments/assets/4e40676c-ba0b-49af-acac-975977173669" />
-
-- e.g., with LitData Streaming
 
 ```python
 import litdata as ld
 from litdata.debugger import enable_tracer
 
-# WARNING: Remove existing trace `litdata_debug.log` file if it exists before re-tracing
-enable_tracer()
+# Call once per process, before the DataLoader. Delete an existing log before re-tracing (append).
+enable_tracer(level="chunk", log_file="litdata_debug.log")
+# level="batch" | "chunk" (default) | "sample" | "debug" | "off"
+# enable_tracer(categories=["download", "read", "delete"])
 
 if __name__ == "__main__":
     dataset = ld.StreamingDataset("s3://my-bucket/my-data", shuffle=True)
-    dataloader = ld.StreamingDataLoader(dataset, batch_size=64)
-
-    for batch in dataloader:
-        print(batch)  # Replace with your data processing logic
+    for batch in ld.StreamingDataLoader(dataset, batch_size=64, num_workers=8):
+        ...
 ```
 
-1. Generate Debug Log:
+| Level | Events |
+| ----- | ------ |
+| `batch` | Epoch + per-batch spans, plus crashes |
+| `chunk` (default) | + `download`, `read`, `delete`, `decompress`, `prefetch` |
+| `sample` | + per-item `__getitem__` (high volume) |
+| `debug` | + `.cnt` lock refcount spans |
+| `off` | Disable |
 
-    - Run your Python program and it'll create a log file containing detailed debug information.
+Event **names** are stable (`download`, `read`, `delete`, `batch`, `sample`, `crash`). Chunk / sample indexes live in args so Perfetto groups all downloads together. Each line is `key: value;` pairs with Chrome **microsecond** timestamps. Crashes are a one-line instant (`ph: I`, `name: crash`); the Python traceback is printed to **stderr**, not the log file (a multi-line `logger.exception` would break Litracer).
 
-    ```bash
-      python main.py
-    ```
+Env overrides: `LITDATA_LOG_FILE`, `LITDATA_TRACE_LEVEL`, `LITDATA_TRACE_CATEGORIES` (comma-separated). Tracer calls are no-ops when tracing is off.
 
-2. Install [Litracer](https://github.com/deependujha/litracer/):
-
-    - Option 1: Using Go (recommended)
-        - Install Go on your system.
-        - Run the following command to install Litracer:
-
-        ```bash
-          go install github.com/deependujha/litracer@latest
-        ```
-
-    - Option 2: Download Binary
-        - Visit the [LitRacer GitHub Releases](https://github.com/deependujha/litracer/releases) page.
-        - Download the appropriate binary for your operating system and follow the installation instructions.
-
-3. Convert Debug Log to trace JSON:
-
-    - Use litracer to convert the generated log file into a trace JSON file. This command uses 100 workers for conversion:
+1. Generate the log:
 
     ```bash
-      litracer litdata_debug.log -o litdata_trace.json -w 100
+    python train.py   # writes litdata_debug.log
     ```
 
-4. Visualize the trace:
+2. Install [Litracer](https://github.com/Lightning-AI/litracer) (Go 1.23+):
 
-    - Use either `chrome://tracing` in the Chrome browser or `ui.perfetto.dev` to view the `litdata_trace.json` file for in-depth performance insights. You can also use `SQL queries` to analyze the logs.
-    - `Perfetto` is recommended over `chrome://tracing` for visualization & analyzing.
+    ```bash
+    git clone https://github.com/Lightning-AI/litracer.git
+    cd litracer && go build -o litracer .
+    ```
 
-- Key Points:
+    Or `go install github.com/deependujha/litracer@latest` (published Go module path). Until `go.mod` is renamed, `go install github.com/Lightning-AI/litracer@latest` does not work. Release binaries: [GitHub Releases](https://github.com/Lightning-AI/litracer/releases).
 
-    - For very large trace.json files (`> 2GB`), refer to the [Perfetto documentation](https://perfetto.dev/docs/visualization/large-traces) for using native accelerators.
-    - If you are trying to connect Perfetto to the RPC server, it is recommended to use Chrome over Brave, as it has been observed that Perfetto in Brave does not autodetect the RPC server.
+3. Convert and open in Perfetto:
+
+    ```bash
+    litracer --quiet --validate -o litdata_trace.json litdata_debug.log
+    litracer --quiet --cat download,read,delete -o io.json litdata_debug.log
+    # open the json at https://ui.perfetto.dev (preferred) or chrome://tracing
+    ```
+
+    `--quiet` prints a one-line summary (per-category durations, unmatched B/E, crashes). `--cat` keeps only those categories. Matched B/E pairs become complete (`ph: X`) spans unless `--no-complete`.
+
+- For trace files `> 2GB`, see [Perfetto large traces](https://perfetto.dev/docs/visualization/large-traces).
+- If you connect Perfetto to the RPC server, prefer Chrome over Brave (Brave often does not autodetect the RPC server).
+
+**Multi-worker `s3://` `FileNotFoundError` after ~120s:** `num_workers=0` working while `num_workers>0` fails usually means the DataLoader parent started obstore (tokio) before fork and worker GETs hung. Current LitData fetches `index.json` with boto3 so workers can lazy-init obstore; they fall back to boto3 if the parent already started the runtime. On Studio R2 / `lightning_storage`, the same symptom can be a prefetch-thread crash (`data_connection_id` / `endpoint_url` into `boto3.Session`) — look for `[litdata] PrepareChunksThread CRASHED` on stderr and a `crash` instant in the trace.
 
 </details>
 

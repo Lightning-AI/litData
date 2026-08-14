@@ -266,6 +266,15 @@ Used when **reading** optimized chunks or raw files — not the optimize worker 
 | `StreamingRawDataset.downloader`                                                       | Uses same registry; prefer cloud URL / connection path over FUSE ([using-litdata.md](using-litdata.md) §10) |
 | `async_prefetch.py`                                                                    | Prefers `adownload_file` when overridden                                                                    |
 
+**S3 / R2 fork-safety and Studio connections** (`downloader.py`):
+
+- `index.json` GETs **never** go through obstore (`_use_obstore_for_s3_key`) so the DataLoader parent does not start tokio before fork.
+- Chunk GETs lazy-init a process-local `S3Store` (`_cached_obstore_store`). If this PID forked after the parent initialized obstore, `obstore_usable()` is false → boto3 fallback.
+- `_build_obstore_s3_store(bucket, s3_client)` builds the store from the **already configured** `S3Client`/`R2Client` (endpoint, region, credential provider). Do **not** pass resolver `storage_options` (`data_connection_id`, `endpoint_url`) into `boto3.Session`.
+- `__getstate__` drops `_store` / `_store_pid` so spawn/pickle cannot ship a live tokio store.
+
+Symptom if either rule is broken: `FileNotFoundError` after ~120s with `num_workers>0` (`num_workers=0` works). Details: [debugging.md](debugging.md), [streaming.md](streaming.md).
+
 **FsProvider vs Downloader** (also [storage-format.md](storage-format.md) §5):
 
 | | FsProvider | Downloader |
@@ -299,6 +308,7 @@ ______________________________________________________________________
 | Chunks left / RuntimeError in `_done`                               | Uploader failed or `delete_cached_files` + local output mismatch                                                 | Inspect cache dirs; uploader errors                                               |
 | Index never appears (multi-node)                                    | Last node waiting on peer `{rank}-index.json`                                                                    | [multi-node.md](multi-node.md) peer wait                                          |
 | FUSE “works” in `ls` but training/optimize is slow or crashes       | Reading mount directly                                                                                           | Pass path into LitData; confirm `Dir.url` is set                                  |
+| `FileNotFoundError` chunk-*.bin after ~120s, only `num_workers>0`   | Obstore tokio started in parent before fork, **or** prefetch thread crashed on `data_connection_id`              | [debugging.md](debugging.md); stderr `PrepareChunksThread CRASHED`; tracer `crash` |
 | Partial / corrupt local file                                        | Crash mid-download (FsProvider path is not always atomic the way `Downloader._atomic_replace` is)                | Wipe `DATA_OPTIMIZER_DATA_CACHE_FOLDER` / re-run; prefer connection+resolver path |
 | `cloudspaces` in output URL                                         | Rejected in `optimize`/`map`                                                                                     | Use connections / datasets, not studio content URLs                               |
 
@@ -331,6 +341,7 @@ streaming/fs_provider.py
 
 streaming/downloader.py
   Downloader  get_downloader  _DOWNLOADERS  register_downloader
+  obstore_usable  _use_obstore_for_s3_key  _build_obstore_s3_store  _cached_obstore_store
 
 constants.py
   _SUPPORTED_PROVIDERS
