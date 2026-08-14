@@ -788,6 +788,7 @@ class BinaryReader:
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
         self._posix_fast = False
+        self._posix_keep = 4
 
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
@@ -842,18 +843,29 @@ class BinaryReader:
     def enable_posix_fast(self, chunk_indexes: list[int], keep: int = 4) -> None:
         """Read chunks from the dataset directory in place (Vast/NFS). Never delete sources."""
         self._posix_fast = True
+        self._posix_keep = max(1, keep)
         setter = getattr(self._item_loader, "set_posix_fast", None)
         if setter is not None:
-            setter(True, keep=keep)
+            setter(True, keep=self._posix_keep)
         self._item_loader.set_mmap_allowed_chunks(set(chunk_indexes))
+        self.prefetch_posix_window(chunk_indexes[: self._posix_keep])
+
+    def prefetch_posix_window(self, chunk_indexes: list[int]) -> None:
+        """``posix_fadvise`` and mmap the next files in this worker's stripe (no download thread)."""
+        if not self._posix_fast:
+            return
         if self._config is None:
             self._try_load_config()
         if self._config is None:
             return
-        for chunk_index in chunk_indexes[:keep]:
+        warmer = getattr(self._item_loader, "warm_posix_chunk", None)
+        for chunk_index in chunk_indexes:
             chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
             advise_willneed(chunk_filepath)
-            self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
+            if warmer is not None:
+                warmer(chunk_index, chunk_filepath)
+            else:
+                self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
     def _release_shared_locks(self) -> None:
         """Release any eagerly-acquired shared-chunk locks this worker still holds."""

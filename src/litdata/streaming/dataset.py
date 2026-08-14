@@ -515,6 +515,10 @@ class StreamingDataset(IterableDataset):
 
         # bump the chunk_index
         self.worker_next_chunk_index += 1
+        if self.posix_fast is not None and self.posix_fast.in_place and self.cache is not None:
+            keep = max(4, self.max_pre_download)
+            start = max(self.worker_next_chunk_index - 1, 0)
+            self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
 
     def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
         if self.cache is None:
@@ -632,6 +636,10 @@ class StreamingDataset(IterableDataset):
             )
 
             self.worker_next_chunk_index += 1  # bump the chunk_index
+            if self.posix_fast is not None and self.posix_fast.in_place and self.cache is not None:
+                keep = max(4, self.max_pre_download)
+                start = self.worker_next_chunk_index - 1
+                self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
 
         # Get the first index (O(1) with deque)
         index = self.upcoming_indexes.popleft()

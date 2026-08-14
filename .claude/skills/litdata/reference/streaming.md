@@ -76,7 +76,7 @@ Sketch:
 **Stage A — chunk→worker assignment** (`Shuffle.get_chunks_and_intervals_per_workers`):
 
 - `NoShuffle` (`shuffle.py`) keeps order; `FullShuffle` permutes **all** chunks deterministically with `np.random.RandomState([seed, seed_shift])` where `seed_shift = 1` for multi-node else `current_epoch` — used for `s3://` / object URLs.
-- `WindowShuffle` (POSIX-fast / Vast / NFS): same sequential assignment as `NoShuffle`, then each worker window-shuffles **its own** chunk list (`LITDATA_POSIX_SHUFFLE_WINDOW`, default 16, seed `[seed, epoch, worker]`). The same window shuffles **item indexes inside the chunk** so `PyTreeLoader` can memcpy a contiguous ~256KiB page (`LITDATA_POSIX_PAGE_BYTES`) and split samples from it. Global permute on a parallel FS is random IOPS; a window keeps `posix_fadvise` and the page cache effective.
+- `WindowShuffle` (POSIX-fast / Vast / NFS): **whole chunks** (never split across workers), sequential stripes, then each worker window-shuffles **its own** list (`LITDATA_POSIX_SHUFFLE_WINDOW`, default 16). The same window shuffles **item indexes inside the chunk**. `PyTreeLoader` keeps a contiguous mmap **view** (~256KiB, `LITDATA_POSIX_PAGE_BYTES`) and splits samples from it. As the worker walks the stripe it `posix_fadvise`s / mmaps the next window (the download thread does not run on local uncompressed POSIX).
 - Both call `_associate_chunks_and_intervals_to_workers` (`utilities/shuffle.py:65`), which greedily fills each worker's item budget and **splits chunk intervals** across worker boundaries — so one chunk can be shared by multiple workers (and re-downloaded by each).
 - Multi-node epoch>1 adds an intra-node reshuffle (`_intra_node_chunk_shuffle`).
 

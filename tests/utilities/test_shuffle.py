@@ -7,6 +7,7 @@ from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _aggregate_shared_chunks_per_rank,
     _associate_chunks_and_intervals_to_workers,
+    _associate_whole_chunks_to_workers,
     _find_chunks_per_workers_on_which_to_skip_deletion,
     _get_shared_chunks,
     _group_chunks_by_nodes,
@@ -449,3 +450,40 @@ def test_window_shuffle_item_order_is_local():
     full = list(np.random.RandomState(42).permutation(64))
     full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
     assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_associate_whole_chunks_never_shares():
+    indexes = list(range(8))
+    chunk_intervals = [Interval(0, 0, 50, 50) for _ in range(8)]
+    workers_chunks, workers_intervals = _associate_whole_chunks_to_workers(
+        _DistributedEnv(4, 0, 1),
+        indexes,
+        chunk_intervals,
+        drop_last=True,
+        num_workers=1,
+        batch_size=1,
+    )
+    assert workers_chunks == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    seen: list[int] = []
+    for chunks in workers_chunks:
+        seen.extend(chunks)
+        assert len(chunks) == len(set(chunks))
+    assert sorted(seen) == indexes
+    lengths = [sum(iv[2] - iv[1] for iv in ivs) for ivs in workers_intervals]
+    assert lengths == [100, 100, 100, 100]
+
+
+def test_associate_whole_chunks_large_tail_goes_to_next_worker():
+    indexes = [0, 1, 2, 3]
+    chunk_intervals = [
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 100, 100),
+    ]
+    workers_chunks, _ = _associate_whole_chunks_to_workers(
+        _DistributedEnv(2, 0, 1), indexes, chunk_intervals, drop_last=False
+    )
+    assert set(workers_chunks[0]).isdisjoint(workers_chunks[1])
+    assert set(workers_chunks[0]) | set(workers_chunks[1]) == set(indexes)
+    assert 3 in workers_chunks[1]

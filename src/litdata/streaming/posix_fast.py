@@ -120,11 +120,11 @@ def detect_posix_fast(
     if _is_object_url(path) or _is_object_url(remote_url):
         return None
 
-    if forced is True:
-        return PosixFastProfile(kind="forced")
-
     if not path:
         return None
+
+    if forced is True:
+        return PosixFastProfile(kind="forced")
 
     kind = "posix"
     if _path_looks_vast(path):
@@ -150,7 +150,7 @@ _DEFAULT_PAGE_BYTES = 256 * 1024
 
 
 def posix_page_bytes() -> int:
-    """Payload bytes to copy from a mapped chunk in one go (then split into items)."""
+    """How many sequential payload bytes to keep as a mapped view (then split into items)."""
     raw = os.getenv("LITDATA_POSIX_PAGE_BYTES")
     if raw is None or not raw.strip():
         return _DEFAULT_PAGE_BYTES

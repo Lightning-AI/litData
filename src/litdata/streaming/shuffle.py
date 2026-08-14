@@ -22,6 +22,7 @@ from litdata.streaming import Cache
 from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _associate_chunks_and_intervals_to_workers,
+    _associate_whole_chunks_to_workers,
     _intra_node_chunk_shuffle,
     _window_shuffle,
     _window_shuffle_chunks_and_intervals,
@@ -164,10 +165,10 @@ class WindowShuffle(Shuffle):
     (random GETs, cache copies). On a parallel filesystem it turns sequential 64MiB files into
     random IOPS and fights ``posix_fadvise`` / page cache.
 
-    ``WindowShuffle`` keeps NoShuffle-style assignment (each worker a contiguous-ish stripe),
-    then window-shuffles **that worker's list** (default window 16). Item order *inside* a
-    chunk uses the same window so the loader can copy one contiguous byte span (a "page")
-    and split samples from it instead of random mmap slices.
+    ``WindowShuffle`` assigns **whole chunks** (no split across workers) in sequential
+    stripes, then window-shuffles each worker's list (default window 16). Item order
+    *inside* a chunk uses the same window so the loader can view one contiguous mmap
+    span and split samples from it.
     """
 
     def __init__(self, cache: Cache, seed: int, drop_last: bool, window: int | None = None):
@@ -180,7 +181,7 @@ class WindowShuffle(Shuffle):
     ) -> Any:
         chunk_intervals = self.cache.get_chunk_intervals()
         indexes = range(len(chunk_intervals))
-        workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
+        workers_chunks, workers_intervals = _associate_whole_chunks_to_workers(
             distributed_env, indexes, chunk_intervals, self.drop_last, num_workers, batch_size
         )
         return _window_shuffle_chunks_and_intervals(

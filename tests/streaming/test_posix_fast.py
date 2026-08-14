@@ -1,9 +1,16 @@
 import os
+from unittest.mock import patch
 
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import PyTreeLoader
-from litdata.streaming.posix_fast import detect_posix_fast, parse_proc_mounts
-from litdata.streaming.shuffle import FullShuffle, WindowShuffle
+from litdata.streaming.posix_fast import (
+    advise_willneed,
+    detect_posix_fast,
+    parse_proc_mounts,
+    posix_page_bytes,
+)
+from litdata.streaming.shuffle import FullShuffle, WindowShuffle, posix_shuffle_window
+from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from tests.streaming.test_item_loader import _write_int_dataset
 
 
@@ -111,3 +118,72 @@ def test_posix_fast_disabled_keeps_full_shuffle(tmpdir, monkeypatch):
     dataset = StreamingDataset(data_dir, shuffle=True)
     list(iter(dataset))
     assert isinstance(dataset.shuffler, FullShuffle)
+
+
+def test_detect_force_on_and_object_url_still_skipped(monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "1")
+    profile = detect_posix_fast("/data/ds", mounts_text="")
+    assert profile is not None
+    assert profile.kind == "forced"
+    assert detect_posix_fast("gs://bucket/key") is None
+    assert detect_posix_fast("r2://bucket/key") is None
+    assert detect_posix_fast(None) is None
+    assert detect_posix_fast("") is None
+
+
+def test_detect_lustre_and_path_vast():
+    profile = detect_posix_fast("/scratch/ds", mounts_text="foo /scratch lustre rw 0 0\n")
+    assert profile is not None
+    assert profile.kind == "lustre"
+    profile = detect_posix_fast("/mnt/vastdata/imagenet", mounts_text="/dev/sda1 / ext4 rw 0 0\n")
+    assert profile is not None
+    assert profile.kind == "vast"
+
+
+def test_posix_env_helpers(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_SHUFFLE_WINDOW", raising=False)
+    assert posix_shuffle_window() == 16
+    monkeypatch.setenv("LITDATA_POSIX_SHUFFLE_WINDOW", "32")
+    assert posix_shuffle_window() == 32
+    monkeypatch.setenv("LITDATA_POSIX_SHUFFLE_WINDOW", "nope")
+    assert posix_shuffle_window() == 16
+    monkeypatch.setenv("LITDATA_POSIX_PAGE_BYTES", "4096")
+    assert posix_page_bytes() == 4096
+    monkeypatch.setenv("LITDATA_POSIX_PAGE_BYTES", "x")
+    assert posix_page_bytes() == 256 * 1024
+
+
+def test_advise_willneed_missing_file(tmp_path):
+    advise_willneed(str(tmp_path / "missing.bin"))
+
+
+def test_window_shuffle_does_not_share_chunks(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=10)
+    dataset = StreamingDataset(data_dir, shuffle=True, drop_last=True)
+    dataset.distributed_env = _DistributedEnv(2, 0, 1)
+    dataset.worker_env = _WorkerEnv.detect()
+    cache = dataset._create_cache(worker_env=dataset.worker_env)
+    shuffler = dataset._create_shuffler(cache)
+    assert isinstance(shuffler, WindowShuffle)
+    workers_chunks, _ = shuffler.get_chunks_and_intervals_per_workers(dataset.distributed_env, 1, 1, 1)
+    flat = [c for chunks in workers_chunks for c in chunks]
+    assert len(flat) == len(set(flat))
+
+
+def test_posix_prefetch_slides_along_stripe(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=60, chunk_size=5)
+    dataset = StreamingDataset(data_dir, shuffle=False, max_pre_download=2)
+    with patch("litdata.streaming.reader.advise_willneed") as mocked:
+        list(iter(dataset))
+    assert mocked.call_count >= 2
+
+
+def test_posix_page_is_memoryview(tmpdir):
+    data_dir = _write_int_dataset(tmpdir, num_items=40, chunk_size=20)
+    dataset = StreamingDataset(data_dir, shuffle=True)
+    list(iter(dataset))
+    loader = dataset.cache._reader._item_loader
+    assert isinstance(loader, PyTreeLoader)
+    assert isinstance(loader._page, memoryview) or loader._page is None
+    if loader._mmap_view is not None:
+        assert isinstance(loader._mmap_view, memoryview)
