@@ -14,6 +14,8 @@
 import glob
 import logging
 import os
+import sys
+import traceback
 import warnings
 from collections import deque
 from contextlib import suppress
@@ -105,6 +107,9 @@ class PrepareChunksThread(Thread):
         self._chunk_ready_lock = Lock()
 
         self._rank = rank
+        # Set when ``run()`` dies so the item-loader wait loop can fail fast with
+        # the real exception instead of timing out as ``FileNotFoundError``.
+        self._error: BaseException | None = None
 
         # Check whether a dataset slice fits on the node
         num_bytes_per_nodes = self._config.num_bytes // self._distributed_env.num_nodes
@@ -628,9 +633,39 @@ class PrepareChunksThread(Thread):
             for chunk_index in deferred:
                 self._to_download_queue.put(chunk_index)
 
+    def prefetch_error(self) -> BaseException | None:
+        """Exception that killed this thread, if any."""
+        return self._error
+
+    def _report_crash(self, exc: BaseException) -> None:
+        """Make a prefetch-thread death obvious in worker logs, then stash it for waiters.
+
+        DataLoader workers often do not surface ``logger.exception`` from a daemon
+        thread. Print a flushed traceback to stderr so the original error shows up
+        in the training log instead of only a later ``FileNotFoundError``.
+        """
+        rank = self._rank if self._rank is not None else self._distributed_env.global_rank
+        worker = self._worker_env.rank
+        header = (
+            f"[litdata] PrepareChunksThread CRASHED (rank={rank}, worker={worker}): "
+            f"{type(exc).__name__}: {exc}\n"
+            "Chunk downloads have stopped. The reader will fail with this error "
+            "instead of waiting until FileNotFoundError."
+        )
+        logger.exception(header)
+        print(header, file=sys.stderr, flush=True)
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+        sys.stderr.flush()
+
     def run(self) -> None:
         try:
             self._run_loop()
+        except Exception as exc:
+            # Do not re-raise: Thread.run would only print a traceback, and the
+            # item loader would still wait until MAX_WAIT_TIME then raise
+            # FileNotFoundError. Stash the cause so waiters fail immediately.
+            self._error = exc
+            self._report_crash(exc)
         finally:
             # Drop thread-local asyncio loop + default-executor workers
             # (``asyncio_N``) created by async chunk prefetch / to_thread.
@@ -841,6 +876,7 @@ class BinaryReader:
                 # Attach the force download queue and readiness signals used by the item loader wait loop.
                 self._item_loader._force_download_queue = self._prepare_thread._force_download_queue  # type: ignore
                 self._item_loader.set_chunk_ready_provider(self._prepare_thread.get_ready_event)
+                self._item_loader.set_prefetch_error_provider(self._prepare_thread.prefetch_error)
                 self._prepare_thread.start()
                 if index.chunk_indexes:
                     self._prepare_thread.download(index.chunk_indexes)

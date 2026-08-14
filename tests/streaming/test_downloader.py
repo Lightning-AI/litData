@@ -431,3 +431,185 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
         assert isinstance(result, bytes)
         for chunk in stream_mock:
             assert chunk in result
+
+
+def _fake_boto_s3_client(
+    access_key="AKIATEST", secret_key="test-secret", token="tok", endpoint=None, region="us-east-1"
+):
+    frozen = MagicMock()
+    frozen.access_key = access_key
+    frozen.secret_key = secret_key
+    frozen.token = token
+    creds = MagicMock()
+    creds.get_frozen_credentials.return_value = frozen
+    client = MagicMock()
+    client._get_credentials.return_value = creds
+    client.meta.endpoint_url = endpoint
+    client.meta.region_name = region
+    return client
+
+
+def test_build_obstore_s3_store_does_not_pass_data_connection_id_to_session(monkeypatch):
+    """storage_options['data_connection_id'] must not be forwarded to boto3.Session (async prefetch crash)."""
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured: dict = {}
+
+    def fake_s3store(bucket, **kwargs):
+        captured["bucket"] = bucket
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_s3store)
+
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(
+        endpoint="https://abc.r2.cloudflarestorage.com",
+        region="auto",
+    )
+    store = _build_obstore_s3_store("my-bucket", wrapper)
+    assert store is not None
+    assert captured["bucket"] == "my-bucket"
+    config = captured["kwargs"]["config"]
+    assert config["endpoint"] == "https://abc.r2.cloudflarestorage.com"
+    assert config["region"] == "auto"
+    assert config["virtual_hosted_style_request"] is False
+    assert "data_connection_id" not in config
+    creds = captured["kwargs"]["credential_provider"]()
+    assert creds["access_key_id"] == "AKIATEST"
+    assert creds["secret_access_key"] == "test-secret"
+    assert creds["token"] == "tok"
+
+
+def test_build_obstore_s3_store_keeps_virtual_host_for_aws(monkeypatch):
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured: dict = {}
+
+    def fake_s3store(bucket, **kwargs):
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_s3store)
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(endpoint="https://s3.us-west-2.amazonaws.com", region="us-west-2")
+    _build_obstore_s3_store("bucket", wrapper)
+    config = captured["kwargs"]["config"]
+    assert "virtual_hosted_style_request" not in config
+    assert config["endpoint"] == "https://s3.us-west-2.amazonaws.com"
+
+
+def test_s3_get_store_uses_s3_client_not_raw_storage_options(monkeypatch, tmpdir):
+    """S3Downloader._get_store must go through S3Client so data_connection_id is not passed to Session."""
+    from litdata.streaming import downloader as downloader_mod
+
+    fake_store = MagicMock()
+    monkeypatch.setattr(downloader_mod, "_build_obstore_s3_store", lambda bucket, client: fake_store)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+
+    storage_options = {"data_connection_id": "conn-1", "endpoint_url": "https://custom.example"}
+    dl = S3Downloader("s3://bucket", str(tmpdir), [], storage_options)
+    store = dl._get_store("bucket")
+    assert store is fake_store
+    # Second call reuses the cached store.
+    assert dl._get_store("bucket") is fake_store
+
+
+def test_r2_get_store_uses_r2_client_not_raw_storage_options(monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    fake_store = MagicMock()
+    monkeypatch.setattr(downloader_mod, "_build_obstore_s3_store", lambda bucket, client: fake_store)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+
+    storage_options = {"data_connection_id": "conn-r2"}
+    dl = R2Downloader("r2://bucket", str(tmpdir), [], storage_options)
+    assert dl._get_store("bucket") is fake_store
+
+
+def test_obstore_usable_false_after_parent_init(monkeypatch):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+    assert downloader_mod.obstore_usable() is False
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+    assert downloader_mod.obstore_usable() is True
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid())
+    assert downloader_mod.obstore_usable() is True
+
+
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_index_download_does_not_start_obstore(s3_client_mock, monkeypatch, tmpdir):
+    """Parent index fetch must not start tokio, so forked workers can lazy-init obstore."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("index.json must not start obstore"))
+    monkeypatch.setattr(S3Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    s3_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = S3Downloader("s3://bucket/data", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "index.json")
+    downloader.download_file("s3://bucket/data/index.json", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+    assert downloader_mod._OBSTORE_INIT_PID is None
+
+
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_download_file_falls_back_to_boto3_after_fork(s3_client_mock, monkeypatch, tmpdir):
+    """Parent already initialized obstore; forked workers must use boto3 or GETs hang."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("obstore must not run after fork"))
+    monkeypatch.setattr(S3Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    s3_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "chunk.bin")
+    downloader.download_file("s3://bucket/chunk.bin", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+
+
+def test_s3_get_store_raises_after_fork(monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    downloader._store = MagicMock()
+    downloader._store_pid = os.getpid() + 1
+    with pytest.raises(RuntimeError, match="fork-safe"):
+        downloader._get_store("bucket")
+    assert not hasattr(downloader, "_store")
+
+
+def test_s3_downloader_pickle_drops_obstore_store(tmpdir):
+    import pickle
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    downloader._store = MagicMock()
+    downloader._store_pid = os.getpid()
+    restored = pickle.loads(pickle.dumps(downloader))
+    assert not hasattr(restored, "_store")
+    assert not hasattr(restored, "_store_pid")

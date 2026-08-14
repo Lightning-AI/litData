@@ -337,3 +337,34 @@ def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
         idx = ChunkedIndex(*cache._get_chunk_index_from_index(i), is_last_index=i == 24)
         item = cache._reader.read(idx)
         assert item == i
+
+
+def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, capsys):
+    """A download exception must be stored on the thread instead of dying silently."""
+    cache_dir = str(tmpdir / "cache")
+    os.makedirs(cache_dir)
+    config = mock.MagicMock()
+    config.num_bytes = 1024
+    config._cache_dir = cache_dir
+    config._remote_dir = "s3://bucket/data"
+    item_loader = mock.MagicMock()
+    env = _DistributedEnv(1, 0, 1)
+
+    thread = PrepareChunksThread(config, item_loader, env, max_cache_size=10_000, max_pre_download=2, rank=0)
+
+    def boom() -> None:
+        raise TypeError("Session.__init__() got an unexpected keyword argument 'data_connection_id'")
+
+    thread._run_loop = boom  # type: ignore[method-assign]
+    thread.run()
+
+    err = thread.prefetch_error()
+    assert isinstance(err, TypeError)
+    assert "data_connection_id" in str(err)
+    assert not thread.is_alive()
+
+    logged = capsys.readouterr().err
+    assert "PrepareChunksThread CRASHED" in logged
+    assert "rank=0" in logged
+    assert "data_connection_id" in logged
+    assert "Traceback (most recent call last)" in logged

@@ -183,6 +183,10 @@ class BaseItemLoader(ABC):
         self._force_download_queue = force_download_queue
         # Optional provider of per-chunk readiness Events from PrepareChunksThread.
         self._chunk_ready_provider: Callable[[int], Event] | None = getattr(self, "_chunk_ready_provider", None)
+        # Optional provider of a crash from PrepareChunksThread (so waiters fail fast).
+        self._prefetch_error_provider: Callable[[], BaseException | None] | None = getattr(
+            self, "_prefetch_error_provider", None
+        )
 
         # setup the serializers on restart
         for data_format in self._data_format:
@@ -220,6 +224,23 @@ class BaseItemLoader(ABC):
         """Install a provider of per-chunk readiness Events from the prefetch thread."""
         self._chunk_ready_provider = provider
 
+    def set_prefetch_error_provider(self, provider: Callable[[], BaseException | None] | None) -> None:
+        """Install a provider that returns a prefetch-thread crash, if any."""
+        self._prefetch_error_provider = provider
+
+    def _raise_if_prefetch_crashed(self, chunk_filepath: str) -> None:
+        """Re-raise a PrepareChunksThread crash so waiters do not time out as FileNotFoundError."""
+        prefetch_error_provider = getattr(self, "_prefetch_error_provider", None)
+        if prefetch_error_provider is None:
+            return
+        err = prefetch_error_provider()
+        if err is None:
+            return
+        raise RuntimeError(
+            f"Chunk prefetch thread crashed while waiting for {chunk_filepath}. "
+            f"Original error: {type(err).__name__}: {err}"
+        ) from err
+
     def _wait_until_chunk_ready(self, chunk_index: int, chunk_filepath: str, filesize_bytes: int) -> None:
         """Block until ``chunk_filepath`` exists and is at least ``filesize_bytes``.
 
@@ -249,6 +270,7 @@ class BaseItemLoader(ABC):
         )
 
         while True:
+            self._raise_if_prefetch_crashed(chunk_filepath)
             if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
                 return
 
@@ -280,6 +302,7 @@ class BaseItemLoader(ABC):
         # Prefetch-thread handles are process-local and reattached after worker spawn.
         state["_chunk_ready_provider"] = None
         state["_force_download_queue"] = None
+        state["_prefetch_error_provider"] = None
         return state
 
     @functools.lru_cache(maxsize=128)
@@ -885,6 +908,7 @@ class ParquetLoader(BaseItemLoader):
         # ParquetLoader does not call ``BaseItemLoader.setup``; keep wait/force-download attrs defined.
         self._force_download_queue = None
         self._chunk_ready_provider = getattr(self, "_chunk_ready_provider", None)
+        self._prefetch_error_provider = getattr(self, "_prefetch_error_provider", None)
         self._df: dict[int, Any] = {}
         self._chunk_row_groups: dict[int, Any] = {}
         self._chunk_row_group_item_read_count: dict[int, Any] = {}

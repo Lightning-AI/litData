@@ -69,6 +69,35 @@ def test_s3_client_without_cloud_space_id(monkeypatch):
     boto3_session().client.assert_called_once()
 
 
+def test_s3_client_pickle_drops_boto_client():
+    import pickle
+
+    s3 = client.S3Client()
+    s3._client = mock.sentinel.live
+    restored = pickle.loads(pickle.dumps(s3))
+    assert restored._client is None
+    assert restored._client_lock is not None
+
+
+def test_s3_client_recreates_after_pid_change(monkeypatch):
+    import os
+
+    boto3_session = mock.MagicMock()
+    boto3 = mock.MagicMock(Session=boto3_session)
+    monkeypatch.setattr(client, "boto3", boto3)
+    botocore = mock.MagicMock()
+    monkeypatch.setattr(client, "botocore", botocore)
+    monkeypatch.setattr(client, "_IS_IN_STUDIO", False)
+
+    s3 = client.S3Client()
+    _ = s3.client
+    s3._owner_pid = os.getpid() + 1
+    s3._client = mock.sentinel.stale
+    second = s3.client
+    assert second is not mock.sentinel.stale
+    assert boto3_session().client.call_count == 2
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="not supported on windows")
 @pytest.mark.parametrize("use_shared_credentials", [False, True, None])
 def test_s3_client_with_cloud_space_id(use_shared_credentials, monkeypatch):

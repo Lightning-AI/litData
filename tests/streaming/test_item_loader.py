@@ -377,4 +377,33 @@ def test_parquet_loader_cache_eviction_with_uneven_groups(tmp_path):
 
     # After a sequential pass every row group in the chunk should have been evicted.
     for chunk_index, groups in loader._chunk_row_groups.items():
-        assert groups == {}, f"chunk {chunk_index} still holds row groups: {list(groups)}"
+        assert groups == {}, f"chunk {chunk_index} still has cached row groups: {groups}"
+
+
+def test_wait_until_chunk_ready_raises_prefetch_crash_immediately(tmpdir):
+    """A dead PrepareChunksThread must not surface as a 120s FileNotFoundError timeout."""
+    from litdata.streaming.item_loader import BaseItemLoader
+
+    class _Loader(BaseItemLoader):
+        def generate_intervals(self):
+            return []
+
+        def pre_load_chunk(self, chunk_index, chunk_filepath):
+            return None
+
+        def load_item_from_chunk(self, index, chunk_index, chunk_filepath, begin, filesize_bytes):
+            return None
+
+        def delete(self, chunk_index, chunk_filepath):
+            return None
+
+        def encode_data(self, data, sizes, flattened):
+            return b"", None
+
+    loader = _Loader()
+    path = os.path.join(tmpdir, "missing-chunk.bin")
+    crash = TypeError("Session.__init__() got an unexpected keyword argument 'data_connection_id'")
+    loader.set_prefetch_error_provider(lambda: crash)
+    with pytest.raises(RuntimeError, match="prefetch thread crashed") as exc_info:
+        loader._wait_until_chunk_ready(0, path, filesize_bytes=16)
+    assert exc_info.value.__cause__ is crash

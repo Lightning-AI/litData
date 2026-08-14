@@ -40,7 +40,7 @@ import os
 import threading
 from typing import TYPE_CHECKING
 
-from litdata.streaming.downloader import Downloader
+from litdata.streaming.downloader import Downloader, obstore_usable
 
 if TYPE_CHECKING:
     from litdata.streaming.config import ChunksConfig
@@ -99,8 +99,16 @@ def apply_async_pre_download_floor(max_pre_download: int, remote_dir: str | None
 
 
 def downloader_supports_adownload(downloader: Downloader | None) -> bool:
-    """True when an async download path is available on ``downloader``."""
+    """True when an async download path is available on ``downloader``.
+
+    Native async methods are obstore-backed. If this process forked after the
+    parent started tokio, report False and overlap via ``to_thread`` (boto3).
+    When the parent never started obstore (index via boto3), workers keep the
+    native path and lazy-init a fresh store.
+    """
     if downloader is None:
+        return False
+    if hasattr(downloader, "_get_store") and not obstore_usable():
         return False
     cls = type(downloader)
     return (

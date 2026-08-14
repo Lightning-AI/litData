@@ -30,7 +30,7 @@ from litdata.streaming.async_prefetch import (
     downloader_supports_adownload,
 )
 from litdata.streaming.config import ChunksConfig
-from litdata.streaming.downloader import Downloader
+from litdata.streaming.downloader import Downloader, S3Downloader
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.reader import PrepareChunksThread
 from litdata.streaming.serializers import _get_serializers
@@ -108,6 +108,15 @@ def test_downloader_supports_adownload_detects_override():
     assert downloader_supports_adownload(base) is False
     fake = _FakeAsyncDownloader("remote", "cache", [])
     assert downloader_supports_adownload(fake) is True
+
+
+def test_downloader_supports_adownload_false_after_obstore_fork(monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+    dl = S3Downloader("s3://bucket", str(tmpdir), [])
+    assert downloader_supports_adownload(dl) is False
 
 
 class _ConfigShim:

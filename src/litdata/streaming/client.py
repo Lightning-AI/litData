@@ -123,11 +123,16 @@ class S3Client:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state.pop("_client_lock", None)
+        # Recreate the boto3 client in the child (fork/spawn). Connection pools
+        # and threading.Locks inside botocore are not safe to inherit.
+        state.pop("_client", None)
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
+        self._client = None
         self._client_lock = threading.Lock()
+        self._owner_pid = os.getpid()
 
     def _create_client(self) -> None:
         # S3 data connections marked available on non-AWS providers can't reach the bucket via the
@@ -190,6 +195,12 @@ class S3Client:
     @property
     def client(self) -> Any:
         # boto3 clients are thread-safe for requests; construction/refresh is not.
+        pid = os.getpid()
+        if getattr(self, "_owner_pid", None) != pid:
+            # DataLoader fork: drop the inherited client and lock.
+            self._client = None
+            self._client_lock = threading.Lock()
+            self._owner_pid = pid
         with self._client_lock:
             if self._client is None:
                 self._create_client()

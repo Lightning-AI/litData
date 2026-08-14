@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Fix async S3/R2 chunk prefetch crashing the prepare thread when `storage_options` contains LitData metadata (`data_connection_id`) or client-only keys (`endpoint_url`). The wait loop now surfaces that crash immediately instead of timing out as `FileNotFoundError`. Prepare-thread deaths also print a traceback to stderr with rank and worker so DataLoader logs show the original error.
+- Fix multi-worker `StreamingDataLoader` `FileNotFoundError` on `s3://` datasets: obstore's tokio runtime is not fork-safe, so `index.json` is fetched with boto3 in the parent and workers lazy-init a fresh obstore store. If the parent already started obstore, workers fall back to boto3 instead of hanging until the chunk wait times out.
+
+
+
 ## [0.2.58] - 2025-10-07
 
 ## [0.2.57] - 2025-10-06
