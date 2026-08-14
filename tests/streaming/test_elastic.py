@@ -281,9 +281,7 @@ def test_restripe_unaligned_drop_first_skips_remainder():
 
 def test_restripe_drop_last_equal_per_worker():
     stream = [(i // 3, i % 3) for i in range(50)]
-    plans = restripe_items(
-        stream, world_size=2, num_workers=2, batch_size=4, drop_first=0, drop_last=True
-    )
+    plans = restripe_items(stream, world_size=2, num_workers=2, batch_size=4, drop_first=0, drop_last=True)
     counts = [len(_flatten_plan([p])) for p in plans]
     assert len(set(counts)) == 1
     assert counts[0] % 4 == 0
@@ -296,12 +294,8 @@ def test_restripe_constant_global_batch_size_same_set():
     intervals = [[0, 0, 8, 8] for _ in range(8)]
     stream = canonical_item_stream(intervals, seed=42, epoch=1, shuffle=True, num_canonical_nodes=4)
     drop_first = 16
-    a = set(
-        _flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first))
-    )
-    b = set(
-        _flatten_plan(restripe_items(stream, world_size=4, num_workers=1, batch_size=8, drop_first=drop_first))
-    )
+    a = set(_flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first)))
+    b = set(_flatten_plan(restripe_items(stream, world_size=4, num_workers=1, batch_size=8, drop_first=drop_first)))
     assert a == b
 
 
