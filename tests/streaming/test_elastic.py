@@ -20,6 +20,8 @@ import torch
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.elastic import (
+    _round_down_drop_first,
+    canonical_chunk_order,
     canonical_item_stream,
     restripe_items,
     sample_in_epoch_from_state,
@@ -112,9 +114,9 @@ def test_worker_plan_to_chunks_stop_length():
 def _all_ids_from_loader(loader, max_batches=None):
     ids = []
     for i, batch in enumerate(loader):
-        if max_batches is not None and i >= max_batches:
-            break
         ids.extend(torch.as_tensor(batch).reshape(-1).tolist())
+        if max_batches is not None and i + 1 >= max_batches:
+            break
     return ids
 
 
@@ -239,3 +241,203 @@ def test_tokens_loader_elastic_workers(tmpdir, monkeypatch):
     loader_b.load_state_dict(state)
     rest = _all_ids_from_loader(loader_b)
     assert rest
+
+
+def test_round_down_drop_first_aligns_to_global_batch():
+    assert _round_down_drop_first(0, 8, 4) == 0
+    assert _round_down_drop_first(32, 8, 4) == 32
+    assert _round_down_drop_first(33, 8, 4) == 32
+    assert _round_down_drop_first(63, 8, 4) == 32
+    assert _round_down_drop_first(-5, 2, 4) == 0
+
+
+def test_canonical_stream_independent_of_physical_world_size():
+    intervals = [[0, 0, 4, 4] for _ in range(12)]
+    a = canonical_item_stream(intervals, seed=9, epoch=2, shuffle=True, num_canonical_nodes=4)
+    b = canonical_item_stream(intervals, seed=9, epoch=2, shuffle=True, num_canonical_nodes=4)
+    c = canonical_item_stream(intervals, seed=9, epoch=2, shuffle=True, num_canonical_nodes=2)
+    assert a == b
+    assert len(set(a)) == len(a)
+    assert set(a) == set(c)
+    # Without a window, flattening NCN buckets keeps shuffled chunk order. Window shuffle
+    # inside buckets is what makes NCN change the 1D stream.
+    w4 = canonical_chunk_order(12, seed=9, epoch=2, shuffle=True, num_canonical_nodes=4, window=3)
+    w2 = canonical_chunk_order(12, seed=9, epoch=2, shuffle=True, num_canonical_nodes=2, window=3)
+    assert sorted(w4) == sorted(w2) == list(range(12))
+    assert w4 != w2
+
+
+def test_canonical_chunk_order_empty_and_window():
+    assert canonical_chunk_order(0, seed=1, epoch=1, shuffle=True, num_canonical_nodes=4) == []
+    order = canonical_chunk_order(16, seed=3, epoch=1, shuffle=True, num_canonical_nodes=4, window=4)
+    assert sorted(order) == list(range(16))
+
+
+def test_restripe_unaligned_drop_first_skips_remainder():
+    stream = [(i // 4, i % 4) for i in range(40)]
+    plans = restripe_items(stream, world_size=2, num_workers=1, batch_size=4, drop_first=13)
+    remaining = _flatten_plan(plans)
+    assert len(remaining) == len(set(remaining))
+    assert set(remaining) == set(stream[8:])
+
+
+def test_restripe_drop_last_equal_per_worker():
+    stream = [(i // 3, i % 3) for i in range(50)]
+    plans = restripe_items(
+        stream, world_size=2, num_workers=2, batch_size=4, drop_first=0, drop_last=True
+    )
+    counts = [len(_flatten_plan([p])) for p in plans]
+    assert len(set(counts)) == 1
+    assert counts[0] % 4 == 0
+    remaining = _flatten_plan(plans)
+    assert len(remaining) == len(set(remaining))
+    assert len(remaining) <= 48
+
+
+def test_restripe_constant_global_batch_size_same_set():
+    intervals = [[0, 0, 8, 8] for _ in range(8)]
+    stream = canonical_item_stream(intervals, seed=42, epoch=1, shuffle=True, num_canonical_nodes=4)
+    drop_first = 16
+    a = set(
+        _flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first))
+    )
+    b = set(
+        _flatten_plan(restripe_items(stream, world_size=4, num_workers=1, batch_size=8, drop_first=drop_first))
+    )
+    assert a == b
+
+
+def test_restripe_8_to_2_to_8_same_remaining_set():
+    intervals = [[0, 0, 4, 4] for _ in range(16)]
+    stream = canonical_item_stream(intervals, seed=11, epoch=1, shuffle=True, num_canonical_nodes=8)
+    drop_first = 32
+    a = set(_flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first)))
+    b = set(_flatten_plan(restripe_items(stream, world_size=2, num_workers=1, batch_size=4, drop_first=drop_first)))
+    c = set(_flatten_plan(restripe_items(stream, world_size=8, num_workers=1, batch_size=4, drop_first=drop_first)))
+    assert a == b == c
+
+
+def test_restripe_uneven_chunk_sizes_no_duplicates():
+    intervals = [[0, 0, 3, 3], [0, 0, 11, 11], [0, 0, 1, 1], [0, 0, 7, 7], [0, 0, 5, 5]]
+    stream = canonical_item_stream(intervals, seed=5, epoch=4, shuffle=True, num_canonical_nodes=2)
+    assert len(stream) == 27
+    plans = restripe_items(stream, world_size=2, num_workers=3, batch_size=2, drop_first=5)
+    remaining = _flatten_plan(plans)
+    assert len(remaining) == len(set(remaining))
+    assert set(remaining) == set(stream[4:])
+
+
+def test_restripe_drop_past_end_is_empty():
+    stream = [(0, i) for i in range(10)]
+    plans = restripe_items(stream, world_size=2, num_workers=2, batch_size=2, drop_first=10_000)
+    assert _flatten_plan(plans) == []
+
+
+def test_v1_checkpoint_infers_sample_in_epoch():
+    state = {"num_samples_yielded": 7, "world_size": 4}
+    assert sample_in_epoch_from_state(state) == 28
+    assert topology_changed(state, world_size=4, num_workers=2, batch_size=8) is False
+    assert topology_changed({"num_workers": 2}, world_size=1, num_workers=8, batch_size=1) is True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_dataloader_workers_8_to_2(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=128, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=8, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=5)
+    state = loader.state_dict()
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=2, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert rest
+    assert len(rest) == len(set(rest))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_elastic_second_checkpoint_advances_cursor(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=96, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=2, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=6)
+    state = loader.state_dict()
+    cursor0 = state["dataset"]["sample_in_epoch"]
+
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=0, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest1 = _all_ids_from_loader(loader_b, max_batches=3)
+    state2 = loader_b.state_dict()
+    assert state2["dataset"].get("resume_mode") == "elastic"
+    assert state2["dataset"]["sample_in_epoch"] == cursor0 + 12
+
+    dataset_c = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_c = StreamingDataLoader(dataset_c, num_workers=0, batch_size=4)
+    loader_c.load_state_dict(state2)
+    rest2 = _all_ids_from_loader(loader_c)
+    assert len(rest1) == len(set(rest1))
+    assert len(rest2) == len(set(rest2))
+    assert set(rest1).isdisjoint(set(rest2))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_elastic_shuffle_false_and_drop_last(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=80, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=False, seed=42, drop_last=True)
+    loader = StreamingDataLoader(dataset, num_workers=2, batch_size=4, drop_last=True)
+    _all_ids_from_loader(loader, max_batches=4)
+    state = loader.state_dict()
+    dataset_b = StreamingDataset(data_dir, shuffle=False, seed=42, drop_last=True)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=4, drop_last=True)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert len(rest) == len(set(rest))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_elastic_completes_then_next_epoch_is_not_stuck(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=48, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=3)
+    state = loader.state_dict()
+
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=2, batch_size=4)
+    loader_b.load_state_dict(state)
+    first_epoch_rest = _all_ids_from_loader(loader_b)
+    second_epoch = _all_ids_from_loader(loader_b)
+    assert first_epoch_rest
+    assert second_epoch
+    assert len(second_epoch) == len(set(second_epoch))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
+def test_v1_checkpoint_without_sample_in_epoch_still_restripes(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    data_dir = _write_int_dataset(os.path.join(tmpdir, "data"), num_items=64, chunk_size=8)
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader = StreamingDataLoader(dataset, num_workers=0, batch_size=4)
+    _all_ids_from_loader(loader, max_batches=4)
+    state = loader.state_dict()
+    ds_state = dict(state["dataset"])
+    yielded = ds_state["num_samples_yielded"]
+    world = ds_state["world_size"]
+    ds_state.pop("sample_in_epoch", None)
+    ds_state.pop("state_version", None)
+    ds_state.pop("resume_mode", None)
+    ds_state["num_workers"] = 2
+    state["dataset"] = ds_state
+    assert sample_in_epoch_from_state(ds_state) == yielded * world
+
+    dataset_b = StreamingDataset(data_dir, shuffle=True, seed=42)
+    loader_b = StreamingDataLoader(dataset_b, num_workers=2, batch_size=4)
+    loader_b.load_state_dict(state)
+    rest = _all_ids_from_loader(loader_b)
+    assert rest
+    assert len(rest) == len(set(rest))
