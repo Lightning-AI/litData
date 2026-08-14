@@ -39,9 +39,9 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
 4. **Checkpointing** (`:1297`) trims each worker's list to resume from `checkpoint_next_index`; `fast_dev_run` trims to N items.
 
 **Checkpoint traps (do not paper over):** writer saves `checkpoint-{rank}-{uuid}.json` and `done_till_index` = **samples written**; loader looks for `checkpoint-{worker}.json` after upload strips UUID; resume slices **input items** by that count. Generators and `Queue` inputs are rejected. Upload errors in `_upload_fn` are often only `print`ed. `DATA_OPTIMIZER_FAST_DEV_RUN` defaults to `"1"` inside `DataProcessor` if `fast_dev_run is None` — public `optimize()` passes `False`. Azure is not in `_SUPPORTED_PROVIDERS` (optimize write).
-5. **`_create_process_workers`** (`:1462`) spawns one `DataWorkerProcess` per worker.
-6. **Progress loop** (`:1376`) polls `error_queue` (re-raises via `_exit_on_error`, which `terminate()`s all workers) and `progress_queue` (tqdm). Exits when the counter equals `num_items` or all workers die.
-7. **`recipe._done(...)`** merges caches / writes the index; index merge runs only on the last node.
+5\. **`_create_process_workers`** (`:1462`) spawns one `DataWorkerProcess` per worker.
+6\. **Progress loop** (`:1376`) polls `error_queue` (re-raises via `_exit_on_error`, which `terminate()`s all workers) and `progress_queue` (tqdm). Exits when the counter equals `num_items` or all workers die.
+7\. **`recipe._done(...)`** merges caches / writes the index; index merge runs only on the last node.
 
 ## Key classes
 

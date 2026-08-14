@@ -60,15 +60,15 @@ Code: `streaming/async_prefetch.py`. Cache interaction: [cache-and-chunk-lifecyc
 
 ## `optimize` / `map` multi-node **(usually set by the platform)**
 
-| Env                                | Role                                                   |
-| ---------------------------------- | ------------------------------------------------------ |
-| `DATA_OPTIMIZER_NUM_NODES`         | World size / launch gate (`>0` ⇒ already a job worker) |
-| `DATA_OPTIMIZER_NODE_RANK`         | This node’s rank                                       |
-| `DATA_OPTIMIZER_GLOBAL_RANK`       | Flat rank for chunk filenames                          |
-| `DATA_OPTIMIZER_NUM_WORKERS`       | Workers per node                                       |
-| `DATA_OPTIMIZER_CACHE_FOLDER`      | Chunk/work cache root                                  |
-| `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | Downloaded input cache                                 |
-| `DATA_OPTIMIZER_TIMEOUT`           | Queue get timeout (≈300s; shared-queue ≈200s)          |
+| Env                                | Role                                                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DATA_OPTIMIZER_NUM_NODES`         | World size / launch gate (`>0` ⇒ already a job worker)                                                  |
+| `DATA_OPTIMIZER_NODE_RANK`         | This node’s rank                                                                                        |
+| `DATA_OPTIMIZER_GLOBAL_RANK`       | Flat rank for chunk filenames                                                                           |
+| `DATA_OPTIMIZER_NUM_WORKERS`       | Workers per node                                                                                        |
+| `DATA_OPTIMIZER_CACHE_FOLDER`      | Chunk/work cache root                                                                                   |
+| `DATA_OPTIMIZER_DATA_CACHE_FOLDER` | Downloaded input cache                                                                                  |
+| `DATA_OPTIMIZER_TIMEOUT`           | Queue get timeout (≈300s; shared-queue ≈200s)                                                           |
 | `DATA_OPTIMIZER_FAST_DEV_RUN`      | `DataProcessor` treats missing/`None` as **on** (`"1"`). Public `optimize(fast_dev_run=False)` is safe. |
 
 Launch flow: [processing.md](processing.md).

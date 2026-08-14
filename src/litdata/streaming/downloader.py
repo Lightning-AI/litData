@@ -98,6 +98,8 @@ async def _obstore_adownload_bytes(store: Any, key: str) -> bytes:
 
     resp = await obs.get_async(store, key)
     return bytes(await resp.bytes_async())
+
+
 # Obstore default request timeout is 30s; large chunk GETs under worker
 # contention can exceed that. Speed-neutral, avoids spurious retries.
 _OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})

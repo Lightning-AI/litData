@@ -298,7 +298,7 @@ for root, dirs, files in walk("/teamspace/s3_connections/data/raw", max_workers=
     ...
 ```
 
-Threaded cloud listing (Studio-oriented; warns elsewhere). Uses ``os.listdir`` on the given path — **not** a bucket API. Order ≠ depth-first. Use to build `inputs=` for optimize/map.
+Threaded cloud listing (Studio-oriented; warns elsewhere). Uses `os.listdir` on the given path — **not** a bucket API. Order ≠ depth-first. Use to build `inputs=` for optimize/map.
 
 ### Other
 

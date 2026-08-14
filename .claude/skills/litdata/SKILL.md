@@ -57,7 +57,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Throughput       | Rough ImageNet Studio order-of-magnitude (not guarantees): FUSE ~**600**/s · Raw (right tuning) ~**6–7k**/s · Optimized 64MB chunks ~**11k**/s — `using-litdata.md` FAQ. Raw benches: medians + provenance SHAs; never cite short-window n=1 against Stage 0 medians.                                                                                                       |
 | **Tracing**      | `from litdata.debugger import enable_tracer` then `enable_tracer(level="chunk")` (or `categories=["download","read","delete"]`). Convert with [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer): `litracer --quiet --validate -o trace.json.gz litdata_debug.log`. One line per event; crashes go to stderr + `ph: I`. Full spec: `reference/debugging.md`. |
 | **S3 workers**   | `index.json` is boto3 (no parent tokio). Workers lazy-init obstore; boto3 fallback if parent already started it. Do **not** pass `data_connection_id` / `endpoint_url` into `boto3.Session` — build obstore from `S3Client`/`R2Client`. `FileNotFoundError` after 120s with `num_workers>0` only → [debugging.md](reference/debugging.md) failure modes.                    |
-| **Keyed lookup** | `optimize(..., key_fn=...)` writes `keys/`. Read `ds["id"]` / `get_by_key`. Patch locally with `dataset_update`. Needs `polars`. [keyed-lookup.md](reference/keyed-lookup.md).                                                                                                                                                                                            |
+| **Keyed lookup** | `optimize(..., key_fn=...)` writes `keys/`. Read `ds["id"]` / `get_by_key`. Patch locally with `dataset_update`. Needs `polars`. [keyed-lookup.md](reference/keyed-lookup.md).                                                                                                                                                                                              |
 | Parquet / HF     | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                                                                                                                                                                                                                                                             |
 
 ## Reference map
@@ -83,18 +83,18 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 
 ## Public API (`src/litdata/__init__.py`)
 
-| Symbol                                                  | Purpose                             |
-| ------------------------------------------------------- | ----------------------------------- |
-| `StreamingDataset` / `StreamingDataLoader`              | Optimized stream + resumable loader |
-| `CombinedStreamingDataset` / `ParallelStreamingDataset` | Mix or zip streams                  |
-| `StreamingRawDataset`                                   | Raw file stream                     |
-| `TokensLoader`                                          | Token windows for LLMs              |
-| `optimize` / `map` / `merge_datasets` / `walk`          | Write / transform / merge / list    |
+| Symbol                                                  | Purpose                                 |
+| ------------------------------------------------------- | --------------------------------------- |
+| `StreamingDataset` / `StreamingDataLoader`              | Optimized stream + resumable loader     |
+| `CombinedStreamingDataset` / `ParallelStreamingDataset` | Mix or zip streams                      |
+| `StreamingRawDataset`                                   | Raw file stream                         |
+| `TokensLoader`                                          | Token windows for LLMs                  |
+| `optimize` / `map` / `merge_datasets` / `walk`          | Write / transform / merge / list        |
 | `dataset_update` / `build_keys_index`                   | Keyed in-place patch / backfill sidecar |
-| `train_test_split`                                      | Split by chunk ROIs                 |
-| `index_parquet_dataset` / `index_hf_dataset`            | Index for streaming                 |
-| `breakpoint`                                            | Multiprocessing-safe pdb            |
-| `enable_tracer` (`litdata.debugger`)                    | Pipeline log → Litracer / Perfetto  |
+| `train_test_split`                                      | Split by chunk ROIs                     |
+| `index_parquet_dataset` / `index_hf_dataset`            | Index for streaming                     |
+| `breakpoint`                                            | Multiprocessing-safe pdb                |
+| `enable_tracer` (`litdata.debugger`)                    | Pipeline log → Litracer / Perfetto      |
 
 Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook §6–9 for constructor args.
 
