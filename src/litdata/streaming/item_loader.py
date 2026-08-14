@@ -692,22 +692,36 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap_view = memoryview(chunk_mmap)
         self._mapped.move_to_end(chunk_index)
 
+    def _close_mapping(self, chunk_index: int, chunk_mmap: mmap.mmap) -> None:
+        """Drop views into ``chunk_mmap`` then close it so the fd is released."""
+        if self._mmap is chunk_mmap:
+            self._mmap = None
+            self._mmap_view = None
+            self._offsets = None
+            self._open_handle = None
+        if self._page_chunk == chunk_index:
+            self._clear_item_page()
+        handle = self._mmap_handles.pop(chunk_index, None)
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
+        with contextlib.suppress(BufferError, ValueError, OSError):
+            chunk_mmap.close()
+
     def _evict_mapped_chunks(self, protect: int | None = None) -> None:
-        while len(self._mapped) > self._mmap_keep:
-            old_idx, (old_mmap, old_offsets, old_path) = self._mapped.popitem(last=False)
-            if old_mmap is self._mmap or old_idx == protect:
-                self._mapped[old_idx] = (old_mmap, old_offsets, old_path)
-                self._mapped.move_to_end(old_idx)
+        for old_idx in list(self._mapped):
+            if len(self._mapped) <= self._mmap_keep:
                 break
-            with contextlib.suppress(BufferError, ValueError):
-                old_mmap.close()
-            handle = self._mmap_handles.pop(old_idx, None)
-            if handle is not None:
-                with contextlib.suppress(OSError):
-                    handle.close()
+            if old_idx == protect:
+                continue
+            old_mmap, _, _ = self._mapped[old_idx]
+            if old_mmap is self._mmap:
+                continue
+            self._mapped.pop(old_idx)
+            self._close_mapping(old_idx, old_mmap)
 
     def _close_open_chunk(self) -> None:
-        """Release the memory-map / file handle for the currently open chunk (if any)."""
+        """Release every memory-map / file handle this loader still holds."""
         self._clear_item_page()
         self._mmap_view = None
         self._offsets = None
@@ -715,17 +729,17 @@ class PyTreeLoader(BaseItemLoader):
         self._open_handle = None
         for idx in list(self._mapped):
             mm, _, _ = self._mapped.pop(idx)
-            with contextlib.suppress(BufferError, ValueError):
-                mm.close()
-            handle = self._mmap_handles.pop(idx, None)
-            if handle is not None:
-                with contextlib.suppress(OSError):
-                    handle.close()
+            self._close_mapping(idx, mm)
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle / memory-map for the current chunk."""
+        del chunk_index
         self._close_open_chunk()
         self._chunk_filepath = None
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self._close_open_chunk()
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         if getattr(self, "_posix_fast", False):
@@ -822,6 +836,8 @@ class TokensLoader(BaseItemLoader):
         self._buffers: dict[int, bytes] = {}
         # keeps track of number of readers for each chunk (can be more than 1 if multiple workers are reading)
         self._counter = defaultdict(int)
+        self._posix_fast = False
+        self._mmap_keep = 1
         self._dtype: torch.dtype | None = None
         self._chunk_filepaths: dict[str, bool] = {}
 
@@ -870,8 +886,31 @@ class TokensLoader(BaseItemLoader):
             begin += num_blocks
         return intervals
 
+    def set_posix_fast(self, enabled: bool, keep: int = 4) -> None:
+        self._posix_fast = enabled
+        self._mmap_keep = max(1, keep) if enabled else 1
+
+    def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
+        """Page-cache hint only. Mapping every upcoming chunk leaked fds (CI EMFILE)."""
+        del chunk_index
+        advise_willneed(chunk_filepath)
+
+    def _evict_token_mmaps(self, protect: int | None = None) -> None:
+        if not self._posix_fast or self._mmap_keep <= 0:
+            return
+        for old_idx in list(self._mmaps):
+            if len(self._mmaps) <= self._mmap_keep:
+                break
+            if old_idx == protect:
+                continue
+            buf = self._buffers.pop(old_idx, None)
+            del buf
+            mm = self._mmaps.pop(old_idx)
+            with contextlib.suppress(BufferError, ValueError, OSError):
+                mm._mmap.close()
+            self._counter.pop(old_idx, None)
+
     def _load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        self._counter[chunk_index] += 1
         if chunk_index in self._mmaps:
             return
         chunk = self._chunks[chunk_index]
@@ -884,6 +923,8 @@ class TokensLoader(BaseItemLoader):
         mmap = np.memmap(chunk_filepath, mode="r", order="C", offset=offset)
         self._mmaps[chunk_index] = mmap
         self._buffers[chunk_index] = memoryview(mmap)  # type: ignore
+        self._counter[chunk_index] += 1
+        self._evict_token_mmaps(protect=chunk_index)
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         # This is called within the prepare chunks thread, so we overlap data loading with data reading.
@@ -949,12 +990,25 @@ class TokensLoader(BaseItemLoader):
         """Release the memory-mapped file for a specific chunk index."""
         self._counter[chunk_index] -= 1
 
-        if self._counter[chunk_index] == 0:
+        if self._counter[chunk_index] <= 0:
             if chunk_index in self._buffers:
                 del self._buffers[chunk_index]
             if chunk_index in self._mmaps:
                 self._mmaps[chunk_index]._mmap.close()
                 del self._mmaps[chunk_index]
+            self._counter.pop(chunk_index, None)
+
+    def _close_open_chunk(self) -> None:
+        for idx in list(self._mmaps):
+            self._buffers.pop(idx, None)
+            mm = self._mmaps.pop(idx)
+            with contextlib.suppress(BufferError, ValueError, OSError):
+                mm._mmap.close()
+        self._counter.clear()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self._close_open_chunk()
 
     def __getstate__(self) -> dict[str, Any]:
         state = super().__getstate__()

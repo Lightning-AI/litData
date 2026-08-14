@@ -204,6 +204,33 @@ def test_posix_page_is_memoryview(tmpdir):
         assert isinstance(loader._mmap_view, memoryview)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="resource.setrlimit is posix")
+def test_posix_fast_tokens_do_not_exhaust_fds(tmpdir):
+    import resource
+
+    import torch
+
+    from litdata.streaming.item_loader import TokensLoader
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    cap = min(256, hard)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (cap, hard))
+    block_size = 64
+    cache = Cache(str(tmpdir), chunk_bytes="2KB", item_loader=TokensLoader(block_size))
+    for i in range(400):
+        cache._add_item(i, torch.randint(0, 100, (80,)).numpy())
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir), item_loader=TokensLoader(block_size), shuffle=True)
+    n = 0
+    for _ in dataset:
+        n += 1
+    assert n > 0
+    loader = dataset.cache._reader._item_loader
+    assert isinstance(loader, TokensLoader)
+    assert len(loader._mmaps) <= loader._mmap_keep + 1
+
+
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="zstd required")
 def test_compressed_chunks_do_not_use_posix_mmap(tmpdir):
     cache = Cache(str(tmpdir), chunk_size=10, compression="zstd")

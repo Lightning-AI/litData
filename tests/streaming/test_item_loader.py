@@ -233,7 +233,7 @@ def test_pytree_loader_mmap_pickle_roundtrip(tmpdir):
 
 
 def test_tokens_loader_posix_warmup_is_picklable(tmpdir):
-    """POSIX-fast warms TokensLoader memmaps in the parent; DataLoader must still pickle the dataset."""
+    """POSIX-fast must not pin token memmaps in the parent (that leaked fds); pickle still works."""
     cache = Cache(str(tmpdir), chunk_size=40, item_loader=TokensLoader(10))
     counter = 0
     for i in range(4):
@@ -246,7 +246,8 @@ def test_tokens_loader_posix_warmup_is_picklable(tmpdir):
     assert len(dataset) == 8
     warmed = dataset.shuffler.cache._reader._item_loader
     assert isinstance(warmed, TokensLoader)
-    assert warmed._buffers, "posix-fast should have warmed at least one token chunk"
+    assert warmed._posix_fast is True
+    assert warmed._buffers == {}
 
     restored = pickle.loads(pickle.dumps(dataset))  # noqa: S301
     restored_loader = restored.shuffler.cache._reader._item_loader

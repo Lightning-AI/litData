@@ -1073,6 +1073,10 @@ class BinaryReader:
         # counts and prevent those chunks from ever being deleted.
         with suppress(Exception):
             self._release_shared_locks()
+        closer = getattr(self._item_loader, "_close_open_chunk", None)
+        if closer is not None:
+            with suppress(Exception):
+                closer()
         if self._prepare_thread and not self._prepare_thread._has_exited:
             self._prepare_thread.force_stop()
             self._prepare_thread = None
