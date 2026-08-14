@@ -144,7 +144,8 @@ def test_merge_rank_key_files_multi_node_then_concatenate(tmpdir):
 
     p0 = merge_rank_key_files(node0, output_filename="0-keys.parquet")
     p1 = merge_rank_key_files(node1, output_filename="1-keys.parquet")
-    assert p0 and p1
+    assert p0
+    assert p1
     out = os.path.join(tmpdir, "merged")
     os.makedirs(out)
     concatenate_key_files([p0, p1], out)

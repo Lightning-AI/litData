@@ -165,10 +165,10 @@ def test_upload_fn_reraises_cloud_errors(tmpdir, monkeypatch):
         _upload_fn(upload_queue, mock.MagicMock(), cache_dir, Dir(path=None, url="s3://bucket/out"))
 
 
-def test_assert_supported_write_url_rejects_azure():
+def test_assert_supported_write_url_rejects_azure(tmpdir):
     from litdata.processing.functions import _assert_supported_write_url
 
-    _assert_supported_write_url(Dir(path="/tmp/out", url=None))
+    _assert_supported_write_url(Dir(path=str(tmpdir), url=None))
     _assert_supported_write_url(Dir(path=None, url="s3://bucket/out"))
     with pytest.raises(ValueError, match="azure"):
         _assert_supported_write_url(Dir(path=None, url="azure://container/path"))
