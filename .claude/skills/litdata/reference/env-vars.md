@@ -79,13 +79,13 @@ Code: `streaming/async_prefetch.py`. Cache interaction: [cache-and-chunk-lifecyc
 
 ### `optimize` / `map` I/O (user-settable)
 
-| Env                                      | Default   | Effect                                                                                          |
-| ---------------------------------------- | --------- | ----------------------------------------------------------------------------------------------- |
-| `LITDATA_PREFETCH_BYTES`                 | `512MB`   | Shared-queue prefetch budget (slots × item size)                                                |
-| `LITDATA_OPTIMIZE_DOWNLOAD_BATCH`        | `16`      | How many remote inputs to gather per download flush                                             |
-| `LITDATA_OPTIMIZE_UPLOAD_BATCH`          | `16`      | How many local chunks to `aupload_file` per flush                                               |
-| `LITDATA_OPTIMIZE_DOWNLOAD_CONCURRENCY`  | `16`      | Semaphore for `adownload_file`; can scale with workers/CPU and back off when disk is low        |
-| `LITDATA_OPTIMIZE_SPLIT_WRITERS`         | `0`       | `1` splits transform vs write on unordered optimize (1–2 chunk writers)                         |
+| Env                                     | Default | Effect                                                                                   |
+| --------------------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `LITDATA_PREFETCH_BYTES`                | `512MB` | Shared-queue prefetch budget (slots × item size)                                         |
+| `LITDATA_OPTIMIZE_DOWNLOAD_BATCH`       | `16`    | How many remote inputs to gather per download flush                                      |
+| `LITDATA_OPTIMIZE_UPLOAD_BATCH`         | `16`    | How many local chunks to `aupload_file` per flush                                        |
+| `LITDATA_OPTIMIZE_DOWNLOAD_CONCURRENCY` | `16`    | Semaphore for `adownload_file`; can scale with workers/CPU and back off when disk is low |
+| `LITDATA_OPTIMIZE_SPLIT_WRITERS`        | `0`     | `1` splits transform vs write on unordered optimize (1–2 chunk writers)                  |
 
 Launch flow: [processing.md](processing.md). I/O details: [data-movement.md](data-movement.md).
 

@@ -58,11 +58,11 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
 
 Each `BaseWorker` (ordered path) or the node orchestrator (shared-queue path) runs I/O off the writer:
 
-| Child       | Start                | Target                  | Default                    | Role                                                                                                                         |
-| ----------- | -------------------- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Child       | Start                | Target                  | Default                    | Role                                                                                                                        |
+| ----------- | -------------------- | ----------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2`     | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via streaming **`Downloader.adownload_file`** (FsProvider fallback) |
-| Uploaders   | `_start_uploaders`   | `_upload_fn`            | `num_uploaders or 1`       | Push chunks / map outputs (`aupload_file` when remote; local write-through)                                                  |
-| Remover     | `_start_remover`     | `_remove_target`        | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files                                                                            |
+| Uploaders   | `_start_uploaders`   | `_upload_fn`            | `num_uploaders or 1`       | Push chunks / map outputs (`aupload_file` when remote; local write-through)                                                 |
+| Remover     | `_start_remover`     | `_remove_target`        | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files                                                                           |
 
 Shared-queue (`keep_data_ordered=False`): I/O is **threads** (`_start_io_thread`); same-process `queue.Queue` except at the writer-process boundary. Direct `s3://` / `gs://` / `r2://` item paths and Studio `lightning_storage` URLs **are** downloaded (not skipped). Studio FUSE mounts are not `stat`/`listdir`'d for path detection or size packing.
 

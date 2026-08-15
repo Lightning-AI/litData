@@ -90,19 +90,19 @@ Empty `Text()` / `JpegArray()` / empty `Tensor()` raise on write. `Tensor(path=`
 Built-in serializers (`streaming/serializers.py`), tried in registry order:
 `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `text`, `bytes`, `numpy`/`tensor` (+ no-header variants), `graph`, `pickle`.
 
-| Return type                                                    | Serializer                    | Result                                                                 |
-| -------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| `Text`                                                         | `text`                        | UTF-8 `str`                                                            |
-| `Image` / `Jpeg` / `Jpeg(array=, quality=95)`                  | `image` / `jpeg`              | Compressed JPEG — **preferred**                                        |
-| `PIL.JpegImageFile` (opened `.jpg`)                            | `jpeg`                        | Compressed JPEG                                                        |
-| `Pil` / plain `PIL.Image` / `fromarray`                        | `pil`                         | Uncompressed pixels — **large**                                        |
-| `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                                                           |
-| `Audio`                                                        | `audio`                       | torchcodec `AudioDecoder`; `audio["array"]` / `["sampling_rate"]`      |
-| `Video`                                                        | `video`                       | torchcodec decoder (`get_frames_at` / `get_frames_in_range`)           |
-| `File`                                                         | `file`                        | **raw `bytes`**                                                        |
-| `Tiff` / `Mesh` / `Pdf` / `Nifti`                              | matching name                 | README `#modality`                                                     |
-| `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout                              |
-| `Graph` / PyG `Data` / `HeteroData`                            | `graph`                       | `LDGR` v3 packed tensors (`to_mapping` / `to_dict`); `#pyg-graphs`     |
+| Return type                                   | Serializer                    | Result                                                             |
+| --------------------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| `Text`                                        | `text`                        | UTF-8 `str`                                                        |
+| `Image` / `Jpeg` / `Jpeg(array=, quality=95)` | `image` / `jpeg`              | Compressed JPEG — **preferred**                                    |
+| `PIL.JpegImageFile` (opened `.jpg`)           | `jpeg`                        | Compressed JPEG                                                    |
+| `Pil` / plain `PIL.Image` / `fromarray`       | `pil`                         | Uncompressed pixels — **large**                                    |
+| `JpegArray` / list of JPEGs                   | `jpeg_array`                  | Packed JPEGs                                                       |
+| `Audio`                                       | `audio`                       | torchcodec `AudioDecoder`; `audio["array"]` / `["sampling_rate"]`  |
+| `Video`                                       | `video`                       | torchcodec decoder (`get_frames_at` / `get_frames_in_range`)       |
+| `File`                                        | `file`                        | **raw `bytes`**                                                    |
+| `Tiff` / `Mesh` / `Pdf` / `Nifti`             | matching name                 | README `#modality`                                                 |
+| `Tensor`                                      | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout                          |
+| `Graph` / PyG `Data` / `HeteroData`           | `graph`                       | `LDGR` v3 packed tensors (`to_mapping` / `to_dict`); `#pyg-graphs` |
 
 **Collate:** `StreamingDataLoader` defaults to `litdata_collate`. Graphs → PyG `Batch.from_data_list` (or a list of `Graph` without torch-geometric). Everything else is `default_collate`. Audio/Video decoders **do not stack** — use a custom `collate_fn` (see `examples/modality/audio.py` / `video.py`). Mixing a graph and an `AudioDecoder` in one dict also needs a custom collate.
 
@@ -261,31 +261,31 @@ ______________________________________________________________________
 
 ### `optimize`
 
-| Arg                                 | Default         | Use                                                                                             |
-| ----------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
-| `fn` / `inputs` / `output_dir`      | —               | Core recipe                                                                                     |
-| `queue`                             | `None`          | Live inputs; one `ALL_DONE` sentinel (`from litdata.processing.data_processor import ALL_DONE`) |
-| `input_dir`                         | `None`          | Background download of remote inputs                                                            |
-| `weights`                           | `None`          | Balance workers by input weight/size                                                            |
-| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count; see chunk-size guidance above                    |
-| `align_chunking`                    | `False`         | Single-worker chunk boundaries (needs `chunk_size`; uneven load)                                |
-| `compression`                       | `None`          | `"zstd"`                                                                                        |
-| `encryption`                        | `None`          | Fernet / RSA / custom; `level="sample"` or `"chunk"`                                            |
-| `num_workers`                       | CPUs            | Local parallelism                                                                               |
-| `fast_dev_run`                      | `False`         | Smoke subset                                                                                    |
-| `num_nodes` / `machine`             | `None`          | **Studio-only multi-node job** (see below) — not local MP                                       |
-| `num_downloaders` / `num_uploaders` | auto            | I/O concurrency                                                                                 |
-| `reorder_files`                     | `True`          | Size packing; `False` preserves order                                                           |
-| `reader` / `batch_size`             | —               | Custom reader; group inputs                                                                     |
-| `mode`                              | `None`          | `"append"` \| `"overwrite"` (else immutable)                                                    |
-| `use_checkpoint`                    | `False`         | Resume interrupted job                                                                          |
-| `item_loader`                       | `None`          | e.g. `TokensLoader()`                                                                           |
-| `start_method` / `optimize_dns`     | spawn† / `None` | MP start; DNS tweak                                                                             |
-| `storage_options`                   | `{}`            | Cloud creds                                                                                     |
+| Arg                                 | Default         | Use                                                                                                         |
+| ----------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------- |
+| `fn` / `inputs` / `output_dir`      | —               | Core recipe                                                                                                 |
+| `queue`                             | `None`          | Live inputs; one `ALL_DONE` sentinel (`from litdata.processing.data_processor import ALL_DONE`)             |
+| `input_dir`                         | `None`          | Background download of remote inputs                                                                        |
+| `weights`                           | `None`          | Balance workers by input weight/size                                                                        |
+| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count; see chunk-size guidance above                                |
+| `align_chunking`                    | `False`         | Single-worker chunk boundaries (needs `chunk_size`; uneven load)                                            |
+| `compression`                       | `None`          | `"zstd"`                                                                                                    |
+| `encryption`                        | `None`          | Fernet / RSA / custom; `level="sample"` or `"chunk"`                                                        |
+| `num_workers`                       | CPUs            | Local parallelism                                                                                           |
+| `fast_dev_run`                      | `False`         | Smoke subset                                                                                                |
+| `num_nodes` / `machine`             | `None`          | **Studio-only multi-node job** (see below) — not local MP                                                   |
+| `num_downloaders` / `num_uploaders` | auto            | I/O concurrency                                                                                             |
+| `reorder_files`                     | `True`          | Size packing; `False` preserves order                                                                       |
+| `reader` / `batch_size`             | —               | Custom reader; group inputs                                                                                 |
+| `mode`                              | `None`          | `"append"` \| `"overwrite"` (else immutable)                                                                |
+| `use_checkpoint`                    | `False`         | Resume interrupted job                                                                                      |
+| `item_loader`                       | `None`          | e.g. `TokensLoader()`                                                                                       |
+| `start_method` / `optimize_dns`     | spawn† / `None` | MP start; DNS tweak                                                                                         |
+| `storage_options`                   | `{}`            | Cloud creds                                                                                                 |
 | `keep_data_ordered`                 | `False`         | Shared per-node work queue (#880). `True` = static per-worker slice. Forced `True` with checkpoint / align. |
-| `broadcast_paths`                   | `False`         | Auto-on for `{%strftime}` paths                                                                 |
-| `key_fn`                            | `None`          | `sample -> str\|int` key; writes `keys/` for `ds["id"]` / `dataset_update`                      |
-| `verbose`                           | `True`          | Progress                                                                                        |
+| `broadcast_paths`                   | `False`         | Auto-on for `{%strftime}` paths                                                                             |
+| `key_fn`                            | `None`          | `sample -> str\|int` key; writes `keys/` for `ds["id"]` / `dataset_update`                                  |
+| `verbose`                           | `True`          | Progress                                                                                                    |
 
 **`mode` vs `use_checkpoint`:** `append` continues chunk numbering from existing `index.json`. `use_checkpoint` resumes input work from `.checkpoints/`. They are not interchangeable; checkpoint resume is fragile for generators / multi-sample `fn` — [processing.md](processing.md).
 
