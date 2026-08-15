@@ -92,8 +92,14 @@ def main() -> None:
         audio_serializer = AudioSerializer(decode="bytes")
         audio_bytes, _ = audio_serializer.serialize(audio)
         print(f"  serialized_audio_bytes={len(audio_bytes)}")
-        add("audio.serialize(array) x50", lambda: [AudioSerializer(decode="bytes").serialize(audio) for _ in range(50)])
-        add("audio.deserialize decode=bytes x200", lambda: [audio_serializer.deserialize(audio_bytes) for _ in range(200)])
+        add(
+            "audio.serialize(array) x50",
+            lambda: [AudioSerializer(decode="bytes").serialize(audio) for _ in range(50)],
+        )
+        add(
+            "audio.deserialize decode=bytes x200",
+            lambda: [audio_serializer.deserialize(audio_bytes) for _ in range(200)],
+        )
         try:
             dec_audio = AudioSerializer(decode="decoder")
             add("audio.deserialize default x50", lambda: [dec_audio.deserialize(audio_bytes) for _ in range(50)])
