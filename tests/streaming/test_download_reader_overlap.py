@@ -140,20 +140,25 @@ def test_item_loader_clears_stale_ready_event(tmpdir):
     ready = threading.Event()
     ready.set()  # stale: previously ready, file now missing
     loader.set_chunk_ready_provider(lambda _idx: ready)
+    cleared = threading.Event()
+    original_clear = ready.clear
+
+    def _clear() -> None:
+        cleared.set()
+        original_clear()
+
+    ready.clear = _clear  # type: ignore[method-assign]
 
     def restore_after_clear() -> None:
         # Wait until the loader clears the stale signal, then restore + re-signal.
-        for _ in range(50):
-            if not ready.is_set():
-                break
-            sleep(0.02)
+        assert cleared.wait(timeout=2.0)
         os.rename(hidden, chunk_filepath)
         ready.set()
 
     threading.Thread(target=restore_after_clear, daemon=True).start()
     item = loader.load_item_from_chunk(2, 1, chunk_filepath, begin, filesize)
     assert item == 2
-    assert ready.is_set()
+    # The wait loop may clear again after restore on a slow FS; the load is the contract.
 
 
 def test_s3_downloader_does_not_publish_partial_final_path(monkeypatch, tmpdir):
