@@ -503,6 +503,22 @@ class ChunksConfig:
             session_options,
         )
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        # threading.Lock / Event are not picklable (DataLoader spawn / deepcopy).
+        state["_file_published"] = {}
+        state["_file_published_lock"] = None
+        state["_on_chunk_file_ready"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._file_published = {}
+        self._file_published_lock = threading.Lock()
+        self._on_chunk_file_ready = None
+        if self._downloader is not None:
+            self._downloader._on_file_published = self.notify_file_published
+
     def __len__(self) -> int:
         return self._length
 

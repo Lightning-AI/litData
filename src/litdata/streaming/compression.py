@@ -56,6 +56,11 @@ class ZSTDCompressor(Compressor):
         self.extension = "zstd"
         self._zstd: Any | None = None
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_zstd"] = None
+        return state
+
     def _zstd_mod(self) -> Any:
         if self._zstd is None:
             if _PYTHON_GREATER_EQUAL_3_14:

@@ -260,13 +260,13 @@ def test_download_with_cache(tmpdir, monkeypatch):
     try:
         local_downloader = LocalDownloaderWithCache(tmpdir, tmpdir, [])
         shutil_mock = MagicMock()
-        os_mock = MagicMock()
+        replace_mock = MagicMock()
         monkeypatch.setattr(shutil, "copy", shutil_mock)
-        monkeypatch.setattr(os, "rename", os_mock)
+        monkeypatch.setattr(os, "replace", replace_mock)
 
         local_downloader.download_file("local:a.txt", os.path.join(tmpdir, "a.txt"))
         shutil_mock.assert_called()
-        os_mock.assert_called()
+        replace_mock.assert_called()
     finally:
         os.remove("a.txt")
 

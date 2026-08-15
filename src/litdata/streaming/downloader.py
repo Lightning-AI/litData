@@ -274,6 +274,8 @@ class Downloader(ABC):
         state = self.__dict__.copy()
         state.pop("_store", None)
         state.pop("_store_pid", None)
+        # Bound method / lock-holding callback is process-local; rebound in ChunksConfig.__setstate__.
+        state.pop("_on_file_published", None)
         return state
 
     def _increment_local_lock(self, chunkpath: str, chunk_index: int) -> None:
