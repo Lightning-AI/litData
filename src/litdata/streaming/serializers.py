@@ -1558,6 +1558,8 @@ class FloatSerializer(NumericSerializer, Serializer):
 class BooleanSerializer(Serializer):
     """The BooleanSerializer serializes and deserializes boolean values to and from bytes."""
 
+    size = 1
+
     def serialize(self, item: bool) -> tuple[bytes, str | None]:
         """Serialize a boolean value to bytes.
 

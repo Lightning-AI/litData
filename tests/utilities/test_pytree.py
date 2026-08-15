@@ -161,6 +161,24 @@ def test_jpeg_array_is_one_leaf():
     assert restored["empty"] == []
 
 
+def test_writer_fixed_size_layout_roundtrip(tmpdir):
+    from litdata.streaming.reader import BinaryReader
+    from litdata.streaming.sampler import ChunkedIndex
+    from litdata.streaming.writer import BinaryWriter
+
+    writer = BinaryWriter(str(tmpdir), chunk_size=8)
+    samples = [{"i": i, "flag": i % 2 == 0, "x": float(i)} for i in range(8)]
+    for i, sample in enumerate(samples):
+        writer[i] = sample
+    writer.done()
+    writer.merge()
+    assert writer._fixed_header is not None
+    assert writer._fixed_body_len == 8 + 1 + 8
+    reader = BinaryReader(str(tmpdir))
+    for i, sample in enumerate(samples):
+        assert reader.read(ChunkedIndex(i, chunk_index=0)) == sample
+
+
 def test_writer_leaves_match_flatten_after_first_sample(tmpdir):
     from litdata.streaming.writer import BinaryWriter
 

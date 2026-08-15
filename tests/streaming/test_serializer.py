@@ -684,6 +684,9 @@ def test_boolean_serializer():
     assert isinstance(data, bytes)
     assert serializer.deserialize(data) is False
 
+    assert serializer.size == 1
+    assert len(data) == 1
+
     # Test can_serialize method
     assert serializer.can_serialize(True)
     assert serializer.can_serialize(False)

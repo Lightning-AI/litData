@@ -214,6 +214,7 @@ class BaseItemLoader(ABC):
         # Fixed size-header layout: one little-endian uint32 per leaf.
         # Keep a format string (pickle-friendly) rather than a ``struct.Struct`` instance.
         self._sizes_fmt = "<" + "I" * len(self._data_format) if self._data_format else None
+        self._sizes_struct = struct.Struct(self._sizes_fmt) if self._sizes_fmt else None
 
     def force_download(self, chunk_index: int) -> None:
         force_download_queue = getattr(self, "_force_download_queue", None)
@@ -319,6 +320,8 @@ class BaseItemLoader(ABC):
         state["_chunk_ready_provider"] = None
         state["_force_download_queue"] = None
         state["_prefetch_error_provider"] = None
+        # ``struct.Struct`` is not picklable; rebuild from ``_sizes_fmt`` after unpickle.
+        state["_sizes_struct"] = None
         return state
 
     @functools.lru_cache(maxsize=128)
@@ -577,7 +580,7 @@ class PyTreeLoader(BaseItemLoader):
         # We want to read the `offset_start` and `offset_end` for the item we want to load
         # 2 uint32 (4 bytes each) => 8 bytes; are read to get the offset_start and offset_end
         pair = fp.read(8)
-        begin, end = np.frombuffer(pair, np.uint32)
+        begin, end = struct.unpack("<II", pair)
 
         fp.seek(begin)  # move the file pointer to the offset_start where the item starts
         return fp.read(end - begin)  # read the item
@@ -648,11 +651,16 @@ class PyTreeLoader(BaseItemLoader):
     def deserialize(self, raw_item_data: bytes | memoryview) -> "PyTree":
         """Deserialize the raw bytes into their python equivalent."""
         idx = self._shift_idx
-        sizes = struct.unpack_from(self._sizes_fmt, raw_item_data, 0) if self._sizes_fmt is not None else ()
-        data = []
-        for size, serializer in zip(sizes, self._serializers_list):
-            data_bytes = raw_item_data[idx : idx + size]
-            data.append(serializer.deserialize(data_bytes))
+        sizes_struct = getattr(self, "_sizes_struct", None)
+        if sizes_struct is not None:
+            sizes = sizes_struct.unpack_from(raw_item_data, 0)
+        elif self._sizes_fmt is not None:
+            sizes = struct.unpack_from(self._sizes_fmt, raw_item_data, 0)
+        else:
+            sizes = ()
+        data = [None] * len(sizes)
+        for i, (size, serializer) in enumerate(zip(sizes, self._serializers_list)):
+            data[i] = serializer.deserialize(raw_item_data[idx : idx + size])
             idx += size
         if self._unflatten is not None:
             return self._unflatten(data)
@@ -824,6 +832,7 @@ class PyTreeLoader(BaseItemLoader):
         state["_mmap_view"] = None
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
+        state["_sizes_struct"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -842,6 +851,8 @@ class PyTreeLoader(BaseItemLoader):
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)
+        sizes_fmt = getattr(self, "_sizes_fmt", None)
+        self._sizes_struct = struct.Struct(sizes_fmt) if sizes_fmt else None
 
 
 class TokensLoader(BaseItemLoader):
