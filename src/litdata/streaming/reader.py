@@ -734,7 +734,7 @@ class PrepareChunksThread(Thread):
 
                 # Shuffle emits numpy.int64; do not use ``isinstance(..., int)``.
                 if chunk_index is not None:
-                    batch: list[int] = [chunk_index]
+                    batch: list[int] = [int(chunk_index)]
                     # Drain more pending indexes so asyncio.gather can overlap remote
                     # downloads. When over disk budget, download one at a time.
                     if self._async_prefetch() and not over_budget:
@@ -746,7 +746,7 @@ class PrepareChunksThread(Thread):
                             if nxt == _END_TOKEN:
                                 self._to_download_queue.put(_END_TOKEN)
                                 break
-                            batch.append(nxt)
+                            batch.append(int(nxt))
                     self._download_chunk_indexes(batch)
 
             if self._max_cache_size:
