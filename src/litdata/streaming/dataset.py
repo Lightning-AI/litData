@@ -204,6 +204,8 @@ class StreamingDataset(IterableDataset):
         self.worker_next_chunk_index = 0
 
         self.num_chunks: int | None = None  # total number of chunks that the current worker will work on
+        # Dataset-wide chunk count for in-chunk shuffle RNG (not the worker's stripe length).
+        self._shuffle_num_chunks: int = 0
         self.global_index = 0  # total number of samples processed by the current worker up until now
 
         # number of samples processed by the current worker in the current chunk
@@ -434,7 +436,7 @@ class StreamingDataset(IterableDataset):
             init_env, init_nw, init_bs, self.current_epoch
         )
         seqs: list[list[tuple[int, int]]] = []
-        n_chunks = len(self.cache.get_chunk_intervals())
+        n_chunks = self._shuffle_num_chunks or len(self.cache.get_chunk_intervals())
         for wchunks, wintervals in zip(workers_chunks, workers_intervals):
             seq: list[tuple[int, int]] = []
             for chunk_i, interval in enumerate(wintervals):
@@ -476,6 +478,7 @@ class StreamingDataset(IterableDataset):
         self.worker_env = forced_worker_env if forced_worker_env is not None else _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
+        self._shuffle_num_chunks = len(self.cache.get_chunk_intervals())
         self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
 
         # Handle restart. Fresh epochs and same-topology resume keep today's shuffler order.
@@ -607,13 +610,12 @@ class StreamingDataset(IterableDataset):
         assert self.cache is not None
         # replay the indexes for the current chunks
         interval = self.worker_intervals[self.worker_next_chunk_index]
-        interval = self.worker_intervals[self.worker_next_chunk_index]
         current_indexes = np.arange(interval[1], interval[2])
 
         # re-shuffle the indexes (seed from global chunk id, not the worker-local position)
         current_indexes = self.shuffler(
             current_indexes,
-            len(self.cache.get_chunk_intervals()),
+            self._shuffle_num_chunks,
             self.current_epoch,
             int(self.worker_chunks[self.worker_next_chunk_index]),
         )
@@ -835,11 +837,10 @@ class StreamingDataset(IterableDataset):
                 interval = self.worker_intervals[self.worker_next_chunk_index]
                 current_indexes = np.arange(interval[1], interval[2])
                 assert self.shuffler is not None
-                assert self.cache is not None
                 self.upcoming_indexes = deque(
                     self.shuffler(
                         current_indexes,
-                        len(self.cache.get_chunk_intervals()),
+                        self._shuffle_num_chunks,
                         self.current_epoch,
                         int(self.worker_chunks[self.worker_next_chunk_index]),
                     )
