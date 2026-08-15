@@ -94,6 +94,16 @@ from typing import (
 
 from litdata.constants import _PIL_AVAILABLE
 
+if _PIL_AVAILABLE:
+    from PIL.JpegImagePlugin import JpegImageFile as _JpegImageFile
+else:
+    _JpegImageFile = None  # type: ignore[misc, assignment]
+
+# Scalars and buffers that dominate StreamingDataset samples. Skip namedtuple / JPEG probes.
+_FAST_LEAF_TYPES: FrozenSet[type] = frozenset(
+    {int, float, str, bool, bytes, bytearray, type(None), complex},
+)
+
 __all__ = [
     "PyTree",
     "Context",
@@ -689,24 +699,20 @@ def _is_jpeg_array(tree: Any) -> bool:
     typ = type(tree)
     if typ is not list and typ is not tuple:
         return False
-    if not tree:
+    if not tree or _JpegImageFile is None:
         return False
-    if not _PIL_AVAILABLE:
-        return False
-
-    from PIL.JpegImagePlugin import JpegImageFile
-
-    return all(isinstance(x, JpegImageFile) for x in tree)
+    return all(isinstance(x, _JpegImageFile) for x in tree)
 
 
 def _get_node_type(tree: Any) -> Any:
     typ = type(tree)
-    # Fast path: registered containers skip namedtuple / JPEG-list probes.
+    if typ in _FAST_LEAF_TYPES:
+        return typ
+    # Registered containers: namedtuple instances are a *subclass* of tuple, so
+    # ``type(point) is tuple`` is never true — only probe JPEG lists/tuples here.
     if typ in SUPPORTED_NODES:
         if (typ is list or typ is tuple) and _is_jpeg_array(tree):
             return "jpeg_array"
-        if typ is tuple and _is_namedtuple_instance(tree):
-            return namedtuple
         return typ
     if _is_namedtuple_instance(tree):
         return namedtuple
@@ -884,6 +890,10 @@ def _tree_flatten_helper(
     if is_leaf is not None and is_leaf(tree):
         leaves.append(tree)
         return _LEAF_SPEC
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        leaves.append(tree)
+        return _LEAF_SPEC
     node_type = _get_node_type(tree)
     if node_type not in SUPPORTED_NODES:
         leaves.append(tree)
@@ -927,6 +937,10 @@ def tree_iter(
 ) -> Iterable[Any]:
     """Get an iterator over the leaves of a pytree."""
     if is_leaf is not None and is_leaf(tree):
+        yield tree
+        return
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
         yield tree
         return
     node_type = _get_node_type(tree)

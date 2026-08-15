@@ -28,7 +28,7 @@ from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.utilities._pytree import PyTree, tree_flatten, treespec_dumps
+from litdata.utilities._pytree import PyTree, tree_flatten, tree_leaves, treespec_dumps
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
@@ -174,14 +174,13 @@ class BinaryWriter:
 
     def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
-        # Flatten the items provided by the users
-        flattened, data_spec = tree_flatten(items)
-
-        # Collect the sizes and associated bytes for each item
+        # Flatten the items provided by the users. After the first sample the treespec is cached,
+        # so later writes only walk leaves (same order as ``tree_flatten``).
         sizes: list[int] = []
         data: list[bytes] = []
 
         if self._data_format is None:
+            flattened, data_spec = tree_flatten(items)
             data_format: list[str] = []
             for item in flattened:
                 data_format.append(self._serialize(item, sizes, data))
@@ -197,6 +196,7 @@ class BinaryWriter:
             self._data_spec = data_spec
             self._format_serializers = [self._serializers_extra[name] for name in data_format]
         else:
+            flattened = tree_leaves(items)
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
 
         return self._item_loader.encode_data(data, sizes, flattened)
