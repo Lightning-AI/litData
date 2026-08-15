@@ -802,7 +802,7 @@ class PyTreeLoader(BaseItemLoader):
         header_len = 4 * n
         out = bytearray(header_len + body_len)
         if n:
-            out[0:header_len] = np.asarray(sizes, dtype=np.uint32).tobytes()
+            out[0:header_len] = struct.pack("<" + "I" * n, *sizes)
         cursor = header_len
         for chunk, size in zip(data, sizes):
             out[cursor : cursor + size] = chunk

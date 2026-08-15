@@ -953,12 +953,42 @@ def tree_iter(
         yield from tree_iter(child, is_leaf=is_leaf)
 
 
+def _collect_leaves(tree: PyTree, leaves: List[Any]) -> None:
+    """Append leaves to ``leaves`` without generator overhead (writer hot path)."""
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        leaves.append(tree)
+        return
+    if typ is dict:
+        for value in tree.values():
+            _collect_leaves(value, leaves)
+        return
+    if typ is list or typ is tuple:
+        if _is_jpeg_array(tree):
+            leaves.append(tree)
+            return
+        for value in tree:
+            _collect_leaves(value, leaves)
+        return
+    node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        leaves.append(tree)
+        return
+    child_pytrees, _context = SUPPORTED_NODES[node_type].flatten_fn(tree)
+    for child in child_pytrees:
+        _collect_leaves(child, leaves)
+
+
 def tree_leaves(
     tree: PyTree,
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> List[Any]:
     """Get a list of leaves of a pytree."""
-    return list(tree_iter(tree, is_leaf=is_leaf))
+    if is_leaf is not None:
+        return list(tree_iter(tree, is_leaf=is_leaf))
+    leaves: List[Any] = []
+    _collect_leaves(tree, leaves)
+    return leaves
 
 
 def tree_structure(

@@ -20,6 +20,13 @@ from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
 
 
+def test_encode_data_size_header_is_little_endian_uint32():
+    packed, dim = PyTreeLoader.encode_data([b"ab", b"cdef"], [2, 4], ["ab", "cdef"])
+    assert dim is None
+    assert packed[:8] == (2).to_bytes(4, "little") + (4).to_bytes(4, "little")
+    assert packed[8:] == b"abcdef"
+
+
 def _write_int_dataset(tmpdir, num_items: int = 40, chunk_size: int = 7) -> str:
     """Write a small integer StreamingDataset and return its directory."""
     cache = Cache(str(tmpdir), chunk_size=chunk_size)

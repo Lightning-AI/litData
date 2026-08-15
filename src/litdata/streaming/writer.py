@@ -99,6 +99,7 @@ class BinaryWriter:
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._serializers_extra: dict[str, Serializer] = {}
         self._format_serializers: list[Serializer] | None = None
+        self._format_fixed_sizes: list[int | None] | None = None
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
@@ -195,6 +196,7 @@ class BinaryWriter:
             self._data_format = data_format
             self._data_spec = data_spec
             self._format_serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in self._format_serializers]
         else:
             flattened = tree_leaves(items)
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
@@ -223,11 +225,15 @@ class BinaryWriter:
         if serializers is None:
             serializers = [self._serializers_extra[name] for name in data_format]
             self._format_serializers = serializers
-        for element, serializer in zip(item, serializers):
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+        fixed_sizes = self._format_fixed_sizes
+        if fixed_sizes is None:
+            fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._format_fixed_sizes = fixed_sizes
+        for element, serializer, fixed in zip(item, serializers, fixed_sizes):
             serialized_item, _ = serializer.serialize(element)
             data.append(serialized_item)
-            size = getattr(serializer, "size", None)
-            sizes.append(size if size is not None else len(serialized_item))
+            sizes.append(fixed if fixed is not None else len(serialized_item))
 
     def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
         """Creates a binary chunk file from serialized items."""
