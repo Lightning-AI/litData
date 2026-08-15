@@ -458,6 +458,13 @@ def test_audio_decoder_is_subscriptable():
     assert decoder["array"].shape == (8,)
 
 
+def test_as_bytes_accepts_memoryview():
+    from litdata.streaming.serializers import _as_bytes
+
+    assert _as_bytes(b"abc") == b"abc"
+    assert _as_bytes(memoryview(b"abc")) == b"abc"
+
+
 @pytest.mark.skipif(not _torchcodec_usable(), reason="Requires a working torchcodec install")
 def test_audio_decoder_hf_getitem():
     array = np.zeros(1600, dtype=np.float32)

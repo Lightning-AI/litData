@@ -61,6 +61,11 @@ def _torchcodec_usable() -> bool:
     return _torchcodec_ok
 
 
+def _as_bytes(data: bytes | bytearray | memoryview) -> bytes:
+    """Convert mmap slices to ``bytes`` so torchcodec can construct a decoder."""
+    return data if isinstance(data, (bytes, bytearray)) else bytes(data)
+
+
 class Serializer(ABC):
     """The base interface for any serializers.
 
@@ -852,6 +857,7 @@ class VideoSerializer(Serializer):
         }
         if self.stream_index is not None:
             kwargs["stream_index"] = self.stream_index
+        data = _as_bytes(data)
         decoder = VideoDecoder(data, **kwargs)
         decoder._litdata_encoded = {"path": None, "bytes": data}
         if getattr(decoder, "metadata", None) is not None:
@@ -878,7 +884,7 @@ class VideoSerializer(Serializer):
         with tempfile.TemporaryDirectory() as dirname:
             fname = os.path.join(dirname, "file.mp4")
             with open(fname, "wb") as stream:
-                stream.write(data)
+                stream.write(_as_bytes(data))
             return torchvision.io.read_video(fname, pts_unit="sec")
 
     def _deserialize_with_torchcodec(self, data: bytes) -> Any:
@@ -890,7 +896,7 @@ class VideoSerializer(Serializer):
         metadata = asdict(dec.metadata) if dec.metadata is not None else {}
         video = dec.get_all_frames().data
         try:
-            audio = AudioDecoder(data).get_all_samples().data
+            audio = AudioDecoder(_as_bytes(data)).get_all_samples().data
         except ValueError:
             audio = torch.zeros(1, 0)
         return video, audio, metadata
@@ -1016,6 +1022,7 @@ class AudioSerializer(Serializer):
             kwargs["sample_rate"] = self.sampling_rate
         if self.num_channels is not None:
             kwargs["num_channels"] = self.num_channels
+        data = _as_bytes(data)
         decoder = AudioDecoder(data, **kwargs)
         decoder._litdata_encoded = {"path": None, "bytes": data}
         if getattr(decoder, "metadata", None) is not None:
