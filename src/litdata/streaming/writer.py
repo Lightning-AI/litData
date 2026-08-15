@@ -36,6 +36,11 @@ from litdata.utilities.parquet import get_parquet_indexer_cls
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
+def _is_worker_index_file(filename: str) -> bool:
+    """True for ``{rank}.index.json``, not the merged ``index.json``."""
+    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+
+
 @dataclass
 class Item:
     index: int
@@ -129,7 +134,7 @@ class BinaryWriter:
         if self._is_done:
             return True
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", f)]
+        index_files = [f for f in files if _is_worker_index_file(f)]
         worker_env = _WorkerEnv.detect()
         data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
         if data_optimiser_num_workers is not None:
@@ -473,7 +478,7 @@ class BinaryWriter:
             if _INDEX_FILENAME in files:
                 return
 
-            index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
             # When using the Data Optimizer, we don't use multi processes.
             is_done = len(index_files) == self._distributed_env.world_size * num_workers
@@ -491,7 +496,7 @@ class BinaryWriter:
 
         """
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+        index_files = [f for f in files if _is_worker_index_file(f)]
 
         chunks_info = []
         config = None

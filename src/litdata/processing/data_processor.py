@@ -186,7 +186,9 @@ def _upload_via_streaming_downloader(
 
 def _upload_dest(output_dir: Dir, local_filepath: str, tmpdir: str | None) -> str:
     """Remote or local destination path for an optimized chunk or sidecar file."""
-    output_filepath = output_dir.url or output_dir.path
+    url = output_dir.url
+    remote = bool(url and parse.urlparse(url).scheme in _SUPPORTED_PROVIDERS)
+    output_filepath = (url if remote else output_dir.path) or url
     assert output_filepath
     if ".checkpoints" in local_filepath:
         output_filepath = os.path.join(output_filepath, ".checkpoints")
@@ -1901,6 +1903,9 @@ class DataProcessor:
 
         if isinstance(user_items, StreamingDataLoader):
             self.reader = StreamingDataLoaderReader(user_items)
+            # Each worker owns a dataloader iterator slice keyed by optimizer rank.
+            # A shared node queue would only keep the first shard.
+            self.keep_data_ordered = True
 
         if self.reader:
             user_items = self.reader.remap_items(user_items, self.num_workers)

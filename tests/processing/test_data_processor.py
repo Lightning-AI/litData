@@ -2119,20 +2119,17 @@ def test_data_chunk_recipe_upload_index_with_data_connection_id(tmpdir, monkeypa
     output_dir = Dir(path=None, url="s3://output-bucket")
     output_dir.data_connection_id = test_connection_id
 
-    # Mock fs_provider
-    fs_provider = mock.MagicMock()
-    get_fs_provider_mock = mock.MagicMock(return_value=fs_provider)
-    monkeypatch.setattr(data_processor_module, "_get_fs_provider", get_fs_provider_mock)
+    put_mock = mock.MagicMock(return_value=(None, None))
+    monkeypatch.setattr(data_processor_module, "_put_files_remote", put_mock)
 
     storage_options = {"timeout": 30}
     recipe = DataChunkRecipe(storage_options=storage_options)
 
     recipe._upload_index(output_dir, cache_dir, num_nodes=1, node_rank=None)
 
-    # Verify fs_provider was called with merged storage_options including data_connection_id
-    expected_storage_options = storage_options.copy()
-    expected_storage_options["data_connection_id"] = test_connection_id
-    get_fs_provider_mock.assert_called_with(output_dir.url, expected_storage_options)
+    put_mock.assert_called_once()
+    assert put_mock.call_args[0][0] is output_dir
+    assert put_mock.call_args[0][2] == storage_options
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
