@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Fixed
+
+- Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes.
+
+### Changed
+
+- `StreamingDataset` / `Cache` default `max_cache_size=None` uses ~20% of free disk and leaves ≥50GB when possible (checkpoints). `MAX_CACHE_SIZE` or an explicit size pins the budget.
+
 ## [0.2.71] - 2026-08-15
 
 ### Added
@@ -17,11 +25,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Prefetch accepts `numpy.int64` chunk indexes from shuffle (they were dropped by `isinstance(..., int)`), so force-download stays a last resort after `_FORCE_DOWNLOAD_TIME`. Concurrent `os.replace` of the same chunk is a no-op when the destination already exists.
-- Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes.
 
 ### Changed
-
-- `StreamingDataset` / `Cache` default `max_cache_size=None` uses ~20% of free disk and leaves ≥50GB when possible (checkpoints). `MAX_CACHE_SIZE` or an explicit size pins the budget.
 
 - Faster pytree flatten on the writer hot path: skip typing-generic `isinstance` and PIL JPEG probes on non-list/tuple nodes, skip namedtuple/JPEG probes on scalar leaves, and call `_get_node_type` once per node. After the first sample, `BinaryWriter` walks `tree_leaves` (non-generator collect) instead of rebuilding a `TreeSpec`, caches per-leaf byte sizes, and packs the size header with `struct` instead of NumPy. When every leaf has a fixed size (int/float/bool), later samples reuse a cached size header and write into one buffer. `BooleanSerializer` advertises `size = 1`. Reader offset pairs and size headers use `struct` instead of NumPy.
 - Remote→local streaming: cap in-flight chunk GETs with `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` (default 8), drain the prefetch queue up to gather width when slots are free, signal file-ready with `Event.set` after the downloader's atomic `os.replace` (decompress publishes the readable `.bin`), and `posix_fadvise(WILLNEED)` downloaded cache files from the prefetch thread (mmap stays on the reader thread).
