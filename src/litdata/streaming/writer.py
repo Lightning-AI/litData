@@ -37,8 +37,13 @@ from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
 def _is_worker_index_file(filename: str) -> bool:
-    """True for ``{rank}.index.json`` or ``{node}-index.json``, not merged ``index.json``."""
-    return filename.endswith(_INDEX_FILENAME) and filename != _INDEX_FILENAME
+    """True for ``{rank}.index.json`` (dot), not ``index.json`` or ``{node}-index.json``."""
+    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+
+
+def _is_node_index_file(filename: str) -> bool:
+    """True for ``{node}-index.json`` (hyphen), the per-node merge output."""
+    return bool(re.fullmatch(rf"\d+-{re.escape(_INDEX_FILENAME)}", filename))
 
 
 @dataclass
@@ -130,11 +135,13 @@ class BinaryWriter:
 
     @property
     def filled(self) -> bool:
-        """True once the merged ``index.json`` exists.
+        """True once the merged ``index.json`` exists for a standalone Cache.
 
-        Do not treat leftover ``{rank}.index.json`` shards as done — overwrite
-        and failed runs leave those in a write-through output dir.
+        Optimizer workers must keep writing during ``mode='append'`` even when
+        a previous ``index.json`` is already in the write-through output dir.
         """
+        if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK") is not None:
+            return False
         if self._is_done:
             return True
         self._is_done = os.path.exists(os.path.join(self._cache_dir, _INDEX_FILENAME))
@@ -493,7 +500,10 @@ class BinaryWriter:
 
         """
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if _is_worker_index_file(f)]
+        if node_rank is None:
+            index_files = [f for f in files if _is_worker_index_file(f) or _is_node_index_file(f)]
+        else:
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
         chunks_info = []
         config = None

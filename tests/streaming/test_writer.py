@@ -350,3 +350,16 @@ def test_zstd_decompress_file_roundtrip(tmpdir):
     compressor.decompress_file(src, dst)
     with open(dst, "rb") as f:
         assert f.read() == payload
+
+
+def test_writer_filled_false_during_optimize_append(tmpdir, monkeypatch):
+    from litdata.constants import _INDEX_FILENAME
+
+    with open(os.path.join(tmpdir, _INDEX_FILENAME), "w") as f:
+        json.dump({"chunks": [], "config": {}}, f)
+    monkeypatch.setenv("DATA_OPTIMIZER_GLOBAL_RANK", "0")
+    writer = BinaryWriter(str(tmpdir), chunk_bytes=90)
+    assert writer.filled is False
+    writer[0] = 1
+    assert writer.done()
+    assert os.path.isfile(os.path.join(tmpdir, "0.index.json"))
