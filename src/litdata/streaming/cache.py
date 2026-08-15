@@ -43,7 +43,7 @@ class Cache:
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         item_loader: BaseItemLoader | None = None,
-        max_cache_size: int | str | None = None,
+        max_cache_size: int | float | str | None = None,
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
         storage_options: dict | None = {},
@@ -64,7 +64,8 @@ class Cache:
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
             item_loader: The object responsible to generate the chunk intervals and load an item froma chunk.
-            max_cache_size: Cache budget. ``None`` adapts to free disk (see ``StreamingDataset``).
+            max_cache_size: Cache budget. ``None`` uses 75% of free disk (see ``StreamingDataset``).
+                A float such as ``0.90`` is that fraction of currently free space.
             serializers: Provide your own serializers.
             writer_chunk_index: The index of the chunk to start from when writing.
             storage_options: Additional connection options for accessing storage services.

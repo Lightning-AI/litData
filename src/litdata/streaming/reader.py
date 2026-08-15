@@ -765,7 +765,7 @@ class BinaryReader:
         cache_dir: str,
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
-        max_cache_size: int | str | None = None,
+        max_cache_size: int | float | str | None = None,
         remote_input_dir: str | None = None,
         compression: str | None = None,
         encryption: Encryption | None = None,

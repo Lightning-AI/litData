@@ -18,26 +18,30 @@ from typing import Any
 from litdata.constants import _TQDM_AVAILABLE
 
 _FORMAT_TO_RATIO = {
-    "kb": 1000,
-    "mb": 1000**2,
-    "gb": 1000**3,
     "tb": 1000**4,
+    "gb": 1000**3,
+    "mb": 1000**2,
+    "kb": 1000,
+    "t": 1000**4,
+    "g": 1000**3,
+    "m": 1000**2,
+    "k": 1000,
+    "b": 1,
 }
 
 
 def _convert_bytes_to_int(bytes_str: str) -> int:
-    """Convert human-readable byte format to an integer."""
+    """Convert human-readable byte format to an integer (``100G`` / ``100GB``)."""
+    raw = bytes_str.lower().strip()
     for suffix in _FORMAT_TO_RATIO:
-        bytes_str = bytes_str.lower().strip()
-        if bytes_str.lower().endswith(suffix):
+        if raw.endswith(suffix):
             try:
-                return int(float(bytes_str[0 : -len(suffix)]) * _FORMAT_TO_RATIO[suffix])
+                return int(float(raw[: -len(suffix)]) * _FORMAT_TO_RATIO[suffix])
             except ValueError:
                 raise ValueError(
-                    f"Unsupported value/suffix {bytes_str}. Supported suffix are "
-                    f"{['b'] + list(_FORMAT_TO_RATIO.keys())}."
-                )
-    raise ValueError(f"The supported units are {_FORMAT_TO_RATIO.keys()}")
+                    f"Unsupported value/suffix {bytes_str}. Supported suffix are {list(_FORMAT_TO_RATIO.keys())}."
+                ) from None
+    raise ValueError(f"The supported units are {list(_FORMAT_TO_RATIO.keys())}.")
 
 
 def _human_readable_bytes(num_bytes: float) -> str:
@@ -60,8 +64,7 @@ def _get_tqdm_iterator_if_available() -> Any:
     return _pass_through
 
 
-_CACHE_FREE_FRACTION = 0.20
-_CACHE_SMALL_FREE_FRACTION = 0.10
+_CACHE_FREE_FRACTION = 0.75
 _CACHE_RESERVE_BYTES = _FORMAT_TO_RATIO["gb"] * 50  # leave room for checkpoints
 
 logger = logging.getLogger("litdata.utilities.format")
@@ -77,23 +80,52 @@ def _probe_existing_dir(path: str | None) -> str:
     return probe or os.getcwd()
 
 
-def _adaptive_max_cache_size(path: str | None = None) -> int:
-    """Conservative cache budget from currently free disk (checkpoints need headroom).
+def _adaptive_max_cache_size(
+    path: str | None = None,
+    *,
+    fraction: float = _CACHE_FREE_FRACTION,
+    leave_reserve: bool = True,
+) -> int:
+    """Cache budget from currently free disk.
 
-    Uses 20% of free space, and always leaves at least 50GB free when that much is
-    available. On smaller volumes, uses 10% of free space.
+    ``leave_reserve`` keeps ≥50GB free when that much is available (default ``None``
+    path). An explicit fraction such as ``0.90`` uses that share of free space as-is.
     """
+    if not 0 < fraction <= 1:
+        raise ValueError(f"`max_cache_size` fraction must be in (0, 1], got {fraction}.")
     probe = _probe_existing_dir(path)
     try:
         free = int(shutil.disk_usage(probe).free)
     except OSError:
         free = _CACHE_RESERVE_BYTES
-    if free > _CACHE_RESERVE_BYTES:
-        return min(int(free * _CACHE_FREE_FRACTION), free - _CACHE_RESERVE_BYTES)
-    return int(free * _CACHE_SMALL_FREE_FRACTION)
+    budget = int(free * fraction)
+    if leave_reserve and free > _CACHE_RESERVE_BYTES:
+        return min(budget, free - _CACHE_RESERVE_BYTES)
+    return budget
 
 
-def _parse_max_cache_size(value: int | str) -> int:
+def _parse_cache_fraction(value: str | float) -> float | None:
+    """Return a (0, 1] free-disk fraction, or ``None`` if ``value`` is a byte size."""
+    if isinstance(value, float):
+        if not 0 < value <= 1:
+            raise ValueError(f"`max_cache_size` fraction must be in (0, 1], got {value}.")
+        return value
+    stripped = value.strip()
+    if stripped.isdigit() or stripped.lower().endswith(tuple(_FORMAT_TO_RATIO)):
+        return None
+    try:
+        parsed = float(stripped)
+    except ValueError:
+        return None
+    if 0 < parsed <= 1:
+        return parsed
+    return None
+
+
+def _parse_max_cache_size(value: int | float | str) -> int:
+    """Parse an absolute cache size (bytes). Fractions must go through ``_resolve_max_cache_size``."""
+    if isinstance(value, float):
+        raise TypeError("fractional `max_cache_size` needs a cache path; use `_resolve_max_cache_size`.")
     if isinstance(value, str):
         stripped = value.strip()
         if stripped.isdigit():
@@ -102,17 +134,35 @@ def _parse_max_cache_size(value: int | str) -> int:
     return int(value)
 
 
-def _resolve_max_cache_size(max_cache_size: int | str | None, cache_path: str | None = None) -> int:
-    """User value or ``MAX_CACHE_SIZE`` wins; otherwise adapt to free disk."""
+def _is_absolute_cache_size(value: int | float | str) -> bool:
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        return False
+    return _parse_cache_fraction(value) is None
+
+
+def _resolve_max_cache_size(max_cache_size: int | float | str | None, cache_path: str | None = None) -> int:
+    """``MAX_CACHE_SIZE`` wins; else size (``\"100G\"``), fraction (``0.90``), or default 75% + 50GB reserve."""
     env = os.getenv("MAX_CACHE_SIZE")
     if env is not None and str(env).strip():
-        return _parse_max_cache_size(str(env).strip())
-    if max_cache_size is not None:
-        return _parse_max_cache_size(max_cache_size)
-    resolved = _adaptive_max_cache_size(cache_path)
-    logger.info(
-        "max_cache_size is unset; using %s (20%% of free disk, leaving ≥50GB when possible) on %s.",
-        _human_readable_bytes(resolved),
-        _probe_existing_dir(cache_path),
-    )
-    return resolved
+        max_cache_size = str(env).strip()
+    if max_cache_size is None:
+        resolved = _adaptive_max_cache_size(cache_path, fraction=_CACHE_FREE_FRACTION, leave_reserve=True)
+        logger.info(
+            "max_cache_size is unset; using %s (75%% of free disk, leaving ≥50GB when possible) on %s.",
+            _human_readable_bytes(resolved),
+            _probe_existing_dir(cache_path),
+        )
+        return resolved
+    fraction = _parse_cache_fraction(max_cache_size) if not isinstance(max_cache_size, int) else None
+    if fraction is not None:
+        resolved = _adaptive_max_cache_size(cache_path, fraction=fraction, leave_reserve=False)
+        logger.info(
+            "max_cache_size=%s of free disk; using %s on %s.",
+            fraction,
+            _human_readable_bytes(resolved),
+            _probe_existing_dir(cache_path),
+        )
+        return resolved
+    return _parse_max_cache_size(max_cache_size)

@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- `StreamingDataset` / `Cache` default `max_cache_size=None` uses ~20% of free disk and leaves ≥50GB when possible (checkpoints). `MAX_CACHE_SIZE` or an explicit size pins the budget.
+- `StreamingDataset` / `Cache` `max_cache_size`: `None` uses 75% of free disk (leave ≥50GB when possible). `"100G"` / `"50GB"` pins bytes; `0.90` (or `MAX_CACHE_SIZE=0.90`) uses that fraction of currently free space.
 
 ## [0.2.71] - 2026-08-15
 

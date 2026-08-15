@@ -17,7 +17,7 @@ remote URL / local path  →  download into cache_dir  →  deserialize sample  
 | Knob               | Default                                                                      | Effect                                                   |
 | ------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `cache_dir`        | `LITDATA_CACHE_DIR` or `~/.lightning/chunks` (Studio: often `/cache/chunks`) | Where `.bin` chunks are stored                           |
-| `max_cache_size`   | `None` (~20% of free disk, leave ≥50GB)                                      | Evict consumed chunks when the cache folder exceeds this |
+| `max_cache_size`   | `None` (75% of free disk, leave ≥50GB); `"100G"` or `0.90`                   | Evict consumed chunks when the cache folder exceeds this |
 | `max_pre_download` | `2` (async remote often floors to ≥4)                                        | Chunks each worker may prefetch ahead                    |
 
 **Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size`.**

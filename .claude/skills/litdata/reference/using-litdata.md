@@ -174,7 +174,7 @@ ______________________________________________________________________
 | ------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `input_dir`                           | required                    | Path, URL, `Dir`, or parquet path with basename wildcards                                               |
 | `cache_dir`                           | env / `~/.lightning/chunks` | Local chunk store. Unused for POSIX-fast in-place reads.                                                |
-| `max_cache_size`                      | `None`                      | Eviction budget. Default adapts to free disk (~20%, leave ≥50GB). Pin with `"50GB"` / `MAX_CACHE_SIZE`. |
+| `max_cache_size`                      | `None`                      | Eviction budget. Default 75% of free disk (leave ≥50GB). `"100G"` / `0.90` / `MAX_CACHE_SIZE`. |
 | `item_loader`                         | from index / `PyTreeLoader` | `TokensLoader`, `ParquetLoader`, …                                                                      |
 | `shuffle`                             | `False`                     | See §5                                                                                                  |
 | `drop_last`                           | DDP-aware                   | See §5                                                                                                  |

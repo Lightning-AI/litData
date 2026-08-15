@@ -51,7 +51,7 @@ from litdata.utilities.dataset_utilities import (
 )
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int, _parse_max_cache_size
+from litdata.utilities.format import _convert_bytes_to_int, _is_absolute_cache_size, _parse_max_cache_size
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
 
@@ -70,7 +70,7 @@ class StreamingDataset(IterableDataset):
         drop_last: bool | None = None,
         seed: int = 42,
         serializers: dict[str, Serializer] | None = None,
-        max_cache_size: int | str | None = None,
+        max_cache_size: int | float | str | None = None,
         subsample: float = 1.0,
         encryption: Encryption | None = None,
         storage_options: dict | None = {},
@@ -96,9 +96,10 @@ class StreamingDataset(IterableDataset):
                 and `False` otherwise.
             seed: Random seed for shuffling.
             serializers: The serializers used to serialize and deserialize the chunks.
-            max_cache_size: Cache budget. ``None`` (default) uses ~20% of currently
-                free disk and leaves at least 50GB free when possible, so checkpoints
-                still have room. Pass a size (``"50GB"``) or set ``MAX_CACHE_SIZE`` to pin it.
+            max_cache_size: Cache budget. ``None`` (default) uses 75% of currently
+                free disk and leaves at least 50GB free when possible. Pass a size
+                (``"100G"`` / ``"50GB"``), a fraction of free disk (``0.90``), or
+                set ``MAX_CACHE_SIZE``.
             subsample: Float representing fraction of the dataset to be randomly sampled (e.g., 0.1 => 10% of dataset).
             encryption: The encryption object to use for decrypting the data.
             storage_options: Additional connection options for accessing storage services.
@@ -178,7 +179,7 @@ class StreamingDataset(IterableDataset):
         self.seed = seed
         self.max_cache_size = max_cache_size
 
-        if max_cache_size is not None:
+        if max_cache_size is not None and _is_absolute_cache_size(max_cache_size):
             max_cache_size_in_bytes = _parse_max_cache_size(max_cache_size)
             # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
             min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
