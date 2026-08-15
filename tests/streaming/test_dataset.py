@@ -823,7 +823,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     functions.optimize(
         optimize_fn,
         inputs,
-        output_dir=str(tmpdir),
+        output_dir=output_dir,
         num_workers=2,
         chunk_size=2,
         reorder_files=False,
@@ -832,10 +832,10 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
         keep_data_ordered=True,
     )
 
-    assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10
+    assert len([f for f in os.listdir(output_dir) if f.endswith(".bin")]) == 10
 
     block_size = 10
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
 
     L = len(dataset)
     assert L == 20
@@ -848,7 +848,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "0")
     monkeypatch.setenv("NNODES", "1")
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataloader = StreamingDataLoader(dataset, batch_size=2, shuffle=False, num_workers=2)
     assert dataset.drop_last  # in distributed setting, this is forced automatically
 
@@ -871,7 +871,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "1")
     monkeypatch.setenv("NNODES", "1")
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataloader = StreamingDataLoader(dataset, batch_size=2, shuffle=False, num_workers=2)
     assert dataset.drop_last  # in distributed setting, this is forced automatically
 
@@ -1467,7 +1467,7 @@ def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
     functions.optimize(
         optimize_fn,
         inputs,
-        output_dir=str(tmpdir),
+        output_dir=output_dir,
         num_workers=2,
         chunk_size=2,
         reorder_files=False,
@@ -1476,18 +1476,18 @@ def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
         keep_data_ordered=True,
     )
 
-    assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10
+    assert len([f for f in os.listdir(output_dir) if f.endswith(".bin")]) == 10
 
     block_size = 10
-    dataset1 = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset1 = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataset2 = StreamingDataset(
-        input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False, subsample=0.4
+        input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False, subsample=0.4
     )
 
     assert len(dataset2) == int(len(dataset1) * 0.4)
 
     dataset3 = StreamingDataset(
-        input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False, subsample=2.5
+        input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False, subsample=2.5
     )
     assert len(dataset3) == int(len(dataset1) * 2.5)
 

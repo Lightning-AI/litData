@@ -1113,7 +1113,9 @@ class BaseWorker:
             item_loader=self.item_loader,
             msg_queue=self.msg_queue,
         )
-        self.cache._reader._rank = _get_node_rank() * self.num_workers + self.worker_index
+        rank = _get_node_rank() * self.num_workers + self.worker_index
+        self.cache._reader._rank = rank
+        self.cache._writer._rank = rank
 
         # return
         if self.use_checkpoint and all(
