@@ -256,6 +256,13 @@ class ChunksConfig:
 
         return self._downloader.download_chunk_bytes_from_index(chunk_index, offset, length)
 
+    def _remove_compressed_source(self, local_chunkpath: str, target_local_chunkpath: str) -> None:
+        """Drop the compressed download once the decompressed chunk is on disk."""
+        if local_chunkpath == target_local_chunkpath:
+            return
+        with contextlib.suppress(FileNotFoundError, PermissionError):
+            os.remove(local_chunkpath)
+
     def try_decompress(self, local_chunkpath: str) -> None:
         if self._compressor is None:
             return
@@ -263,6 +270,7 @@ class ChunksConfig:
         target_local_chunkpath = local_chunkpath.replace(f".{self._compressor_name}", "")
 
         if os.path.exists(target_local_chunkpath):
+            self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
             return
 
         # Wait until either the decompressed target appears (another worker finished) or the
@@ -276,12 +284,14 @@ class ChunksConfig:
                 raise ChunkWaitTimeoutError(local_chunkpath, time() - start_time)
 
         if os.path.exists(target_local_chunkpath):
+            self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
             return
 
         decompress_lock = target_local_chunkpath + ".decompress.lock"
         try:
             with FileLock(decompress_lock, timeout=_MAX_WAIT_TIME):
                 if os.path.exists(target_local_chunkpath):
+                    self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
                     return
 
                 assert self._chunks is not None
@@ -301,9 +311,7 @@ class ChunksConfig:
                     with contextlib.suppress(FileNotFoundError, PermissionError):
                         os.remove(tmp_path)
                     raise
-                if self._downloader is not None:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.remove(local_chunkpath)
+                self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
         finally:
             # FileLock leaves its lock file behind; remove after release.
             with contextlib.suppress(Exception):

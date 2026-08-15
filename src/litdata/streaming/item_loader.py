@@ -51,6 +51,11 @@ Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx"
 logger = logging.getLogger("litdata.streaming.item_loader")
 
 
+def _as_chunk_index(chunk_index: int) -> int:
+    """Normalize sampler / numpy indexes so mmap dict keys stay hash-stable."""
+    return int(chunk_index)
+
+
 def _open_chunk_file(chunk_filepath: str) -> FileIO:
     """Open a chunk for reading, retrying Windows ``PermissionError`` races.
 
@@ -931,8 +936,14 @@ class TokensLoader(BaseItemLoader):
             self._counter.pop(old_idx, None)
 
     def _load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        if chunk_index in self._mmaps:
+        chunk_index = _as_chunk_index(chunk_index)
+        if chunk_index in self._mmaps and chunk_index in self._buffers:
             return
+        if chunk_index in self._mmaps and chunk_index not in self._buffers:
+            mm = self._mmaps.pop(chunk_index)
+            with contextlib.suppress(BufferError, ValueError, OSError):
+                mm._mmap.close()
+            self._counter.pop(chunk_index, None)
         chunk = self._chunks[chunk_index]
 
         # Skip the header
@@ -952,7 +963,7 @@ class TokensLoader(BaseItemLoader):
             self._chunk_filepaths[chunk_filepath] = True
 
         if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size > 0:
-            self._load_chunk(chunk_index, chunk_filepath)
+            self._load_chunk(_as_chunk_index(chunk_index), chunk_filepath)
 
     def load_item_from_chunk(
         self,
@@ -963,6 +974,7 @@ class TokensLoader(BaseItemLoader):
         filesize_bytes: int,
     ) -> torch.Tensor:
         assert self._block_size
+        chunk_index = _as_chunk_index(chunk_index)
 
         if chunk_filepath in self._chunk_filepaths and not os.path.isfile(chunk_filepath):
             del self._chunk_filepaths[chunk_filepath]
@@ -974,7 +986,11 @@ class TokensLoader(BaseItemLoader):
         self._load_chunk(chunk_index, chunk_filepath)
         assert self._dtype
 
-        buffer: bytes = self._buffers[chunk_index]
+        buffer = self._buffers.get(chunk_index)
+        if buffer is None:
+            self._mmaps.pop(chunk_index, None)
+            self._load_chunk(chunk_index, chunk_filepath)
+            buffer = self._buffers[chunk_index]
 
         # offset: how many bytes to skip to get to the item we want to load
         #       -> if chunk begins at 5, and we want to load the item at index 7,
@@ -995,6 +1011,7 @@ class TokensLoader(BaseItemLoader):
         return data
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
+        chunk_index = _as_chunk_index(chunk_index)
         with trace_span("delete", CAT_DELETE, chunk=chunk_index):
             if os.path.exists(chunk_filepath):
                 if chunk_index in self._buffers:
@@ -1008,6 +1025,7 @@ class TokensLoader(BaseItemLoader):
 
     def close(self, chunk_index: int) -> None:
         """Release the memory-mapped file for a specific chunk index."""
+        chunk_index = _as_chunk_index(chunk_index)
         self._counter[chunk_index] -= 1
 
         if self._posix_fast:

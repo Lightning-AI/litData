@@ -273,6 +273,12 @@ class PrepareChunksThread(Thread):
         file_existed = os.path.exists(chunk_filepath)
         try:
             self._item_loader.delete(chunk_index, chunk_filepath)
+            compressor = getattr(self._config, "_compressor_name", None)
+            basename = os.path.basename(chunk_filepath)
+            if compressor and chunk_filepath.endswith(".bin") and f".{compressor}." not in basename:
+                compressed = chunk_filepath.replace(".bin", f".{compressor}.bin")
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(compressed)
             self._note_chunk_removed(chunk_index)
             # Only free a slot when we removed a real file that was counted toward
             # the budget. Force-redownload keeps the reservation for the replacement.
