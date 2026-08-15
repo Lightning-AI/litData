@@ -377,7 +377,7 @@ def _assert_dir_has_index_file(
 
             if mode == "overwrite" or (mode is None and not use_checkpoint):
                 for file in os.listdir(output_dir.path):
-                    if file.endswith(".bin"):
+                    if file.endswith(".bin") or file.endswith("index.json"):
                         os.remove(os.path.join(output_dir.path, file))
 
                 # delete checkpoints

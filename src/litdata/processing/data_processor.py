@@ -184,6 +184,14 @@ def _upload_via_streaming_downloader(
     raise NotImplementedError(f"{type(downloader).__name__} does not support async upload")
 
 
+def _same_local_file(src: str, dst: str) -> bool:
+    """True when ``src`` and ``dst`` are the same inode (macOS ``/var`` vs ``/private/var``)."""
+    try:
+        return os.path.samefile(src, dst)
+    except OSError:
+        return os.path.normpath(os.path.abspath(src)) == os.path.normpath(os.path.abspath(dst))
+
+
 def _upload_dest(output_dir: Dir, local_filepath: str, tmpdir: str | None) -> str:
     """Remote or local destination path for an optimized chunk or sidecar file."""
     url = output_dir.url
@@ -612,7 +620,7 @@ def _upload_fn(
                 if ".checkpoints" in local_filepath:
                     continue
                 raise FileNotFoundError(local_filepath)
-            if os.path.abspath(local_filepath) != os.path.abspath(output_filepath):
+            if not _same_local_file(local_filepath, output_filepath):
                 shutil.copy(local_filepath, output_filepath)
             _mark_uploaded(local_filepath)
         else:
@@ -1647,7 +1655,7 @@ class DataChunkRecipe(DataRecipe):
                 dest_dir = os.path.join(output_dir.path, _KEYS_DIRNAME)
                 os.makedirs(dest_dir, exist_ok=True)
                 dest = os.path.join(dest_dir, name)
-                if os.path.abspath(local_filepath) != os.path.abspath(dest):
+                if not _same_local_file(local_filepath, dest):
                     shutil.copyfile(local_filepath, dest)
         if remote_jobs:
             _put_files_remote(output_dir, remote_jobs, self.storage_options, cache_dir)
@@ -1669,7 +1677,7 @@ class DataChunkRecipe(DataRecipe):
             )
         elif output_dir.path and os.path.isdir(output_dir.path):
             dest = os.path.join(output_dir.path, filename)
-            if os.path.abspath(local_filepath) != os.path.abspath(dest):
+            if not _same_local_file(local_filepath, dest):
                 shutil.copyfile(local_filepath, dest)
 
     def _upload_index(self, output_dir: Dir, cache_dir: str, num_nodes: int, node_rank: int | None) -> None:
@@ -1692,7 +1700,7 @@ class DataChunkRecipe(DataRecipe):
             )
         elif output_dir.path and os.path.isdir(output_dir.path):
             dest = os.path.join(output_dir.path, os.path.basename(local_filepath))
-            if os.path.abspath(local_filepath) != os.path.abspath(dest):
+            if not _same_local_file(local_filepath, dest):
                 shutil.copyfile(local_filepath, dest)
 
         if num_nodes == 1 or node_rank is None:
@@ -1714,7 +1722,8 @@ class DataChunkRecipe(DataRecipe):
                     fs_provider = _get_fs_provider(remote_filepath, merged_storage_options)
                     fs_provider.download_file(remote_filepath, node_index_filepath)
                 elif output_dir.path and os.path.isdir(output_dir.path):
-                    shutil.copyfile(remote_filepath, node_index_filepath)
+                    if not _same_local_file(remote_filepath, node_index_filepath):
+                        shutil.copyfile(remote_filepath, node_index_filepath)
 
             merge_cache = Cache(cache_dir, chunk_bytes=1)
             merge_cache._merge_no_wait()

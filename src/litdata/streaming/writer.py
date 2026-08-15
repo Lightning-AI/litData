@@ -37,8 +37,8 @@ from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
 def _is_worker_index_file(filename: str) -> bool:
-    """True for ``{rank}.index.json``, not the merged ``index.json``."""
-    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+    """True for ``{rank}.index.json`` or ``{node}-index.json``, not merged ``index.json``."""
+    return filename.endswith(_INDEX_FILENAME) and filename != _INDEX_FILENAME
 
 
 @dataclass
@@ -130,17 +130,14 @@ class BinaryWriter:
 
     @property
     def filled(self) -> bool:
-        """Returns whether the caching phase is done."""
+        """True once the merged ``index.json`` exists.
+
+        Do not treat leftover ``{rank}.index.json`` shards as done — overwrite
+        and failed runs leave those in a write-through output dir.
+        """
         if self._is_done:
             return True
-        files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if _is_worker_index_file(f)]
-        worker_env = _WorkerEnv.detect()
-        data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
-        if data_optimiser_num_workers is not None:
-            self._is_done = len(index_files) == int(data_optimiser_num_workers)
-        else:
-            self._is_done = len(index_files) == self._distributed_env.world_size * worker_env.world_size
+        self._is_done = os.path.exists(os.path.join(self._cache_dir, _INDEX_FILENAME))
         return self._is_done
 
     @property
