@@ -702,7 +702,7 @@ def _encode_image_ref(item: Any, default_format: str = "PNG", default_quality: i
     explicit_format = getattr(item, "format", None)
     if image is not None or array is not None:
         pil = image if image is not None else _pil_from_array(array)
-        fmt = explicit_format or ( _native_pil_format(pil) if image is not None else default_format)
+        fmt = explicit_format or (_native_pil_format(pil) if image is not None else default_format)
         return _save_pil(pil, fmt, quality=quality, mode=mode)
     data, ext = _read_media_bytes(item)
     if quality is None and mode is None and getattr(item, "format", None) is None:
@@ -974,9 +974,7 @@ class AudioSerializer(Serializer):
 
             tensor = array if isinstance(array, torch.Tensor) else torch.from_numpy(array.astype(np.float32))
             buffer = io.BytesIO()
-            AudioEncoder(tensor, sample_rate=rate).to_file_like(
-                buffer, format="wav", num_channels=channels
-            )
+            AudioEncoder(tensor, sample_rate=rate).to_file_like(buffer, format="wav", num_channels=channels)
             return buffer.getvalue()
         import wave
 

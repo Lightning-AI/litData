@@ -78,14 +78,14 @@ Path-only → store file bytes. Bare `*.jpg` / `*.png` paths are also claimed (s
 Built-in serializers (`streaming/serializers.py`), tried in registry order:
 `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `pickle`.
 
-| Return type | Serializer | Result |
-| ----------- | ---------- | ------ |
-| `Image` / `Jpeg` / `Jpeg(array=, quality=95)` | `image` / `jpeg` | Compressed JPEG — **preferred** |
-| `PIL.JpegImageFile` (opened `.jpg`) | `jpeg` | Compressed JPEG |
-| `Pil` / plain `PIL.Image` / `fromarray` | `pil` | Uncompressed pixels — **large** |
-| `JpegArray` / list of JPEGs | `jpeg_array` | Packed JPEGs |
-| `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name | See README `#media-types` |
-| `Tensor` | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
+| Return type                                                    | Serializer                    | Result                                    |
+| -------------------------------------------------------------- | ----------------------------- | ----------------------------------------- |
+| `Image` / `Jpeg` / `Jpeg(array=, quality=95)`                  | `image` / `jpeg`              | Compressed JPEG — **preferred**           |
+| `PIL.JpegImageFile` (opened `.jpg`)                            | `jpeg`                        | Compressed JPEG                           |
+| `Pil` / plain `PIL.Image` / `fromarray`                        | `pil`                         | Uncompressed pixels — **large**           |
+| `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                              |
+| `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name                 | See README `#media-types`                 |
+| `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
 
 **Best practice:** `Image(..., quality=95, format="jpeg")` (or keep existing JPEGs via `Image(path=)`). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
 
