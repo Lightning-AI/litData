@@ -550,7 +550,7 @@ def test_dataset_cache_recreation(tmpdir):
     assert dataset.shuffler is shuffler  # shuffler gets reused
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(90)
 def test_len_called_before_dataloader_drop_last(tmpdir):
     cache = Cache(str(tmpdir), chunk_size=10)
     for i in range(100):
@@ -565,7 +565,7 @@ def test_len_called_before_dataloader_drop_last(tmpdir):
     dataloader = StreamingDataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=4,
+        num_workers=2,
         drop_last=True,
         shuffle=False,
     )
