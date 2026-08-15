@@ -13,7 +13,7 @@
 
 import shutil
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14, _ZSTD_AVAILABLE
 from litdata.debugger import CAT_DECOMPRESS, trace_span
@@ -54,9 +54,9 @@ class ZSTDCompressor(Compressor):
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
         self.level = level
         self.extension = "zstd"
-        self._zstd = None
+        self._zstd: Any | None = None
 
-    def _zstd_mod(self):
+    def _zstd_mod(self) -> Any:
         if self._zstd is None:
             if _PYTHON_GREATER_EQUAL_3_14:
                 from compression import zstd as mod

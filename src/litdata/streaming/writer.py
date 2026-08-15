@@ -216,7 +216,7 @@ class BinaryWriter:
             self._fixed_header = None
             self._fixed_body_len = 0
             return
-        typed = [int(size) for size in sizes]
+        typed = [int(size) for size in sizes if size is not None]
         self._fixed_header = struct.pack("<" + "I" * len(typed), *typed)
         self._fixed_body_len = sum(typed)
 
@@ -233,6 +233,7 @@ class BinaryWriter:
         cursor = len(header)
         for element, serializer, size in zip(flattened, serializers, sizes):
             blob, _ = serializer.serialize(element)
+            assert size is not None
             end = cursor + size
             out[cursor:end] = blob
             cursor = end
