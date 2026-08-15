@@ -40,7 +40,7 @@ from litdata.constants import (
     _TORCHCODEC_AVAILABLE,
     _TRIMESH_AVAILABLE,
 )
-from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
+from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
 
 _torchcodec_ok: bool | None = None
 
@@ -472,6 +472,148 @@ class NoHeaderNumpySerializer(Serializer):
 
     def can_serialize(self, item: np.ndarray) -> bool:
         return isinstance(item, np.ndarray) and len(item.shape) == 1
+
+
+_GRAPH_FIELDS = ("x", "edge_index", "edge_attr", "y", "pos", "batch")
+_GRAPH_MAGIC = b"LDGR"
+_GRAPH_KIND_TENSOR = 0
+_GRAPH_KIND_PICKLE = 1
+_GRAPH_META_KEY = "_meta"
+
+
+def _is_pyg_data(item: Any) -> bool:
+    module = getattr(type(item), "__module__", "")
+    return module.startswith("torch_geometric.data") and hasattr(item, "to_dict")
+
+
+def _is_tensor_like(value: Any) -> bool:
+    if isinstance(value, (Tensor, torch.Tensor, np.ndarray)):
+        return True
+    return hasattr(value, "cpu") and hasattr(value, "shape") and not isinstance(value, (str, bytes, dict, list))
+
+
+def _graph_has_arrays(graph: Graph) -> bool:
+    return any(getattr(graph, name) is not None for name in _GRAPH_FIELDS)
+
+
+def _mapping_from_item(item: Any) -> dict[str, Any] | None:
+    """PyG-native mapping: ``Data.to_dict()``. Nested / opaque objects return ``None`` (pickle)."""
+    if _is_pyg_data(item):
+        mapping = dict(item.to_dict())
+    elif isinstance(item, Graph):
+        if item.data is not None and _is_pyg_data(item.data):
+            mapping = dict(item.data.to_dict())
+        else:
+            mapping = {name: getattr(item, name) for name in _GRAPH_FIELDS if getattr(item, name) is not None}
+            if item.data is not None:
+                if isinstance(item.data, dict):
+                    mapping.update(item.data)
+                elif not mapping:
+                    return None
+                else:
+                    mapping["_opaque"] = item.data
+    else:
+        raise TypeError(f"Cannot pack graph from {type(item)}")
+
+    if any(isinstance(value, dict) for value in mapping.values()):
+        return None
+    if not any(_is_tensor_like(value) for value in mapping.values()):
+        return None
+    return mapping
+
+
+def _reconstruct_graph(values: dict[str, Any]) -> Any:
+    """Re-read with PyG when installed: ``Data.from_dict(mapping)``."""
+    try:
+        from torch_geometric.data import Data
+
+        return Data.from_dict(values)
+    except ImportError:
+        known = {name: values.pop(name) for name in list(values) if name in _GRAPH_FIELDS}
+        leftover = values or None
+        return Graph(**known, data=leftover)
+
+
+class GraphSerializer(Serializer):
+    """Store a PyG ``Data.to_dict()`` as packed tensors (not ``torch.save``).
+
+    Reconstructs with ``Data.from_dict`` when torch-geometric is installed.
+    ``graph:pickle`` is only for NetworkX / nested HeteroData / opaque ``data=``.
+    """
+
+    def __init__(self) -> None:
+        self._tensor = TensorSerializer()
+        self._pickle_fallback = False
+
+    def setup(self, metadata: Any) -> None:
+        self._pickle_fallback = isinstance(metadata, str) and metadata.endswith("pickle")
+
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
+        mapping = _mapping_from_item(item)
+        if mapping is None:
+            payload = item.data if isinstance(item, Graph) and item.data is not None else item
+            return pickle.dumps(payload), "graph:pickle"
+
+        tensors: dict[str, Any] = {}
+        meta: dict[str, Any] = {}
+        for key, value in mapping.items():
+            if _is_tensor_like(value):
+                tensors[key] = value
+            else:
+                meta[key] = value
+
+        parts = [_GRAPH_MAGIC, struct.pack(">B", 2)]
+        fields: list[tuple[bytes, int, bytes]] = []
+        for name, value in tensors.items():
+            tensor = _coerce_torch_tensor(value).cpu().contiguous()
+            payload, _ = self._tensor.serialize(tensor)
+            fields.append((name.encode("ascii"), _GRAPH_KIND_TENSOR, payload))
+        if meta:
+            fields.append((_GRAPH_META_KEY.encode("ascii"), _GRAPH_KIND_PICKLE, pickle.dumps(meta)))
+        parts.append(struct.pack(">B", len(fields)))
+        for name_b, kind, payload in fields:
+            parts.append(struct.pack(">B", len(name_b)))
+            parts.append(name_b)
+            parts.append(struct.pack(">B", kind))
+            parts.append(struct.pack(">I", len(payload)))
+            parts.append(payload)
+        return b"".join(parts), "graph"
+
+    def deserialize(self, data: bytes) -> Any:
+        view = data if isinstance(data, memoryview) else memoryview(data)
+        if self._pickle_fallback or bytes(view[: len(_GRAPH_MAGIC)]) != _GRAPH_MAGIC:
+            loaded = pickle.loads(bytes(view))  # noqa: S301
+            return loaded if isinstance(loaded, Graph) else Graph(data=loaded)
+        offset = len(_GRAPH_MAGIC)
+        version = view[offset]
+        offset += 1
+        if version not in (1, 2):
+            raise ValueError(f"Unsupported graph pack version: {version}")
+        n_fields = view[offset]
+        offset += 1
+        values: dict[str, Any] = {}
+        for _ in range(n_fields):
+            name_len = view[offset]
+            offset += 1
+            name = bytes(view[offset : offset + name_len]).decode("ascii")
+            offset += name_len
+            if version == 2:
+                kind = view[offset]
+                offset += 1
+            else:
+                kind = _GRAPH_KIND_TENSOR
+            payload_len = struct.unpack_from(">I", view, offset)[0]
+            offset += 4
+            payload = bytes(view[offset : offset + payload_len])
+            offset += payload_len
+            if kind == _GRAPH_KIND_PICKLE or name == _GRAPH_META_KEY:
+                values.update(pickle.loads(payload))  # noqa: S301
+            else:
+                values[name] = self._tensor.deserialize(payload)
+        return _reconstruct_graph(values)
+
+    def can_serialize(self, item: Any) -> bool:
+        return isinstance(item, Graph) or _is_pyg_data(item)
 
 
 class PickleSerializer(Serializer):
@@ -1373,6 +1515,7 @@ _SERIALIZERS = OrderedDict(
         "nifti": NiftiSerializer(),
         "mesh": MeshSerializer(),
         "pdf": PDFSerializer(),
+        "graph": GraphSerializer(),
         "tifffile": TIFFSerializer(),
         "file": FileSerializer(),
         "pil": PILSerializer(),

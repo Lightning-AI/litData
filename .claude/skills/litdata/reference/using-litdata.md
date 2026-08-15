@@ -62,7 +62,7 @@ ______________________________________________________________________
 **Always wrap media** so `optimize` can tell a filepath from a caption. Wrappers are pytree leaves (`src/litdata/types.py`). README `#media-types`.
 
 ```python
-from litdata import Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor
+from litdata import Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor, Graph
 
 Audio(path=wav)                          # or array= + sampling_rate=
 Video(path=mp4)                          # or array= + fps=
@@ -76,7 +76,7 @@ Mesh(mesh=trimesh_obj, file_type="glb")
 Path-only → store file bytes. Bare `*.jpg` / `*.png` paths are also claimed (same as `Image(path=)`) so stream returns a **tensor**, not a string. Decode is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
 
 Built-in serializers (`streaming/serializers.py`), tried in registry order:
-`str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `pickle`.
+`str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `graph`, `pickle`.
 
 | Return type                                                    | Serializer                    | Result                                    |
 | -------------------------------------------------------------- | ----------------------------- | ----------------------------------------- |
@@ -86,6 +86,7 @@ Built-in serializers (`streaming/serializers.py`), tried in registry order:
 | `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                              |
 | `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name                 | See README `#media-types`                 |
 | `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
+| `Graph` / PyG `Data`                                           | `graph`                       | `to_dict` tensors; README `#pyg-graphs`   |
 
 **Best practice:** `Image(..., quality=95, format="jpeg")` (or keep existing JPEGs via `Image(path=)`). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
 

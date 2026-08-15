@@ -3,6 +3,8 @@
 # you may not use this file except in compliance with the License.
 
 import os
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -11,6 +13,7 @@ import torch
 from litdata.streaming.serializers import (
     _SERIALIZERS,
     AudioSerializer,
+    GraphSerializer,
     ImageSerializer,
     JPEGArraySerializer,
     NoHeaderTensorSerializer,
@@ -21,8 +24,15 @@ from litdata.streaming.serializers import (
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
-from litdata.types import Audio, Image, Jpeg, JpegArray, Tensor
+from litdata.types import Audio, Graph, Image, Jpeg, JpegArray, Tensor
 from litdata.utilities._pytree import tree_flatten
+
+try:
+    import torch_geometric  # noqa: F401
+
+    _PYG_AVAILABLE = True
+except ImportError:
+    _PYG_AVAILABLE = False
 
 
 def test_image_serializer_claims_bare_jpeg_path(tmpdir):
@@ -187,3 +197,109 @@ def test_tokens_loader_reads_tensor_wrapper_dim():
     encoded, dim = TokensLoader.encode_data([data], [len(data)], [tokens])
     assert dim == 32
     assert encoded == data
+
+
+def test_graph_serializer_packs_coo_tensors():
+    graph = Graph(
+        x=torch.arange(12, dtype=torch.float32).reshape(4, 3),
+        edge_index=torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+        edge_attr=torch.ones(3, 1),
+        y=torch.tensor([7]),
+    )
+    picked = next(name for name, serializer in _get_serializers(None).items() if serializer.can_serialize(graph))
+    assert picked == "graph"
+    data, name = GraphSerializer().serialize(graph)
+    assert name == "graph"
+    assert data.startswith(b"LDGR")
+    out = GraphSerializer().deserialize(data)
+    assert out.x.shape == (4, 3)
+    assert out.edge_index.tolist() == [[0, 1, 2], [1, 2, 3]]
+    assert out.y.tolist() == [7]
+
+
+def test_graph_serializer_packs_extra_keys_and_meta():
+    graph = Graph(
+        x=torch.ones(2, 1),
+        edge_index=torch.tensor([[0], [1]], dtype=torch.long),
+        data={"train_mask": torch.tensor([True, False]), "num_nodes": 2},
+    )
+    data, name = GraphSerializer().serialize(graph)
+    assert name == "graph"
+    out = GraphSerializer().deserialize(data)
+    assert out.x.shape == (2, 1)
+    if hasattr(out, "train_mask"):
+        mask, num_nodes = out.train_mask, out.num_nodes
+    else:
+        mask, num_nodes = out.data["train_mask"], out.data["num_nodes"]
+    assert mask.tolist() == [True, False]
+    assert int(num_nodes) == 2
+
+
+def test_graph_reconstruct_uses_pyg_from_dict(monkeypatch):
+    class FakeData:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        @classmethod
+        def from_dict(cls, mapping):
+            return cls(mapping)
+
+    pyg = types.ModuleType("torch_geometric")
+    pyg_data = types.ModuleType("torch_geometric.data")
+    pyg_data.Data = FakeData
+    pyg.data = pyg_data
+    monkeypatch.setitem(sys.modules, "torch_geometric", pyg)
+    monkeypatch.setitem(sys.modules, "torch_geometric.data", pyg_data)
+
+    graph = Graph(x=torch.ones(2, 1), edge_index=torch.tensor([[0], [1]], dtype=torch.long))
+    packed, _ = GraphSerializer().serialize(graph)
+    out = GraphSerializer().deserialize(packed)
+    assert isinstance(out, FakeData)
+    assert out.mapping["x"].shape == (2, 1)
+
+
+@pytest.mark.skipif(not _PYG_AVAILABLE, reason="Requires torch-geometric")
+def test_pyg_data_roundtrip_and_loader(tmpdir):
+    from torch_geometric.data import Batch, Data
+    from torch_geometric.nn import GCNConv, global_mean_pool
+
+    from litdata import StreamingDataLoader, StreamingDataset
+    from litdata.streaming.cache import Cache
+
+    cache = Cache(str(tmpdir), chunk_size=8)
+    for i in range(16):
+        n = 6 + i % 3
+        cache[i] = Data(
+            x=torch.randn(n, 4),
+            edge_index=torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+            y=torch.tensor(i % 2, dtype=torch.long),
+            num_nodes=n,
+        )
+    cache.done()
+    cache.merge()
+
+    ds = StreamingDataset(str(tmpdir))
+    assert type(ds[0]).__name__ == "Data"
+    loader = StreamingDataLoader(ds, batch_size=4, num_workers=0, shuffle=False)
+    batch = next(iter(loader))
+    assert isinstance(batch, Batch)
+    assert batch.y.numel() == 4
+
+    conv = GCNConv(4, 2)
+    lin = torch.nn.Linear(2, 2)
+    opt = torch.optim.Adam(list(conv.parameters()) + list(lin.parameters()), lr=1e-2)
+    logits = lin(global_mean_pool(conv(batch.x, batch.edge_index), batch.batch))
+    loss = torch.nn.functional.cross_entropy(logits, batch.y.view(-1))
+    loss.backward()
+    opt.step()
+    assert loss.ndim == 0
+
+
+def test_graph_pickle_fallback_for_opaque_data():
+    graph = Graph(data={"nodes": [1, 2], "edges": [(0, 1)]})
+    data, name = GraphSerializer().serialize(graph)
+    assert name == "graph:pickle"
+    serializer = GraphSerializer()
+    serializer.setup(name)
+    out = serializer.deserialize(data)
+    assert out.data == {"nodes": [1, 2], "edges": [(0, 1)]}

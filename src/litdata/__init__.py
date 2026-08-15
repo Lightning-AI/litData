@@ -15,9 +15,11 @@ import warnings
 from litdata.__about__ import *  # noqa: F403
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
 from litdata.exceptions import ChunkWaitTimeoutError
+from litdata.processing.complete import complete_dataset, is_complete_dataset
 from litdata.processing.functions import map, merge_datasets, optimize, walk
 from litdata.processing.media_folder import iter_webdataset_tar, list_media_folder
 from litdata.raw.dataset import StreamingRawDataset
+from litdata.streaming.collate import pyg_collate
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
@@ -25,7 +27,7 @@ from litdata.streaming.dataset_update import dataset_update
 from litdata.streaming.item_loader import TokensLoader
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.writer import index_parquet_dataset
-from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video
+from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.keys_index import build_keys_index
@@ -42,6 +44,7 @@ __all__ = [
     "StreamingRawDataset",
     "CombinedStreamingDataset",
     "StreamingDataLoader",
+    "pyg_collate",
     "TokensLoader",
     "ParallelStreamingDataset",
     "map",
@@ -53,6 +56,8 @@ __all__ = [
     "iter_webdataset_tar",
     "train_test_split",
     "merge_datasets",
+    "complete_dataset",
+    "is_complete_dataset",
     "index_parquet_dataset",
     "index_hf_dataset",
     "breakpoint",
@@ -69,6 +74,7 @@ __all__ = [
     "Pdf",
     "Nifti",
     "Tensor",
+    "Graph",
 ]
 
 if _LIGHTNING_SDK_AVAILABLE:

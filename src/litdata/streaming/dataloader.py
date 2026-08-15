@@ -24,6 +24,8 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data._utils.collate import default_collate
+
+from litdata.streaming.collate import pyg_collate
 from torch.utils.data._utils.fetch import _BaseDatasetFetcher
 from torch.utils.data.dataloader import (
     DataLoader,
@@ -673,8 +675,9 @@ class StreamingDataLoader(DataLoader):
         if profile_batches and num_workers == 0:
             raise ValueError("Profiling is supported only with num_workers >= 1.")
 
-        if collate_fn:
-            collate_fn = StreamingDataLoaderCollateFn(collate_fn)
+        if collate_fn is None:
+            collate_fn = pyg_collate
+        collate_fn = StreamingDataLoaderCollateFn(collate_fn)
 
         self.current_epoch = 0
         self.batch_size = batch_size

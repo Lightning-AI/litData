@@ -90,8 +90,9 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | `CombinedStreamingDataset` / `ParallelStreamingDataset`                             | Mix or zip streams                      |
 | `StreamingRawDataset`                                                               | Raw file stream                         |
 | `TokensLoader`                                                                      | Token windows for LLMs                  |
-| `optimize` / `map` / `merge_datasets` / `walk`                                      | Write / transform / merge / list        |
-| `Audio` `Video` `Image` `Jpeg` `JpegArray` `Pil` `Tiff` `File` `Mesh` `Pdf` `Nifti` | Typed media leaves for `optimize`       |
+| `optimize` / `map` / `merge_datasets` / `walk` / `complete_dataset`                 | Write / transform / merge / finish index |
+| `Audio` `Video` `Image` `Jpeg` `JpegArray` `Pil` `Tiff` `File` `Mesh` `Pdf` `Nifti` `Tensor` `Graph` | Typed media leaves for `optimize` |
+| `pyg_collate`                                                                       | Default graph batching for the loader   |
 | `dataset_update` / `build_keys_index`                                               | Keyed in-place patch / backfill sidecar |
 | `train_test_split`                                                                  | Split by chunk ROIs                     |
 | `index_parquet_dataset` / `index_hf_dataset`                                        | Index for streaming                     |

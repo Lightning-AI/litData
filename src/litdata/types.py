@@ -19,6 +19,8 @@ to the serializer (a caption string is not an audio file). Native objects
 
     optimize(lambda p: Audio(path=p), inputs=wavs, output_dir=...)
     optimize(lambda x: Image(array=x, quality=95, format="jpeg"), ...)
+    optimize(lambda g: g, inputs=pyg_data_list, output_dir=...)  # Data.to_dict packed
+    optimize(lambda g: Graph(x=g.x, edge_index=g.edge_index), ...)
 """
 
 from __future__ import annotations
@@ -137,6 +139,43 @@ class Nifti(_MediaRef):
     image: Any = None
     array: Any = None
     affine: Any = None
+
+
+@dataclass
+class Graph:
+    """Graph sample stored as packed tensors from PyG ``Data.to_dict()``.
+
+    Prefer passing a ``torch_geometric.data.Data`` (or ``Graph(...)``). On read,
+    LitData calls ``Data.from_dict`` when torch-geometric is installed. Do not
+    ``torch.save`` the graph — that is still pickle/zip. ``data=`` is only a
+    pickle fallback for NetworkX or nested HeteroData.
+
+        Graph(x=node_feat, edge_index=edge_index, edge_attr=edge_w, y=label)
+        Graph(data=pyg_data)  # uses pyg_data.to_dict()
+    """
+
+    x: Any = None
+    edge_index: Any = None
+    edge_attr: Any = None
+    y: Any = None
+    pos: Any = None
+    batch: Any = None
+    data: Any = None
+
+    def to_pyg(self) -> Any:
+        """``Data.from_dict`` (requires torch-geometric)."""
+        from torch_geometric.data import Data
+
+        mapping = {
+            name: getattr(self, name)
+            for name in ("x", "edge_index", "edge_attr", "y", "pos", "batch")
+            if getattr(self, name) is not None
+        }
+        if isinstance(self.data, dict):
+            mapping.update(self.data)
+        elif self.data is not None and hasattr(self.data, "to_dict"):
+            return self.data
+        return Data.from_dict(mapping)
 
 
 @dataclass

@@ -14,7 +14,7 @@
 import logging
 import os
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from time import time
 from typing import Any
 
@@ -1030,6 +1030,12 @@ class StreamingDataset(IterableDataset):
                 "The provided `num_samples_yielded` state is greater than the dataset length. "
                 f"Found `{state['num_samples_yielded']}` instead of `{len(self)}`."
             )
+
+    def subset(self, indices: "Sequence[int] | slice") -> "StreamingDataset":
+        """Return a copy restricted to the given global indices (or a ``slice``)."""
+        from litdata.utilities.train_test_split import subset_dataset
+
+        return subset_dataset(self, indices)
 
     def reset(self) -> None:
         # undo all the properties associated with original dataset

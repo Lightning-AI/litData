@@ -68,7 +68,13 @@ _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
-_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0"))
+# Opt-in PyPI upgrade nag. Downstream libraries pin litdata and disable this.
+# ``LITDATA_CHECK_UPDATES=1`` turns it back on. ``LITDATA_DISABLE_VERSION_CHECK``
+# still wins when set.
+_LITDATA_CHECK_UPDATES = int(os.getenv("LITDATA_CHECK_UPDATES", "0"))
+_LITDATA_DISABLE_VERSION_CHECK = int(
+    os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0" if _LITDATA_CHECK_UPDATES else "1")
+)
 # Experimental async chunk prefetch (see ``litdata.streaming.async_prefetch``).
 # Default: on for remote datasets when ``LITDATA_ASYNC_CHUNK_PREFETCH`` is unset;
 # force with ``LITDATA_ASYNC_CHUNK_PREFETCH=0/1``.

@@ -34,6 +34,7 @@ Transform                              Optimize / Stream
   <a href="#resolve-paths">Paths & cloud URLs</a> •
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#start-from-a-template">Templates</a> •
+  <a href="#used-by">Used by</a> •
   <a href="#community">Community</a>
 </p>
 
@@ -521,9 +522,9 @@ Ready-made ImageNet optimize/stream scripts: `benchmarks/litdata/` (`--write_mod
   <summary> ✅ Custom serializers <a id="serializers" href="#serializers">🔗</a> </summary>
 &nbsp;
 
-LitData serializes each **pytree leaf** with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), and `pickle` (fallback).
+LitData serializes each **pytree leaf** with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), `graph`, and `pickle` (fallback).
 
-Prefer [typed media wrappers](#media-types) (`Audio`, `Video`, `Image`, …) so a filepath is not confused with a caption. For images, `Image(..., quality=95, format="jpeg")` or a `JpegImageFile` stores JPEG; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
+Prefer [typed media wrappers](#media-types) (`Audio`, `Video`, `Image`, `Graph`, …) so a filepath is not confused with a caption. For images, `Image(..., quality=95, format="jpeg")` or a `JpegImageFile` stores JPEG; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
 
 Pass custom serializers when **streaming** (and when using the lower-level `Cache` writer):
 
@@ -558,7 +559,7 @@ Keys you pass are tried before the defaults (so they win over `pickle`). `optimi
 Wrap media in `optimize` so the serializer is unambiguous (a string caption is not a `.wav` path). Wrappers are **pytree leaves**: one serializer sees the whole object.
 
 ```python
-from litdata import optimize, Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor
+from litdata import optimize, Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor, Graph
 
 def fn(path):
     return {
@@ -581,6 +582,7 @@ def fn(path):
 | `Pdf` | `pdf` | `path=` / `bytes=` / `pdf=` |
 | `Nifti` | `nifti` | `path=` / `bytes=` / `image=` / `array=` + `affine=` |
 | `Tensor` | `tensor` / `no_header_tensor` | `array=` (1-D → `TokensLoader` layout) |
+| `Graph` | `graph` | PyG `Data` or `x=` / `edge_index=` / … (see [PyG graphs](#pyg-graphs)) |
 
 Path-only samples are stored as-is. `quality` / `format` / `mode` (or `array=` / `image=`) trigger an encode.
 
@@ -593,6 +595,66 @@ Mesh(mesh=trimesh_obj, file_type="glb")
 ```
 
 Video/audio decode with torchcodec (`VideoDecoder` / `AudioDecoder` by default). CUDA decode is forced to CPU inside DataLoader and optimize workers.
+
+</details>
+
+<details>
+  <summary> ✅ Stream PyG graphs <a id="pyg-graphs" href="#pyg-graphs">🔗</a> </summary>
+&nbsp;
+
+Store [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/) `Data` as packed tensors (`Data.to_dict()`), not `torch.save` / pickle. On read, LitData reconstructs with `Data.from_dict` when `torch-geometric` is installed.
+
+```python
+import torch
+import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.nn import GCNConv, global_mean_pool
+
+from litdata import optimize, StreamingDataset, StreamingDataLoader
+
+def make_graph(i: int) -> Data:
+    n = 8 + i % 5
+    src = torch.randint(0, n, (12,), dtype=torch.long)
+    dst = torch.randint(0, n, (12,), dtype=torch.long)
+    return Data(
+        x=torch.randn(n, 8),
+        edge_index=torch.stack([src, dst], 0),
+        y=torch.tensor(i % 3),
+        num_nodes=n,
+    )
+
+optimize(make_graph, inputs=list(range(1024)), output_dir="graphs", chunk_size=64)
+
+dataset = StreamingDataset("graphs")
+sample = dataset[0]          # torch_geometric.data.Data
+loader = StreamingDataLoader(dataset, batch_size=32, shuffle=True)
+batch = next(iter(loader))   # DataBatch (Batch.from_data_list)
+
+class Net(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = GCNConv(8, 16)
+        self.lin = torch.nn.Linear(16, 3)
+
+    def forward(self, data):
+        x = F.relu(self.conv(data.x, data.edge_index))
+        return self.lin(global_mean_pool(x, data.batch))
+```
+
+**Notes**
+
+- Pass a `Data` object (or `Graph(x=..., edge_index=...)`). Extra tensor attrs (`train_mask`, …) and scalars (`num_nodes`) are kept.
+- `StreamingDataLoader` uses `pyg_collate` by default so variable-size graphs become a `DataBatch`. `default_collate` cannot stack them. You can still pass `collate_fn=` or use `torch_geometric.loader.DataLoader` for `follow_batch` / `exclude_keys`.
+- `optimize` needs a **top-level** function (spawn). Nested `HeteroData` and NetworkX fall back to pickle (`graph:pickle`).
+- Do not `torch.save` the graph into the sample — that is still pickle/zip and slower to stream.
+
+```python
+from litdata import Graph, pyg_collate
+
+Graph(x=node_feat, edge_index=edge_index, y=label)
+Graph(data=pyg_data)   # uses pyg_data.to_dict()
+# without torch-geometric installed, samples are Graph; call .to_pyg() later
+```
 
 </details>
 
@@ -1396,6 +1458,16 @@ if __name__ == "__main__":
     print(len(dataset))
     # out: 1000
 ```
+
+If you wrote chunks yourself (`Cache` / `BinaryWriter`) and only have `{rank}.index.json` shards, finish the dataset:
+
+```python
+from litdata import complete_dataset, StreamingDataset
+
+complete_dataset("my_chunks")  # no-op if index.json already exists
+StreamingDataset("my_chunks")  # also tries this automatically
+```
+
 </details>
 
 <details>
@@ -1481,6 +1553,13 @@ print(test_dataset)
 # out: 50,000
 ```
 
+Or pick exact indices with `StreamingDataset.subset`:
+
+```python
+train = dataset.subset(range(0, 30_000))
+# dataset.subset(slice(0, 1000))
+```
+
 </details>
 
 <details>
@@ -1497,6 +1576,9 @@ dataset = StreamingDataset("s3://my-bucket/my-data", subsample=0.01) # data are 
 
 print(len(dataset)) # display the length of your data
 # out: 1000
+
+# or a list / slice of global indices
+small = dataset.subset([0, 10, 20])
 ```
 
 </details>
@@ -1613,7 +1695,7 @@ ld.index_parquet_dataset(
 
 ### Stream with `ParquetLoader`
 
-Unlike `hf://`, local/S3/GCS parquet **does not** auto-select the loader — pass `ParquetLoader` explicitly (it must match `index.json`).
+If the folder looks like parquet and has no `index.json`, `StreamingDataset` now **builds the index automatically**. You still need `ParquetLoader` for local/S3/GCS (it must match `index.json`). `hf://` already auto-indexes and selects the loader.
 
 ```python
 import litdata as ld
@@ -1919,7 +2001,8 @@ export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
 | `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | `8` | S3 obstore stream chunk size (MiB) |
 | `MAX_WAIT_TIME` | `120` | Seconds to wait for a chunk before error |
 | `FORCE_DOWNLOAD_TIME` | `30` | Seconds before force re-download of a missing chunk |
-| `LITDATA_DISABLE_VERSION_CHECK` | `0` | `1` skips the upgrade tip |
+| `LITDATA_CHECK_UPDATES` | unset | `1` enables the PyPI upgrade tip (off by default) |
+| `LITDATA_DISABLE_VERSION_CHECK` | on unless updates enabled | `1` skips the upgrade tip |
 | `HF_TOKEN` | — | Gated Hugging Face datasets |
 | `DEBUG_LITDATA` / `PRINT_DEBUG_LOGS` | `0` | Internal debug / stdout logs |
 | `LITDATA_LOG_FILE` | `litdata_debug.log` | `enable_tracer()` output path |
@@ -2552,6 +2635,22 @@ Below are templates for real-world applications of LitData at scale.
 &nbsp;
 
 ----
+
+# Used by
+
+Published packages that declare a `litdata` dependency (excluding first-party Lightning / LitGPT):
+
+| Project | Pin | Notes |
+|---|---|---|
+| [PyHealth](https://github.com/sunlabuiuc/PyHealth) (`pyhealth`) | `litdata~=0.2.59` | Clinical toolkit; caches + `StreamingDataset` |
+| [LBSTER](https://github.com/prescient-design/lobster) (`lbster`) | `litdata>=0.2.49` | Genentech protein LMs |
+| [OpenSynth](https://github.com/OpenSynth-energy/OpenSynth) (`opensynth-energy`) | `litdata==0.2.30` | Smart-meter synthetic data |
+| [biomed-multi-view](https://github.com/BiomedSciAI/biomed-multi-view) | `litdata==0.2.6` | IBM BiomedSciAI |
+| [DEM](https://github.com/cma2015/DEM) (`biodem`) | `litdata>=0.2.29` | Phenotypic / gene mining |
+| [deeptan](https://github.com/cma2015/DeepTAN) | `litdata>=0.2.49` | Same lab as DEM |
+| [deeptan-network](https://github.com/wangying608/deeptan) | `litdata>=0.2.51` | Related DeepTAN package |
+| [datarax](https://github.com/avitai/datarax) | `litdata>=0.2` extra `benchmark` | Optional cloud streaming |
+| [fasr](https://pypi.org/project/fasr/) | `litdata>=0.2.46` extra `litdata` | Speech ASR framework |
 
 # Community
 LitData is a community project accepting contributions -  Let's make the world's most advanced AI data processing framework.
