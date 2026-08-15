@@ -47,6 +47,7 @@ from litdata.streaming.serializers import (
     TIFFSerializer,
     VideoSerializer,
     _get_serializers,
+    _LitAudioDecoder,
     _torchcodec_usable,
 )
 from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tiff, Video
@@ -436,6 +437,25 @@ def test_audio_type_path_and_pcm(tmpdir):
     encoded, name = serializer.serialize(Audio(path=pcm_path, sampling_rate=8000))
     assert name == "audio:wav"
     assert encoded[:4] == b"RIFF"
+
+
+def test_audio_decoder_is_subscriptable():
+    class _FakeDecoder:
+        def get_all_samples(self):
+            class _Samples:
+                data = torch.zeros(1, 8)
+
+            return _Samples()
+
+        def get_samples_played_in_range(self, start: float, end: float):
+            class _Range:
+                sample_rate = 8000
+
+            return _Range()
+
+    decoder = _LitAudioDecoder(_FakeDecoder())
+    assert decoder["sampling_rate"] == 8000
+    assert decoder["array"].shape == (8,)
 
 
 @pytest.mark.skipif(not _torchcodec_usable(), reason="Requires a working torchcodec install")

@@ -664,22 +664,35 @@ def _decode_image_tensor(data: bytes) -> torch.Tensor:
     return decode_image(array, mode=ImageReadMode.RGB)
 
 
-def _attach_audio_hf_api(decoder: Any) -> Any:
-    """HF ``AudioDecoder`` is subscriptable: ``audio["array"]``, ``audio["sampling_rate"]``."""
-    if getattr(decoder, "_litdata_hf_getitem", False):
-        return decoder
+class _LitAudioDecoder:
+    """Wrap torchcodec ``AudioDecoder`` so ``audio["array"]`` / ``audio["sampling_rate"]`` work.
 
-    def __getitem__(key: str) -> Any:
+    Assigning ``__getitem__`` on the native decoder is ignored (C extension).
+    """
+
+    def __init__(self, decoder: Any) -> None:
+        self._decoder = decoder
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._decoder, name)
+
+    def __getitem__(self, key: str) -> Any:
         if key == "array":
-            samples = decoder.get_all_samples().data.cpu().numpy()
+            samples = self._decoder.get_all_samples().data.cpu().numpy()
             return np.mean(samples, axis=tuple(range(samples.ndim - 1))) if samples.ndim > 1 else samples
         if key == "sampling_rate":
-            return decoder.get_samples_played_in_range(0, 0).sample_rate
+            return self._decoder.get_samples_played_in_range(0, 0).sample_rate
         raise KeyError(key)
 
-    decoder.__getitem__ = __getitem__
-    decoder._litdata_hf_getitem = True
-    return decoder
+
+def _unwrap_audio_decoder(item: Any) -> Any:
+    return item._decoder if isinstance(item, _LitAudioDecoder) else item
+
+
+def _attach_audio_hf_api(decoder: Any) -> Any:
+    if isinstance(decoder, _LitAudioDecoder):
+        return decoder
+    return _LitAudioDecoder(decoder)
 
 
 def _nifti_encoded_bytes(image: Any) -> tuple[bytes, str]:
@@ -916,6 +929,7 @@ class AudioSerializer(Serializer):
         if _torchcodec_usable():
             from torchcodec.decoders import AudioDecoder
 
+            item = _unwrap_audio_decoder(item)
             if isinstance(item, AudioDecoder):
                 return self._serialize_decoder(item), "audio:wav"
 
@@ -1023,7 +1037,7 @@ class AudioSerializer(Serializer):
         if _torchcodec_usable():
             from torchcodec.decoders import AudioDecoder
 
-            if isinstance(data, AudioDecoder):
+            if isinstance(_unwrap_audio_decoder(data), AudioDecoder):
                 return True
         if isinstance(data, dict) and data.get("array") is not None and data.get("sampling_rate") is not None:
             return True
