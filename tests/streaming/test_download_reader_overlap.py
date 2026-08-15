@@ -20,6 +20,36 @@ from litdata.streaming.sampler import ChunkedIndex
 from litdata.utilities.env import _DistributedEnv
 
 
+def test_run_loop_downloads_numpy_int64_chunk_indexes(monkeypatch, tmpdir):
+    """Shuffle queues numpy.int64; the prepare loop must not drop them as non-ints."""
+    import numpy as np
+
+    cache_dir = str(tmpdir / "cache")
+    os.makedirs(cache_dir)
+    config = MagicMock(spec=ChunksConfig)
+    config.num_bytes = 1024
+    config._cache_dir = cache_dir
+    config._remote_dir = "s3://bucket"
+    config.download_chunk_from_index = MagicMock()
+    item_loader = MagicMock()
+    env = _DistributedEnv(1, 0, 1)
+
+    thread = PrepareChunksThread(config, item_loader, env, max_cache_size=10_000, max_pre_download=4)
+    seen: list[list[int]] = []
+
+    def fake_download(chunk_indexes: list[int]) -> None:
+        seen.append(list(chunk_indexes))
+        thread._force_stop_event.set()
+
+    monkeypatch.setattr(thread, "_download_chunk_indexes", fake_download)
+    monkeypatch.setattr(thread, "_async_prefetch", lambda: False)
+    thread.download([np.int64(17), np.int64(18)])
+    thread.run()
+
+    assert seen, "prepare thread dropped numpy.int64 chunk indexes"
+    assert [int(x) for x in seen[0]] == [17]
+
+
 def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkeypatch, tmpdir):
     """Force/delete polls must use timeout=0 while the prefetch buffer can still accept downloads."""
     cache_dir = str(tmpdir / "cache")

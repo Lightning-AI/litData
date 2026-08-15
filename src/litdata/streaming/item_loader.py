@@ -296,14 +296,8 @@ class BaseItemLoader(ABC):
                 if remaining <= 0:
                     raise ChunkWaitTimeoutError(chunk_filepath, time() - start_time)
                 event = chunk_ready_provider(chunk_index)
-                # Ask the prefetch thread for this chunk immediately. The Event only
-                # wakes us after mark_chunk_ready; if the prefetch window is full the
-                # download queue is not drained, but force-download still is.
-                if not requested_force_download and force_download_queue is not None:
-                    self.force_download(chunk_index)
-                    requested_force_download = True
-                # Wake as soon as the downloader atomically publishes (or decompress finishes).
-                # Recheck prefetch crashes at least once a second.
+                # Wait for prefetch to publish. Force-download is a last resort after
+                # ``_FORCE_DOWNLOAD_TIME`` (default 30s) — not on the first wait.
                 signaled = event.wait(timeout=min(1.0, remaining))
                 if signaled and not (
                     os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes

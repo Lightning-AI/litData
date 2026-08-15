@@ -108,8 +108,6 @@ class PrepareChunksThread(Thread):
         # Per-chunk readiness signals for the in-process item-loader wait loop.
         self._chunk_ready: dict[int, Event] = {}
         self._chunk_ready_lock = Lock()
-        # Downloader/decompress atomic publish → set the same Events the item loader waits on.
-        self._config._on_chunk_file_ready = self.mark_chunk_ready
 
         self._rank = rank
         # Set when ``run()`` dies so the item-loader wait loop can fail fast with
@@ -602,6 +600,8 @@ class PrepareChunksThread(Thread):
         """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
         if not chunk_indexes:
             return
+        # Shuffle / queue can repeat an index; one GET per chunk per batch.
+        chunk_indexes = list(dict.fromkeys(int(idx) for idx in chunk_indexes))
         # Respect the shared disk budget before bringing new bytes onto disk.
         pending: list[int] = []
         deferred: list[int] = []
@@ -732,7 +732,8 @@ class PrepareChunksThread(Thread):
                     self._has_exited = True
                     return
 
-                if isinstance(chunk_index, int):
+                # Shuffle emits numpy.int64; do not use ``isinstance(..., int)``.
+                if chunk_index is not None:
                     batch: list[int] = [chunk_index]
                     # Drain more pending indexes so asyncio.gather can overlap remote
                     # downloads. When over disk budget, download one at a time.
@@ -745,8 +746,7 @@ class PrepareChunksThread(Thread):
                             if nxt == _END_TOKEN:
                                 self._to_download_queue.put(_END_TOKEN)
                                 break
-                            if isinstance(nxt, int):
-                                batch.append(nxt)
+                            batch.append(nxt)
                     self._download_chunk_indexes(batch)
 
             if self._max_cache_size:

@@ -16,7 +16,6 @@ import logging
 import os
 import threading
 from collections import defaultdict
-from collections.abc import Callable
 from contextlib import suppress
 from time import time
 from typing import Any, Optional
@@ -97,14 +96,6 @@ class ChunksConfig:
         # In-process "file is visible" Events, set after atomic publish (download or decompress).
         self._file_published: dict[str, threading.Event] = {}
         self._file_published_lock = threading.Lock()
-        # PrepareChunksThread installs this so download/decompress publish can set chunk-ready.
-        self._on_chunk_file_ready: Callable[[int], None] | None = None
-        self._readable_name_to_index: dict[str, int] = {}
-        for chunk_index, cnk in enumerate(self._chunks):
-            readable = cnk["filename"]
-            if self._config.get("compression"):
-                readable = readable.replace(f".{self._config['compression']}", "")
-            self._readable_name_to_index[readable] = chunk_index
 
         if remote_dir:
             self._downloader = get_downloader(
@@ -280,8 +271,6 @@ class ChunksConfig:
                 event = threading.Event()
                 self._file_published[path] = event
             event.set()
-        # Do not mark chunk-ready here. Compressed downloads publish a non-readable
-        # path first; the item loader must wait until decompress / _finalize.
 
     def wait_file_published(self, local_filepath: str, timeout: float) -> bool:
         """Wait for an in-process publish Event; fall back to ``exists`` for other workers."""
@@ -508,14 +497,12 @@ class ChunksConfig:
         # threading.Lock / Event are not picklable (DataLoader spawn / deepcopy).
         state["_file_published"] = {}
         state["_file_published_lock"] = None
-        state["_on_chunk_file_ready"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self._file_published = {}
         self._file_published_lock = threading.Lock()
-        self._on_chunk_file_ready = None
         if self._downloader is not None:
             self._downloader._on_file_published = self.notify_file_published
 

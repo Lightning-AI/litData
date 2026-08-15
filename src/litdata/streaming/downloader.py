@@ -322,7 +322,13 @@ class Downloader(ABC):
     @staticmethod
     def _atomic_replace(tmp_path: str, local_filepath: str) -> None:
         """Publish a completed download by atomically replacing the destination path."""
-        os.replace(tmp_path, local_filepath)
+        try:
+            os.replace(tmp_path, local_filepath)
+        except FileNotFoundError:
+            # Same-pid gather of a duplicate index, or another worker already published.
+            if os.path.exists(local_filepath):
+                return
+            raise
 
     def _notify_published(self, local_filepath: str) -> None:
         """Signal that ``local_filepath`` is visible (atomic rename finished, or already present)."""
