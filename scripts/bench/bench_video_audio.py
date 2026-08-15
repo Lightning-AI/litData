@@ -6,7 +6,7 @@ lazy torchcodec decoder. AudioSerializer did not exist on HEAD.
 
   ffmpeg -y -f lavfi -i testsrc=size=64x64:rate=8:duration=1 -pix_fmt yuv420p /tmp/litdata_av.mp4
   PYTHONPATH=src python scripts/bench/bench_video_audio.py --label after --video /tmp/litdata_av.mp4
-  PYTHONPATH=/tmp/litdata-before-bench/src python scripts/bench/bench_video_audio.py --label before --video /tmp/litdata_av.mp4
+  LITDATA_BENCH_SRC=/path/to/old/src python scripts/bench/bench_video_audio.py --label before --video CLIP.mp4
 """
 
 from __future__ import annotations
@@ -49,9 +49,8 @@ def main() -> None:
     parser.add_argument("--video", default="/tmp/litdata_av.mp4")
     args = parser.parse_args()
 
-    from litdata.streaming.serializers import VideoSerializer
-
     import litdata
+    from litdata.streaming.serializers import VideoSerializer
 
     src = Path(litdata.__file__).resolve().parent
     print(f"label={args.label}  litdata={src}")
@@ -98,8 +97,11 @@ def main() -> None:
         try:
             dec_audio = AudioSerializer(decode="decoder")
             add("audio.deserialize default x50", lambda: [dec_audio.deserialize(audio_bytes) for _ in range(50)])
-            samples_ser = AudioSerializer(decode="samples")
-            add("audio.deserialize decode=samples x20", lambda: [samples_ser.deserialize(audio_bytes) for _ in range(20)])
+            samples_serializer = AudioSerializer(decode="samples")
+            add(
+                "audio.deserialize decode=samples x20",
+                lambda: [samples_serializer.deserialize(audio_bytes) for _ in range(20)],
+            )
         except Exception as exc:
             print(f"  audio decoder skipped: {type(exc).__name__}: {exc}")
     else:

@@ -109,7 +109,7 @@ def _stream_n(out: Path, n: int = 8) -> tuple[float, str]:
         t, _ = _time(lambda: [ds[i] for i in range(min(n, len(ds)))])
         sample = ds[0]
         return t, type(sample).__name__ if not isinstance(sample, tuple) else type(sample[0]).__name__
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return -1.0, f"fail:{exc.__class__.__name__}"
 
 
@@ -158,21 +158,21 @@ def main() -> None:
     pdf = _download(_PDF_URL, raw / "dummy.pdf")
     stl = raw / "mesh.stl"
     stl.write_bytes(_STL)
-    wav_ser = AudioSerializer(decode="bytes")
-    wav_bytes, _ = wav_ser.serialize({"array": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
+    wav_serializer = AudioSerializer(decode="bytes")
+    wav_bytes, _ = wav_serializer.serialize({"array": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
     wav = raw / "tone.wav"
     wav.write_bytes(wav_bytes)
     nii = raw / "vol.nii"
     nii.write_bytes(b"niftifake" * 64)
 
-    for name, ser, path, loops in (
+    for name, serializer, path, loops in (
         ("video_bytes", VideoSerializer(decode="bytes"), video, 20),
         ("audio_bytes", AudioSerializer(decode="bytes"), wav, 200),
         ("mesh_bytes", MeshSerializer(decode=False), stl, 200),
         ("pdf_bytes", PDFSerializer(decode=False), pdf, 200),
         ("nifti_bytes", NiftiSerializer(decode=False), nii, 200),
     ):
-        def _roundtrip(serializer=ser, src=str(path), n=loops):
+        def _roundtrip(serializer=serializer, src=str(path), n=loops):
             for _ in range(n):
                 blob, _fmt = serializer.serialize(src)
                 serializer.deserialize(blob)
@@ -180,7 +180,11 @@ def main() -> None:
         t, _ = _time(_roundtrip)
         results.append((f"{name}_x{loops}", t, f"{path.stat().st_size}B"))
 
-    t, _ = _time(lambda: AudioSerializer(decode="bytes").serialize({"array": np.zeros(16000, np.float32), "sampling_rate": 16000}))
+    t, _ = _time(
+        lambda: AudioSerializer(decode="bytes").serialize(
+            {"array": np.zeros(16000, np.float32), "sampling_rate": 16000}
+        )
+    )
     results.append(("audio_from_array", t, "1s@16k"))
 
     mesh_dec = MeshSerializer(decode=True)

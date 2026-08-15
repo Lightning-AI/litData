@@ -980,7 +980,9 @@ class BinaryReader:
                 item = self._item_loader.load_item_from_bytes(raw_bytes, index.chunk_index)
             else:
                 self.setup_thread_and_download_chunk(index)
-                item = self._item_loader.load_item_from_chunk(
+                pytree_loader = self._item_loader
+                assert isinstance(pytree_loader, PyTreeLoader)
+                item = pytree_loader.load_item_from_chunk(
                     index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
                 )
         else:

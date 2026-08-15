@@ -20,8 +20,6 @@ import tarfile
 from collections.abc import Iterator
 from typing import Any
 
-from litdata.streaming.serializers import AudioSerializer, MeshSerializer, PDFSerializer, VideoSerializer
-
 IMAGE_EXTENSIONS = (
     "jpg",
     "jpeg",
@@ -32,10 +30,10 @@ IMAGE_EXTENSIONS = (
     "tif",
     "tiff",
 )
-VIDEO_EXTENSIONS = VideoSerializer._EXTENSIONS
-AUDIO_EXTENSIONS = AudioSerializer._EXTENSIONS
-MESH_EXTENSIONS = MeshSerializer._EXTENSIONS
-PDF_EXTENSIONS = PDFSerializer._EXTENSIONS
+VIDEO_EXTENSIONS = ("mp4", "ogv", "mjpeg", "avi", "mov", "h264", "mpg", "mpeg", "webm", "wmv", "mkv")
+AUDIO_EXTENSIONS = ("wav", "mp3", "flac", "ogg", "opus", "m4a", "aac", "wma", "pcm")
+MESH_EXTENSIONS = ("glb", "ply", "stl")
+PDF_EXTENSIONS = ("pdf",)
 NIFTI_EXTENSIONS = ("nii", "nii.gz")
 
 _KIND_EXTENSIONS: dict[str, tuple[str, ...]] = {

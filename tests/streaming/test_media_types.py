@@ -9,19 +9,19 @@ import pytest
 import torch
 
 from litdata.streaming.serializers import (
+    _SERIALIZERS,
     AudioSerializer,
     ImageSerializer,
     JPEGArraySerializer,
     NoHeaderTensorSerializer,
     TensorSerializer,
     VideoSerializer,
-    _SERIALIZERS,
     _get_serializers,
     _image_array_for_pil,
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
-from litdata.types import Audio, Image, Jpeg, JpegArray, Tensor, Video
+from litdata.types import Audio, Image, Jpeg, JpegArray, Tensor
 from litdata.utilities._pytree import tree_flatten
 
 
@@ -42,9 +42,9 @@ def test_writer_picks_audio_not_string_for_wrapper():
     serializers = _get_serializers(None)
     caption = "dog barking.wav"
     audio = Audio(bytes=b"RIFF....", path="dog.wav")
-    picked = next(name for name, ser in serializers.items() if ser.can_serialize(audio))
+    picked = next(name for name, serializer in serializers.items() if serializer.can_serialize(audio))
     assert picked == "audio"
-    picked_caption = next(name for name, ser in serializers.items() if ser.can_serialize(caption))
+    picked_caption = next(name for name, serializer in serializers.items() if serializer.can_serialize(caption))
     assert picked_caption == "str"
 
 
@@ -172,9 +172,9 @@ def test_tensor_wrapper_routes_1d_and_nd():
     assert not NoHeaderTensorSerializer().can_serialize(image)
     data, name = NoHeaderTensorSerializer().serialize(tokens)
     assert name.startswith("no_header_tensor:")
-    ser = NoHeaderTensorSerializer()
-    ser.setup(name)
-    assert torch.equal(ser.deserialize(data), tokens.array)
+    serializer = NoHeaderTensorSerializer()
+    serializer.setup(name)
+    assert torch.equal(serializer.deserialize(data), tokens.array)
     packed, _ = TensorSerializer().serialize(image)
     assert TensorSerializer().deserialize(packed).shape == (3, 4, 4)
 

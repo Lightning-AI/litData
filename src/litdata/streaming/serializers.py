@@ -21,16 +21,14 @@ import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import suppress
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import asdict
 from itertools import chain
 from typing import Any
 
 import numpy as np
-import tifffile
 import torch
 
-from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
 from litdata.constants import (
     _AV_AVAILABLE,
     _NIBABEL_AVAILABLE,
@@ -38,11 +36,11 @@ from litdata.constants import (
     _PDFPLUMBER_AVAILABLE,
     _PIL_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
-    _TORCHCODEC_AVAILABLE,
     _TORCH_VISION_LESS_THAN_0_26,
+    _TORCHCODEC_AVAILABLE,
     _TRIMESH_AVAILABLE,
 )
-
+from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
 
 _torchcodec_ok: bool | None = None
 
@@ -486,7 +484,7 @@ class PickleSerializer(Serializer):
 
 class FileSerializer(Serializer):
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
-        if isinstance(item, File) or isinstance(item, _MediaRef):
+        if isinstance(item, (File, _MediaRef)):
             data, ext = _read_media_bytes(item)
             return data, f"file:{ext}" if ext else "file"
         print("FileSerializer will be removed in the future.")
@@ -526,7 +524,9 @@ def _read_media_bytes(item: Any, _extensions: tuple[str, ...] = ()) -> tuple[byt
     if isinstance(item, _MediaRef) and item.path is None and item.bytes is None:
         extras = [name for name in ("array", "image", "mesh", "pdf") if getattr(item, name, None) is not None]
         if extras:
-            raise TypeError(f"{type(item).__name__} has {extras} but no path/bytes; the serializer should encode those first.")
+            raise TypeError(
+                f"{type(item).__name__} has {extras} but no path/bytes; the serializer should encode those first."
+            )
         raise TypeError(f"{type(item).__name__} needs path=, bytes=, or a native payload (array=/image=/...).")
     if path:
         if os.path.isfile(path):
@@ -731,7 +731,8 @@ def _encode_video_array(array: Any, fps: float) -> bytes:
             write_video(path, frames, fps=float(fps))
         except Exception as exc:
             raise TypeError(
-                "Encoding Video(array=...) requires torchvision video writing. Pass Video(path=...) or Video(bytes=...)."
+                "Encoding Video(array=...) requires torchvision video writing. "
+                "Pass Video(path=...) or Video(bytes=...)."
             ) from exc
         with open(path, "rb") as handle:
             return handle.read()
@@ -1119,7 +1120,7 @@ class MeshSerializer(Serializer):
                     return data, f"mesh:{ext or 'glb'}"
                 exported = item.export(file_type=file_type)
                 payload = exported if isinstance(exported, (bytes, bytearray)) else bytes(exported)
-                return payload, f"mesh:{file_type}"
+                return bytes(payload), f"mesh:{file_type}"
 
         data, ext = _read_media_bytes(item, self._EXTENSIONS)
         if ext not in self._EXTENSIONS:
@@ -1169,6 +1170,8 @@ class PDFSerializer(Serializer):
                 if name and os.path.isfile(name):
                     with open(name, "rb") as handle:
                         return handle.read(), "pdf"
+                if stream is None:
+                    raise TypeError("PDF object has no readable stream.")
                 stream.seek(0)
                 return stream.read(), "pdf"
 
@@ -1183,6 +1186,8 @@ class PDFSerializer(Serializer):
                     if name and os.path.isfile(name):
                         with open(name, "rb") as handle:
                             return handle.read(), "pdf"
+                    if stream is None:
+                        raise TypeError("PDF object has no readable stream.")
                     stream.seek(0)
                     return stream.read(), "pdf"
         if isinstance(item, (bytes, bytearray)) and bytes(item[:4]) == b"%PDF":
@@ -1311,9 +1316,11 @@ class TIFFSerializer(Serializer):
         if isinstance(item, Tiff) and (item.array is not None or item.image is not None):
             array = item.array if item.array is not None else np.asarray(item.image)
             buffer = io.BytesIO()
+            import tifffile
+
             tifffile.imwrite(buffer, _as_numpy(array))
             return buffer.getvalue(), "tiff"
-        if isinstance(item, Tiff) or isinstance(item, dict):
+        if isinstance(item, (Tiff, dict)):
             data, _ = _read_media_bytes(item)
             return data, "tiff"
         if not isinstance(item, str) or not os.path.isfile(item):
@@ -1325,6 +1332,8 @@ class TIFFSerializer(Serializer):
         return data, None
 
     def deserialize(self, data: bytes) -> Any:
+        import tifffile
+
         return tifffile.imread(io.BytesIO(data))  # This is a NumPy array
 
     def can_serialize(self, item: Any) -> bool:
