@@ -1710,24 +1710,32 @@ class DataChunkRecipe(DataRecipe):
         # Note: When using the Data Optimizer, they should be a single process on each node executing this section
         # So no risk to get race condition.
         if num_nodes == node_rank + 1:
-            # Get the index file locally
-            for node_rank in range(num_nodes - 1):
+            # Merge node shards in the cache, not the write-through output dir,
+            # so ``{node}-index.json`` uploads stay in place for other ranks.
+            merge_dir = _get_cache_dir() if _is_local_write_through(output_dir) else cache_dir
+            os.makedirs(merge_dir, exist_ok=True)
+            last_rank = node_rank
+            for src_rank in range(num_nodes):
+                name = f"{src_rank}-{_INDEX_FILENAME}"
                 output_dir_path = output_dir.url if output_dir.url else output_dir.path
                 assert output_dir_path
-                remote_filepath = os.path.join(output_dir_path, f"{node_rank}-{_INDEX_FILENAME}")
-                node_index_filepath = os.path.join(cache_dir, os.path.basename(remote_filepath))
+                remote_filepath = os.path.join(output_dir_path, name)
+                node_index_filepath = os.path.join(merge_dir, name)
+                if src_rank == last_rank and os.path.isfile(os.path.join(cache_dir, name)):
+                    remote_filepath = os.path.join(cache_dir, name)
                 if obj.scheme in _SUPPORTED_PROVIDERS:
+                    if src_rank == last_rank and os.path.isfile(node_index_filepath):
+                        continue
                     merged_storage_options = construct_storage_options(self.storage_options, output_dir)
                     _wait_for_file_to_exist(remote_filepath, storage_options=merged_storage_options)
                     fs_provider = _get_fs_provider(remote_filepath, merged_storage_options)
                     fs_provider.download_file(remote_filepath, node_index_filepath)
-                elif output_dir.path and os.path.isdir(output_dir.path):
-                    if not _same_local_file(remote_filepath, node_index_filepath):
-                        shutil.copyfile(remote_filepath, node_index_filepath)
+                elif os.path.isfile(remote_filepath) and not _same_local_file(remote_filepath, node_index_filepath):
+                    shutil.copyfile(remote_filepath, node_index_filepath)
 
-            merge_cache = Cache(cache_dir, chunk_bytes=1)
+            merge_cache = Cache(merge_dir, chunk_bytes=1)
             merge_cache._merge_no_wait()
-            self._upload_index(output_dir, cache_dir, 1, None)
+            self._upload_index(output_dir, merge_dir, 1, None)
 
 
 class MapRecipe(DataRecipe):
