@@ -73,9 +73,9 @@ lint.per-file-ignores."scripts/bench/**" = [
   "D301",   # raw docstring escapes in CLI examples
   "D401",
   "D404",
+  "S108",   # local bench fixtures under /tmp
   "S110",   # teardown best-effort
   "S311",
-  "S108",   # local bench fixtures under /tmp
   "S603",   # trusted local subprocess for bench orchestration
   "S605",   # historic cache wipe via shell glob
   "SIM105",

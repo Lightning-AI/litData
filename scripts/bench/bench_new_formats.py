@@ -172,6 +172,7 @@ def main() -> None:
         ("pdf_bytes", PDFSerializer(decode=False), pdf, 200),
         ("nifti_bytes", NiftiSerializer(decode=False), nii, 200),
     ):
+
         def _roundtrip(serializer=serializer, src=str(path), n=loops):
             for _ in range(n):
                 blob, _fmt = serializer.serialize(src)
