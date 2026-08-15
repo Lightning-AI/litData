@@ -7,15 +7,31 @@
 &nbsp;
 &nbsp;
 
-<pre>
-Transform                              Optimize / Stream
-  
-✅ Parallelize data processing       ✅ Stream raw files with no prep
-✅ Create vector embeddings          ✅ Stream large cloud datasets          
-✅ Run distributed inference         ✅ Accelerate training by 20x           
-✅ Scrape websites at scale          ✅ Pause and resume data streaming      
-                                     ✅ Use remote data without local loading
-</pre>
+<table>
+<tr>
+<td valign="top" align="left">
+
+**Transform**
+
+✅ Parallelize data processing  
+✅ Create vector embeddings  
+✅ Run distributed inference  
+✅ Scrape websites at scale
+
+</td>
+<td valign="top" align="left">
+
+**Optimize / Stream**
+
+✅ Stream raw files with no prep  
+✅ Stream large cloud datasets  
+✅ Accelerate training by 20x  
+✅ Pause and resume data streaming  
+✅ Use remote data without local loading
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -2564,26 +2580,12 @@ Speed to stream Imagenet 1.2M from other cloud storage providers:
 |---|---|---|---|
 | Cloudflare R2 | LitData | **5335** | **5630** |
 
-Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
-| Framework | Dataset Mode | Dataset Size @ 256px | Images / sec 1st Epoch (float32) | Images / sec 2nd Epoch (float32) |
-|---|---|---|---|---|
-| LitData | PIL RAW | 168 GB | 6647 | 6398 | 
-| LitData | JPEG 90% | 12 GB | 6553 | 6537 |
-| ffcv (os_cache=True) | RAW | 170 GB | 7263 | 6698 |
-| ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
-| ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
-| ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+Speed to stream a synthetic ImageNet-scale set from **Vast NFS** with POSIX-fast (mmap in place, decode only, no transforms):
 
-Speed to stream a **synthetic ImageNet-scale set from Vast NFS** (NFSv3 `nconnect=32`, 208-CPU host, ~1 TiB RAM). Dataset: **1.08M** JPEG q95 256×256 (~160 GiB, 64 MiB chunks). `StreamingDataLoader`, batch **256**, `shuffle=True`, `drop_last=True`, decode only unless noted. POSIX-fast mmaps chunks **in place** (no copy into `~/.lightning/chunks`).
-
-| Setup | Workers | Images / sec |
-|---|---|---|
-| Copy into local cache (`LITDATA_POSIX_FAST=0`) | 48 | **16.7k** (2-epoch avg) |
-| POSIX-fast (this default on local/Vast paths) | 48 | **18.2k** |
-| POSIX-fast + README ImageNet augs (crop 224, flip, float32) | 48 | **12.9k** |
-| POSIX-fast, all CPU cores | **208** | **35.8k** |
-
-Notes: 208 workers need enough **MemAvailable**. This host had **928×1 GiB hugepages** reserved and idle (~900 GiB locked); after `nr_hugepages=0`, 208 workers stayed healthy. If `num_workers=os.cpu_count()` would crowd RAM, LitData **clamps** workers (`LITDATA_POSIX_MAX_WORKERS=0` disables) and skips `WILLNEED` prefetch. Real ImageNet JPEG 90% is much smaller (~12 GiB) and usually decodes faster than this q95 noise set.
+| Workers | Images / sec |
+|---|---|
+| 48 | **18.2k** |
+| 208 | **35.8k** |
 
 ### Raw Dataset
 
@@ -2693,19 +2695,44 @@ Below are templates for real-world applications of LitData at scale.
 
 # Used by
 
-Published packages that declare a `litdata` dependency (excluding first-party Lightning / LitGPT):
-
-| Project | Pin | Notes |
-|---|---|---|
-| [PyHealth](https://github.com/sunlabuiuc/PyHealth) (`pyhealth`) | `litdata~=0.2.59` | Clinical toolkit; caches + `StreamingDataset` |
-| [LBSTER](https://github.com/prescient-design/lobster) (`lbster`) | `litdata>=0.2.49` | Genentech protein LMs |
-| [OpenSynth](https://github.com/OpenSynth-energy/OpenSynth) (`opensynth-energy`) | `litdata==0.2.30` | Smart-meter synthetic data |
-| [biomed-multi-view](https://github.com/BiomedSciAI/biomed-multi-view) | `litdata==0.2.6` | IBM BiomedSciAI |
-| [DEM](https://github.com/cma2015/DEM) (`biodem`) | `litdata>=0.2.29` | Phenotypic / gene mining |
-| [deeptan](https://pypi.org/project/deeptan/) | `litdata>=0.2.49` | Same lab as DEM |
-| [deeptan-network](https://pypi.org/project/deeptan-network/) | `litdata>=0.2.51` | Related DeepTAN package |
-| [datarax](https://github.com/avitai/datarax) | `litdata>=0.2` extra `benchmark` | Optional cloud streaming |
-| [fasr](https://pypi.org/project/fasr/) | `litdata>=0.2.46` extra `litdata` | Speech ASR framework |
+<table width="100%">
+<tr>
+<th align="left" width="18%">Project</th>
+<th align="left">Description</th>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/sunlabuiuc/PyHealth">PyHealth</a></td>
+<td>Deep-learning toolkit for clinical prediction (MIMIC, eICU, OMOP, sleep, CXR). <code>set_task()</code> writes processed samples with LitData; <code>SampleDataset</code> subclasses <code>StreamingDataset</code> so training streams chunked EHR tensors instead of holding the cohort in RAM.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/prescient-design/lobster">LBSTER</a></td>
+<td>Protein and biological-sequence language models from Prescient Design (Genentech). Pre-training and concept-bottleneck models (fitness, embeddings, guided generation) stream large sequence corpora through LitData.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/OpenSynth-energy/OpenSynth">OpenSynth</a></td>
+<td>Open toolkit for synthetic smart-meter / energy time series. Generated or historical meter traces are optimized and streamed for model training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/BiomedSciAI/biomed-multi-view">biomed-multi-view</a></td>
+<td>IBM BiomedSciAI multi-view biomedical models. LitData is used to cache and stream paired modalities during training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/cma2015/DEM">DEM</a></td>
+<td>Phenotype and gene-mining pipeline (<code>biodem</code>). Large genomic / trait tables are packed into LitData chunks for repeated training passes.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://pypi.org/project/deeptan/">deeptan</a></td>
+<td>Graph multi-task models for multi-omics trait-associated networks. Guide graphs and expression tables are converted to LitData chunks before GNN training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/avitai/datarax">datarax</a></td>
+<td>Data tooling with an optional cloud-streaming extra that uses LitData to read remote datasets without a full local copy.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://pypi.org/project/fasr/">fasr</a></td>
+<td>Speech ASR framework. The LitData extra streams audio and transcripts for training instead of random-access file lists.</td>
+</tr>
+</table>
 
 # Community
 LitData is a community project accepting contributions -  Let's make the world's most advanced AI data processing framework.
@@ -2723,8 +2750,7 @@ LitData is a community project accepting contributions -  Let's make the world's
   author       = {Thomas Chaton and Lightning AI},
   title        = {LitData: Transform datasets at scale. Optimize datasets for fast AI model training.},
   year         = {2023},
-  howpublished = {\url{https://github.com/Lightning-AI/litdata}},
-  note         = {Accessed: 2025-04-09}
+  howpublished = {\url{https://github.com/Lightning-AI/litdata}}
 }
 ```
 
@@ -2732,8 +2758,12 @@ LitData is a community project accepting contributions -  Let's make the world's
 
 ## Papers with LitData
 
-* [Towards Interpretable Protein Structure
-Prediction with Sparse Autoencoders](https://arxiv.org/pdf/2503.08764) | [Github](https://github.com/johnyang101/reticular-sae) | (Nithin Parsan, David J. Yang and John J. Yang)
+Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scholar hits for “litdata streaming” are often weather *lightning* data, or mention LitData only as example source code.
+
+| Paper | Venue | How LitData is used |
+|---|---|---|
+| [Towards Interpretable Protein Structure Prediction with Sparse Autoencoders](https://arxiv.org/abs/2503.08764) ([code](https://github.com/johnyang101/reticular-sae)) | ICLR 2025 GEM | `optimize` shards ESM-2 embeddings; `StreamingDataset` streams from S3 for multi-GPU SAE training |
+| [TinyLlama: An Open-Source Small Language Model](https://arxiv.org/abs/2401.02385) ([code](https://github.com/jzhang38/TinyLlama)) | arXiv 2024 | 1.1B pretrain on SlimPajama + StarCoder via Lit-GPT’s `lightning.data` stack (now LitData): `CombinedStreamingDataset` + `TokensLoader` |
 
 ----
 
