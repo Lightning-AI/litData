@@ -931,6 +931,10 @@ class EmulateS3StreamingDataset(StreamingDataset):
             item_loader=self.item_loader,
             chunk_bytes=1,
             serializers=self.serializers,
+            # These tests emulate remote GETs into a tiny pytest tmp dir. Adaptive
+            # ``max_cache_size`` on CI /tmp can be smaller than the fixture, which
+            # deletes chunks under TokensLoader mmap and kills DataLoader workers.
+            max_cache_size=self.max_cache_size if self.max_cache_size is not None else "100GB",
         )
         cache._reader._try_load_config()
 
