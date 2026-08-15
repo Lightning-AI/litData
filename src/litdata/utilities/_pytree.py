@@ -685,21 +685,34 @@ def _is_namedtuple_instance(tree: Any) -> bool:
     return all(type(entry) == str for entry in fields)
 
 def _is_jpeg_array(tree: Any) -> bool:
-    """Check if the tree is a list of jpeg images."""
+    """True when ``tree`` is a non-empty list/tuple of PIL JPEG images."""
+    typ = type(tree)
+    if typ is not list and typ is not tuple:
+        return False
+    if not tree:
+        return False
     if not _PIL_AVAILABLE:
-            return False
+        return False
 
     from PIL.JpegImagePlugin import JpegImageFile
-    return isinstance(tree, (List,Tuple)) and bool(tree) and all(isinstance(x, JpegImageFile) for x in tree)
+
+    return all(isinstance(x, JpegImageFile) for x in tree)
+
 
 def _get_node_type(tree: Any) -> Any:
+    typ = type(tree)
+    # Fast path: registered containers skip namedtuple / JPEG-list probes.
+    if typ in SUPPORTED_NODES:
+        if (typ is list or typ is tuple) and _is_jpeg_array(tree):
+            return "jpeg_array"
+        if typ is tuple and _is_namedtuple_instance(tree):
+            return namedtuple
+        return typ
     if _is_namedtuple_instance(tree):
         return namedtuple
-
     if _is_jpeg_array(tree):
         return "jpeg_array"
-
-    return type(tree)
+    return typ
 
 
 # A leaf is defined as anything that is not a Node.
@@ -868,11 +881,13 @@ def _tree_flatten_helper(
     leaves: List[Any],
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> TreeSpec:
-    if _is_leaf(tree, is_leaf=is_leaf):
+    if is_leaf is not None and is_leaf(tree):
         leaves.append(tree)
         return _LEAF_SPEC
-
     node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        leaves.append(tree)
+        return _LEAF_SPEC
     flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
     child_pytrees, context = flatten_fn(tree)
 
@@ -911,16 +926,17 @@ def tree_iter(
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> Iterable[Any]:
     """Get an iterator over the leaves of a pytree."""
-    if _is_leaf(tree, is_leaf=is_leaf):
+    if is_leaf is not None and is_leaf(tree):
         yield tree
-    else:
-        node_type = _get_node_type(tree)
-        flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
-        child_pytrees, _ = flatten_fn(tree)
-
-        # Recursively flatten the children
-        for child in child_pytrees:
-            yield from tree_iter(child, is_leaf=is_leaf)
+        return
+    node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        yield tree
+        return
+    flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
+    child_pytrees, _context = flatten_fn(tree)
+    for child in child_pytrees:
+        yield from tree_iter(child, is_leaf=is_leaf)
 
 
 def tree_leaves(

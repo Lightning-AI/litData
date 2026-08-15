@@ -1578,7 +1578,7 @@ class BooleanSerializer(Serializer):
         Returns:
             The deserialized boolean value
         """
-        return bool(np.frombuffer(data, dtype=np.bool_)[0])
+        return data[0] != 0
 
     def can_serialize(self, item: Any) -> bool:
         """Check if the item can be serialized by this serializer.

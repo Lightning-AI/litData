@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Changed
+
+- Faster pytree flatten on the writer hot path: skip typing-generic `isinstance` and PIL JPEG probes on non-list/tuple nodes, and call `_get_node_type` once per node. `BooleanSerializer.deserialize` reads the first byte instead of going through NumPy.
+
 ## [0.2.70] - 2026-08-15
 
 ### Added

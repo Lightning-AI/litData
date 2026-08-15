@@ -183,6 +183,24 @@ def test_pytree_wrapper_is_single_leaf():
     assert isinstance(leaves[1], Image)
 
 
+def test_jpeg_array_flatten_is_single_leaf():
+    pytest.importorskip("PIL")
+    import io
+
+    from PIL import Image as PILImage
+
+    frames = []
+    for _ in range(3):
+        buf = io.BytesIO()
+        PILImage.new("RGB", (8, 8), color=(10, 20, 30)).save(buf, format="JPEG")
+        frames.append(PILImage.open(io.BytesIO(buf.getvalue())))
+    leaves, spec = tree_flatten({"index": 1, "images": frames})
+    assert spec.type is dict
+    assert len(leaves) == 2
+    assert leaves[0] == 1
+    assert leaves[1] is frames
+
+
 def test_serializers_registry_has_media_keys():
     for key in ("video", "audio", "image", "nifti", "mesh", "pdf", "text", "graph"):
         assert key in _SERIALIZERS
