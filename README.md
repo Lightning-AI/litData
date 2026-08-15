@@ -2141,7 +2141,9 @@ for batch in StreamingDataLoader(dataset, batch_size=64, num_workers=8):
 | `LITDATA_ASYNC_CHUNK_PREFETCH=1` | Force on |
 | `LITDATA_ASYNC_CHUNK_PREFETCH=0` | Force off |
 
-When async is on, LitData raises `max_pre_download` to at least **4** so `asyncio.gather` has enough in-flight downloads (override with `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`; set `0` to disable the floor). Peak disk ≈ `num_workers × max_pre_download × chunk_size` — size `max_cache_size` accordingly.
+When async is on, LitData raises `max_pre_download` to at least **4** so `asyncio.gather` has enough in-flight downloads (override with `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`; set `0` to disable the floor). Concurrent GETs are capped by `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` (default **8**). The prepare thread drains the prefetch queue up to that gather width whenever a cache slot is free. Peak disk ≈ `num_workers × max_pre_download × chunk_size` — size `max_cache_size` accordingly.
+
+The reader does **not** poll the cache directory for each chunk. After a download finishes, the downloader atomically `os.replace`s the temp file and sets an in-process `Event`. Compressed chunks set that Event only after decompress publishes the readable `.bin`. Other DataLoader workers still fall back to a short filesystem check (Events are per process).
 
 ```bash
 # Debugging download/delete races — force synchronous downloads
@@ -2149,6 +2151,9 @@ export LITDATA_ASYNC_CHUNK_PREFETCH=0
 
 # Keep max_pre_download=2 even with async enabled
 export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
+
+# Cap overlapping remote GETs (default 8)
+export LITDATA_ASYNC_DOWNLOAD_CONCURRENCY=4
 ```
 
 ### Common environment variables
@@ -2158,6 +2163,7 @@ export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
 | `LITDATA_CACHE_DIR` | `~/.lightning/chunks` | Default chunk cache directory |
 | `LITDATA_ASYNC_CHUNK_PREFETCH` | on for remote | `0`/`1` force async chunk download overlap |
 | `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` | `4` | Floor for `max_pre_download` when async is on (`0` = no floor) |
+| `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` | `8` | Max in-flight chunk GETs per gather |
 | `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | `8` | S3 obstore stream chunk size (MiB) |
 | `MAX_WAIT_TIME` | `120` | Seconds to wait for a chunk before error |
 | `FORCE_DOWNLOAD_TIME` | `30` | Seconds before force re-download of a missing chunk |
