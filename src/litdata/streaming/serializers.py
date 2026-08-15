@@ -118,7 +118,7 @@ class PILSerializer(Serializer):
         idx = 3 * 4
         width, height, mode_size = np.frombuffer(data[:idx], np.uint32)
         idx2 = idx + mode_size
-        mode = data[idx:idx2].decode("utf-8")
+        mode = bytes(data[idx:idx2]).decode("utf-8")
         size = width, height
         raw = data[idx2:]
         return Image.frombytes(mode, size, raw)  # pyright: ignore
@@ -1220,7 +1220,7 @@ class StringSerializer(Serializer):
         return obj.encode("utf-8"), None
 
     def deserialize(self, data: bytes) -> str:
-        return data.decode("utf-8")
+        return bytes(data).decode("utf-8")
 
     def can_serialize(self, data: str) -> bool:
         return isinstance(data, str) and not os.path.isfile(data)

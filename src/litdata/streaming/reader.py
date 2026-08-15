@@ -1091,7 +1091,13 @@ class BinaryReader:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_prepare_thread"] = None
+        # StreamingTimingStats holds a threading.Lock and is process-local.
+        state.pop("_timing", None)
         return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._timing = StreamingTimingStats.instance()
 
     def __del__(self) -> None:
         # Release eagerly-acquired shared-chunk locks that were never released (e.g. the loop was

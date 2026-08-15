@@ -103,8 +103,8 @@ def normalize_key(key: Any) -> str | int:
         return key
     if isinstance(key, str):
         return key
-    if isinstance(key, bytes):
-        return key.decode("utf-8")
+    if isinstance(key, (bytes, bytearray, memoryview)):
+        return bytes(key).decode("utf-8")
     try:
         import numpy as np
 

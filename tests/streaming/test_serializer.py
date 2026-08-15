@@ -24,7 +24,6 @@ import tifffile
 import torch
 from lightning_utilities.core.imports import RequirementCache
 
-from litdata.constants import _TORCHCODEC_AVAILABLE
 from litdata.streaming.serializers import (
     _AV_AVAILABLE,
     _NUMPY_DTYPES_MAPPING,
@@ -48,6 +47,7 @@ from litdata.streaming.serializers import (
     TIFFSerializer,
     VideoSerializer,
     _get_serializers,
+    _torchcodec_usable,
 )
 from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tiff, Video
 
@@ -347,7 +347,7 @@ def test_video_serializer_accepts_path_and_dict(tmpdir):
     assert data == b"from-dict"
 
 
-@pytest.mark.skipif(not _TORCHCODEC_AVAILABLE, reason="Requires torchcodec")
+@pytest.mark.skipif(not _torchcodec_usable(), reason="Requires a working torchcodec install")
 def test_video_serializer_default_is_torchcodec_decoder(tmpdir):
     from torch.hub import download_url_to_file
     from torchcodec.decoders import VideoDecoder
@@ -438,7 +438,7 @@ def test_audio_type_path_and_pcm(tmpdir):
     assert encoded[:4] == b"RIFF"
 
 
-@pytest.mark.skipif(not _TORCHCODEC_AVAILABLE, reason="Requires torchcodec")
+@pytest.mark.skipif(not _torchcodec_usable(), reason="Requires a working torchcodec install")
 def test_audio_decoder_hf_getitem():
     array = np.zeros(1600, dtype=np.float32)
     data, _ = AudioSerializer(decode="bytes").serialize({"array": array, "sampling_rate": 8000})
