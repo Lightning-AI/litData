@@ -12,9 +12,11 @@
 # limitations under the License.
 
 import asyncio
+import cProfile
 import inspect
 import logging
 import os
+import pstats
 from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
@@ -55,6 +57,38 @@ from litdata.utilities.base import (
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
+
+_CPROFILE_MAIN_STEM = "cprofile_main"
+_CPROFILE_WORKER_STEM = "cprofile_worker0"
+
+
+def _cprofile_output_dir(profile_dir: str | None) -> str:
+    path = os.path.abspath(profile_dir or os.getcwd())
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _dump_cprofile(profiler: cProfile.Profile, stem: str) -> None:
+    """Write ``{stem}.prof`` and a short ``{stem}.txt`` tottime/cumtime dump."""
+    profiler.disable()
+    prof_path = f"{stem}.prof"
+    txt_path = f"{stem}.txt"
+    profiler.dump_stats(prof_path)
+    with open(txt_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "Prefer tottime (self time). cumtime mixes threads in the same process "
+            "(worker 0 includes fetch + prefetch + collate) and over-counts waits.\n"
+            "C extensions (JPEG decode, upsample, S3/obstore) appear on the Python caller.\n\n"
+        )
+        stats = pstats.Stats(profiler, stream=handle)
+        stats.strip_dirs()
+        handle.write("--- tottime ---\n")
+        stats.sort_stats("tottime").print_stats(40)
+        handle.write("\n--- cumtime ---\n")
+        stats.sort_stats("cumtime").print_stats(40)
+        handle.write("\n--- litdata ---\n")
+        stats.sort_stats("tottime").print_stats("litdata", 40)
+    print(f"[litdata] cProfile wrote {prof_path} and {txt_path}", flush=True)
 
 
 def _equal_items(data_1: Any, data_2: Any) -> bool:
@@ -463,6 +497,57 @@ class _ProfileWorkerLoop:
             tracer.save()
 
 
+class _CProfileWorkerLoop:
+    """cProfile worker 0's DataLoader loop (stdlib; no viztracer)."""
+
+    def __init__(self, profile_dir: str) -> None:
+        self._profile_dir = profile_dir
+
+    def __call__(
+        self,
+        dataset_kind: Any,
+        dataset: Any,
+        index_queue: Any,
+        data_queue: Any,
+        done_event: Any,
+        auto_collation: Any,
+        collate_fn: Any,
+        drop_last: Any,
+        base_seed: Any,
+        init_fn: Any,
+        worker_id: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        from torch.utils.data._utils import worker
+
+        profiler: cProfile.Profile | None = None
+        if worker_id == 0:
+            profiler = cProfile.Profile()
+            profiler.enable()
+
+        reloaded_worker = reload(worker)
+        try:
+            reloaded_worker._worker_loop(
+                dataset_kind,
+                dataset,
+                index_queue,
+                data_queue,
+                done_event,
+                auto_collation,
+                collate_fn,
+                drop_last,
+                base_seed,
+                init_fn,
+                worker_id,
+                *args,
+                **kwargs,
+            )
+        finally:
+            if profiler is not None:
+                _dump_cprofile(profiler, os.path.join(self._profile_dir, _CPROFILE_WORKER_STEM))
+
+
 class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
     def __init__(self, loader: DataLoader) -> None:
         self._loader = loader
@@ -472,17 +557,42 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
             else []
         )
         self._num_workers = loader.num_workers
+        self._cprofile: cProfile.Profile | None = None
+        self._orig_worker_loop: Any = None
 
         distributed_env = _DistributedEnv.detect()
+        profile_cprofile = bool(getattr(self._loader, "_profile_cprofile", False))
 
-        if self._loader._profile_batches and distributed_env.global_rank == 0 and _VIZ_TRACKER_AVAILABLE:
+        if distributed_env.global_rank == 0:
             from torch.utils.data._utils import worker
 
-            worker._worker_loop = _ProfileWorkerLoop(
-                self._loader._profile_batches, self._loader._profile_skip_batches, self._loader._profile_dir
-            )
+            if self._loader._profile_batches and _VIZ_TRACKER_AVAILABLE:
+                worker._worker_loop = _ProfileWorkerLoop(
+                    self._loader._profile_batches, self._loader._profile_skip_batches, self._loader._profile_dir
+                )
+            elif profile_cprofile:
+                self._orig_worker_loop = worker._worker_loop
+                worker._worker_loop = _CProfileWorkerLoop(_cprofile_output_dir(self._loader._profile_dir))
 
+        # Workers fork/spawn here. Enable the parent profiler only after that so
+        # the child does not inherit an active cProfile (one profiler per process).
         super().__init__(loader)
+
+        if profile_cprofile and distributed_env.global_rank == 0:
+            self._cprofile = cProfile.Profile()
+            self._cprofile.enable()
+
+    def _shutdown_workers(self) -> None:
+        if self._cprofile is not None:
+            stem = os.path.join(_cprofile_output_dir(self._loader._profile_dir), _CPROFILE_MAIN_STEM)
+            _dump_cprofile(self._cprofile, stem)
+            self._cprofile = None
+        if self._orig_worker_loop is not None:
+            from torch.utils.data._utils import worker
+
+            worker._worker_loop = self._orig_worker_loop
+            self._orig_worker_loop = None
+        super()._shutdown_workers()
 
     def _try_put_index(self) -> None:
         # Used to restart on the right DataLoader worker
@@ -610,6 +720,9 @@ class StreamingDataLoader(DataLoader):
         profile_skip_batches (int): How many batches to skip before recording
         profile_batches (int, bool, optional): Whether to record data loading profile and generate a result.json file.
         profile_dir (int, bool,  optional): Where to store the recorded trace when profile_batches is enabled.
+        profile_cprofile (bool, optional): Write stdlib cProfile stats for the main process and
+            worker 0 (``cprofile_main.prof`` / ``cprofile_worker0.prof``). Cannot be combined
+            with ``profile_batches`` (both use ``sys.setprofile``).
 
     """
 
@@ -624,6 +737,7 @@ class StreamingDataLoader(DataLoader):
         profile_batches: bool | int = False,
         profile_skip_batches: int = 0,
         profile_dir: str | None = None,
+        profile_cprofile: bool = False,
         prefetch_factor: int | None = None,
         shuffle: bool | None = None,
         drop_last: bool | None = None,
@@ -668,6 +782,11 @@ class StreamingDataLoader(DataLoader):
 
         shuffle = None
 
+        if profile_batches and profile_cprofile:
+            raise ValueError(
+                "`profile_batches` (viztracer) and `profile_cprofile` both install a profiler; enable only one of them."
+            )
+
         if profile_batches and not _VIZ_TRACKER_AVAILABLE:
             raise ModuleNotFoundError("To use profile_batches, viztracer is required. Run `pip install viztracer`")
 
@@ -684,6 +803,8 @@ class StreamingDataLoader(DataLoader):
         self._profile_batches = profile_batches
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
+        self._profile_cprofile = profile_cprofile
+        self._cprofile_main: cProfile.Profile | None = None
         self._num_samples_yielded_streaming = 0
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
@@ -734,54 +855,68 @@ class StreamingDataLoader(DataLoader):
         self.dataset.set_epoch(self.current_epoch)
         emit_trace("dataloader", "B", CAT_EPOCH, epoch=self.current_epoch)
         batch_idx = 0
+        if self._profile_cprofile and self.num_workers == 0:
+            self._cprofile_main = cProfile.Profile()
+            self._cprofile_main.enable()
 
-        if isinstance(self.dataset, StreamingDataset):
-            assert self.batch_size
-            timing = StreamingTimingStats.instance()
-            for batch in super().__iter__():
-                emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
-                t0 = timing.start()
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                self._num_samples_yielded_streaming += self.batch_size
-                timing.record("dataloader_yield_s", t0)
-                yield batch
-                emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
-                batch_idx += 1
-        else:
-            self.dataset._set_use_streaming_dataloader(True)
-            assert self.batch_size
-            # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
-            for batch in super().__iter__():
-                emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
-                    self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
-                        sample[-1].item() if self.batch_size > 1 else sample.item()
-                        for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
-                    ]
-
-                    if __NUM_CYCLES_KEY__ in batch:
-                        self._num_cycles[self._latest_worker_idx] = [
-                            cycle[-1].item() if self.batch_size > 1 else cycle.item()
-                            for cycle in batch[__NUM_CYCLES_KEY__]
-                        ]
-                        self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
-
-                    yield batch[__SAMPLES_KEY__]
-                else:
+        try:
+            if isinstance(self.dataset, StreamingDataset):
+                assert self.batch_size
+                timing = StreamingTimingStats.instance()
+                for batch in super().__iter__():
+                    emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    t0 = timing.start()
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    self._num_samples_yielded_streaming += self.batch_size
+                    timing.record("dataloader_yield_s", t0)
                     yield batch
-                emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
-                batch_idx += 1
+                    emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    batch_idx += 1
+            else:
+                self.dataset._set_use_streaming_dataloader(True)
+                assert self.batch_size
+                # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
+                for batch in super().__iter__():
+                    emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
+                        self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
+                            sample[-1].item() if self.batch_size > 1 else sample.item()
+                            for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
+                        ]
 
-        # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
-        # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
-        # the last `yield`) must leave `restore` untouched: callers that explicitly resumed from a
-        # checkpoint (`load_state_dict`) rely on `restore` staying `True` across such early exits so
-        # that the *next* `__iter__` call keeps skipping `reset_state_dict()` and replays from the
-        # loaded state (see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). `restore` is
-        # only toggled back to `False` here, once the loop above completes a full epoch normally.
-        emit_trace("dataloader", "E", CAT_EPOCH, epoch=self.current_epoch)
-        self.restore = False
+                        if __NUM_CYCLES_KEY__ in batch:
+                            self._num_cycles[self._latest_worker_idx] = [
+                                cycle[-1].item() if self.batch_size > 1 else cycle.item()
+                                for cycle in batch[__NUM_CYCLES_KEY__]
+                            ]
+                            self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
+
+                        yield batch[__SAMPLES_KEY__]
+                    else:
+                        yield batch
+                    emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    batch_idx += 1
+
+            # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
+            # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
+            # the last `yield`) must leave `restore` untouched: callers that explicitly resumed from a
+            # checkpoint (`load_state_dict`) rely on `restore` staying `True` across such early exits so
+            # that the *next* `__iter__` call keeps skipping `reset_state_dict()` and replays from the
+            # loaded state (see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). `restore` is
+            # only toggled back to `False` here, once the loop above completes a full epoch normally.
+            emit_trace("dataloader", "E", CAT_EPOCH, epoch=self.current_epoch)
+            self.restore = False
+        finally:
+            self._dump_cprofile_main()
+
+    def _dump_cprofile_main(self) -> None:
+        """Flush the in-process cProfile started for ``num_workers == 0``."""
+        profiler = self._cprofile_main
+        if profiler is None:
+            return
+        self._cprofile_main = None
+        _dump_cprofile(profiler, os.path.join(_cprofile_output_dir(self._profile_dir), _CPROFILE_MAIN_STEM))
 
     def __len__(self) -> int:
         if self._dataset_kind == _DatasetKind.Iterable:

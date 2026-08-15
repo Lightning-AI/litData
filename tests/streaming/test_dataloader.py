@@ -106,6 +106,61 @@ def test_streaming_dataloader():
     }
 
 
+def test_profile_cprofile_conflicts_with_profile_batches(tmpdir):
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(4, 1), TestStatefulDataset(4, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    with pytest.raises(ValueError, match="profile_cprofile"):
+        StreamingDataLoader(
+            dataset,
+            batch_size=2,
+            num_workers=1,
+            profile_batches=True,
+            profile_cprofile=True,
+            profile_dir=str(tmpdir),
+        )
+
+
+def test_profile_cprofile_main_and_worker(tmpdir):
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(8, 1), TestStatefulDataset(8, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=2, num_workers=1, profile_cprofile=True, profile_dir=str(tmpdir)
+    )
+    batches = list(dataloader)
+    assert len(batches) > 0
+    main_prof = os.path.join(tmpdir, "cprofile_main.prof")
+    worker_prof = os.path.join(tmpdir, "cprofile_worker0.prof")
+    assert os.path.exists(main_prof)
+    assert os.path.exists(worker_prof)
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_main.txt"))
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_worker0.txt"))
+    assert os.path.getsize(main_prof) > 0
+    assert os.path.getsize(worker_prof) > 0
+
+
+def test_profile_cprofile_num_workers_zero(tmpdir):
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(6, 1), TestStatefulDataset(6, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=2, num_workers=0, profile_cprofile=True, profile_dir=str(tmpdir)
+    )
+    assert list(dataloader)
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_main.prof"))
+    assert not os.path.exists(os.path.join(tmpdir, "cprofile_worker0.prof"))
+
+
 @pytest.mark.skip(reason="Profiling patches torch which leads to undesired test interactions")
 @pytest.mark.skipif(not _VIZ_TRACKER_AVAILABLE, reason="viz tracker required")
 @pytest.mark.parametrize("profile", [2, True])

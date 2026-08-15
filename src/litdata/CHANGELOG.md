@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Added
+
+- `StreamingDataLoader(..., profile_cprofile=True)` writes stdlib cProfile stats for the main process and worker 0 (`cprofile_main.prof` / `cprofile_worker0.prof` plus `.txt` summaries). No extra dependency. Cannot be combined with `profile_batches` (viztracer).
+
 ### Fixed
 
 - Prefetch accepts `numpy.int64` chunk indexes from shuffle (they were dropped by `isinstance(..., int)`), so force-download stays a last resort after `_FORCE_DOWNLOAD_TIME`. Concurrent `os.replace` of the same chunk is a no-op when the destination already exists.

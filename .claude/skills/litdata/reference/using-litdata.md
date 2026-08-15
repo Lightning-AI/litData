@@ -225,6 +225,27 @@ StreamingDataLoader(
 
 `int` wraps `fetcher.fetch` and stops after skip+N fetches; `True` traces until the worker loop ends. Complementary to `enable_tracer()` + [Litracer](https://github.com/Lightning-AI/litracer) (pipeline events) — see [debugging.md](debugging.md). README: `#profile-loading`.
 
+### Profiling (`profile_cprofile`) — stdlib cProfile
+
+```python
+StreamingDataLoader(
+    dataset,
+    batch_size=64,
+    num_workers=4,
+    profile_cprofile=True,
+    profile_dir="./profiles",    # cprofile_main.prof + cprofile_worker0.prof (+ .txt)
+)
+```
+
+| Requirement | Detail |
+| ----------- | ------ |
+| Dep         | None (`cProfile` / `pstats` are stdlib) |
+| Scope       | Main process + worker **0** (rank 0). `num_workers=0` writes main only |
+| Output      | `{profile_dir}/cprofile_{main,worker0}.{prof,txt}` |
+| Conflict    | Raises if `profile_batches` is also set |
+
+Parent profiler starts after workers spawn (fork must not inherit an active cProfile). Inspect with `python -m pstats profiles/cprofile_worker0.prof`.
+
 ______________________________________________________________________
 
 ## 8. Cache, async prefetch & environment variables
@@ -529,7 +550,7 @@ ______________________________________________________________________
 
 ## 13. Debug & profile
 
-**DataLoader worker CPU** — `StreamingDataLoader(..., profile_batches=20, num_workers=4)` → viztracer `result.json` (§7 / README `#profile-loading`).
+**DataLoader worker CPU** — `StreamingDataLoader(..., profile_batches=20, num_workers=4)` → viztracer `result.json`; `profile_cprofile=True` → `cprofile_main.prof` + `cprofile_worker0.prof` (§7 / README `#profile-loading`).
 
 **LitData pipeline events** — `from litdata.debugger import enable_tracer` → `litdata_debug.log` → [Litracer](https://github.com/Lightning-AI/litracer) → Perfetto:
 

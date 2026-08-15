@@ -23,6 +23,25 @@ loader = StreamingDataLoader(
 - Overwrites existing `result.json`. View in `chrome://tracing` or Perfetto.
 - Full user doc: README `#profile-loading`; cookbook: [using-litdata.md](using-litdata.md) §7.
 
+## StreamingDataLoader cProfile (main + worker 0)
+
+Stdlib function profile — no viztracer. Complementary to the Chrome trace above.
+
+```python
+loader = StreamingDataLoader(
+    StreamingDataset("s3://bucket/data"),
+    batch_size=64,
+    num_workers=4,
+    profile_cprofile=True,
+    profile_dir="./profiles",   # → cprofile_main.prof + cprofile_worker0.prof
+)
+```
+
+- No extra dependency. Raises if combined with `profile_batches`.
+- Rank 0 only. Worker file is worker **0**. `num_workers=0` writes main only.
+- Parent profiler starts after workers spawn so fork does not inherit an active cProfile.
+- Also writes `.txt` tottime/cumtime dumps. Open `.prof` with `python -m pstats`.
+
 ## Breakpoints inside worker processes
 
 Normal `breakpoint()` doesn't work in DataLoader or `optimize`/`map` worker subprocesses (no stdin). Use LitData's multiprocessing-safe pdb, which reopens `sys.stdin` under a lock (`utilities/breakpoint.py:33`, exported as `litdata.breakpoint`):

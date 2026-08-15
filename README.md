@@ -1085,7 +1085,8 @@ On **Vast / NFS / local disk**, POSIX-fast is on by default (`LITDATA_POSIX_FAST
 | All usual `torch.utils.data.DataLoader` kwargs | `batch_size`, `num_workers`, `collate_fn`, `pin_memory`, … |
 | `shuffle` / `drop_last` | Forwarded to the streaming dataset |
 | `profile_batches` | `int` / `True` / `False` — viztracer worker trace (see [Profile data loading](#profile-loading)) |
-| `profile_skip_batches` / `profile_dir` | Warm-up skip count; output dir for `result.json` |
+| `profile_cprofile` | `True` — stdlib cProfile of the main process + worker 0 (see [Profile data loading](#profile-loading)) |
+| `profile_skip_batches` / `profile_dir` | Warm-up skip count; output dir for viztracer / cProfile files |
 | `multiprocessing_context` | Use **`"spawn"`** (or `"forkserver"`) with `ParquetLoader` + `num_workers>0` on Linux |
 
 Prefer `StreamingDataLoader` over a plain PyTorch `DataLoader` for optimized / combined / parallel datasets (resume + correct batch metadata).
@@ -2051,7 +2052,32 @@ Only **worker 0** is instrumented. When an `int` is used, the tracer wraps `fetc
 
 - Delete or change `profile_dir` between runs — LitData removes an existing `result.json` before starting.
 - Pair with a wiped chunk cache if you care about **cold** epoch behavior (`litdata cache clear`).
-- For deeper LitData internals (download / read / delete timeline), use `enable_tracer()` + [Litracer](https://github.com/Lightning-AI/litracer) instead — see [Debug & Profile LitData](#debug-profile). That path is complementary: viztracer = DataLoader worker CPU timeline; Litracer = LitData pipeline events.
+### cProfile (main + worker 0)
+
+Stdlib statistical profile of **the parent process** (queue wait, unpickle, collate handoff) and **worker 0** (fetch, decode, transforms). No extra package.
+
+```python
+loader = StreamingDataLoader(
+    dataset,
+    batch_size=64,
+    num_workers=4,
+    profile_cprofile=True,
+    profile_dir="./profiles",
+)
+
+for batch in loader:
+    train_step(batch)
+# writes profiles/cprofile_main.prof + cprofile_worker0.prof (and .txt summaries)
+```
+
+```bash
+python -m pstats profiles/cprofile_worker0.prof
+# then: sort tottime   stats 30
+```
+
+Do not set `profile_cprofile` and `profile_batches` together — both install a `sys.setprofile` hook. With `num_workers=0` only the main file is written. The parent profiler starts **after** workers spawn so fork does not inherit an active cProfile.
+
+- For deeper LitData internals (download / read / delete timeline), use `enable_tracer()` + [Litracer](https://github.com/Lightning-AI/litracer) instead — see [Debug & Profile LitData](#debug-profile). That path is complementary: viztracer = DataLoader worker CPU timeline; cProfile = function self/cum time; Litracer = LitData pipeline events.
 
 </details>
 
