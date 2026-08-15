@@ -129,7 +129,7 @@ class BinaryWriter:
         if self._is_done:
             return True
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+        index_files = [f for f in files if re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", f)]
         worker_env = _WorkerEnv.detect()
         data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
         if data_optimiser_num_workers is not None:

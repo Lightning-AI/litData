@@ -316,6 +316,43 @@ def test_download_data_target(wait_for_disk_usage_higher_than_threshold_mock, tm
     wait_for_disk_usage_higher_than_threshold_mock.assert_called()
 
 
+def test_download_data_target_preserves_batch_order_on_cache_hit(tmpdir, monkeypatch):
+    """A later item must not emit before an earlier one just because the file is already cached."""
+    monkeypatch.setenv("LITDATA_OPTIMIZE_DOWNLOAD_BATCH", "8")
+    input_dir = os.path.join(tmpdir, "input_dir")
+    os.makedirs(input_dir, exist_ok=True)
+    src = os.path.join(input_dir, "a.txt")
+    with open(src, "w") as f:
+        f.write("HERE")
+
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    payloads = [(i, (i * 20, src), [src]) for i in range(3)]
+    payloads.append(None)
+
+    class _Queue:
+        def __init__(self) -> None:
+            self._items = list(payloads)
+
+        def get(self, *_, **__):
+            return self._items.pop(0)
+
+        def get_nowait(self):
+            if not self._items:
+                raise Empty
+            return self._items.pop(0)
+
+    emitted: list[Any] = []
+    queue_out = mock.MagicMock()
+    queue_out.put.side_effect = lambda value: emitted.append(value)
+
+    _download_data_target(Dir(input_dir), cache_dir, _Queue(), queue_out, emit_done=True)
+
+    indexes = [row[0] for row in emitted if row is not None]
+    assert indexes == [0, 1, 2]
+
+
 def test_wait_for_disk_usage_higher_than_threshold():
     disk_usage_mock = mock.Mock(side_effect=[mock.Mock(free=10e9), mock.Mock(free=10e9), mock.Mock(free=10e11)])
     with mock.patch("litdata.processing.data_processor.shutil.disk_usage", disk_usage_mock):

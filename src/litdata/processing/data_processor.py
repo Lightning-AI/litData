@@ -408,7 +408,9 @@ def _download_data_target(
             pending_emit: list[tuple[int, Any, list[str]]] = []
             for index, item, paths in batch:
                 if input_dir.path and all(os.path.exists(_cache_local_path(p, input_dir, cache_dir)) for p in paths):
-                    _emit(index, item, paths)
+                    # Keep batch order: a cache hit must not jump ahead of earlier
+                    # items still waiting on copy/download (Windows local-file batches).
+                    pending_emit.append((index, item, paths))
                     continue
 
                 if input_dir.url is None and input_dir.path is None:
