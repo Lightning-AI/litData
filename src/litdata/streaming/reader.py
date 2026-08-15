@@ -149,17 +149,13 @@ class PrepareChunksThread(Thread):
     def _should_start_download(self, *, over_budget: bool) -> bool:
         """True when we should pull work from the download queue.
 
-        After the first fill, wait until enough slots are free to gather again.
-        Otherwise a nearly-full prefetch window refills one chunk at a time and
-        ``asyncio.gather`` never overlaps (seen on 80-chunk R2 zstd datasets).
+        Use every free slot. Waiting for a gather-sized hole deadlocks when the
+        reader is blocked on the next undownloaded chunk (deletes are only queued
+        after that load succeeds). Overlap still happens when several slots are
+        free: ``_run_loop`` drains the queue up to gather width.
         """
-        if self._free_prefetch_slots() <= 0:
-            return False
-        # Always use a free slot. Waiting for a gather-sized hole deadlocks when
-        # the reader is blocked on the next undownloaded chunk (deletes are only
-        # queued after that load succeeds). Overlap still happens when several
-        # slots are free: `_run_loop` drains the queue up to gather width.
-        return True
+        del over_budget
+        return self._free_prefetch_slots() > 0
 
     def get_ready_event(self, chunk_index: int) -> Event:
         """Return (creating if needed) the readiness event for ``chunk_index``."""

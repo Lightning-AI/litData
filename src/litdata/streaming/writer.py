@@ -225,7 +225,9 @@ class BinaryWriter:
         header = self._fixed_header
         serializers = self._format_serializers
         sizes = self._format_fixed_sizes
-        assert header is not None and serializers is not None and sizes is not None
+        assert header is not None
+        assert serializers is not None
+        assert sizes is not None
         out = bytearray(len(header) + self._fixed_body_len)
         out[0 : len(header)] = header
         cursor = len(header)
