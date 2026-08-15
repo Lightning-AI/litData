@@ -33,6 +33,7 @@ from litdata import __version__
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, MapRecipe, _is_studio_fuse_path
+from litdata.processing.media_folder import iter_webdataset_tar, list_media_folder
 from litdata.processing.readers import BaseReader
 from litdata.processing.utilities import (
     _get_work_dir,

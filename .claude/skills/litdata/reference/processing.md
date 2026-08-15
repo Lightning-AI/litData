@@ -136,10 +136,14 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
 ## Runnable examples (from README)
 
 ```python
-# Optimize a dataset into chunks (README:144)
+# Optimize a dataset into chunks (README core example)
+import numpy as np
 import litdata as ld
+
 def fn(index):
-    return {"index": index, "image": ..., "class": ...}
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    return {"index": index, "image": ld.Image(array=array, quality=95, format="jpeg"), "class": 0}
+
 if __name__ == "__main__":
     ld.optimize(fn=fn, inputs=list(range(1000)), output_dir="fast_data",
                 num_workers=4, chunk_bytes="64MB")

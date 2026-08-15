@@ -193,9 +193,11 @@ def test_binary_writer_with_jpeg_filepath_and_int(tmpdir):
     reader = BinaryReader(cache_dir, max_cache_size=10 ^ 9)
     for i in range(100):
         data = reader.read(ChunkedIndex(i, chunk_index=i // 7))
-        img_read = Image.open(data["x"])
-        print(f"{img_read.size=}")
-        np.testing.assert_array_equal(img_read, imgs[i])
+        # Filepath → image bytes → RGB CHW tensor (torchvision). No PIL on read.
+        got = np.asarray(data["x"])
+        assert got.shape == (3, 28, 28)
+        expected = np.asarray(imgs[i].convert("RGB")).transpose(2, 0, 1)
+        np.testing.assert_array_equal(got, expected)
         assert data["y"] == i
 
 

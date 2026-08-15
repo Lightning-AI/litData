@@ -151,24 +151,19 @@ Transform raw data into optimized chunks for maximum streaming speed.
 This step formats the dataset for fast loading by writing data in an efficient chunked binary format.
 
 ```python
-import io
 import numpy as np
-from PIL import Image
 import litdata as ld
 
 def random_images(index):
-    # Replace with your actual image loading (e.g. Image.open("photo.jpg")).
-    # Prefer JPEG: return a JpegImageFile, or re-encode at quality≈95. Plain
-    # Image.fromarray(...) stores uncompressed PIL RAW and can be 10×+ larger.
-    img = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=95)
-    buf.seek(0)
-    jpeg_image = Image.open(buf)  # JpegImageFile → compressed bytes in the chunk
-    fake_labels = np.random.randint(10)
-
-    # Keys/types must stay stable across samples; list lengths/types fixed
-    return {"index": index, "image": jpeg_image, "class": fake_labels}
+    # Replace with your files: Image(path="photo.jpg") or Image(bytes=...).
+    # Wrappers pick the serializer (a caption string is not an image).
+    # quality/format encode JPEG — not uncompressed PIL RAW.
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    return {
+        "index": index,
+        "image": ld.Image(array=array, quality=95, format="jpeg"),
+        "class": np.random.randint(10),
+    }
 
 if __name__ == "__main__":
     # Exactly one of chunk_bytes or chunk_size
@@ -501,24 +496,18 @@ How you return images from `optimize` controls storage size and streaming speed.
 
 | What you return | Serializer | Result |
 |-----------------|------------|--------|
-| `PIL.JpegImageFile` (e.g. `Image.open("x.jpg")`) | JPEG | Compressed bytes — **preferred** |
-| Plain `PIL.Image` / `Image.fromarray(...)` | PIL RAW | Uncompressed pixels — often **10×+ larger** |
+| `litdata.Image(path=...)` / `Image(array=..., quality=95, format="jpeg")` | `image` | Compressed bytes — **preferred** |
+| `litdata.Jpeg(path=...)` / `Jpeg(array=..., quality=95)` | `jpeg` | JPEG bytes |
+| `PIL.JpegImageFile` (e.g. `PIL.Image.open("x.jpg")`) | `jpeg` | Compressed bytes |
+| Plain `PIL.Image` / `Image.fromarray(...)` | `pil` | Uncompressed pixels — often **10×+ larger** |
 
-**Best practice:** store JPEG at **quality ≈ 95** (or keep existing `.jpg` files). Resize when helpful.
+**Best practice:** wrap with `Image` / `Jpeg` at **quality ≈ 95**, or keep existing `.jpg` files via `Image(path=...)`. Resize when helpful.
 
 ```python
-import io
-from PIL import Image
 import litdata as ld
 
 def load_image(path):
-    img = Image.open(path)
-    if not str(path).lower().endswith((".jpg", ".jpeg")):
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-        img = Image.open(buf)  # JpegImageFile
-    return {"image": img, "path": path}
+    return {"image": ld.Image(path=path, quality=95, format="jpeg"), "id": path}
 
 if __name__ == "__main__":
     ld.optimize(fn=load_image, inputs=list_of_paths, output_dir="fast_data", chunk_bytes="64MB", num_workers=8)
@@ -532,9 +521,9 @@ Ready-made ImageNet optimize/stream scripts: `benchmarks/litdata/` (`--write_mod
   <summary> ✅ Custom serializers <a id="serializers" href="#serializers">🔗</a> </summary>
 &nbsp;
 
-LitData serializes each leaf of your sample with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `tifffile`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), and `pickle` (fallback).
+LitData serializes each **pytree leaf** with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), and `pickle` (fallback).
 
-For images, returning a `JpegImageFile` selects **`jpeg`**; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
+Prefer [typed media wrappers](#media-types) (`Audio`, `Video`, `Image`, …) so a filepath is not confused with a caption. For images, `Image(..., quality=95, format="jpeg")` or a `JpegImageFile` stores JPEG; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
 
 Pass custom serializers when **streaming** (and when using the lower-level `Cache` writer):
 
@@ -558,7 +547,52 @@ dataset = StreamingDataset(
 )
 ```
 
-Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer JPEG / numpy / tensor leaves for best results.
+Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer typed wrappers / JPEG / numpy / tensor leaves for best results.
+
+</details>
+
+<details>
+  <summary> ✅ Typed media wrappers (`Audio`, `Video`, `Image`, …) <a id="media-types" href="#media-types">🔗</a> </summary>
+&nbsp;
+
+Wrap media in `optimize` so the serializer is unambiguous (a string caption is not a `.wav` path). Wrappers are **pytree leaves**: one serializer sees the whole object.
+
+```python
+from litdata import optimize, Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor
+
+def fn(path):
+    return {
+        "audio": Audio(path=path),
+        "id": path,
+    }
+```
+
+| Wrapper | Serializer | Typical payload |
+|---------|------------|-----------------|
+| `Audio` | `audio` | `path=` / `bytes=` / `array=` + `sampling_rate=` |
+| `Video` | `video` | `path=` / `bytes=` / `array=` + `fps=` |
+| `Image` | `image` | `path=` / `bytes=` / `array=` / `image=` + `quality=` `format=` `mode=` |
+| `Jpeg` | `jpeg` | same, always JPEG (`quality` default 95) |
+| `JpegArray` | `jpeg_array` | `images=[Jpeg(...), ...]` |
+| `Pil` | `pil` | `path=` / `array=` / `image=` + `mode=` (raw pixels) |
+| `Tiff` | `tifffile` | `path=` / `bytes=` / `array=` |
+| `File` | `file` | `path=` / `bytes=` (generic file) |
+| `Mesh` | `mesh` | `path=` / `bytes=` / `mesh=` + `file_type=` |
+| `Pdf` | `pdf` | `path=` / `bytes=` / `pdf=` |
+| `Nifti` | `nifti` | `path=` / `bytes=` / `image=` / `array=` + `affine=` |
+| `Tensor` | `tensor` / `no_header_tensor` | `array=` (1-D → `TokensLoader` layout) |
+
+Path-only samples are stored as-is. `quality` / `format` / `mode` (or `array=` / `image=`) trigger an encode.
+
+```python
+Audio(array=waveform, sampling_rate=16000)
+Video(array=frames, fps=25)
+Image(array=hwc, quality=95, format="jpeg", mode="RGB")
+Nifti(array=volume, affine=np.eye(4))
+Mesh(mesh=trimesh_obj, file_type="glb")
+```
+
+Video/audio decode with torchcodec (`VideoDecoder` / `AudioDecoder` by default). CUDA decode is forced to CPU inside DataLoader and optimize workers.
 
 </details>
 
@@ -944,16 +978,15 @@ Local `output_dir` writes chunks in place. Remote inputs and outputs use the str
 
 ```python
 import numpy as np
-from PIL import Image
 import litdata as ld
 
 def random_images(index):
-    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
-    fake_labels = np.random.randint(10)
-
-    data = {"index": index, "image": fake_images, "class": fake_labels}
-
-    return data
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    return {
+        "index": index,
+        "image": ld.Image(array=array, quality=95, format="jpeg"),
+        "class": np.random.randint(10),
+    }
 
 if __name__ == "__main__":
     # The optimize function writes data in an optimized format.
@@ -1338,15 +1371,15 @@ Merge multiple optimized datasets into one.
 
 ```python
 import numpy as np
-from PIL import Image
 
-from litdata import StreamingDataset, merge_datasets, optimize
+from litdata import Image, StreamingDataset, merge_datasets, optimize
 
 
 def random_images(index):
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
     return {
         "index": index,
-        "image": Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)),
+        "image": Image(array=array, quality=95, format="jpeg"),
         "class": np.random.randint(10),
     }
 

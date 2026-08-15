@@ -98,6 +98,7 @@ class BinaryWriter:
 
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._serializers_extra: dict[str, Serializer] = {}
+        self._format_serializers: list[Serializer] | None = None
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
@@ -194,8 +195,8 @@ class BinaryWriter:
                     print(msg, flush=True)
             self._data_format = data_format
             self._data_spec = data_spec
+            self._format_serializers = [self._serializers_extra[name] for name in data_format]
         else:
-            # tiny optimization to avoid looping over all the data format
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
 
         return self._item_loader.encode_data(data, sizes, flattened)
@@ -206,7 +207,8 @@ class BinaryWriter:
             if serializer.can_serialize(item):
                 serialized_item, name = serializer.serialize(item)
                 data.append(serialized_item)
-                sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+                size = getattr(serializer, "size", None)
+                sizes.append(size if size is not None else len(serialized_item))
                 name = name or serializer_name
                 if name and name not in self._serializers_extra:
                     self._serializers_extra[name] = serializer
@@ -217,12 +219,15 @@ class BinaryWriter:
         self, item: Any, sizes: list[int], data: list[bytes], data_format: list[str]
     ) -> None:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
-        assert data_format
-        for element, item_format in zip(item, data_format):
-            serializer = self._serializers_extra[item_format]
+        serializers = self._format_serializers
+        if serializers is None:
+            serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_serializers = serializers
+        for element, serializer in zip(item, serializers):
             serialized_item, _ = serializer.serialize(element)
             data.append(serialized_item)
-            sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+            size = getattr(serializer, "size", None)
+            sizes.append(size if size is not None else len(serialized_item))
 
     def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
         """Creates a binary chunk file from serialized items."""
@@ -273,16 +278,25 @@ class BinaryWriter:
                 f" Found {self._pretty_serialized_items()} with boundaries: {self._min_index}, {self._max_index}."
             )
 
-        num_items = np.uint32(len(items))  # total number of items in the chunk
-        sizes = list(map(len, items))  # list of sizes (length of bytes) of each item
-        offsets = np.array([0] + sizes).cumsum().astype(np.uint32)  # let's say: [0, 10, 30, 45]
+        n = len(items)
+        num_items = np.uint32(n)
+        header = 4 + 4 * (n + 1)
+        offsets = np.empty(n + 1, dtype=np.uint32)
+        offsets[0] = header
+        cursor = header
+        for i, item in enumerate(items):
+            cursor += item.bytes
+            offsets[i + 1] = cursor
 
-        # add the number of bytes taken to store (num_items and offsets). Let's say 60: offsets -> [60, 70, 90, 105]
-        offsets += len(num_items.tobytes()) + len(offsets.tobytes())
-        sample_data = b"".join([item.data for item in items])
-
-        # combine all bytes data which will be written to the chunk file
-        data = num_items.tobytes() + offsets.tobytes() + sample_data
+        data = bytearray(cursor)
+        data[0:4] = num_items.tobytes()
+        data[4:header] = offsets.tobytes()
+        pos = header
+        for item in items:
+            end = pos + item.bytes
+            data[pos:end] = item.data
+            pos = end
+        data = bytes(data)
 
         # Whether to encrypt the data at the chunk level
         if self._encryption and self._encryption.level == EncryptionLevel.CHUNK:

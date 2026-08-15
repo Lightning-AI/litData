@@ -15,7 +15,7 @@ import warnings
 from litdata.__about__ import *  # noqa: F403
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
 from litdata.exceptions import ChunkWaitTimeoutError
-from litdata.processing.functions import map, merge_datasets, optimize, walk
+from litdata.processing.functions import iter_webdataset_tar, list_media_folder, map, merge_datasets, optimize, walk
 from litdata.raw.dataset import StreamingRawDataset
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
@@ -27,6 +27,7 @@ from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.keys_index import build_keys_index
+from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video
 from litdata.utilities.train_test_split import train_test_split
 
 warnings.filterwarnings(
@@ -47,12 +48,26 @@ __all__ = [
     "dataset_update",
     "build_keys_index",
     "walk",
+    "list_media_folder",
+    "iter_webdataset_tar",
     "train_test_split",
     "merge_datasets",
     "index_parquet_dataset",
     "index_hf_dataset",
     "breakpoint",
     "ChunkWaitTimeoutError",
+    "Audio",
+    "Video",
+    "Image",
+    "Jpeg",
+    "JpegArray",
+    "Pil",
+    "Tiff",
+    "File",
+    "Mesh",
+    "Pdf",
+    "Nifti",
+    "Tensor",
 ]
 
 if _LIGHTNING_SDK_AVAILABLE:

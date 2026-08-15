@@ -756,8 +756,6 @@ class BinaryReader:
 
         """
         super().__init__()
-        warnings.filterwarnings("ignore", message=".*The given buffer is not writable.*")
-
         self._cache_dir = cache_dir
         self._remote_input_dir = remote_input_dir
 
@@ -790,6 +788,8 @@ class BinaryReader:
         self._posix_fast = False
         self._posix_keep = 4
         self._posix_willneed = True
+        self._timing = StreamingTimingStats.instance()
+        self._pytree_loader = isinstance(self._item_loader, PyTreeLoader)
 
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
@@ -955,7 +955,7 @@ class BinaryReader:
         Prefetching should reduce the wait time to be the batch available.
 
         """
-        if not isinstance(index, ChunkedIndex):
+        if index.__class__ is not ChunkedIndex:
             raise ValueError("The Reader.read(...) method expects a chunked Index.")
 
         # Load the config containing the index
@@ -964,10 +964,10 @@ class BinaryReader:
 
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
-        timing = StreamingTimingStats.instance()
-        decode_t0 = timing.start()
+        timing = self._timing
+        decode_t0 = timing.start() if timing.enabled else None
 
-        if isinstance(self._item_loader, PyTreeLoader):
+        if self._pytree_loader:
             if (
                 self.on_demand_bytes
                 and self._config

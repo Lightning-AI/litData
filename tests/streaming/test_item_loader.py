@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 import torch
 
-from litdata.constants import _CRYPTOGRAPHY_AVAILABLE, _NUMPY_DTYPES_MAPPING, _TORCH_DTYPES_MAPPING
+from litdata.constants import (
+    _CRYPTOGRAPHY_AVAILABLE,
+    _NUMPY_DTYPES_MAPPING,
+    _POLARS_AVAILABLE,
+    _PYARROW_AVAILABLE,
+    _TORCH_DTYPES_MAPPING,
+)
 from litdata.streaming import Cache, item_loader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader, TokensLoader
@@ -378,6 +384,21 @@ def test_parquet_loader_row_group_boundaries(tmp_path):
     expected = [0, 0, 1, 1, 2, 2]
     for idx, exp in zip(boundaries, expected):
         assert dataset[idx]["col"] == exp
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE or not _POLARS_AVAILABLE, reason="pyarrow and polars are required")
+def test_parquet_loader_column_projection(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    parquet_dir = tmp_path / "pq"
+    parquet_dir.mkdir()
+    pq.write_table(pa.table({"keep": [1, 2, 3], "drop": [9, 8, 7]}), parquet_dir / "data.parquet")
+    index_parquet_dataset(str(parquet_dir))
+
+    dataset = StreamingDataset(str(parquet_dir), item_loader=ParquetLoader(low_memory=True, columns=["keep"]))
+    row = dataset[0]
+    assert row == {"keep": 1}
 
 
 def test_parquet_loader_cache_eviction_with_uneven_groups(tmp_path):

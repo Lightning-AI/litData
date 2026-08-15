@@ -33,19 +33,12 @@ ______________________________________________________________________
 ## 2. Canonical optimize → stream
 
 ```python
-import io
 import litdata as ld
-from PIL import Image
 
 def fn(path):
-    # Prefer JPEG (JpegImageFile) — see §3. Plain Image.fromarray → huge PIL RAW.
-    img = Image.open(path)  # keep .jpg as JpegImageFile; or re-encode at quality≈95
-    if not path.lower().endswith((".jpg", ".jpeg")):
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-        img = Image.open(buf)
-    return {"image": img, "path": path}  # stable keys/types across samples
+    # Typed wrapper picks the image serializer (a caption is not a filepath).
+    # quality/format encode JPEG — not uncompressed PIL RAW. See §3.
+    return {"image": ld.Image(path=path, quality=95, format="jpeg"), "path": path}
 
 if __name__ == "__main__":  # required for multiprocessing
     ld.optimize(
@@ -64,18 +57,37 @@ Train: `shuffle=True, drop_last=True`. Val: usually `shuffle=False, drop_last=Fa
 
 ______________________________________________________________________
 
-## 3. Images & serializers
+## 3. Images, media types & serializers
+
+**Always wrap media** so `optimize` can tell a filepath from a caption. Wrappers are pytree leaves (`src/litdata/types.py`). README `#media-types`.
+
+```python
+from litdata import Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor
+
+Audio(path=wav)                          # or array= + sampling_rate=
+Video(path=mp4)                          # or array= + fps=
+Image(path=jpg, quality=95, format="jpeg")
+Image(array=hwc, quality=95, format="jpeg", mode="RGB")
+Jpeg(array=hwc, quality=95)
+Nifti(array=volume, affine=np.eye(4))
+Mesh(mesh=trimesh_obj, file_type="glb")
+```
+
+Path-only → store file bytes. Bare `*.jpg` / `*.png` paths are also claimed (same as `Image(path=)`) so stream returns a **tensor**, not a string. Decode is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
 
 Built-in serializers (`streaming/serializers.py`), tried in registry order:
-`str`, `bool`, `int`, `float`, `video`, `tifffile`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `pickle`.
+`str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `pickle`.
 
-| Return type                           | Serializer   | Result                                       |
-| ------------------------------------- | ------------ | -------------------------------------------- |
-| `PIL.JpegImageFile` (opened `.jpg`)   | `jpeg`       | Stores compressed JPEG bytes — **preferred** |
-| Plain `PIL.Image` / `Image.fromarray` | `pil`        | Uncompressed pixels — **large**              |
-| List of JPEGs                         | `jpeg_array` | Packed JPEGs                                 |
+| Return type | Serializer | Result |
+| ----------- | ---------- | ------ |
+| `Image` / `Jpeg` / `Jpeg(array=, quality=95)` | `image` / `jpeg` | Compressed JPEG — **preferred** |
+| `PIL.JpegImageFile` (opened `.jpg`) | `jpeg` | Compressed JPEG |
+| `Pil` / plain `PIL.Image` / `fromarray` | `pil` | Uncompressed pixels — **large** |
+| `JpegArray` / list of JPEGs | `jpeg_array` | Packed JPEGs |
+| `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name | See README `#media-types` |
+| `Tensor` | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
 
-**Best practice:** optimize images as JPEG at **quality ≈ 95** (or keep existing JPEGs). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
+**Best practice:** `Image(..., quality=95, format="jpeg")` (or keep existing JPEGs via `Image(path=)`). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
 
 Custom / override:
 
@@ -83,7 +95,7 @@ Custom / override:
 dataset = StreamingDataset(..., serializers={"my_type": MySerializer()})
 ```
 
-Subclass `Serializer` with `serialize` / `deserialize` / `can_serialize`. Keys you pass are merged ahead of built-ins (win over `pickle`). `optimize()` picks built-ins from the types your `fn` returns — prefer JPEG / numpy / tensor leaves.
+Subclass `Serializer` with `serialize` / `deserialize` / `can_serialize`. Keys you pass are merged ahead of built-ins (win over `pickle`). `optimize()` picks built-ins from the types your `fn` returns — prefer **typed wrappers** / JPEG / numpy / tensor leaves.
 
 ______________________________________________________________________
 
@@ -525,7 +537,7 @@ ______________________________________________________________________
 
 1. Pick §1 workflow — if they have a file tree and want to start now → **§10 `StreamingRawDataset`** (not optimize-first).
 2. Minimal recipe; add only needed knobs from §6–9 (or §10 for raw).
-3. Images → §3 for **optimize** (JPEG ~95). Raw path: `transform=` decode bytes.
+3. Images → §3 for **optimize** (`Image(..., quality=95, format="jpeg")`). Raw path: `transform=` decode bytes.
 4. Train optimized → `StreamingDataLoader` + `shuffle`/`drop_last`/`seed`. Train raw → torch `DataLoader`.
 5. Disk/slow stream → §8 + cache doc; or suggest upgrading raw → optimize.
 6. Paths/Studio → §4 + [lightning-studio.md](lightning-studio.md).

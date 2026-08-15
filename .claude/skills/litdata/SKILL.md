@@ -4,7 +4,8 @@ description: >-
   Expert use of the LitData library and work on its codebase. Use when writing or
   reviewing code that calls litdata (StreamingDataset, StreamingDataLoader,
   StreamingRawDataset, optimize, map, CombinedStreamingDataset,
-  ParallelStreamingDataset, TokensLoader, serializers, train_test_split,
+  ParallelStreamingDataset, TokensLoader, serializers, Audio/Video/Image
+  typed wrappers, train_test_split,
   merge_datasets, index_parquet_dataset, index_hf_dataset), answering how-to
   questions, choosing raw vs optimize vs parquet/HF/MDS, keyed lookup
   (`key_fn`, `build_keys_index`, `dataset_update`, `get_by_key`), tuning
@@ -45,7 +46,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | Topic            | Remember                                                                                                                                                                                                                                                                                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Raw files**    | `StreamingRawDataset` + torch `DataLoader` — `#stream-raw` / §10. Prefer cloud URL / connection path over FUSE. Defaults: `max_concurrent_downloads=None` (adaptive Stage 1), `max_prefetch=16` (worker-aware ~64 aggregate), `hedge_delay=0`, `download_timeout=120` (**batch-level**), `range_parallel_threshold=0`. Explicit `int` concurrency = exact permits.          |
-| Images           | Return **JPEG** (`JpegImageFile` / quality ≈95). Plain `PIL.Image` / `fromarray` → huge PIL RAW                                                                                                                                                                                                                                                                             |
+| Images / media   | Wrap with `Image` / `Jpeg` / `Audio` / `Video` / … (`types.py`). `Image(path=…, quality=95, format="jpeg")` or `Image(array=…, quality=95)`. Bare `PIL.Image` / `fromarray` → huge PIL RAW. README `#media-types`                                                                                                                                                             |
 | Train stream     | Optimized: `StreamingDataLoader` + `shuffle=True, drop_last=True, seed=…`                                                                                                                                                                                                                                                                                                   |
 | Optimize         | `if __name__ == "__main__"`; exactly one of `chunk_bytes` \| `chunk_size`. Default **64MB**; multi‑MB samples → consider **256–512MB**. **Shuffle the sample list before `optimize()`** when source order matters — README `#faq-chunk-shuffle`                                                                                                                             |
 | Ordered data     | Chunk/item shuffle ≠ file-level shuffle. Shuffle before `optimize`, or use `StreamingRawDataset` + `DataLoader(shuffle=True)`. LitData does distributed + within-chunk bucket sampling automatically                                                                                                                                                                        |
@@ -90,6 +91,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | `StreamingRawDataset`                                   | Raw file stream                         |
 | `TokensLoader`                                          | Token windows for LLMs                  |
 | `optimize` / `map` / `merge_datasets` / `walk`          | Write / transform / merge / list        |
+| `Audio` `Video` `Image` `Jpeg` `JpegArray` `Pil` `Tiff` `File` `Mesh` `Pdf` `Nifti` | Typed media leaves for `optimize` |
 | `dataset_update` / `build_keys_index`                   | Keyed in-place patch / backfill sidecar |
 | `train_test_split`                                      | Split by chunk ROIs                     |
 | `index_parquet_dataset` / `index_hf_dataset`            | Index for streaming                     |
@@ -100,7 +102,7 @@ Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook
 
 ## Package map
 
-- `streaming/` — read · `processing/` — write · `raw/` — raw stream · `cli/` — `litdata cache path|clear`
+- `streaming/` — read · `processing/` — write · `raw/` — raw stream · `types.py` — media wrappers · `cli/` — `litdata cache path|clear`
 - `utilities/` — env, encryption, subsample, split, parquet, HF
 - `constants.py` — optional-dep flags, env knobs, default chunk 64 MB
 - Registries: downloaders, fs providers, serializers, compressors; `resolver.py` → `Dir`

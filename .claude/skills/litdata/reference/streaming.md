@@ -69,7 +69,7 @@ Sketch:
 - **`resolver.py`** — path/URL resolution (NOT I/O backend selection). `_resolve_dir` (`:50`) → `Dir(path, url, data_connection_id)`. Full map: [resolver.md](resolver.md), [lightning-studio.md](lightning-studio.md).
 - **`client.py`** — `S3Client`/`R2Client` wrap boto3 with credential refresh + temporary project-role credentials from the Lightning control plane.
 - **`compression.py`** — `Compressor` ABC + `ZSTDCompressor`, registered into `_COMPRESSORS`. Decompression in `ChunksConfig.try_decompress` (`config.py:182`).
-- **`serializers.py`** — `Serializer` ABC; ordered `_SERIALIZERS` dict (`:553`, order matters because `can_serialize` is tried top-to-bottom). Includes `str/bool/int/float/video/tifffile/pil/jpeg/numpy/tensor/pickle` (catch-all). Users pass custom serializers via `StreamingDataset(serializers=...)`.
+- **`serializers.py`** — `Serializer` ABC; ordered `_SERIALIZERS` (order matters: `can_serialize` top-to-bottom). Includes `str/bool/int/float/video/audio/image/nifti/mesh/pdf/tifffile/file/pil/jpeg/jpeg_array/numpy/tensor/pickle`. Typed leaves in `types.py` (`Audio`, `Video`, `Image`, `Jpeg`, …) — README `#media-types`. Custom serializers via `StreamingDataset(serializers=...)`.
 
 ## Shuffling & sharding — two independent stages
 
