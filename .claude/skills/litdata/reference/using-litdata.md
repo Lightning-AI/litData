@@ -71,6 +71,7 @@ Image(array=hwc, quality=95, format="jpeg", mode="RGB")
 Jpeg(array=hwc, quality=95)
 Nifti(array=volume, affine=np.eye(4))
 Mesh(mesh=trimesh_obj, file_type="glb")
+Graph(x=x, edge_index=edge_index, y=y)   # or pass PyG Data / HeteroData
 ```
 
 Path-only → store file bytes. Bare `*.jpg` / `*.png` paths are also claimed (same as `Image(path=)`) so stream returns a **tensor**, not a string. Decode is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
@@ -86,7 +87,7 @@ Built-in serializers (`streaming/serializers.py`), tried in registry order:
 | `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                              |
 | `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name                 | See README `#media-types`                 |
 | `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
-| `Graph` / PyG `Data`                                           | `graph`                       | `to_dict` tensors; README `#pyg-graphs`   |
+| `Graph` / PyG `Data` / `HeteroData`                            | `graph`                       | `to_dict` tensors; README `#pyg-graphs`   |
 
 **Best practice:** `Image(..., quality=95, format="jpeg")` (or keep existing JPEGs via `Image(path=)`). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
 

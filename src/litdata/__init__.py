@@ -19,7 +19,7 @@ from litdata.processing.complete import complete_dataset, is_complete_dataset
 from litdata.processing.functions import map, merge_datasets, optimize, walk
 from litdata.processing.media_folder import iter_webdataset_tar, list_media_folder
 from litdata.raw.dataset import StreamingRawDataset
-from litdata.streaming.collate import pyg_collate
+from litdata.streaming.collate import litdata_collate
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
@@ -44,7 +44,7 @@ __all__ = [
     "StreamingRawDataset",
     "CombinedStreamingDataset",
     "StreamingDataLoader",
-    "pyg_collate",
+    "litdata_collate",
     "TokensLoader",
     "ParallelStreamingDataset",
     "map",

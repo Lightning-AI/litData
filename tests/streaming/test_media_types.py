@@ -24,6 +24,7 @@ from litdata.streaming.serializers import (
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
+from litdata.streaming.collate import litdata_collate
 from litdata.types import Audio, Graph, Image, Jpeg, JpegArray, Tensor
 from litdata.utilities._pytree import tree_flatten
 
@@ -259,6 +260,47 @@ def test_graph_reconstruct_uses_pyg_from_dict(monkeypatch):
 
 
 @pytest.mark.skipif(not _PYG_AVAILABLE, reason="Requires torch-geometric")
+def test_pyg_heterodata_roundtrip_and_loader(tmpdir):
+    from torch_geometric.data import Batch, HeteroData
+
+    from litdata import StreamingDataLoader, StreamingDataset
+    from litdata.streaming.cache import Cache
+
+    data = HeteroData()
+    data["paper"].x = torch.randn(4, 3)
+    data["author"].x = torch.randn(2, 5)
+    data["author", "writes", "paper"].edge_index = torch.tensor([[0, 1], [0, 2]], dtype=torch.long)
+    data.y = torch.tensor(1)
+
+    packed, name = GraphSerializer().serialize(data)
+    assert name == "graph"
+    out = GraphSerializer().deserialize(packed)
+    assert type(out).__name__ == "HeteroData"
+    assert out["paper"].x.shape == (4, 3)
+    assert out["author"].x.shape == (2, 5)
+    assert out["author", "writes", "paper"].edge_index.tolist() == [[0, 1], [0, 2]]
+    assert int(out.y) == 1
+
+    cache = Cache(str(tmpdir), chunk_size=4)
+    for i in range(8):
+        sample = HeteroData()
+        sample["paper"].x = torch.ones(3, 2) * i
+        sample["author"].x = torch.ones(2, 4) * i
+        sample["author", "writes", "paper"].edge_index = torch.tensor([[0], [i % 3]], dtype=torch.long)
+        sample.y = torch.tensor(i % 2)
+        cache[i] = sample
+    cache.done()
+    cache.merge()
+
+    ds = StreamingDataset(str(tmpdir))
+    assert type(ds[0]).__name__ == "HeteroData"
+    batch = next(iter(StreamingDataLoader(ds, batch_size=4, num_workers=0, shuffle=False)))
+    assert isinstance(batch, Batch)
+    assert batch["paper"].x.size(0) == 12
+    assert batch.y.numel() == 4
+
+
+@pytest.mark.skipif(not _PYG_AVAILABLE, reason="Requires torch-geometric")
 def test_pyg_data_roundtrip_and_loader(tmpdir):
     from torch_geometric.data import Batch, Data
     from torch_geometric.nn import GCNConv, global_mean_pool
@@ -303,3 +345,67 @@ def test_graph_pickle_fallback_for_opaque_data():
     serializer.setup(name)
     out = serializer.deserialize(data)
     assert out.data == {"nodes": [1, 2], "edges": [(0, 1)]}
+
+
+def test_graph_field_kwargs_override_data():
+    class FakePyg:
+        def to_dict(self):
+            return {
+                "x": torch.zeros(2, 1),
+                "edge_index": torch.tensor([[0], [1]], dtype=torch.long),
+            }
+
+    FakePyg.__module__ = "torch_geometric.data.data"
+    overlay = torch.ones(2, 1)
+    mapping = Graph(data=FakePyg(), x=overlay).to_mapping()
+    assert torch.equal(mapping["x"], overlay)
+
+
+def test_graph_rejects_opaque_data_mixed_with_fields():
+    with pytest.raises(TypeError, match="opaque"):
+        Graph(x=torch.ones(1, 1), data=object()).to_mapping()
+    with pytest.raises(TypeError, match="opaque"):
+        GraphSerializer().serialize(Graph(x=torch.ones(1, 1), data=object()))
+
+
+def test_graph_packs_nested_dict_meta_and_non_ascii_name():
+    graph = Graph(
+        x=torch.ones(2, 1),
+        edge_index=torch.tensor([[0], [1]], dtype=torch.long),
+        data={"split": {"fold": 1}, "特征": torch.zeros(2, 1)},
+    )
+    data, name = GraphSerializer().serialize(graph)
+    assert name == "graph"
+    out = GraphSerializer().deserialize(data)
+    assert out.x.shape == (2, 1)
+    extra = out["特征"] if not isinstance(out, Graph) else out.data["特征"]
+    assert extra.shape == (2, 1)
+    split = out.split if not isinstance(out, Graph) else out.data["split"]
+    assert split == {"fold": 1}
+
+
+def test_graph_num_nodes_only_uses_pickle():
+    data, name = GraphSerializer().serialize(Graph(data={"num_nodes": 4}))
+    assert name == "graph:pickle"
+
+
+def test_litdata_collate_non_graph_uses_default_collate():
+    batch = litdata_collate(
+        [
+            {"id": 1, "image": torch.zeros(3, 2, 2)},
+            {"id": 2, "image": torch.ones(3, 2, 2)},
+        ]
+    )
+    assert batch["id"].tolist() == [1, 2]
+    assert batch["image"].shape == (2, 3, 2, 2)
+
+
+def test_litdata_collate_graphs_without_pyg(monkeypatch):
+    stub = types.ModuleType("torch_geometric.data")
+    monkeypatch.setitem(sys.modules, "torch_geometric.data", stub)
+    graphs = [
+        Graph(x=torch.ones(2, 1), edge_index=torch.tensor([[0], [1]], dtype=torch.long)),
+        Graph(x=torch.zeros(3, 1), edge_index=torch.tensor([[0, 1], [1, 2]], dtype=torch.long)),
+    ]
+    out = litdata_collate(graphs)
+    assert out is graphs or (isinstance(out, list) and len(out) == 2)

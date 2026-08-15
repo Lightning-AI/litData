@@ -84,20 +84,20 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 
 ## Public API (`src/litdata/__init__.py`)
 
-| Symbol                                                                                               | Purpose                                  |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `StreamingDataset` / `StreamingDataLoader`                                                           | Optimized stream + resumable loader      |
-| `CombinedStreamingDataset` / `ParallelStreamingDataset`                                              | Mix or zip streams                       |
-| `StreamingRawDataset`                                                                                | Raw file stream                          |
-| `TokensLoader`                                                                                       | Token windows for LLMs                   |
-| `optimize` / `map` / `merge_datasets` / `walk` / `complete_dataset`                                  | Write / transform / merge / finish index |
-| `Audio` `Video` `Image` `Jpeg` `JpegArray` `Pil` `Tiff` `File` `Mesh` `Pdf` `Nifti` `Tensor` `Graph` | Typed media leaves for `optimize`        |
-| `pyg_collate`                                                                                        | Default graph batching for the loader    |
-| `dataset_update` / `build_keys_index`                                                                | Keyed in-place patch / backfill sidecar  |
-| `train_test_split`                                                                                   | Split by chunk ROIs                      |
-| `index_parquet_dataset` / `index_hf_dataset`                                                         | Index for streaming                      |
-| `breakpoint`                                                                                         | Multiprocessing-safe pdb                 |
-| `enable_tracer` (`litdata.debugger`)                                                                 | Pipeline log → Litracer / Perfetto       |
+| Symbol                                                                                               | Purpose                                   |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `StreamingDataset` / `StreamingDataLoader`                                                           | Optimized stream + resumable loader       |
+| `CombinedStreamingDataset` / `ParallelStreamingDataset`                                              | Mix or zip streams                        |
+| `StreamingRawDataset`                                                                                | Raw file stream                           |
+| `TokensLoader`                                                                                       | Token windows for LLMs                    |
+| `optimize` / `map` / `merge_datasets` / `walk` / `complete_dataset`                                  | Write / transform / merge / finish index  |
+| `Audio` `Video` `Image` `Jpeg` `JpegArray` `Pil` `Tiff` `File` `Mesh` `Pdf` `Nifti` `Tensor` `Graph` | Typed media leaves for `optimize`         |
+| `litdata_collate`                                                                                    | Loader default; PyG batch only for graphs |
+| `dataset_update` / `build_keys_index`                                                                | Keyed in-place patch / backfill sidecar   |
+| `train_test_split`                                                                                   | Split by chunk ROIs                       |
+| `index_parquet_dataset` / `index_hf_dataset`                                                         | Index for streaming                       |
+| `breakpoint`                                                                                         | Multiprocessing-safe pdb                  |
+| `enable_tracer` (`litdata.debugger`)                                                                 | Pipeline log → Litracer / Perfetto        |
 
 Defined under `streaming/`, `processing/`, `raw/`, `utilities/` — see cookbook §6–9 for constructor args.
 

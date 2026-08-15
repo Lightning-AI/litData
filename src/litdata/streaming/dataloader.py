@@ -37,7 +37,7 @@ from torch.utils.data.sampler import BatchSampler, Sampler
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
 from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
-from litdata.streaming.collate import pyg_collate
+from litdata.streaming.collate import litdata_collate
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.elastic import _round_down_drop_first, sample_in_epoch_from_state, topology_changed
@@ -675,7 +675,7 @@ class StreamingDataLoader(DataLoader):
             raise ValueError("Profiling is supported only with num_workers >= 1.")
 
         if collate_fn is None:
-            collate_fn = pyg_collate
+            collate_fn = litdata_collate
         collate_fn = StreamingDataLoaderCollateFn(collate_fn)
 
         self.current_epoch = 0

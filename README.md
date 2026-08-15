@@ -556,45 +556,34 @@ Keys you pass are tried before the defaults (so they win over `pickle`). `optimi
   <summary> ✅ Typed media wrappers (`Audio`, `Video`, `Image`, …) <a id="media-types" href="#media-types">🔗</a> </summary>
 &nbsp;
 
-Wrap media in `optimize` so the serializer is unambiguous (a string caption is not a `.wav` path). Wrappers are **pytree leaves**: one serializer sees the whole object.
+Wrap media in `optimize` so the serializer is unambiguous (a string caption is not a `.wav` path). Wrappers are **pytree leaves**: one serializer sees the whole object. Path/bytes are stored as-is; `array=` / `image=` / `mesh=` encode.
 
 ```python
-from litdata import optimize, Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor, Graph
+from litdata import optimize, Audio, Image
 
 def fn(path):
-    return {
-        "audio": Audio(path=path),
-        "id": path,
-    }
+    return {"audio": Audio(path=path), "id": path}
+
+optimize(fn, inputs=wav_paths, output_dir="data")
 ```
 
-| Wrapper | Serializer | Typical payload |
-|---------|------------|-----------------|
-| `Audio` | `audio` | `path=` / `bytes=` / `array=` + `sampling_rate=` |
-| `Video` | `video` | `path=` / `bytes=` / `array=` + `fps=` |
-| `Image` | `image` | `path=` / `bytes=` / `array=` / `image=` + `quality=` `format=` `mode=` |
-| `Jpeg` | `jpeg` | same, always JPEG (`quality` default 95) |
-| `JpegArray` | `jpeg_array` | `images=[Jpeg(...), ...]` |
-| `Pil` | `pil` | `path=` / `array=` / `image=` + `mode=` (raw pixels) |
-| `Tiff` | `tifffile` | `path=` / `bytes=` / `array=` |
-| `File` | `file` | `path=` / `bytes=` (generic file) |
-| `Mesh` | `mesh` | `path=` / `bytes=` / `mesh=` + `file_type=` |
-| `Pdf` | `pdf` | `path=` / `bytes=` / `pdf=` |
-| `Nifti` | `nifti` | `path=` / `bytes=` / `image=` / `array=` + `affine=` |
-| `Tensor` | `tensor` / `no_header_tensor` | `array=` (1-D → `TokensLoader` layout) |
-| `Graph` | `graph` | PyG `Data` or `x=` / `edge_index=` / … (see [PyG graphs](#pyg-graphs)) |
+| Type | Write | Stream |
+|------|-------|--------|
+| `Audio` | `Audio(path="a.wav")` <br> `Audio(bytes=wav)` <br> `Audio(array=wave, sampling_rate=16000)` | torchcodec `AudioDecoder` — `audio["array"]`, `audio["sampling_rate"]` |
+| `Video` | `Video(path="c.mp4")` <br> `Video(bytes=mp4)` <br> `Video(array=frames, fps=25)` | torchcodec `VideoDecoder` |
+| `Image` | `Image(path="a.jpg")` <br> `Image(bytes=jpeg)` <br> `Image(array=hwc, quality=95, format="jpeg")` | CHW `torch.Tensor` |
+| `Jpeg` | `Jpeg(path="a.jpg")` <br> `Jpeg(array=hwc, quality=95)` | CHW `torch.Tensor` (always JPEG, quality default 95) |
+| `JpegArray` | `JpegArray(images=[Jpeg(path=p) for p in frames])` | `list[Tensor]` |
+| `Pil` | `Pil(path="a.png")` <br> `Pil(image=pil_img, mode="RGB")` | `PIL.Image` (raw pixels — larger than JPEG) |
+| `Tiff` | `Tiff(path="a.tif")` <br> `Tiff(array=hw)` | NumPy array (`tifffile`) |
+| `File` | `File(path="doc.bin")` <br> `File(bytes=blob)` | `bytes` |
+| `Mesh` | `Mesh(path="m.glb")` <br> `Mesh(mesh=trimesh_obj, file_type="glb")` | trimesh object |
+| `Pdf` | `Pdf(path="p.pdf")` <br> `Pdf(pdf=pdfplumber_doc)` | pdfplumber PDF |
+| `Nifti` | `Nifti(path="v.nii.gz")` <br> `Nifti(array=vol, affine=np.eye(4))` | nibabel image |
+| `Tensor` | `Tensor(array=torch.randn(3, 4, 4))` <br> `Tensor(array=token_ids)` | `torch.Tensor` (1-D uses the `TokensLoader` layout) |
+| `Graph` | `Data(x=…, edge_index=…, y=…)` <br> `Graph(x=…, edge_index=…, y=…)` <br> `Graph(data=pyg_data)` | PyG `Data` / `HeteroData` if installed, else `Graph` — see [PyG graphs](#pyg-graphs) |
 
-Path-only samples are stored as-is. `quality` / `format` / `mode` (or `array=` / `image=`) trigger an encode.
-
-```python
-Audio(array=waveform, sampling_rate=16000)
-Video(array=frames, fps=25)
-Image(array=hwc, quality=95, format="jpeg", mode="RGB")
-Nifti(array=volume, affine=np.eye(4))
-Mesh(mesh=trimesh_obj, file_type="glb")
-```
-
-Video/audio decode with torchcodec (`VideoDecoder` / `AudioDecoder` by default). CUDA decode is forced to CPU inside DataLoader and optimize workers.
+CUDA video/audio decode is forced to CPU inside DataLoader and optimize workers. Pass `AudioSerializer(decode="bytes")` / `VideoSerializer(decode="bytes")` if you want raw bytes instead of a decoder.
 
 </details>
 
@@ -602,7 +591,11 @@ Video/audio decode with torchcodec (`VideoDecoder` / `AudioDecoder` by default).
   <summary> ✅ Stream PyG graphs <a id="pyg-graphs" href="#pyg-graphs">🔗</a> </summary>
 &nbsp;
 
-Store [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/) `Data` as packed tensors (`Data.to_dict()`), not `torch.save` / pickle. On read, LitData reconstructs with `Data.from_dict` when `torch-geometric` is installed.
+Store [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/) `Data` / `HeteroData` as packed tensors (`to_dict()`), not `torch.save` / pickle. On read, LitData reconstructs with `from_dict` when `torch-geometric` is installed. `optimize` needs a **top-level** function (spawn).
+
+`StreamingDataLoader` uses `litdata_collate` by default: graph samples become a `DataBatch` (`Batch.from_data_list`); everything else uses PyTorch `default_collate`. For `follow_batch` / `exclude_keys`, use `torch_geometric.loader.DataLoader`. Without PyG, graph batches stay a list of `Graph`.
+
+### Homogeneous `Data` + GCN
 
 ```python
 import torch
@@ -610,7 +603,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, global_mean_pool
 
-from litdata import optimize, StreamingDataset, StreamingDataLoader
+from litdata import StreamingDataLoader, StreamingDataset, optimize
 
 def make_graph(i: int) -> Data:
     n = 8 + i % 5
@@ -620,15 +613,16 @@ def make_graph(i: int) -> Data:
         x=torch.randn(n, 8),
         edge_index=torch.stack([src, dst], 0),
         y=torch.tensor(i % 3),
+        train_mask=torch.ones(n, dtype=torch.bool),
         num_nodes=n,
     )
 
 optimize(make_graph, inputs=list(range(1024)), output_dir="graphs", chunk_size=64)
 
 dataset = StreamingDataset("graphs")
-sample = dataset[0]          # torch_geometric.data.Data
+sample = dataset[0]  # Data when PyG is installed, else Graph
 loader = StreamingDataLoader(dataset, batch_size=32, shuffle=True)
-batch = next(iter(loader))   # DataBatch (Batch.from_data_list)
+batch = next(iter(loader))  # DataBatch
 
 class Net(torch.nn.Module):
     def __init__(self):
@@ -641,20 +635,81 @@ class Net(torch.nn.Module):
         return self.lin(global_mean_pool(x, data.batch))
 ```
 
-**Notes**
-
-- Pass a `Data` object (or `Graph(x=..., edge_index=...)`). Extra tensor attrs (`train_mask`, …) and scalars (`num_nodes`) are kept.
-- `StreamingDataLoader` uses `pyg_collate` by default so variable-size graphs become a `DataBatch`. `default_collate` cannot stack them. You can still pass `collate_fn=` or use `torch_geometric.loader.DataLoader` for `follow_batch` / `exclude_keys`.
-- `optimize` needs a **top-level** function (spawn). Nested `HeteroData` and NetworkX fall back to pickle (`graph:pickle`).
-- Do not `torch.save` the graph into the sample — that is still pickle/zip and slower to stream.
+### `Graph` wrapper (no PyG at write time)
 
 ```python
-from litdata import Graph, pyg_collate
+from litdata import Graph, optimize
 
-Graph(x=node_feat, edge_index=edge_index, y=label)
-Graph(data=pyg_data)   # uses pyg_data.to_dict()
-# without torch-geometric installed, samples are Graph; call .to_pyg() later
+def make_graph(i: int) -> Graph:
+    n = 6
+    return Graph(
+        x=torch.randn(n, 4),
+        edge_index=torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long),
+        y=torch.tensor(i % 2),
+        data={"num_nodes": n},  # extra tensors/scalars; field kwargs override data=
+    )
+
+optimize(make_graph, inputs=list(range(256)), output_dir="graphs")
+# later: sample.to_pyg()  if the stream returned Graph
 ```
+
+`Graph(data=pyg_data)` uses `pyg_data.to_dict()`. Do not mix tensor fields with an opaque NetworkX `data=`.
+
+### Heterogeneous `HeteroData`
+
+```python
+from torch_geometric.data import HeteroData
+
+from litdata import StreamingDataLoader, StreamingDataset, optimize
+
+def make_hetero(i: int) -> HeteroData:
+    data = HeteroData()
+    data["paper"].x = torch.randn(8, 16)
+    data["author"].x = torch.randn(4, 8)
+    data["author", "writes", "paper"].edge_index = torch.tensor(
+        [[0, 1, 2, 3], [0, 2, 4, 6]], dtype=torch.long
+    )
+    data.y = torch.tensor(i % 3)
+    return data
+
+optimize(make_hetero, inputs=list(range(512)), output_dir="hetero", chunk_size=32)
+
+dataset = StreamingDataset("hetero")
+sample = dataset[0]  # HeteroData
+print(sample["paper"].x.shape, sample["author", "writes", "paper"].edge_index.shape)
+
+loader = StreamingDataLoader(dataset, batch_size=16)
+batch = next(iter(loader))  # HeteroDataBatch
+# batch["paper"].x, batch["paper"].batch, batch["author", "writes", "paper"].edge_index
+```
+
+### Graph plus metadata in one sample
+
+```python
+def make_row(i: int) -> dict:
+    return {"id": i, "graph": make_graph(i)}
+
+optimize(make_row, inputs=list(range(1024)), output_dir="rows")
+loader = StreamingDataLoader(StreamingDataset("rows"), batch_size=8)
+batch = next(iter(loader))
+# batch["id"] is a tensor; batch["graph"] is a DataBatch
+```
+
+### Sample subgraphs first, then stream
+
+`NeighborLoader` needs one in-memory graph. To stream, run the sampler in `optimize` and store each subgraph as a `Data`:
+
+```python
+# sampler = NeighborSampler(big_graph, num_neighbors=[10, 10])
+
+def sample_seed(seed: int) -> Data:
+    out = sampler.sample_from_nodes(torch.tensor([seed]))
+    return Data(x=out.x, edge_index=out.edge_index, y=out.y)
+
+optimize(sample_seed, inputs=train_seeds.tolist(), output_dir="subgraphs")
+```
+
+NetworkX (or any non-tensor object) uses `Graph(data=nx_graph)` → `graph:pickle`. Do not `torch.save` a graph into the sample.
 
 </details>
 
@@ -2647,8 +2702,8 @@ Published packages that declare a `litdata` dependency (excluding first-party Li
 | [OpenSynth](https://github.com/OpenSynth-energy/OpenSynth) (`opensynth-energy`) | `litdata==0.2.30` | Smart-meter synthetic data |
 | [biomed-multi-view](https://github.com/BiomedSciAI/biomed-multi-view) | `litdata==0.2.6` | IBM BiomedSciAI |
 | [DEM](https://github.com/cma2015/DEM) (`biodem`) | `litdata>=0.2.29` | Phenotypic / gene mining |
-| [deeptan](https://github.com/cma2015/DeepTAN) | `litdata>=0.2.49` | Same lab as DEM |
-| [deeptan-network](https://github.com/wangying608/deeptan) | `litdata>=0.2.51` | Related DeepTAN package |
+| [deeptan](https://pypi.org/project/deeptan/) | `litdata>=0.2.49` | Same lab as DEM |
+| [deeptan-network](https://pypi.org/project/deeptan-network/) | `litdata>=0.2.51` | Related DeepTAN package |
 | [datarax](https://github.com/avitai/datarax) | `litdata>=0.2` extra `benchmark` | Optional cloud streaming |
 | [fasr](https://pypi.org/project/fasr/) | `litdata>=0.2.46` extra `litdata` | Speech ASR framework |
 

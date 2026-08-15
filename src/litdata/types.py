@@ -29,6 +29,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def is_pyg_data(item: Any) -> bool:
+    """True for PyG ``Data`` / ``HeteroData`` / ``Batch`` (has ``to_dict``)."""
+    module = getattr(type(item), "__module__", "")
+    return module.startswith("torch_geometric.data") and hasattr(item, "to_dict")
+
+
 @dataclass
 class _MediaRef:
     path: str | None = None
@@ -141,17 +147,20 @@ class Nifti(_MediaRef):
     affine: Any = None
 
 
+GRAPH_FIELDS = ("x", "edge_index", "edge_attr", "y", "pos", "batch")
+
+
 @dataclass
 class Graph:
     """Graph sample stored as packed tensors from PyG ``Data.to_dict()``.
 
-    Prefer passing a ``torch_geometric.data.Data`` (or ``Graph(...)``). On read,
-    LitData calls ``Data.from_dict`` when torch-geometric is installed. Do not
+    Prefer passing a PyG ``Data`` / ``HeteroData`` (or ``Graph(...)``). On read,
+    LitData calls ``Data.from_dict`` / ``HeteroData.from_dict``. Do not
     ``torch.save`` the graph — that is still pickle/zip. ``data=`` is only a
-    pickle fallback for NetworkX or nested HeteroData.
+    pickle fallback for NetworkX or other opaque objects.
 
         Graph(x=node_feat, edge_index=edge_index, edge_attr=edge_w, y=label)
-        Graph(data=pyg_data)  # uses pyg_data.to_dict()
+        Graph(data=pyg_data)  # uses pyg_data.to_dict(); field kwargs override
     """
 
     x: Any = None
@@ -162,19 +171,36 @@ class Graph:
     batch: Any = None
     data: Any = None
 
-    def to_pyg(self) -> Any:
-        """``Data.from_dict`` (requires torch-geometric)."""
-        from torch_geometric.data import Data
-
-        mapping = {
-            name: getattr(self, name)
-            for name in ("x", "edge_index", "edge_attr", "y", "pos", "batch")
-            if getattr(self, name) is not None
-        }
-        if isinstance(self.data, dict):
+    def to_mapping(self) -> dict[str, Any]:
+        """Flat mapping for pack / ``Data.from_dict``. Field kwargs override ``data=``."""
+        mapping: dict[str, Any] = {}
+        if self.data is not None and is_pyg_data(self.data):
+            mapping.update(self.data.to_dict())
+        elif isinstance(self.data, dict):
             mapping.update(self.data)
-        elif self.data is not None and hasattr(self.data, "to_dict"):
-            return self.data
+        elif self.data is not None:
+            if any(getattr(self, name) is not None for name in GRAPH_FIELDS):
+                raise TypeError(
+                    "Graph.data= must be a PyG Data, a dict, or omitted. "
+                    "Do not mix tensor fields with an opaque data= payload."
+                )
+            return mapping
+        for name in GRAPH_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                mapping[name] = value
+        return mapping
+
+    def to_pyg(self) -> Any:
+        """``Data.from_dict`` / ``HeteroData.from_dict`` (requires torch-geometric)."""
+        from torch_geometric.data import Data, HeteroData
+
+        mapping = self.to_mapping()
+        if any(
+            isinstance(value, dict) and any(hasattr(child, "shape") for child in value.values())
+            for value in mapping.values()
+        ):
+            return HeteroData.from_dict(mapping)
         return Data.from_dict(mapping)
 
 

@@ -41,6 +41,7 @@ from litdata.constants import (
     _TRIMESH_AVAILABLE,
 )
 from litdata.types import (
+    GRAPH_FIELDS,
     Audio,
     File,
     Graph,
@@ -55,6 +56,7 @@ from litdata.types import (
     Tiff,
     Video,
     _MediaRef,
+    is_pyg_data,
 )
 
 _torchcodec_ok: bool | None = None
@@ -68,8 +70,11 @@ def _torchcodec_usable() -> bool:
     if _torchcodec_ok is not None:
         return _torchcodec_ok
     try:
-        from torchcodec.decoders import AudioDecoder, VideoDecoder  # noqa: F401
+        import torch
+        from torchcodec.encoders import AudioEncoder
 
+        # Importing decoders is not enough: Windows often has the wheel but no FFmpeg DLLs.
+        AudioEncoder(torch.zeros(1, 8), sample_rate=8000).to_file_like(io.BytesIO(), format="wav")
         _torchcodec_ok = True
     except Exception:
         _torchcodec_ok = False
@@ -489,62 +494,104 @@ class NoHeaderNumpySerializer(Serializer):
         return isinstance(item, np.ndarray) and len(item.shape) == 1
 
 
-_GRAPH_FIELDS = ("x", "edge_index", "edge_attr", "y", "pos", "batch")
 _GRAPH_MAGIC = b"LDGR"
 _GRAPH_KIND_TENSOR = 0
 _GRAPH_KIND_PICKLE = 1
 _GRAPH_META_KEY = "_meta"
-
-
-def _is_pyg_data(item: Any) -> bool:
-    module = getattr(type(item), "__module__", "")
-    return module.startswith("torch_geometric.data") and hasattr(item, "to_dict")
+_GRAPH_TENSOR_MARK = "__ldgr_t__"
+_GRAPH_VERSION = 3
 
 
 def _is_tensor_like(value: Any) -> bool:
-    if isinstance(value, (Tensor, torch.Tensor, np.ndarray)):
-        return True
-    return hasattr(value, "cpu") and hasattr(value, "shape") and not isinstance(value, (str, bytes, dict, list))
+    return isinstance(value, (Tensor, torch.Tensor, np.ndarray))
 
 
-def _graph_has_arrays(graph: Graph) -> bool:
-    return any(getattr(graph, name) is not None for name in _GRAPH_FIELDS)
+def _pyg_cls(item: Any) -> str:
+    return "hetero" if type(item).__name__ == "HeteroData" else "data"
 
 
-def _mapping_from_item(item: Any) -> dict[str, Any] | None:
-    """PyG-native mapping: ``Data.to_dict()``. Nested / opaque objects return ``None`` (pickle)."""
-    if _is_pyg_data(item):
-        mapping = dict(item.to_dict())
-    elif isinstance(item, Graph):
-        if item.data is not None and _is_pyg_data(item.data):
-            mapping = dict(item.data.to_dict())
+def _looks_hetero(mapping: dict[str, Any]) -> bool:
+    return any(
+        isinstance(value, dict) and any(_is_tensor_like(child) for child in value.values())
+        for value in mapping.values()
+    )
+
+
+def _mapping_from_item(item: Any) -> tuple[dict[str, Any], str] | None:
+    """PyG ``to_dict()`` (flat ``Data`` or nested ``HeteroData``). Opaque objects return ``None``."""
+    if is_pyg_data(item):
+        return dict(item.to_dict()), _pyg_cls(item)
+    if isinstance(item, Graph):
+        mapping = item.to_mapping()
+        if not mapping:
+            return None
+        if is_pyg_data(item.data):
+            cls = _pyg_cls(item.data)
         else:
-            mapping = {name: getattr(item, name) for name in _GRAPH_FIELDS if getattr(item, name) is not None}
-            if item.data is not None:
-                if isinstance(item.data, dict):
-                    mapping.update(item.data)
-                elif not mapping:
-                    return None
-                else:
-                    mapping["_opaque"] = item.data
-    else:
-        raise TypeError(f"Cannot pack graph from {type(item)}")
+            cls = "hetero" if _looks_hetero(mapping) else "data"
+        return mapping, cls
+    raise TypeError(f"Cannot pack graph from {type(item)}")
 
-    if any(isinstance(value, dict) for value in mapping.values()):
+
+def _flatten_graph(obj: Any, prefix: tuple[Any, ...] = ()) -> tuple[dict[tuple[Any, ...], Any], Any] | None:
+    if _is_tensor_like(obj):
+        return {prefix: obj}, _GRAPH_TENSOR_MARK
+    if isinstance(obj, dict):
+        tensors: dict[tuple[Any, ...], Any] = {}
+        tree: dict[Any, Any] = {}
+        for key, value in obj.items():
+            nested = _flatten_graph(value, prefix + (key,))
+            if nested is None:
+                return None
+            child_tensors, child_tree = nested
+            tensors.update(child_tensors)
+            tree[key] = child_tree
+        return tensors, tree
+    if isinstance(obj, (list, tuple, set)):
         return None
-    if not any(_is_tensor_like(value) for value in mapping.values()):
-        return None
-    return mapping
+    return {}, obj
+
+
+def _path_name(path: tuple[Any, ...]) -> str:
+    parts: list[str] = []
+    for key in path:
+        if isinstance(key, tuple):
+            parts.append("__".join(str(part) for part in key))
+        else:
+            parts.append(str(key))
+    return ".".join(parts)
+
+
+def _fill_graph_tree(tree: Any, tensors: dict[tuple[Any, ...], Any], prefix: tuple[Any, ...] = ()) -> Any:
+    if tree == _GRAPH_TENSOR_MARK:
+        return tensors[prefix]
+    if isinstance(tree, dict):
+        return {key: _fill_graph_tree(value, tensors, prefix + (key,)) for key, value in tree.items()}
+    return tree
 
 
 def _reconstruct_graph(values: dict[str, Any]) -> Any:
-    """Re-read with PyG when installed: ``Data.from_dict(mapping)``."""
+    """Re-read with ``Data.from_dict`` / ``HeteroData.from_dict`` when PyG is installed."""
+    tree = values.pop("_tree", None)
+    paths = values.pop("_paths", None)
+    fields = values.pop("_fields", None)
+    cls = values.pop("_cls", "data")
+    if tree is not None and paths is not None and fields is not None:
+        by_path = {path: values[name] for path, name in zip(paths, fields)}
+        values = _fill_graph_tree(tree, by_path)
+
     try:
+        if cls == "hetero":
+            from torch_geometric.data import HeteroData
+
+            return HeteroData.from_dict(values)
         from torch_geometric.data import Data
 
         return Data.from_dict(values)
     except ImportError:
-        known = {name: values.pop(name) for name in list(values) if name in _GRAPH_FIELDS}
+        if cls == "hetero":
+            return Graph(data=values)
+        known = {name: values.pop(name) for name in list(values) if name in GRAPH_FIELDS}
         leftover = values or None
         return Graph(**known, data=leftover)
 
@@ -552,8 +599,8 @@ def _reconstruct_graph(values: dict[str, Any]) -> Any:
 class GraphSerializer(Serializer):
     """Store a PyG ``Data.to_dict()`` as packed tensors (not ``torch.save``).
 
-    Reconstructs with ``Data.from_dict`` when torch-geometric is installed.
-    ``graph:pickle`` is only for NetworkX / nested HeteroData / opaque ``data=``.
+    Reconstructs with ``Data.from_dict`` / ``HeteroData.from_dict`` when
+    torch-geometric is installed. ``graph:pickle`` is only for NetworkX / opaque ``data=``.
     """
 
     def __init__(self) -> None:
@@ -564,30 +611,38 @@ class GraphSerializer(Serializer):
         self._pickle_fallback = isinstance(metadata, str) and metadata.endswith("pickle")
 
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
-        mapping = _mapping_from_item(item)
-        if mapping is None:
+        packed = _mapping_from_item(item)
+        if packed is None:
             payload = item.data if isinstance(item, Graph) and item.data is not None else item
             return pickle.dumps(payload), "graph:pickle"
 
-        tensors: dict[str, Any] = {}
-        meta: dict[str, Any] = {}
-        for key, value in mapping.items():
-            if _is_tensor_like(value):
-                tensors[key] = value
-            else:
-                meta[key] = value
+        mapping, cls = packed
+        flattened = _flatten_graph(mapping)
+        if flattened is None or not flattened[0]:
+            payload = item.data if isinstance(item, Graph) and item.data is not None else item
+            return pickle.dumps(payload), "graph:pickle"
 
-        parts = [_GRAPH_MAGIC, struct.pack(">B", 2)]
+        tensor_map, tree = flattened
+        paths = list(tensor_map.keys())
+        names = [_path_name(path) for path in paths]
+        if len(set(names)) != len(names):
+            names = [f"t{index}" for index in range(len(paths))]
+        meta = {"_cls": cls, "_tree": tree, "_paths": paths, "_fields": names}
+
+        parts = [_GRAPH_MAGIC, struct.pack(">B", _GRAPH_VERSION)]
         fields: list[tuple[bytes, int, bytes]] = []
-        for name, value in tensors.items():
-            tensor = _coerce_torch_tensor(value).cpu().contiguous()
+        for name, path in zip(names, paths):
+            tensor = _coerce_torch_tensor(tensor_map[path]).cpu().contiguous()
             payload, _ = self._tensor.serialize(tensor)
-            fields.append((name.encode("ascii"), _GRAPH_KIND_TENSOR, payload))
-        if meta:
-            fields.append((_GRAPH_META_KEY.encode("ascii"), _GRAPH_KIND_PICKLE, pickle.dumps(meta)))
-        parts.append(struct.pack(">B", len(fields)))
+            fields.append((name.encode("utf-8"), _GRAPH_KIND_TENSOR, payload))
+        fields.append((_GRAPH_META_KEY.encode("utf-8"), _GRAPH_KIND_PICKLE, pickle.dumps(meta)))
+        if len(fields) > 65535:
+            raise ValueError("graph pack exceeds 65535 fields")
+        parts.append(struct.pack(">H", len(fields)))
         for name_b, kind, payload in fields:
-            parts.append(struct.pack(">B", len(name_b)))
+            if len(name_b) > 65535:
+                raise ValueError("graph field name exceeds 65535 bytes")
+            parts.append(struct.pack(">H", len(name_b)))
             parts.append(name_b)
             parts.append(struct.pack(">B", kind))
             parts.append(struct.pack(">I", len(payload)))
@@ -602,17 +657,25 @@ class GraphSerializer(Serializer):
         offset = len(_GRAPH_MAGIC)
         version = view[offset]
         offset += 1
-        if version not in (1, 2):
+        if version not in (1, 2, 3):
             raise ValueError(f"Unsupported graph pack version: {version}")
-        n_fields = view[offset]
-        offset += 1
+        if version >= 3:
+            n_fields = struct.unpack_from(">H", view, offset)[0]
+            offset += 2
+        else:
+            n_fields = view[offset]
+            offset += 1
         values: dict[str, Any] = {}
         for _ in range(n_fields):
-            name_len = view[offset]
-            offset += 1
-            name = bytes(view[offset : offset + name_len]).decode("ascii")
+            if version >= 3:
+                name_len = struct.unpack_from(">H", view, offset)[0]
+                offset += 2
+            else:
+                name_len = view[offset]
+                offset += 1
+            name = bytes(view[offset : offset + name_len]).decode("utf-8")
             offset += name_len
-            if version == 2:
+            if version >= 2:
                 kind = view[offset]
                 offset += 1
             else:
@@ -628,7 +691,7 @@ class GraphSerializer(Serializer):
         return _reconstruct_graph(values)
 
     def can_serialize(self, item: Any) -> bool:
-        return isinstance(item, Graph) or _is_pyg_data(item)
+        return isinstance(item, Graph) or is_pyg_data(item)
 
 
 class PickleSerializer(Serializer):

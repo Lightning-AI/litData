@@ -76,6 +76,7 @@ def test_serializers():
         "nifti",
         "mesh",
         "pdf",
+        "graph",
         "tifffile",
         "file",
         "pil",
