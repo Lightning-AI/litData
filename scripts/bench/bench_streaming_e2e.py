@@ -29,7 +29,6 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 os.environ.setdefault("LITDATA_TIMING", "1")
 
-from litdata.streaming import Cache  # noqa: E402
 from litdata.streaming.dataloader import StreamingDataLoader  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 from litdata.streaming.timing import StreamingTimingStats  # noqa: E402
