@@ -525,10 +525,7 @@ def _mapping_from_item(item: Any) -> tuple[dict[str, Any], str] | None:
         mapping = item.to_mapping()
         if not mapping:
             return None
-        if is_pyg_data(item.data):
-            cls = _pyg_cls(item.data)
-        else:
-            cls = "hetero" if _looks_hetero(mapping) else "data"
+        cls = _pyg_cls(item.data) if is_pyg_data(item.data) else "hetero" if _looks_hetero(mapping) else "data"
         return mapping, cls
     raise TypeError(f"Cannot pack graph from {type(item)}")
 
