@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+from litdata.streaming.collate import litdata_collate
 from litdata.streaming.serializers import (
     _SERIALIZERS,
     AudioSerializer,
@@ -24,7 +25,6 @@ from litdata.streaming.serializers import (
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
-from litdata.streaming.collate import litdata_collate
 from litdata.types import Audio, Graph, Image, Jpeg, JpegArray, Tensor
 from litdata.utilities._pytree import tree_flatten
 
