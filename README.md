@@ -45,6 +45,7 @@
   <a href="#quick-start">Quick start</a> •
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
+  <a href="#modality">Modality</a> •
   <a href="#key-features">Features</a> •
   <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
@@ -295,6 +296,115 @@ ld.map(
 ✅ Enterprise security:       Self host or process data on your cloud account with Lightning Studios.  
 
 &nbsp;
+
+----
+
+# Modality <a id="media-types"></a>
+
+Wrap each file so a caption is not treated as a path: Text(path=...), Image(path=...), Audio(path=...). Path and raw bytes are stored as-is; array / image / mesh encode.
+
+<table width="100%">
+<tr>
+<th align="left">Type</th>
+<th align="left">Write</th>
+<th align="left">Stream</th>
+</tr>
+<tr>
+<td colspan="3"><strong>Text</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/text.py">Text</a></td>
+<td>Text(path="a.txt")<br>Text(bytes=utf8)<br>Text(text="a caption")</td>
+<td>text  # str</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/text.py">Tokens</a></td>
+<td>Tensor(array=token_ids)<br>optimize(..., item_loader=TokensLoader())</td>
+<td>tokens  # Tensor, length block_size — <a href="#llm-training">LLM training</a></td>
+</tr>
+<tr>
+<td colspan="3"><strong>Image</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/image.py">Image</a></td>
+<td>Image(path="a.jpg")<br>Image(bytes=jpeg)<br>Image(array=hwc, quality=95, format="jpeg")</td>
+<td>image.shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/jpeg.py">Jpeg</a></td>
+<td>Jpeg(path="a.jpg")<br>Jpeg(array=hwc, quality=95)</td>
+<td>image.shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/jpeg_array.py">JpegArray</a></td>
+<td>JpegArray(images=[Jpeg(path=p) for p in frames])</td>
+<td>images[0].shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/pil.py">Pil</a></td>
+<td>Pil(path="a.png")<br>Pil(image=pil_img, mode="RGB")</td>
+<td>pil_img.size  # PIL.Image</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/tiff.py">Tiff</a></td>
+<td>Tiff(path="a.tif")<br>Tiff(array=hw)</td>
+<td>array.shape  # NumPy</td>
+</tr>
+<tr>
+<td colspan="3"><strong>Audio and Video</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/audio.py">Audio</a></td>
+<td>Audio(path="a.wav")<br>Audio(bytes=wav)<br>Audio(array=wave, sampling_rate=16000)</td>
+<td>audio["array"]<br>audio["sampling_rate"]</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/video.py">Video</a></td>
+<td>Video(path="c.mp4")<br>Video(bytes=mp4)<br>Video(array=frames, fps=25)</td>
+<td>video.get_frames_at(0)<br>video.get_frames_in_range(0, 8)</td>
+</tr>
+<tr>
+<td colspan="3"><strong>File</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/file.py">File</a></td>
+<td>File(path="doc.bin")<br>File(bytes=blob)</td>
+<td>sidecar  # raw bytes</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/pdf.py">Pdf</a></td>
+<td>Pdf(path="p.pdf")<br>Pdf(pdf=pdfplumber_doc)</td>
+<td>pdf.pages[0]  # Pdfplumber</td>
+</tr>
+<tr>
+<td colspan="3"><strong>3D and volume</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/mesh.py">Mesh</a></td>
+<td>Mesh(path="m.glb")<br>Mesh(mesh=trimesh_obj, file_type="glb")</td>
+<td>mesh.vertices  # Trimesh</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/nifti.py">Nifti</a></td>
+<td>Nifti(path="v.nii.gz")<br>Nifti(array=vol, affine=np.eye(4))</td>
+<td>nifti.get_fdata()  # Nibabel</td>
+</tr>
+<tr>
+<td colspan="3"><strong>Tensor and Graph</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/tensor.py">Tensor</a></td>
+<td>Tensor(array=torch.randn(3, 4, 4))</td>
+<td>feat  # Tensor — 1-D token ids use TokensLoader under Text</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/graph.py">Graph</a></td>
+<td>Data(x=…, edge_index=…, y=…)<br>Graph(x=…, edge_index=…, y=…)<br>Graph(data=pyg_data)</td>
+<td>graph.x, graph.edge_index  # PyG Data or Graph — <a href="#pyg-graphs">PyG graphs</a></td>
+</tr>
+</table>
+
+Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
 ----
 
@@ -565,41 +675,6 @@ dataset = StreamingDataset(
 ```
 
 Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer typed wrappers / JPEG / numpy / tensor leaves for best results.
-
-</details>
-
-<details>
-  <summary> ✅ Typed media wrappers (`Audio`, `Video`, `Image`, …) <a id="media-types" href="#media-types">🔗</a> </summary>
-&nbsp;
-
-Wrap media in `optimize` so the serializer is unambiguous (a string caption is not a `.wav` path). Wrappers are **pytree leaves**: one serializer sees the whole object. Path/bytes are stored as-is; `array=` / `image=` / `mesh=` encode.
-
-```python
-from litdata import optimize, Audio, Image
-
-def fn(path):
-    return {"audio": Audio(path=path), "id": path}
-
-optimize(fn, inputs=wav_paths, output_dir="data")
-```
-
-| Type | Write | Stream |
-|------|-------|--------|
-| `Audio` | `Audio(path="a.wav")` <br> `Audio(bytes=wav)` <br> `Audio(array=wave, sampling_rate=16000)` | torchcodec `AudioDecoder` — `audio["array"]`, `audio["sampling_rate"]` |
-| `Video` | `Video(path="c.mp4")` <br> `Video(bytes=mp4)` <br> `Video(array=frames, fps=25)` | torchcodec `VideoDecoder` |
-| `Image` | `Image(path="a.jpg")` <br> `Image(bytes=jpeg)` <br> `Image(array=hwc, quality=95, format="jpeg")` | CHW `torch.Tensor` |
-| `Jpeg` | `Jpeg(path="a.jpg")` <br> `Jpeg(array=hwc, quality=95)` | CHW `torch.Tensor` (always JPEG, quality default 95) |
-| `JpegArray` | `JpegArray(images=[Jpeg(path=p) for p in frames])` | `list[Tensor]` |
-| `Pil` | `Pil(path="a.png")` <br> `Pil(image=pil_img, mode="RGB")` | `PIL.Image` (raw pixels — larger than JPEG) |
-| `Tiff` | `Tiff(path="a.tif")` <br> `Tiff(array=hw)` | NumPy array (`tifffile`) |
-| `File` | `File(path="doc.bin")` <br> `File(bytes=blob)` | `bytes` |
-| `Mesh` | `Mesh(path="m.glb")` <br> `Mesh(mesh=trimesh_obj, file_type="glb")` | trimesh object |
-| `Pdf` | `Pdf(path="p.pdf")` <br> `Pdf(pdf=pdfplumber_doc)` | pdfplumber PDF |
-| `Nifti` | `Nifti(path="v.nii.gz")` <br> `Nifti(array=vol, affine=np.eye(4))` | nibabel image |
-| `Tensor` | `Tensor(array=torch.randn(3, 4, 4))` <br> `Tensor(array=token_ids)` | `torch.Tensor` (1-D uses the `TokensLoader` layout) |
-| `Graph` | `Data(x=…, edge_index=…, y=…)` <br> `Graph(x=…, edge_index=…, y=…)` <br> `Graph(data=pyg_data)` | PyG `Data` / `HeteroData` if installed, else `Graph` — see [PyG graphs](#pyg-graphs) |
-
-CUDA video/audio decode is forced to CPU inside DataLoader and optimize workers. Pass `AudioSerializer(decode="bytes")` / `VideoSerializer(decode="bytes")` if you want raw bytes instead of a decoder.
 
 </details>
 

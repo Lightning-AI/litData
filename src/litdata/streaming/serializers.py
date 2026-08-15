@@ -36,7 +36,6 @@ from litdata.constants import (
     _PDFPLUMBER_AVAILABLE,
     _PIL_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
-    _TORCH_VISION_LESS_THAN_0_26,
     _TORCHCODEC_AVAILABLE,
     _TRIMESH_AVAILABLE,
 )
@@ -53,6 +52,7 @@ from litdata.types import (
     Pdf,
     Pil,
     Tensor,
+    Text,
     Tiff,
     Video,
     _MediaRef,
@@ -79,6 +79,18 @@ def _torchcodec_usable() -> bool:
     except Exception:
         _torchcodec_ok = False
     return _torchcodec_ok
+
+
+def _torchvision_read_video_available() -> bool:
+    """``torchvision.io.read_video`` was removed in recent torchvision builds."""
+    if not _AV_AVAILABLE:
+        return False
+    try:
+        import torchvision.io
+
+        return hasattr(torchvision.io, "read_video")
+    except Exception:
+        return False
 
 
 def _as_bytes(data: bytes | bytearray | memoryview) -> bytes:
@@ -1088,7 +1100,7 @@ class VideoSerializer(Serializer):
             return self._video_decoder(data)
         if _torchcodec_usable():
             return self._deserialize_with_torchcodec(data)
-        if _TORCH_VISION_LESS_THAN_0_26 or _AV_AVAILABLE:
+        if _torchvision_read_video_available():
             return self._deserialize_with_torchvision_io(data)
         raise ModuleNotFoundError("torchcodec is required. Run `pip install torchcodec`")
 
@@ -1098,11 +1110,15 @@ class VideoSerializer(Serializer):
 
         import torchvision.io
 
+        read_video = getattr(torchvision.io, "read_video", None)
+        if read_video is None:
+            raise ModuleNotFoundError("torchcodec is required. Run `pip install torchcodec`")
+
         with tempfile.TemporaryDirectory() as dirname:
             fname = os.path.join(dirname, "file.mp4")
             with open(fname, "wb") as stream:
                 stream.write(_as_bytes(data))
-            return torchvision.io.read_video(fname, pts_unit="sec")
+            return read_video(fname, pts_unit="sec")
 
     def _deserialize_with_torchcodec(self, data: bytes) -> Any:
         import torch
@@ -1464,6 +1480,22 @@ class StringSerializer(Serializer):
         return isinstance(data, str) and not os.path.isfile(data)
 
 
+class TextSerializer(Serializer):
+    """Store UTF-8 text. ``path=`` / ``bytes=`` are stored as-is; ``text=`` encodes."""
+
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
+        if isinstance(item, Text) and item.text is not None:
+            return item.text.encode("utf-8"), "text"
+        data, _ext = _read_media_bytes(item)
+        return data, "text"
+
+    def deserialize(self, data: bytes) -> str:
+        return bytes(data).decode("utf-8")
+
+    def can_serialize(self, data: Any) -> bool:
+        return isinstance(data, Text)
+
+
 class NumericSerializer:
     """Store scalar."""
 
@@ -1581,6 +1613,7 @@ class TIFFSerializer(Serializer):
 _SERIALIZERS = OrderedDict(
     **{
         "str": StringSerializer(),
+        "text": TextSerializer(),
         "bool": BooleanSerializer(),
         "int": IntegerSerializer(),
         "float": FloatSerializer(),

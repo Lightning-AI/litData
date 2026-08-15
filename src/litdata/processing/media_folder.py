@@ -20,6 +20,7 @@ import tarfile
 from collections.abc import Iterator
 from typing import Any
 
+TEXT_EXTENSIONS = ("txt", "md")
 IMAGE_EXTENSIONS = (
     "jpg",
     "jpeg",
@@ -37,6 +38,7 @@ PDF_EXTENSIONS = ("pdf",)
 NIFTI_EXTENSIONS = ("nii", "nii.gz")
 
 _KIND_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "text": TEXT_EXTENSIONS,
     "image": IMAGE_EXTENSIONS,
     "video": VIDEO_EXTENSIONS,
     "audio": AUDIO_EXTENSIONS,
@@ -63,8 +65,8 @@ def list_media_folder(
 
     Each item is ``{"path": abs_path, "label": parent_dir_name_or_None}``.
     Files directly under ``root`` have ``label=None``. Pass the list to
-    ``optimize`` / ``map``. ``kind`` selects extensions (``image``, ``video``,
-    ``audio``, ``mesh``, ``pdf``, ``nifti``).
+    ``optimize`` / ``map``. ``kind`` selects extensions (``text``, ``image``,
+    ``video``, ``audio``, ``mesh``, ``pdf``, ``nifti``).
     """
     if kind not in _KIND_EXTENSIONS:
         raise ValueError(f"Unknown media kind {kind!r}. Expected one of {sorted(_KIND_EXTENSIONS)}.")

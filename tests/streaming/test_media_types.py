@@ -25,7 +25,7 @@ from litdata.streaming.serializers import (
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
-from litdata.types import Audio, Graph, Image, Jpeg, JpegArray, Tensor
+from litdata.types import Audio, Graph, Image, Jpeg, JpegArray, Tensor, Text
 from litdata.utilities._pytree import tree_flatten
 
 try:
@@ -47,6 +47,20 @@ def test_image_serializer_claims_bare_jpeg_path(tmpdir):
     tensor = ImageSerializer().deserialize(data)
     assert tensor.shape == (3, 8, 8)
     assert tensor.dtype == torch.uint8
+
+
+def test_text_wrapper_roundtrip(tmpdir):
+    from litdata.streaming.serializers import TextSerializer
+
+    path = os.path.join(tmpdir, "note.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("hello path")
+    serializer = TextSerializer()
+    assert serializer.can_serialize(Text(path=path))
+    data, name = serializer.serialize(Text(path=path))
+    assert name == "text"
+    assert serializer.deserialize(data) == "hello path"
+    assert serializer.deserialize(serializer.serialize(Text(text="hello text"))[0]) == "hello text"
 
 
 def test_writer_picks_audio_not_string_for_wrapper():

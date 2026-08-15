@@ -25,7 +25,6 @@ import torch
 from lightning_utilities.core.imports import RequirementCache
 
 from litdata.streaming.serializers import (
-    _AV_AVAILABLE,
     _NUMPY_DTYPES_MAPPING,
     _SERIALIZERS,
     _TORCH_DTYPES_MAPPING,
@@ -49,6 +48,7 @@ from litdata.streaming.serializers import (
     _get_serializers,
     _LitAudioDecoder,
     _torchcodec_usable,
+    _torchvision_read_video_available,
 )
 from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tiff, Video
 
@@ -67,6 +67,7 @@ def test_serializers():
     keys = list(_SERIALIZERS.keys())
     assert keys == [
         "str",
+        "text",
         "bool",
         "int",
         "float",
@@ -293,7 +294,10 @@ def test_assert_no_header_numpy_serializer():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows")
-@pytest.mark.skipif(condition=not _AV_AVAILABLE, reason="Requires: 'av'")
+@pytest.mark.skipif(
+    condition=not _torchcodec_usable() and not _torchvision_read_video_available(),
+    reason="Requires torchcodec or torchvision.io.read_video",
+)
 def test_wav_deserialization(tmpdir):
     from torch.hub import download_url_to_file
 

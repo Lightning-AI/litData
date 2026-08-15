@@ -119,6 +119,13 @@ class Tiff(_MediaRef):
 
 
 @dataclass
+class Text(_MediaRef):
+    """Text sample: path, UTF-8 bytes, or ``text=`` string. Streams as ``str``."""
+
+    text: str | None = None
+
+
+@dataclass
 class File(_MediaRef):
     """Generic file bytes (``FileSerializer``)."""
 

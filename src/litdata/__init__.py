@@ -27,7 +27,7 @@ from litdata.streaming.dataset_update import dataset_update
 from litdata.streaming.item_loader import TokensLoader
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.writer import index_parquet_dataset
-from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video
+from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Text, Tiff, Video
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.keys_index import build_keys_index
@@ -74,6 +74,7 @@ __all__ = [
     "Pdf",
     "Nifti",
     "Tensor",
+    "Text",
     "Graph",
 ]
 

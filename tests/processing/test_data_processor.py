@@ -50,6 +50,7 @@ from litdata.processing.data_processor import (
 from litdata.processing.functions import LambdaMapRecipe, _get_input_dir, map, optimize
 from litdata.streaming import StreamingDataLoader, StreamingDataset, resolver
 from litdata.streaming.cache import Cache, Dir
+from litdata.streaming.serializers import _torchcodec_usable
 
 
 def seed_everything(random_seed):
@@ -1671,13 +1672,12 @@ def create_synthetic_audio_file(filepath) -> dict:
 
 
 @pytest.mark.skipif(
-    condition=not _ZSTD_AVAILABLE or sys.platform == "win32", reason="Requires: ['zstd'] or Windows not supported"
+    condition=not _ZSTD_AVAILABLE or sys.platform == "win32" or not _torchcodec_usable(),
+    reason="Requires zstd, torchcodec; Windows not supported",
 )
 @pytest.mark.parametrize("compression", [None])
 def test_load_audio_file_optimize_and_stream(tmpdir, compression):
     seed_everything(42)
-
-    import soundfile as sf
 
     optimize(
         fn=create_synthetic_audio_file,
@@ -1690,10 +1690,13 @@ def test_load_audio_file_optimize_and_stream(tmpdir, compression):
 
     dataset = StreamingDataset(input_dir=str(tmpdir))
     sample = dataset[0]
-    data, sample_rate = sf.read(sample)
-    tensor = torch.from_numpy(data).unsqueeze(0)
-    assert tensor.shape == torch.Size([1, 16000])
-    assert sample_rate == 16000
+    # Bare .wav paths are Audio: stream a decoder (array + sampling_rate), not a path.
+    data = sample["array"]
+    sample_rate = sample["sampling_rate"]
+    tensor = torch.from_numpy(np.asarray(data)).unsqueeze(0)
+    assert tensor.shape[0] == 1
+    assert tensor.shape[-1] > 0
+    assert int(sample_rate) == 16000
 
 
 def test_is_path_valid_in_studio(monkeypatch, tmpdir):
