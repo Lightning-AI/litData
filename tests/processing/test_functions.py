@@ -788,7 +788,9 @@ def data_producer(q: Queue):
     for item in yield_numbers():
         q.put(item)
 
-    q.put(ALL_DONE)  # Sentinel value to indicate end
+    # One sentinel per possible worker; workers also re-queue ALL_DONE.
+    for _ in range(8):
+        q.put(ALL_DONE)
 
 
 def simple_optimize_fn(index):

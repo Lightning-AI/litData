@@ -1743,6 +1743,7 @@ def test_get_input_dir_lightning_storage_does_not_stat(monkeypatch):
 
     monkeypatch.setattr(os.path, "exists", _boom)
     assert _get_input_dir(["/teamspace/lightning_storage/testing/a.bin"]) == "/teamspace/lightning_storage/testing"
+    assert _get_input_dir([r"\teamspace\lightning_storage\testing\a.bin"]) == "/teamspace/lightning_storage/testing"
 
 
 def test_is_path_does_not_stat_studio_fuse(monkeypatch):

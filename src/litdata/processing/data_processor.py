@@ -1013,9 +1013,9 @@ class BaseWorker:
             try:
                 combined_data = self.ready_to_process_queue.get(timeout=timeout)
 
-                if combined_data == ALL_DONE and self.keep_data_ordered:
-                    # Ordered path: one sentinel is shared. Unordered: the feeder already
-                    # enqueued one ALL_DONE per worker — do not put it back (bounded queue).
+                if combined_data == ALL_DONE and (self.keep_data_ordered or self.using_queue_optimize):
+                    # Ordered and queue-input: one sentinel is shared. Unordered list
+                    # optimize already enqueues one ALL_DONE per worker — do not put it back.
                     self.ready_to_process_queue.put(ALL_DONE)
             except Empty:
                 timed_out = True
@@ -1221,11 +1221,9 @@ class BaseWorker:
         self.remover.start()
 
     def _start_uploaders(self) -> None:
-        if (
-            self._node_io
-            or _is_local_write_through(self.output_dir)
-            or (self.output_dir.path is None and self.output_dir.url is None)
-        ):
+        if self._node_io or (self.output_dir.path is None and self.output_dir.url is None):
+            return
+        if _is_local_write_through(self.output_dir) and not isinstance(self.data_recipe, MapRecipe):
             return
 
         for _ in range(self.num_uploaders):
@@ -1854,6 +1852,7 @@ class DataProcessor:
         self._n_node_uploaders = 0
         self.shared_write_queue: Queue | None = None
         self.chunk_writers: list[ChunkWriterProcess] = []
+        self.data_recipe: DataRecipe | None = None
 
         # Queue for routing worker logs to the main process without breaking tqdm output.
         self.msg_queue: Queue = Queue()
@@ -2018,6 +2017,7 @@ class DataProcessor:
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
+        self.data_recipe = data_recipe
         if not self.keep_data_ordered:
             self._start_node_io_pools()
             if self.node_user_items is not None:
@@ -2136,7 +2136,9 @@ class DataProcessor:
     def _n_upload_threads(self) -> int:
         if self.output_dir.path is None and self.output_dir.url is None:
             return 0
-        if _is_local_write_through(self.output_dir):
+        # Chunk write-through already lands ``chunk-*.bin`` in the output dir.
+        # ``map`` still writes into a temp dir and must copy those files out.
+        if _is_local_write_through(self.output_dir) and not isinstance(getattr(self, "data_recipe", None), MapRecipe):
             return 0
         return max(self.num_uploaders, 2)
 

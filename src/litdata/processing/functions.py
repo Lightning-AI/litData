@@ -105,17 +105,21 @@ def _get_input_dir(inputs: Sequence[Any]) -> str | None:
     path = list(indexed_paths.values())[0]
     if _is_remote_file(path):
         return os.path.dirname(path)
-    if _is_studio_fuse_path(path) or path.startswith("/teamspace"):
-        if "/.project" in path:
-            return "/" + os.path.join(*path.split("/")[:4])
-        return "/" + os.path.join(*path.split("/")[:4])
+    if _is_studio_fuse_path(path) or path.startswith("/teamspace") or path.startswith("\\teamspace"):
+        return _teamspace_prefix(path)
     absolute_path = str(Path(path).resolve())
 
-    if _IS_IN_STUDIO or absolute_path.startswith("/teamspace"):
-        if "/.project" in absolute_path:
-            return "/" + os.path.join(*str(list(indexed_paths.values())[0]).split("/")[:4])
-        return "/" + os.path.join(*str(absolute_path).split("/")[:4])
+    if _IS_IN_STUDIO or absolute_path.startswith("/teamspace") or absolute_path.startswith("\\teamspace"):
+        if "/.project" in absolute_path.replace("\\", "/"):
+            return _teamspace_prefix(str(list(indexed_paths.values())[0]))
+        return _teamspace_prefix(absolute_path)
     return None
+
+
+def _teamspace_prefix(path: str) -> str:
+    """First three ``/teamspace/...`` components, always with POSIX separators."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return "/" + "/".join(parts[:3])
 
 
 def _get_default_num_workers() -> int:
