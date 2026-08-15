@@ -237,12 +237,12 @@ StreamingDataLoader(
 )
 ```
 
-| Requirement | Detail |
-| ----------- | ------ |
-| Dep         | None (`cProfile` / `pstats` are stdlib) |
+| Requirement | Detail                                                                 |
+| ----------- | ---------------------------------------------------------------------- |
+| Dep         | None (`cProfile` / `pstats` are stdlib)                                |
 | Scope       | Main process + worker **0** (rank 0). `num_workers=0` writes main only |
-| Output      | `{profile_dir}/cprofile_{main,worker0}.{prof,txt}` |
-| Conflict    | Raises if `profile_batches` is also set |
+| Output      | `{profile_dir}/cprofile_{main,worker0}.{prof,txt}`                     |
+| Conflict    | Raises if `profile_batches` is also set                                |
 
 Parent profiler starts after workers spawn (fork must not inherit an active cProfile). Inspect with `python -m pstats profiles/cprofile_worker0.prof`.
 
