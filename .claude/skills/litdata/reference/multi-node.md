@@ -148,10 +148,10 @@ ______________________________________________________________________
 
 - Each node has **its own** `/cache/chunks` and `/cache/data` (or env overrides). **Not** a shared NFS assumption.
 - `DataProcessor._cleanup_cache` wipes both at **start** of each node’s run.
-- Downloaders/uploaders/removers run **per worker on that node** — see [data-movement.md](data-movement.md).
+- Shared-queue default: download/upload/remove are **node-level threads** on that node (not a global queue). Ordered path still uses per-worker I/O. See [data-movement.md](data-movement.md).
 - Every node needs credentials for **inputs and outputs** (attached connections or keys on all instances). Missing creds on node K → that shard fails; last-node index merge may hang waiting for `{K}-index.json`.
 
-**FUSE vs direct:** same as single-node — pass `/teamspace/s3_connections/…` so each node resolves to `Dir.url` and downloads via FsProvider, not through FUSE under multi-worker load.
+**FUSE vs direct:** same as single-node — pass `/teamspace/s3_connections/…` so each node resolves to `Dir.url` and downloads via `Downloader`, not through FUSE under multi-worker load.
 
 ______________________________________________________________________
 

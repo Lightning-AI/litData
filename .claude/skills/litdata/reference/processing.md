@@ -15,15 +15,16 @@ All paths under `src/litdata/`. This pipeline fans work across workers (and mach
 
 User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `#optimize-kwargs` / `#map` / `#walk`.
 
-- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (default shared queue; `True` for static slices), `encryption`, `item_loader=TokensLoader()`, `key_fn` (writes `keys/` — [keyed-lookup.md](keyed-lookup.md)), `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`, `broadcast_paths=False` (auto-on for `{%strftime}` paths — see [multi-node.md](multi-node.md) §3.4). → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`. Last node merges key shards via `_merge_and_upload_keys` (append uses `concatenate_key_files`). **No multi-node key tests yet.**
+- **`optimize(...)`** — `functions.py` `optimize`. Runs `fn` per input; flatten via pytree → `chunk-*.bin` + `index.json`. **Exactly one of `chunk_size` / `chunk_bytes`.** Notable: `queue`+`ALL_DONE`, `align_chunking`, `use_checkpoint`, `mode="append"|"overwrite"`, `keep_data_ordered=False` (default shared **per-node** queue; `True` for static slices), `encryption`, `item_loader=TokensLoader()`, `key_fn` (writes `keys/` — [keyed-lookup.md](keyed-lookup.md)), `weights`/`input_dir`, `num_nodes`/`machine`, `num_downloaders`/`num_uploaders`, `broadcast_paths=False` (auto-on for `{%strftime}` paths — see [multi-node.md](multi-node.md) §3.4). → `LambdaDataChunkRecipe` / `QueueDataChunkRecipe` → `DataProcessor.run`. Last node merges key shards via `_merge_and_upload_keys` (append uses `concatenate_key_files`). **No multi-node key tests yet.** Remote I/O: streaming `Downloader` (`adownload_file` / `aupload_file`); see [data-movement.md](data-movement.md) and `#880`.
 - **`map(...)`** — `functions.py` `map`. `fn(input, output_dir) -> None` (side effects only). Same worker/scale knobs + `error_when_not_empty` + `broadcast_paths`. → `LambdaMapRecipe`.
 - **`merge_datasets(input_dirs, output_dir, max_workers=..., storage_options={})`** — Copy chunks + concat `index.json`; matching `data_format`/compression required.
 - **walk** — Threaded local/`os.listdir` listing (Studio-oriented). **Not** cloud `os.walk`. Order ≠ depth-first.
+- **`list_media_folder` / `iter_webdataset_tar`** — `processing/media_folder.py`. Class-folder `{path, label}` lists (`kind` = text/image/video/audio/mesh/pdf/nifti) and WebDataset tar iteration. Pass the list to `optimize` / `map`.
 
 ## Multi-node & data movement — start here
 
 - **`num_nodes` is not local multiprocessing** and is **not** torch.distributed/SLURM. Studio-only job launch via `_execute` (`resolver.py`). Full launch gate, env vars, sharding, who uploads chunks vs who merges `index.json`, checkpoints/append, and hang modes → **[multi-node.md](multi-node.md)**.
-- **Per-worker I/O children** (`_download_data_target`, `_upload_fn`, `_remove_target`), resolver FUSE→`s3://`/`gs://`/`r2://`, cache folders, and streaming `Downloader` distinction → **[data-movement.md](data-movement.md)**.
+- **I/O** (`_download_data_target`, `_upload_fn`, `_remove_target`): with `keep_data_ordered=False`, download/upload/remove run as **node-level threads** (writers stay processes). Remote bytes use the streaming `Downloader`. Resolver FUSE→`s3://`/`gs://`/`r2://` and cache folders → **[data-movement.md](data-movement.md)**.
 - Quick rule: pass `/teamspace/s3_connections/…` or cloud URLs into LitData so resolve+FsProvider bypass FUSE; prefer durable remote `output_dir` on multi-node.
 
 ## Orchestration (`processing/data_processor.py`)
@@ -55,17 +56,19 @@ User-facing arg tables → [using-litdata.md](using-litdata.md) §9 and README `
 
 ## Producer/consumer model (inside each worker)
 
-Each `BaseWorker` runs a local pipeline of child processes (spawned in `_setup`):
+Each `BaseWorker` (ordered path) or the node orchestrator (shared-queue path) runs I/O off the writer:
 
-| Child       | Start                | Target                  | Default count              | Role                                                                                              |
-| ----------- | -------------------- | ----------------------- | -------------------------- | ------------------------------------------------------------------------------------------------- |
-| Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2`     | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via **FsProvider** (not `Downloader` ABC) |
-| Uploaders   | `_start_uploaders`   | `_upload_fn`            | `num_uploaders or 1`       | Push chunks / map outputs to `output_dir`                                                         |
-| Remover     | `_start_remover`     | `_remove_target`        | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files                                                 |
+| Child       | Start                | Target                  | Default                    | Role                                                                                                                         |
+| ----------- | -------------------- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Downloaders | `_start_downloaders` | `_download_data_target` | `num_downloaders or 2`     | Prefetch inputs into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` via streaming **`Downloader.adownload_file`** (FsProvider fallback) |
+| Uploaders   | `_start_uploaders`   | `_upload_fn`            | `num_uploaders or 1`       | Push chunks / map outputs (`aupload_file` when remote; local write-through)                                                  |
+| Remover     | `_start_remover`     | `_remove_target`        | 1 if `delete_cached_files` | Delete local cached inputs + uploaded chunk files                                                                            |
+
+Shared-queue (`keep_data_ordered=False`): I/O is **threads** (`_start_io_thread`); same-process `queue.Queue` except at the writer-process boundary. Direct `s3://` / `gs://` / `r2://` item paths and Studio `lightning_storage` URLs **are** downloaded (not skipped). Studio FUSE mounts are not `stat`/`listdir`'d for path detection or size packing.
 
 Worker main loop (`_loop`): `ready_to_process_queue.get()` → `_handle_data_chunk_recipe` or `_handle_data_transform_recipe`.
 
-**`no_downloaders`** when `input_dir.path is None` **or** a `reader` is set — including pure `s3://` `Dir(path=None, url=…)` (downloaders need a FUSE/local `path` to rewrite). Studio connections set both `path` and `url`.
+**`no_downloaders`** when a `reader` is set, or there is nothing to fetch. Pure `s3://` item paths **are** downloaded on the shared-queue path. Studio connections set both `path` and `url`.
 
 **`remove` flag** = `DataProcessor.delete_cached_files` (default True); not exposed on public `optimize()`/`map()`.
 
@@ -162,4 +165,4 @@ enc = FernetEncryption(password="secret", level="sample")
 ld.optimize(fn=fn, inputs=..., output_dir="enc_data", chunk_bytes="64MB", encryption=enc)
 ```
 
-README feature sections: LLM pre-training / tokenization (721), filter illegal data (784), shared queue for optimize (607), queue as input (664), merge (995), distributed optimize (1436), encryption (1478), Lightning data connections (1615).
+README feature sections (search headings, not line numbers): LLM training, shared queue, queue as input, merge, distributed optimize, encryption, Lightning data connections, `#modality`.

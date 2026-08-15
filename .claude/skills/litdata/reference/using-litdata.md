@@ -59,35 +59,52 @@ ______________________________________________________________________
 
 ## 3. Images, media types & serializers
 
-**Always wrap media** so `optimize` can tell a filepath from a caption. Wrappers are pytree leaves (`src/litdata/types.py`). README `#media-types`.
+**Always wrap media** so `optimize` can tell a filepath from a caption. Wrappers are pytree leaves (`src/litdata/types.py`). README `#modality` (alias `#media-types`). Runnable path→optimize→batch recipes: `examples/modality/`.
 
 ```python
-from litdata import Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti, Tensor, Graph
+from litdata import (
+    Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti,
+    Tensor, Text, Graph, list_media_folder,
+)
 
+items = list_media_folder("data/images", kind="image")  # {path, label} class folders
+# kinds: text, image, video, audio, mesh, pdf, nifti
+
+Text(path=txt)                           # or bytes= / text="caption" → stream str
 Audio(path=wav)                          # or array= + sampling_rate=
 Video(path=mp4)                          # or array= + fps=
 Image(path=jpg, quality=95, format="jpeg")
 Image(array=hwc, quality=95, format="jpeg", mode="RGB")
 Jpeg(array=hwc, quality=95)
+File(path=blob)                          # stream raw bytes
 Nifti(array=volume, affine=np.eye(4))
 Mesh(mesh=trimesh_obj, file_type="glb")
+Tensor(array=feat)                       # N-D tensor. 1-D array= is TokensLoader
 Graph(x=x, edge_index=edge_index, y=y)   # or pass PyG Data / HeteroData
 ```
 
-Path-only → store file bytes. Bare `*.jpg` / `*.png` paths are also claimed (same as `Image(path=)`) so stream returns a **tensor**, not a string. Decode is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
+Path-only / `bytes=` → store file bytes. Bare `*.jpg` / `*.png` / `*.wav` paths are also claimed so stream returns media, not a string. **Bare `.txt` / `.npy` / `.bin` strings pickle the path** — wrap with `Text` / `File` or load the array. Decode for images is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
+
+Empty `Text()` / `JpegArray()` / empty `Tensor()` raise on write. `Tensor(path=` / `bytes=, dtype=)` is still the 1-D token layout; `Tensor()` with no payload is not.
 
 Built-in serializers (`streaming/serializers.py`), tried in registry order:
-`str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy`/`tensor` (+ no-header variants), `graph`, `pickle`.
+`str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `text`, `bytes`, `numpy`/`tensor` (+ no-header variants), `graph`, `pickle`.
 
-| Return type                                                    | Serializer                    | Result                                    |
-| -------------------------------------------------------------- | ----------------------------- | ----------------------------------------- |
-| `Image` / `Jpeg` / `Jpeg(array=, quality=95)`                  | `image` / `jpeg`              | Compressed JPEG — **preferred**           |
-| `PIL.JpegImageFile` (opened `.jpg`)                            | `jpeg`                        | Compressed JPEG                           |
-| `Pil` / plain `PIL.Image` / `fromarray`                        | `pil`                         | Uncompressed pixels — **large**           |
-| `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                              |
-| `Audio` / `Video` / `Tiff` / `File` / `Mesh` / `Pdf` / `Nifti` | matching name                 | See README `#media-types`                 |
-| `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout |
-| `Graph` / PyG `Data` / `HeteroData`                            | `graph`                       | `to_dict` tensors; README `#pyg-graphs`   |
+| Return type                                                    | Serializer                    | Result                                                                 |
+| -------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
+| `Text`                                                         | `text`                        | UTF-8 `str`                                                            |
+| `Image` / `Jpeg` / `Jpeg(array=, quality=95)`                  | `image` / `jpeg`              | Compressed JPEG — **preferred**                                        |
+| `PIL.JpegImageFile` (opened `.jpg`)                            | `jpeg`                        | Compressed JPEG                                                        |
+| `Pil` / plain `PIL.Image` / `fromarray`                        | `pil`                         | Uncompressed pixels — **large**                                        |
+| `JpegArray` / list of JPEGs                                    | `jpeg_array`                  | Packed JPEGs                                                           |
+| `Audio`                                                        | `audio`                       | torchcodec `AudioDecoder`; `audio["array"]` / `["sampling_rate"]`      |
+| `Video`                                                        | `video`                       | torchcodec decoder (`get_frames_at` / `get_frames_in_range`)           |
+| `File`                                                         | `file`                        | **raw `bytes`**                                                        |
+| `Tiff` / `Mesh` / `Pdf` / `Nifti`                              | matching name                 | README `#modality`                                                     |
+| `Tensor`                                                       | `tensor` / `no_header_tensor` | 1-D `array=` is the `TokensLoader` layout                              |
+| `Graph` / PyG `Data` / `HeteroData`                            | `graph`                       | `LDGR` v3 packed tensors (`to_mapping` / `to_dict`); `#pyg-graphs`     |
+
+**Collate:** `StreamingDataLoader` defaults to `litdata_collate`. Graphs → PyG `Batch.from_data_list` (or a list of `Graph` without torch-geometric). Everything else is `default_collate`. Audio/Video decoders **do not stack** — use a custom `collate_fn` (see `examples/modality/audio.py` / `video.py`). Mixing a graph and an `AudioDecoder` in one dict also needs a custom collate.
 
 **Best practice:** `Image(..., quality=95, format="jpeg")` (or keep existing JPEGs via `Image(path=)`). Resize when helpful. README benches: PIL RAW ~168 GB vs JPEG 90% ~12 GB at similar stream speed.
 
@@ -265,7 +282,7 @@ ______________________________________________________________________
 | `item_loader`                       | `None`          | e.g. `TokensLoader()`                                                                           |
 | `start_method` / `optimize_dns`     | spawn† / `None` | MP start; DNS tweak                                                                             |
 | `storage_options`                   | `{}`            | Cloud creds                                                                                     |
-| `keep_data_ordered`                 | `False`         | Shared work queue. `True` = static per-worker slice. Forced `True` with checkpoint / align.     |
+| `keep_data_ordered`                 | `False`         | Shared per-node work queue (#880). `True` = static per-worker slice. Forced `True` with checkpoint / align. |
 | `broadcast_paths`                   | `False`         | Auto-on for `{%strftime}` paths                                                                 |
 | `key_fn`                            | `None`          | `sample -> str\|int` key; writes `keys/` for `ds["id"]` / `dataset_update`                      |
 | `verbose`                           | `True`          | Progress                                                                                        |
@@ -539,7 +556,7 @@ ______________________________________________________________________
 
 1. Pick §1 workflow — if they have a file tree and want to start now → **§10 `StreamingRawDataset`** (not optimize-first).
 2. Minimal recipe; add only needed knobs from §6–9 (or §10 for raw).
-3. Images → §3 for **optimize** (`Image(..., quality=95, format="jpeg")`). Raw path: `transform=` decode bytes.
+3. Images / media → §3 for **optimize** (`Image(..., quality=95, format="jpeg")`, `list_media_folder`). Raw path: `transform=` decode bytes.
 4. Train optimized → `StreamingDataLoader` + `shuffle`/`drop_last`/`seed`. Train raw → torch `DataLoader`.
 5. Disk/slow stream → §8 + cache doc; or suggest upgrading raw → optimize.
 6. Paths/Studio → §4 + [lightning-studio.md](lightning-studio.md).

@@ -78,6 +78,6 @@ pytest tests/path/test_x.py::test_name -v --capture=no    # see testing.md
 
 ## Adding examples / docs
 
-- Runnable examples → `examples/` (subfolders `getting_started/`, `multi_modal/`, ...). Keep minimal; use public or synthetic data.
+- Runnable examples → `examples/` (modality recipes in `examples/modality/`). Keep minimal; use public or synthetic data. Do not name a file `numpy.py` (it shadows the numpy package — use `numpy_array.py`).
 - README is the primary narrative doc; feature sections are `<details>` blocks. `README.md` is exempt from `mdformat`/`trailing-whitespace` hooks — keep its formatting consistent manually.
 - Sphinx docs build from `docs/source` (`make docs`).

@@ -52,6 +52,7 @@
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#start-from-a-template">Templates</a> •
   <a href="#used-by">Used by</a> •
+  <a href="#skills">Skills</a> •
   <a href="#community">Community</a>
 </p>
 
@@ -110,7 +111,7 @@ On Linux/macOS, `[extras]` includes optional `uvloop` for a faster asyncio event
 <details>
   <summary>AI agent skill (Cursor, Claude Code, …)</summary>
 
-Install the LitData expert skill so coding agents know the full API, path resolver, optimize/stream recipes, and internals:
+Install the LitData expert skill so coding agents know the full API, path resolver, optimize/stream recipes, and internals. Full file map → [Skills](#skills).
 
 ```bash
 npx skills add Lightning-AI/litData
@@ -2821,6 +2822,39 @@ Below are templates for real-world applications of LitData at scale.
 <td>Speech ASR framework. The LitData extra streams audio and transcripts for training instead of random-access file lists.</td>
 </tr>
 </table>
+
+# Skills <a id="skills"></a>
+
+Coding agents (Cursor, Claude Code, and others) should load the LitData skill instead of guessing the API.
+
+```bash
+npx skills add Lightning-AI/litData
+```
+
+Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interactive). In this repo the skill already lives at [`.claude/skills/litdata/`](.claude/skills/litdata/). Installer: [skills CLI](https://github.com/vercel-labs/skills).
+
+Start at [`SKILL.md`](.claude/skills/litdata/SKILL.md), then load [`reference/using-litdata.md`](.claude/skills/litdata/reference/using-litdata.md) before writing examples.
+
+| File | When to load |
+| --- | --- |
+| [SKILL.md](.claude/skills/litdata/SKILL.md) | Triggers, public API, traps |
+| [using-litdata.md](.claude/skills/litdata/reference/using-litdata.md) | Optimize / stream / raw / modality cookbook |
+| [streaming.md](.claude/skills/litdata/reference/streaming.md) | Read path, shuffle, resume, serializers |
+| [processing.md](.claude/skills/litdata/reference/processing.md) | optimize / map orchestration |
+| [data-movement.md](.claude/skills/litdata/reference/data-movement.md) | Download / upload / FUSE vs direct I/O |
+| [multi-node.md](.claude/skills/litdata/reference/multi-node.md) | Studio num_nodes jobs |
+| [resolver.md](.claude/skills/litdata/reference/resolver.md) | Paths, URLs, Studio mounts |
+| [storage-format.md](.claude/skills/litdata/reference/storage-format.md) | Chunks, `index.json`, writer / reader |
+| [cache-and-chunk-lifecycle.md](.claude/skills/litdata/reference/cache-and-chunk-lifecycle.md) | Prefetch and eviction |
+| [env-vars.md](.claude/skills/litdata/reference/env-vars.md) | LITDATA_* and DATA_OPTIMIZER_* |
+| [keyed-lookup.md](.claude/skills/litdata/reference/keyed-lookup.md) | key_fn, dataset_update |
+| [debugging.md](.claude/skills/litdata/reference/debugging.md) | enable_tracer, Litracer |
+| [benchmarking.md](.claude/skills/litdata/reference/benchmarking.md) | Fair benches |
+| [lightning-studio.md](.claude/skills/litdata/reference/lightning-studio.md) | Studio env and credentials |
+| [testing.md](.claude/skills/litdata/reference/testing.md) | Pytest / CI |
+| [contributing.md](.claude/skills/litdata/reference/contributing.md) | PR / lint path |
+
+Offline streaming what-if (not the Python package): [simulator/](simulator/) (litsim).
 
 # Community
 LitData is a community project accepting contributions -  Let's make the world's most advanced AI data processing framework.

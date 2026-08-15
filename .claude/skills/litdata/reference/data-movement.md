@@ -10,10 +10,10 @@ ______________________________________________________________________
 
 | Path                                                             | What agents mean by “downloader”                                           | Module / symbols                                                                                                                                                                 | Transport                                                                                           |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **Write / processing** (`optimize`, `map`)                       | Child **processes** per worker that prefetch input files into a data cache | `processing/data_processor.py`: `_download_data_target`, `_start_downloaders`                                                                                                    | **`FsProvider`** (`streaming/fs_provider.py`) for `s3`/`gs`/`r2`; local `shutil.copyfile` otherwise |
-| **Read / streaming** (`StreamingDataset`, `StreamingRawDataset`) | **`Downloader` ABC** subclasses selected by URL prefix                     | `streaming/downloader.py`: `Downloader`, `S3Downloader`, `GCPDownloader`, `R2Downloader`, `AzureDownloader`, `HFDownloader`, `LocalDownloader`, `get_downloader`, `_DOWNLOADERS` | Cloud SDKs / obstore / boto3 per subclass                                                           |
+| **Write / processing** (`optimize`, `map`)                       | Prefetch inputs + push chunks. Shared-queue path: **node-level threads**. Ordered path: per-worker children. | `processing/data_processor.py`: `_download_data_target`, `_upload_fn`, `_start_io_thread` | Streaming **`Downloader`** (`adownload_file` / `aupload_file`); `FsProvider` fallback + index merge |
+| **Read / streaming** (`StreamingDataset`, `StreamingRawDataset`) | **`Downloader` ABC** subclasses selected by URL prefix                                                       | `streaming/downloader.py`: `get_downloader`, `_DOWNLOADERS`                                | Cloud SDKs / obstore / boto3 per subclass                                                          |
 
-There are **no** classes named `Uploader` or `Remover`. Processing upload/remove are process targets `_upload_fn` and `_remove_target` in `data_processor.py`.
+There are **no** classes named `Uploader` or `Remover`. Processing upload/remove are `_upload_fn` and `_remove_target`. After [#880](https://github.com/Lightning-AI/litData/pull/880), remote optimize I/O prefers the same `Downloader` used at train time.
 
 **Schemes:**
 
@@ -35,11 +35,11 @@ DataProcessor  (processing/data_processor.py)
         │  broadcast_object input/output Dir (only if broadcast_paths / `{%strftime}`)
         │  shard items → DataWorkerProcess × num_workers
         ▼
-Per worker (BaseWorker._setup):
+I/O (shared-queue default: node-level threads; ordered: per-worker children):
   _collect_paths → rewrite item paths to cache_data_dir when remote/FUSE
-  _start_downloaders  → Process(_download_data_target) × num_downloaders
-  _start_uploaders    → Process(_upload_fn) × num_uploaders
-  _start_remover      → Process(_remove_target) if delete_cached_files
+  download → Downloader.adownload_file (batched) into DATA_OPTIMIZER_DATA_CACHE_FOLDER
+  upload   → Downloader.aupload_file (batched) or local write-through
+  remove   → _remove_target after successful upload
         │
         ▼
 ready_to_process_queue → user fn (optimize→Cache/BinaryWriter | map→temp out dir)
@@ -59,8 +59,8 @@ Public knobs (`processing/functions.py` → `DataProcessor`):
 
 | Knob                  | Default                                       | Meaning                                                                                                                                                           |
 | --------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `num_downloaders`     | `2` (`DataProcessor`: `num_downloaders or 2`) | Downloader processes **per worker**                                                                                                                               |
-| `num_uploaders`       | `1`                                           | Uploader processes **per worker**                                                                                                                                 |
+| `num_downloaders`     | `2` (`DataProcessor`: `num_downloaders or 2`) | Download concurrency hint (shared-queue uses node-level threads + `LITDATA_OPTIMIZE_DOWNLOAD_*`)                                                                  |
+| `num_uploaders`       | `1`                                           | Upload concurrency hint (`LITDATA_OPTIMIZE_UPLOAD_BATCH`)                                                                                                         |
 | `delete_cached_files` | `True` on `DataProcessor`                     | Passed to worker as `remove`; starts remover. **Not** exposed on public `optimize()` / `map()` — stays default True unless you construct `DataProcessor` yourself |
 | `input_dir`           | Auto via `_get_input_dir(inputs)` or explicit | Resolved `Dir`; drives download + path rewrite                                                                                                                    |
 | `output_dir`          | Required                                      | Resolved `Dir`; drives upload                                                                                                                                     |
@@ -137,7 +137,7 @@ ______________________________________________________________________
 - **Important:** pure `s3://…` input resolves to `Dir(path=None, url=…)`, so **`path is None` ⇒ downloaders do not run**. Background download assumes a local/FUSE `path` to rewrite into `cache_data_dir`. For Studio connections, `path` is set (FUSE) **and** `url` is set — that is the path where downloaders matter.
 - Custom `reader` (e.g. `StreamingDataLoaderReader`) also disables downloaders; the reader supplies bytes.
 
-Defaults: `num_downloaders or 2` processes per worker. Each is `multiprocessing.Process(target=_download_data_target, args=(input_dir, cache_data_dir, to_download_queue, ready_to_process_queue, storage_options))`.
+Shared-queue default: node-level I/O threads + batched `Downloader.adownload_file` (`LITDATA_OPTIMIZE_DOWNLOAD_BATCH` / `_CONCURRENCY`). Ordered path may still spawn per-worker children. Direct `s3://` / `gs://` / `r2://` item paths are downloaded (not skipped).
 
 ### 3.2 Queue protocol
 
@@ -156,7 +156,7 @@ For each path in the item:
 4. If `url` and `path` and the FUSE/local file is **missing**: rewrite path with `path.replace(input_dir.path, input_dir.url)` → cloud URL.
 5. If `urlparse(path).scheme in _SUPPORTED_PROVIDERS` (`s3`/`gs`/`r2`):
    - `construct_storage_options(storage_options, input_dir)` (injects `data_connection_id`)
-   - `_get_fs_provider(input_dir.url, …).download_file(remote, local_path)`
+   - Prefer `get_downloader(...).adownload_file` (obstore when usable); `FsProvider.download_file` is the fallback
 6. Elif `os.path.isfile(path)` and not under `this_studio`: `shutil.copyfile` into cache.
 7. Else: `ValueError` unsupported URL.
 
@@ -164,7 +164,7 @@ For each path in the item:
 
 | Input                                 | Action                                                                        |
 | ------------------------------------- | ----------------------------------------------------------------------------- |
-| FUSE connection + missing local file  | Resolve to `url`, FsProvider download into `DATA_OPTIMIZER_DATA_CACHE_FOLDER` |
+| FUSE connection + missing local file  | Resolve to `url`, `Downloader` GET into `DATA_OPTIMIZER_DATA_CACHE_FOLDER`    |
 | Already cached under `cache_data_dir` | No-op, pass through                                                           |
 | Real local file outside `this_studio` | Copy into data cache                                                          |
 | `this_studio` local                   | Leave path as-is (no copy into cache for that prefix)                         |
@@ -182,11 +182,12 @@ ______________________________________________________________________
 
 `_start_uploaders` runs unless **both** `output_dir.path` and `output_dir.url` are `None`.
 
-- Remote `output_dir.url` with scheme in `_SUPPORTED_PROVIDERS` → `FsProvider.upload_file`.
-- Local `output_dir.path` → `shutil.copy` into destination (makedirs as needed).
+- Remote `output_dir.url` with scheme in `_SUPPORTED_PROVIDERS` → batched `aupload_file` (`_put_files_remote`); `FsProvider.upload_file` if the downloader has no async upload.
+- Local `output_dir.path` → write-through / copy (no cache→output copy when already in place).
 - Else → `ValueError`.
+- Failed remote uploads **re-raise** (they used to `print` and continue).
 
-Default `num_uploaders or 1` per worker.
+Tune with `LITDATA_OPTIMIZE_UPLOAD_BATCH`.
 
 ### 4.2 Who enqueues uploads
 
@@ -277,9 +278,10 @@ Symptom if either rule is broken: `FileNotFoundError` after ~120s with `num_work
 
 **FsProvider vs Downloader** (also [storage-format.md](storage-format.md) §5):
 
-| | FsProvider | Downloader |
-| | \---------- | ---------- |
-| Optimize input download / chunk upload / index / merge / empty checks | ✅ | ❌ |
+| Role | FsProvider | Downloader |
+| ---- | ---------- | ---------- |
+| Optimize input download / chunk upload (hot path) | fallback | ✅ `adownload` / `aupload` |
+| Optimize index / merge / empty checks | ✅ | ❌ |
 | StreamingDataset chunk prefetch / StreamingRawDataset | ❌ | ✅ |
 | Schemes | s3, gs, r2 | + azure, hf, local |
 
@@ -289,9 +291,9 @@ ______________________________________________________________________
 
 | Goal                                   | Prefer                                                                                                                                                                 | What LitData does                                                                                                     |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Optimize files on Studio S3 connection | `input_dir` / paths under `/teamspace/s3_connections/…`                                                                                                                | Resolve → downloaders + FsProvider GET into `/cache/data`                                                             |
-| Optimize from laptop with AWS creds    | `s3://bucket/…` in inputs; may need design that doesn’t rely on `path`-based downloaders — verify whether your inputs are local copies or you read via SDK inside `fn` | Pure `s3://` `Dir` has `path=None` → **no** `_download_data_target` pool                                              |
-| Write durable chunks                   | `output_dir=/teamspace/s3_connections/…/vN` or `s3://…`                                                                                                                | Uploaders + `_upload_index` via FsProvider                                                                            |
+| Optimize files on Studio S3 connection | `input_dir` / paths under `/teamspace/s3_connections/…`                                                                                                                | Resolve → `Downloader` GET into `/cache/data`                                                                         |
+| Optimize from laptop with AWS creds    | `s3://bucket/…` in inputs                                                                                                                                              | Shared-queue path downloads remote item URLs; do not hand-read FUSE                                                   |
+| Write durable chunks                   | `output_dir=/teamspace/s3_connections/…/vN` or `s3://…`                                                                                                                | `aupload_file` + `_upload_index`                                                                                      |
 | Scratch only                           | local / `this_studio` (small)                                                                                                                                          | Local copy uploaders; multi-node remaps `this_studio` optimize outs to job artifacts ([multi-node.md](multi-node.md)) |
 | Raw training I/O                       | `StreamingRawDataset("s3://…")` or connection path                                                                                                                     | `Downloader` async; **not** processing downloaders                                                                    |
 
@@ -303,7 +305,7 @@ ______________________________________________________________________
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `ValueError: The provided … isn't supported` in downloader/uploader | Scheme outside `_SUPPORTED_PROVIDERS` for processing                                                             | Use s3/gs/r2 for optimize I/O; azure/hf are streaming-Downloader-only              |
 | Auth / 403 on download or upload                                    | Missing keys; RO bucket; connection without write; missing `data_connection_id` for R2                           | `storage_options`, Studio connection attach, IAM                                   |
-| Hang with remote inputs                                             | Disk wait (`_wait_for_disk_usage_higher_than_threshold` 25 GB); remover stuck; uploader exception only `print`ed | Free space on `/`; `num_workers=1`; watch uploader `print(e)`                      |
+| Hang with remote inputs                                             | Disk wait (`_wait_for_disk_usage_higher_than_threshold` 25 GB); remover stuck; upload flush waiting              | Free space on `/`; `num_workers=1`; upload errors now re-raise                     |
 | `The provided item … didn't contain any filepaths`                  | `_collect_paths` / `_is_path` failed                                                                             | Pass real paths under `input_dir.path`; set `input_dir` explicitly                 |
 | Chunks left / RuntimeError in `_done`                               | Uploader failed or `delete_cached_files` + local output mismatch                                                 | Inspect cache dirs; uploader errors                                                |
 | Index never appears (multi-node)                                    | Last node waiting on peer `{rank}-index.json`                                                                    | [multi-node.md](multi-node.md) peer wait                                           |
@@ -321,6 +323,8 @@ ______________________________________________________________________
 ```
 processing/data_processor.py
   _download_data_target   _upload_fn   _remove_target   keep_path
+  _download_via_streaming_downloader  _upload_via_streaming_downloader
+  _put_files_remote  _start_io_thread
   BaseWorker._collect_paths  _start_downloaders  _start_uploaders  _start_remover
   _try_upload  no_downloaders  delete_cached_files
   DataChunkRecipe._done  _upload_index
