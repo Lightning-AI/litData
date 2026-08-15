@@ -54,6 +54,8 @@ _THREAD_LOOPS = threading.local()
 # Empirically, async gather on real S3 is bottlenecked when max_pre_download==2
 # (only 1–2 in-flight). Floor to 4 when the feature is enabled unless overridden.
 _DEFAULT_ASYNC_MIN_PRE_DOWNLOAD = 4
+# Cap in-flight GETs so a large drain batch does not open one connection per slot.
+_DEFAULT_ASYNC_DOWNLOAD_CONCURRENCY = 8
 
 
 def async_chunk_prefetch_enabled(remote_dir: str | None = None) -> bool:
@@ -79,6 +81,17 @@ def async_prefetch_min_pre_download() -> int:
     if raw is None:
         return _DEFAULT_ASYNC_MIN_PRE_DOWNLOAD
     return max(0, int(raw))
+
+
+def async_download_concurrency(n_chunks: int) -> int:
+    """How many remote chunk GETs to run at once inside ``asyncio.gather``.
+
+    Override with ``LITDATA_ASYNC_DOWNLOAD_CONCURRENCY`` (default 8). Always at
+    least 1 and at most ``n_chunks``.
+    """
+    raw = os.getenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY")
+    limit = _DEFAULT_ASYNC_DOWNLOAD_CONCURRENCY if raw is None else max(1, int(raw))
+    return max(1, min(limit, max(1, n_chunks)))
 
 
 def apply_async_pre_download_floor(max_pre_download: int, remote_dir: str | None = None) -> int:
@@ -196,7 +209,17 @@ async def adownload_chunk_indexes(config: ChunksConfig, chunk_indexes: list[int]
     if len(chunk_indexes) == 1:
         await _adownload_chunk_index(config, chunk_indexes[0])
         return
-    await asyncio.gather(*[_adownload_chunk_index(config, idx) for idx in chunk_indexes])
+    limit = async_download_concurrency(len(chunk_indexes))
+    if limit >= len(chunk_indexes):
+        await asyncio.gather(*[_adownload_chunk_index(config, idx) for idx in chunk_indexes])
+        return
+    sem = asyncio.Semaphore(limit)
+
+    async def _one(idx: int) -> None:
+        async with sem:
+            await _adownload_chunk_index(config, idx)
+
+    await asyncio.gather(*[_one(idx) for idx in chunk_indexes])
 
 
 def _thread_event_loop() -> asyncio.AbstractEventLoop:

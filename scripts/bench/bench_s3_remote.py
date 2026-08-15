@@ -83,6 +83,10 @@ def _fresh_cache(prefix: str) -> str:
 def bench_download(input_dir: str, n_chunks: int, drop_page_cache: bool = False) -> dict:
     """Compare serial sync downloads vs asyncio.gather on real remote chunks."""
     remote, chunks = _load_index(input_dir)
+    resolved = _resolve_dir(input_dir)
+    storage_options = {}
+    if getattr(resolved, "data_connection_id", None):
+        storage_options["data_connection_id"] = resolved.data_connection_id
     n_chunks = min(n_chunks, len(chunks))
     indexes = list(range(n_chunks))
     selected = chunks[:n_chunks]
@@ -94,8 +98,8 @@ def bench_download(input_dir: str, n_chunks: int, drop_page_cache: bool = False)
     serial_cache = _fresh_cache("litdata-s3-serial-")
     async_cache = _fresh_cache("litdata-s3-async-")
     try:
-        serial_dl = get_downloader(remote + "/", serial_cache, selected, {}, {})
-        async_dl = get_downloader(remote + "/", async_cache, selected, {}, {})
+        serial_dl = get_downloader(remote + "/", serial_cache, selected, storage_options, {})
+        async_dl = get_downloader(remote + "/", async_cache, selected, storage_options, {})
         print(f"downloader={type(serial_dl).__name__} native_adownload={downloader_supports_adownload(serial_dl)}")
 
         t0 = time.perf_counter()

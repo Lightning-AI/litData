@@ -16,6 +16,7 @@ from litdata.constants import (
 from litdata.streaming import Cache, item_loader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader, TokensLoader
+from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
 
@@ -167,6 +168,20 @@ def test_compiled_unflatten_is_picklable_for_dataloader_workers(tmpdir):
     assert restored._unflatten is not None
     leaves = [1, 2.0]
     assert restored._unflatten(leaves) == loader._unflatten(leaves) == {"i": 1, "x": 2.0}
+
+
+def test_pre_load_chunk_does_not_mutate_mmap_from_prefetch_thread(tmpdir):
+    """PrepareChunksThread may only WILLNEED; mmap state stays on the reader thread."""
+    data_dir = _write_int_dataset(tmpdir, num_items=14, chunk_size=7)
+    dataset = StreamingDataset(data_dir)
+    _ = dataset[0]
+    loader = dataset.cache._reader._item_loader
+    assert isinstance(loader, PyTreeLoader)
+    loader.close(0)
+    chunk_path = dataset.cache._reader.config[ChunkedIndex(0, chunk_index=0)][0]
+    loader.pre_load_chunk(0, chunk_path)
+    assert loader._mapped == {}
+    assert loader._mmap is None
 
 
 def test_pytree_loader_mmap_matches_file_reads(tmpdir):

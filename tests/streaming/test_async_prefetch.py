@@ -25,6 +25,7 @@ from litdata.streaming.async_prefetch import (
     adownload_chunk_indexes,
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
+    async_download_concurrency,
     async_prefetch_min_pre_download,
     download_chunk_indexes_concurrently,
     downloader_supports_adownload,
@@ -154,6 +155,16 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
     assert len(fake.calls) == 3
     for idx in indexes:
         assert os.path.exists(os.path.join(cache_dir, chunks[idx]["filename"]))
+
+
+def test_async_download_concurrency_caps_gather(monkeypatch):
+    monkeypatch.delenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", raising=False)
+    assert async_download_concurrency(3) == 3
+    assert async_download_concurrency(32) == 8
+    monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "2")
+    assert async_download_concurrency(32) == 2
+    monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "1")
+    assert async_download_concurrency(8) == 1
 
 
 def test_download_chunk_indexes_concurrently_single_uses_sync(tmpdir, monkeypatch):

@@ -293,7 +293,7 @@ class BaseItemLoader(ABC):
 
             if chunk_ready_provider is not None:
                 event = chunk_ready_provider(chunk_index)
-                signaled = event.wait(timeout=0.1)
+                signaled = event.wait(timeout=0.02)
                 # Stale signal: chunk was ready once, then deleted / not yet re-published.
                 if signaled and not (
                     os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
@@ -438,7 +438,10 @@ class PyTreeLoader(BaseItemLoader):
         return intervals
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        if self._posix_fast and self._posix_willneed:
+        # Called from PrepareChunksThread. Only advise the page cache — do not
+        # mutate mmap state here (the reader thread owns ``_mapped``).
+        del chunk_index
+        if os.path.isfile(chunk_filepath) and (self._posix_willneed or not self._posix_fast):
             advise_willneed(chunk_filepath)
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
@@ -746,8 +749,9 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap = None
         self._open_handle = None
         for idx in list(self._mapped):
-            mm, _, _ = self._mapped.pop(idx)
-            self._close_mapping(idx, mm)
+            cached = self._mapped.pop(idx, None)
+            if cached is not None:
+                self._close_mapping(idx, cached[0])
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle / memory-map for the current chunk."""

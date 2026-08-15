@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Faster pytree flatten on the writer hot path: skip typing-generic `isinstance` and PIL JPEG probes on non-list/tuple nodes, skip namedtuple/JPEG probes on scalar leaves, and call `_get_node_type` once per node. After the first sample, `BinaryWriter` walks `tree_leaves` (non-generator collect) instead of rebuilding a `TreeSpec`, caches per-leaf byte sizes, and packs the size header with `struct` instead of NumPy. When every leaf has a fixed size (int/float/bool), later samples reuse a cached size header and write into one buffer. `BooleanSerializer` advertises `size = 1`. Reader offset pairs and size headers use `struct` instead of NumPy.
+- Remote→local streaming: cap in-flight chunk GETs with `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` (default 8), poll chunk-ready Events every 20ms, and `posix_fadvise(WILLNEED)` downloaded cache files from the prefetch thread (mmap stays on the reader thread).
 
 ## [0.2.70] - 2026-08-15
 
