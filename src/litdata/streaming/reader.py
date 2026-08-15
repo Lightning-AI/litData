@@ -33,6 +33,7 @@ from litdata.debugger import CAT_CRASH, CAT_DOWNLOAD, CAT_READ, emit_trace, trac
 from litdata.streaming.async_prefetch import (
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
+    async_download_concurrency,
     close_thread_event_loop,
     download_chunk_indexes_concurrently,
 )
@@ -99,6 +100,7 @@ class PrepareChunksThread(Thread):
         self._to_download_queue: Queue = Queue()
         self._to_delete_queue: Queue = Queue()
         self._force_stop_event = Event()
+        self._end_requested = False
 
         # TODO: Find a real fix to this problem
         self._force_download_queue: Queue = Queue()
@@ -106,6 +108,8 @@ class PrepareChunksThread(Thread):
         # Per-chunk readiness signals for the in-process item-loader wait loop.
         self._chunk_ready: dict[int, Event] = {}
         self._chunk_ready_lock = Lock()
+        # Downloader/decompress atomic publish → set the same Events the item loader waits on.
+        self._config._on_chunk_file_ready = self.mark_chunk_ready
 
         self._rank = rank
         # Set when ``run()`` dies so the item-loader wait loop can fail fast with
@@ -132,6 +136,30 @@ class PrepareChunksThread(Thread):
     def _async_prefetch(self) -> bool:
         """True when this prepare thread should batch-download via asyncio."""
         return async_chunk_prefetch_enabled(self._config._remote_dir)
+
+    def _async_gather_width(self) -> int:
+        """How many queued chunk indexes to download together."""
+        if not self._async_prefetch():
+            return 1
+        return max(1, min(self._max_pre_download, async_download_concurrency(self._max_pre_download)))
+
+    def _free_prefetch_slots(self) -> int:
+        return max(0, self._max_pre_download - self._pre_download_counter)
+
+    def _should_start_download(self, *, over_budget: bool) -> bool:
+        """True when we should pull work from the download queue.
+
+        After the first fill, wait until enough slots are free to gather again.
+        Otherwise a nearly-full prefetch window refills one chunk at a time and
+        ``asyncio.gather`` never overlaps (seen on 80-chunk R2 zstd datasets).
+        """
+        if self._free_prefetch_slots() <= 0:
+            return False
+        # Always use a free slot. Waiting for a gather-sized hole deadlocks when
+        # the reader is blocked on the next undownloaded chunk (deletes are only
+        # queued after that load succeeds). Overlap still happens when several
+        # slots are free: `_run_loop` drains the queue up to gather width.
+        return True
 
     def get_ready_event(self, chunk_index: int) -> Event:
         """Return (creating if needed) the readiness event for ``chunk_index``."""
@@ -292,6 +320,7 @@ class PrepareChunksThread(Thread):
 
     def stop(self) -> None:
         """Receive the list of the chunk indices to download for the current epoch."""
+        self._end_requested = True
         self._to_download_queue.put(_END_TOKEN)
 
     def force_stop(self) -> None:
@@ -671,7 +700,6 @@ class PrepareChunksThread(Thread):
                 self._has_exited = True
                 return
 
-            can_download_more = self._pre_download_counter < self._max_pre_download
             over_budget = False
             if self._slot_budget_enabled():
                 # Prefer eviction when over the shared disk budget so multi-worker
@@ -680,15 +708,28 @@ class PrepareChunksThread(Thread):
                 if over_budget:
                     self._maybe_delete_chunks(timeout=0.0)
 
+            can_download_more = self._should_start_download(over_budget=over_budget)
+
             # Non-blocking force/delete polls while download work can still proceed, so we do not
             # pay ~0.2s of empty-queue sleep per chunk. When the prefetch buffer is full, keep a
             # short timeout so force-download requests are not blocked behind a long delete wait.
             side_timeout = 0.0 if can_download_more else _DEFAULT_TIMEOUT
 
+            # When the window is full, drain deletes before blocking on force-download
+            # so slots free and we can refill instead of sitting on an empty force queue.
+            if self._max_cache_size and not can_download_more:
+                self._maybe_delete_chunks(timeout=0.0)
+
             self._force_download(timeout=side_timeout)
 
             if can_download_more:
                 chunk_index = _get_from_queue(self._to_download_queue)
+            elif self._end_requested:
+                chunk_index = _END_TOKEN
+            else:
+                chunk_index = None
+
+            if can_download_more or chunk_index == _END_TOKEN:
                 if chunk_index == _END_TOKEN:
                     if self._max_cache_size:
                         self._drain_and_flush_deletes()
@@ -697,23 +738,18 @@ class PrepareChunksThread(Thread):
 
                 if chunk_index is not None:
                     batch = [chunk_index]
-                    # Optionally drain more pending indexes up to the prefetch budget so
-                    # asyncio.gather can overlap remote downloads. When over disk budget,
-                    # download one chunk at a time so deletes can catch up.
+                    # Drain more pending indexes so asyncio.gather can overlap remote
+                    # downloads. When over disk budget, download one at a time.
                     if self._async_prefetch() and not over_budget:
-                        slots_left = self._max_pre_download - self._pre_download_counter - 1
-                        while slots_left > 0:
-                            # Non-blocking drain: a 0.1s Empty wait per missing
-                            # slot would serialize gather and erase async overlap.
+                        target = min(self._free_prefetch_slots(), self._async_gather_width())
+                        while len(batch) < target:
                             nxt = _get_from_queue(self._to_download_queue, timeout=0.0)
                             if nxt is None:
                                 break
                             if nxt == _END_TOKEN:
-                                # Put END back so the next loop iteration exits cleanly.
                                 self._to_download_queue.put(_END_TOKEN)
                                 break
                             batch.append(nxt)
-                            slots_left -= 1
                     self._download_chunk_indexes(batch)
 
             if self._max_cache_size:

@@ -16,6 +16,7 @@ from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.downloader import S3Downloader
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.reader import _DEFAULT_TIMEOUT, PrepareChunksThread
+from litdata.streaming.sampler import ChunkedIndex
 from litdata.utilities.env import _DistributedEnv
 
 
@@ -159,6 +160,36 @@ def test_item_loader_clears_stale_ready_event(tmpdir):
     item = loader.load_item_from_chunk(2, 1, chunk_filepath, begin, filesize)
     assert item == 2
     # The wait loop may clear again after restore on a slow FS; the load is the contract.
+
+
+def test_atomic_publish_sets_file_and_chunk_ready_events(tmpdir):
+    """Downloader os.replace should set in-process Events instead of requiring FS polls."""
+    cache = Cache(str(tmpdir / "src"), chunk_size=2)
+    for i in range(2):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    reader = cache._reader
+    reader._try_load_config()
+    config = reader.config
+    chunk_filepath, _, _ = config[ChunkedIndex(0, chunk_index=0)]
+
+    dest = os.path.join(str(tmpdir / "dest"), os.path.basename(chunk_filepath))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(b"ready")
+
+    from litdata.streaming.downloader import LocalDownloader
+
+    dl = LocalDownloader(str(tmpdir / "src"), str(tmpdir / "dest"), [])
+    dl._on_file_published = config.notify_file_published
+    # Simulate the last step of a download: atomic publish of tmp → dest.
+    dl._publish_file(tmp, dest)
+
+    assert os.path.exists(dest)
+    assert config.wait_file_published(dest, timeout=0.0)
 
 
 def test_s3_downloader_does_not_publish_partial_final_path(monkeypatch, tmpdir):

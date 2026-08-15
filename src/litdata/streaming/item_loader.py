@@ -292,14 +292,20 @@ class BaseItemLoader(ABC):
                 return
 
             if chunk_ready_provider is not None:
+                remaining = max_wait - (time() - start_time)
+                if remaining <= 0:
+                    raise ChunkWaitTimeoutError(chunk_filepath, time() - start_time)
                 event = chunk_ready_provider(chunk_index)
-                signaled = event.wait(timeout=0.02)
-                # Stale signal: chunk was ready once, then deleted / not yet re-published.
+                # Wake as soon as the downloader atomically publishes (or decompress finishes).
+                # Recheck prefetch crashes at least once a second.
+                signaled = event.wait(timeout=min(0.05, remaining))
                 if signaled and not (
                     os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
                 ):
+                    # Stale signal after delete (clear_chunk_ready may have been skipped).
+                    # Chunk-ready is set only after decompress/finalize, so this is safe.
                     event.clear()
-                    sleep(0.1)
+                    sleep(0.05)
             else:
                 sleep(0.1)
 

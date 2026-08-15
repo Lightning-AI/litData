@@ -146,6 +146,7 @@ def _remote_join(remote_dir: str, filename: str) -> str:
 async def _adownload_file_to_path(downloader: Downloader, remote_filepath: str, local_filepath: str) -> None:
     """Fetch ``remote_filepath`` asynchronously and publish atomically."""
     if os.path.exists(local_filepath):
+        downloader._notify_published(local_filepath)
         return
     # Prefer streaming-to-disk when the backend overrides adownload_file.
     if type(downloader).adownload_file is not Downloader.adownload_file:
@@ -162,7 +163,7 @@ async def _adownload_file_to_path(downloader: Downloader, remote_filepath: str, 
         os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
         with open(tmp_path, "wb") as f:
             f.write(data)
-        downloader._atomic_replace(tmp_path, local_filepath)
+        downloader._publish_file(tmp_path, local_filepath)
     except Exception:
         with contextlib.suppress(FileNotFoundError, PermissionError):
             os.remove(tmp_path)
@@ -185,7 +186,7 @@ async def _adownload_chunk_index(config: ChunksConfig, chunk_index: int) -> None
     )
 
     if os.path.exists(local_chunkpath):
-        config.try_decompress(local_chunkpath)
+        await asyncio.to_thread(config.try_decompress, local_chunkpath)
         if lazily_ref_counted:
             downloader._increment_local_lock(lock_path, chunk_index)
         return
@@ -199,7 +200,7 @@ async def _adownload_chunk_index(config: ChunksConfig, chunk_index: int) -> None
         # Overlap blocking SDK calls across threads when native async is unavailable.
         await asyncio.to_thread(downloader.download_chunk_from_index, chunk_index)
 
-    config.try_decompress(local_chunkpath)
+    await asyncio.to_thread(config.try_decompress, local_chunkpath)
 
 
 async def adownload_chunk_indexes(config: ChunksConfig, chunk_indexes: list[int]) -> None:

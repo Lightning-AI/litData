@@ -204,11 +204,30 @@ def test_prepare_chunks_thread_batches_when_async_enabled(tmpdir, monkeypatch):
 
     monkeypatch.setattr(thread, "_download_chunk_indexes", _capture)
     thread.download([0, 1, 2])
-    thread._to_download_queue.put("END")
+    thread.stop()
     thread.run()
     assert called
     # First batch should include multiple indexes when async prefetch is on.
     assert len(called[0]) >= 2
+
+
+def test_should_start_download_refills_in_gather_batches(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    cache_dir = _seed_local_chunks(tmpdir, n_chunks=4, chunk_size=2)
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
+    assert cfg is not None
+    cfg._remote_dir = "r2://bucket/data"
+    thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=8)
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 1
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 7
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 8
+    assert thread._should_start_download(over_budget=False) is False
+    thread._pre_download_counter = 4
+    assert thread._should_start_download(over_budget=False) is True
 
 
 def test_no_use_asyncio_on_streaming_dataloader():
