@@ -45,6 +45,7 @@ from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
+from litdata.utilities.format import _resolve_max_cache_size
 
 warnings.filterwarnings("ignore", message=".*The given buffer is not writable.*")
 
@@ -819,7 +820,8 @@ class BinaryReader:
         # still holds. See `acquire_shared_locks` / `_release_shared_locks`.
         self._shared_chunk_indexes: set[int] = set()
         self._held_shared: set[int] = set()
-        self._max_cache_size = int(os.getenv("MAX_CACHE_SIZE", max_cache_size or 0))
+        self._max_cache_size = _resolve_max_cache_size(max_cache_size, cache_dir)
+        self._keep_node_shard: bool | None = None
         self._storage_options = storage_options
         self._session_options = session_options
         self._max_pre_download = max_pre_download
@@ -850,6 +852,12 @@ class BinaryReader:
             self._session_options,
         )
         return self._config
+
+    def set_keep_node_shard(self, keep: bool) -> None:
+        """Pin this node's chunk files when the shard fits in ``max_cache_size``."""
+        self._keep_node_shard = keep
+        if self._prepare_thread is not None:
+            self._prepare_thread._delete_chunks_when_processed = (not keep) and bool(self._max_cache_size)
 
     def acquire_shared_locks(self, shared_chunk_indexes: set[int]) -> None:
         """Eagerly reference-count the chunks this worker shares with other workers.
@@ -961,6 +969,10 @@ class BinaryReader:
                 self._item_loader.set_chunk_ready_provider(self._prepare_thread.get_ready_event)
                 self._item_loader.set_prefetch_error_provider(self._prepare_thread.prefetch_error)
                 self._prepare_thread.start()
+                if self._keep_node_shard is not None:
+                    self._prepare_thread._delete_chunks_when_processed = (not self._keep_node_shard) and bool(
+                        self._max_cache_size
+                    )
                 if index.chunk_indexes:
                     self._prepare_thread.download(index.chunk_indexes)
                     self._chunks_queued_for_download = True

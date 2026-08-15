@@ -27,7 +27,7 @@ from litdata.streaming.serializers import Serializer
 from litdata.streaming.writer import BinaryWriter
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int
+from litdata.utilities.format import _resolve_max_cache_size
 
 logger = logging.Logger(__name__)
 
@@ -43,7 +43,7 @@ class Cache:
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         item_loader: BaseItemLoader | None = None,
-        max_cache_size: int | str = "100GB",
+        max_cache_size: int | str | None = None,
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
         storage_options: dict | None = {},
@@ -64,7 +64,7 @@ class Cache:
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
             item_loader: The object responsible to generate the chunk intervals and load an item froma chunk.
-            max_cache_size: The maximum cache size used by the reader when fetching the chunks.
+            max_cache_size: Cache budget. ``None`` adapts to free disk (see ``StreamingDataset``).
             serializers: Provide your own serializers.
             writer_chunk_index: The index of the chunk to start from when writing.
             storage_options: Additional connection options for accessing storage services.
@@ -93,7 +93,7 @@ class Cache:
             self._cache_dir,
             subsampled_files=subsampled_files,
             region_of_interest=region_of_interest,
-            max_cache_size=_convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
+            max_cache_size=_resolve_max_cache_size(max_cache_size, self._cache_dir),
             remote_input_dir=input_dir.url,
             compression=compression,
             encryption=encryption,

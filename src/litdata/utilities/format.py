@@ -10,6 +10,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
+import os
+import shutil
 from typing import Any
 
 from litdata.constants import _TQDM_AVAILABLE
@@ -55,3 +58,61 @@ def _get_tqdm_iterator_if_available() -> Any:
         yield from iterator
 
     return _pass_through
+
+
+_CACHE_FREE_FRACTION = 0.20
+_CACHE_SMALL_FREE_FRACTION = 0.10
+_CACHE_RESERVE_BYTES = _FORMAT_TO_RATIO["gb"] * 50  # leave room for checkpoints
+
+logger = logging.getLogger("litdata.utilities.format")
+
+
+def _probe_existing_dir(path: str | None) -> str:
+    probe = os.path.abspath(path or os.getcwd())
+    while probe and not os.path.isdir(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return os.getcwd()
+        probe = parent
+    return probe or os.getcwd()
+
+
+def _adaptive_max_cache_size(path: str | None = None) -> int:
+    """Conservative cache budget from currently free disk (checkpoints need headroom).
+
+    Uses 20% of free space, and always leaves at least 50GB free when that much is
+    available. On smaller volumes, uses 10% of free space.
+    """
+    probe = _probe_existing_dir(path)
+    try:
+        free = int(shutil.disk_usage(probe).free)
+    except OSError:
+        free = _CACHE_RESERVE_BYTES
+    if free > _CACHE_RESERVE_BYTES:
+        return min(int(free * _CACHE_FREE_FRACTION), free - _CACHE_RESERVE_BYTES)
+    return int(free * _CACHE_SMALL_FREE_FRACTION)
+
+
+def _parse_max_cache_size(value: int | str) -> int:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+        return _convert_bytes_to_int(stripped)
+    return int(value)
+
+
+def _resolve_max_cache_size(max_cache_size: int | str | None, cache_path: str | None = None) -> int:
+    """User value or ``MAX_CACHE_SIZE`` wins; otherwise adapt to free disk."""
+    env = os.getenv("MAX_CACHE_SIZE")
+    if env is not None and str(env).strip():
+        return _parse_max_cache_size(str(env).strip())
+    if max_cache_size is not None:
+        return _parse_max_cache_size(max_cache_size)
+    resolved = _adaptive_max_cache_size(cache_path)
+    logger.info(
+        "max_cache_size is unset; using %s (20%% of free disk, leaving ≥50GB when possible) on %s.",
+        _human_readable_bytes(resolved),
+        _probe_existing_dir(cache_path),
+    )
+    return resolved

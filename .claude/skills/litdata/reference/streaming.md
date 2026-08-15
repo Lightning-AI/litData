@@ -123,7 +123,7 @@ for batch in dataloader:
 dataset = StreamingDataset('s3://my-bucket/my-data', storage_options={
     "endpoint_url": "...", "aws_access_key_id": "...", "aws_secret_access_key": "..."})
 
-# Custom cache dir + cache cap (README:360; dataset.py:63 default "100GB")
+# Custom cache dir + cache cap (default None = ~20% of free disk)
 dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache",
                            max_cache_size="50GB")
 

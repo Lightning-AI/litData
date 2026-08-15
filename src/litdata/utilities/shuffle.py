@@ -134,6 +134,69 @@ def _associate_whole_chunks_to_workers(
     return chunks_per_workers, intervals_per_workers
 
 
+def node_shard_fits_in_cache(shard_bytes: int, max_cache_size: int | None) -> bool:
+    """True when a node's unique chunk files can stay resident under ``max_cache_size``."""
+    if not max_cache_size:
+        return True
+    return shard_bytes <= max_cache_size
+
+
+def _unique_chunk_indexes_per_node(
+    chunks_per_workers: list[list[int]],
+    distributed_env: _DistributedEnv,
+    num_workers: int,
+) -> list[list[int]]:
+    grouped = _group_chunks_by_nodes(
+        chunks_per_workers=chunks_per_workers,
+        world_size=distributed_env.world_size,
+        num_nodes=distributed_env.num_nodes,
+        num_workers_per_process=num_workers,
+    )
+    return [list(dict.fromkeys(chunk_indexes)) for chunk_indexes in grouped]
+
+
+def _permute_node_chunk_indexes(
+    chunk_indexes_per_nodes: list[list[int]],
+    seed: int,
+    current_epoch: int,
+) -> list[list[int]]:
+    permuted: list[list[int]] = []
+    for node_idx, chunk_indexes in enumerate(chunk_indexes_per_nodes):
+        if not chunk_indexes:
+            permuted.append([])
+            continue
+        rng = np.random.RandomState([seed, current_epoch, node_idx])
+        permuted.append([int(i) for i in rng.permutation(chunk_indexes)])
+    return permuted
+
+
+def _associate_within_nodes(
+    distributed_env: _DistributedEnv,
+    chunk_indexes_per_nodes: list[list[int]],
+    chunk_intervals: list[Interval],
+    drop_last: bool,
+    num_workers: int,
+    batch_size: int,
+) -> tuple[list[list[int]], list[Any]]:
+    """Associate each node's chunk ids only among that node's ranks (no cross-node move)."""
+    num_nodes = max(1, distributed_env.num_nodes)
+    ranks_per_node = distributed_env.world_size // num_nodes
+    global_n = distributed_env.world_size * num_workers
+    workers_chunks: list[list[int]] = [[] for _ in range(global_n)]
+    workers_intervals: list[Any] = [[] for _ in range(global_n)]
+    local_env = _DistributedEnv(ranks_per_node, 0, 1)
+    for node_idx, node_chunk_ids in enumerate(chunk_indexes_per_nodes):
+        node_intervals = [chunk_intervals[int(i)] for i in node_chunk_ids]
+        local_chunks, local_intervals = _associate_chunks_and_intervals_to_workers(
+            local_env, node_chunk_ids, node_intervals, drop_last, num_workers, batch_size
+        )
+        base = node_idx * ranks_per_node * num_workers
+        for local_w, (chunks, intervals) in enumerate(zip(local_chunks, local_intervals)):
+            workers_chunks[base + local_w] = list(chunks)
+            workers_intervals[base + local_w] = list(intervals)
+    return workers_chunks, workers_intervals
+
+
 def _intra_node_chunk_shuffle(
     distributed_env: _DistributedEnv,
     num_workers: int,
@@ -141,21 +204,10 @@ def _intra_node_chunk_shuffle(
     seed: int,
     current_epoch: int,
 ) -> list[int]:
-    chunk_indexes_per_nodes = _group_chunks_by_nodes(
-        chunks_per_workers=chunks_per_workers,
-        world_size=distributed_env.world_size,
-        num_nodes=distributed_env.num_nodes,
-        num_workers_per_process=num_workers,
-    )
-
-    # shuffle the chunks associated to the node
-    for i in range(len(chunk_indexes_per_nodes)):
-        # permute the indexes within the node
-        chunk_indexes_per_nodes[i] = list(
-            np.random.RandomState([seed, current_epoch]).permutation(chunk_indexes_per_nodes[i])
-        )
-
-    return [index for chunks in chunk_indexes_per_nodes for index in chunks]
+    unique_per_node = _unique_chunk_indexes_per_node(chunks_per_workers, distributed_env, num_workers)
+    permuted = _permute_node_chunk_indexes(unique_per_node, seed, current_epoch)
+    shuffled = [index for chunks in permuted for index in chunks]
+    return list(dict.fromkeys(shuffled))
 
 
 def _group_chunks_by_nodes(

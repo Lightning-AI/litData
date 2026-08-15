@@ -51,7 +51,7 @@ from litdata.utilities.dataset_utilities import (
 )
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int
+from litdata.utilities.format import _convert_bytes_to_int, _parse_max_cache_size
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
 
@@ -70,7 +70,7 @@ class StreamingDataset(IterableDataset):
         drop_last: bool | None = None,
         seed: int = 42,
         serializers: dict[str, Serializer] | None = None,
-        max_cache_size: int | str = "100GB",
+        max_cache_size: int | str | None = None,
         subsample: float = 1.0,
         encryption: Encryption | None = None,
         storage_options: dict | None = {},
@@ -96,7 +96,9 @@ class StreamingDataset(IterableDataset):
                 and `False` otherwise.
             seed: Random seed for shuffling.
             serializers: The serializers used to serialize and deserialize the chunks.
-            max_cache_size: The maximum cache size used by the StreamingDataset.
+            max_cache_size: Cache budget. ``None`` (default) uses ~20% of currently
+                free disk and leaves at least 50GB free when possible, so checkpoints
+                still have room. Pass a size (``"50GB"``) or set ``MAX_CACHE_SIZE`` to pin it.
             subsample: Float representing fraction of the dataset to be randomly sampled (e.g., 0.1 => 10% of dataset).
             encryption: The encryption object to use for decrypting the data.
             storage_options: Additional connection options for accessing storage services.
@@ -176,21 +178,17 @@ class StreamingDataset(IterableDataset):
         self.seed = seed
         self.max_cache_size = max_cache_size
 
-        max_cache_size_in_bytes = int(
-            _convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
-        )
-        # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
-        # For ~64MB chunks and a full machine (e.g. 48 workers × prefetch 2–4), that
-        # is already ~5–12GB before in-flight downloads. Warn below 25GB so limited
-        # budgets leave headroom instead of thrashing under multi-worker streaming.
-        min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
-        if max_cache_size_in_bytes < min_cache_size_in_bytes:
-            logger.warning(
-                "The provided `max_cache_size` is less than 25GB. "
-                "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
-                "`num_workers * max_pre_download * chunk_size` (often 5–12GB). "
-                "Consider increasing `max_cache_size` to at least 25GB to avoid eviction thrash."
-            )
+        if max_cache_size is not None:
+            max_cache_size_in_bytes = _parse_max_cache_size(max_cache_size)
+            # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
+            min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
+            if max_cache_size_in_bytes < min_cache_size_in_bytes:
+                logger.warning(
+                    "The provided `max_cache_size` is less than 25GB. "
+                    "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
+                    "`num_workers * max_pre_download * chunk_size` (often 5–12GB). "
+                    "Consider increasing `max_cache_size` to at least 25GB to avoid eviction thrash."
+                )
 
         self.cache: Cache | None = None
         self.worker_env: _WorkerEnv | None = None
@@ -436,12 +434,12 @@ class StreamingDataset(IterableDataset):
             init_env, init_nw, init_bs, self.current_epoch
         )
         seqs: list[list[tuple[int, int]]] = []
+        n_chunks = len(self.cache.get_chunk_intervals())
         for wchunks, wintervals in zip(workers_chunks, workers_intervals):
             seq: list[tuple[int, int]] = []
-            n_chunks = len(wchunks)
             for chunk_i, interval in enumerate(wintervals):
-                items = self.shuffler(np.arange(interval[1], interval[2]), n_chunks, self.current_epoch, chunk_i)
                 chunk_index = int(wchunks[chunk_i])
+                items = self.shuffler(np.arange(interval[1], interval[2]), n_chunks, self.current_epoch, chunk_index)
                 seq.extend((chunk_index, int(item)) for item in items)
             seqs.append(seq)
         if seqs:
@@ -514,6 +512,10 @@ class StreamingDataset(IterableDataset):
 
             # The max number of samples to return from `__next__` (in worker)
             self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
+
+        keep_shard = getattr(self.shuffler, "node_shard_fits", None)
+        if keep_shard is not None:
+            self.cache._reader.set_keep_node_shard(bool(keep_shard))
 
         # Eagerly reference-count the chunks this worker shares with other workers on the node.
         # A chunk can straddle worker boundaries and therefore be read by several workers; if a
@@ -602,13 +604,18 @@ class StreamingDataset(IterableDataset):
             # To prevent this we exit early and let the worker raise a StopIteration in __next__.
             return
 
+        assert self.cache is not None
         # replay the indexes for the current chunks
+        interval = self.worker_intervals[self.worker_next_chunk_index]
         interval = self.worker_intervals[self.worker_next_chunk_index]
         current_indexes = np.arange(interval[1], interval[2])
 
-        # re-shuffle the indexes
+        # re-shuffle the indexes (seed from global chunk id, not the worker-local position)
         current_indexes = self.shuffler(
-            current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index
+            current_indexes,
+            len(self.cache.get_chunk_intervals()),
+            self.current_epoch,
+            int(self.worker_chunks[self.worker_next_chunk_index]),
         )
 
         # skip any indexes already consumed
@@ -828,8 +835,14 @@ class StreamingDataset(IterableDataset):
                 interval = self.worker_intervals[self.worker_next_chunk_index]
                 current_indexes = np.arange(interval[1], interval[2])
                 assert self.shuffler is not None
+                assert self.cache is not None
                 self.upcoming_indexes = deque(
-                    self.shuffler(current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index)
+                    self.shuffler(
+                        current_indexes,
+                        len(self.cache.get_chunk_intervals()),
+                        self.current_epoch,
+                        int(self.worker_chunks[self.worker_next_chunk_index]),
+                    )
                 )
 
             self.worker_next_chunk_index += 1  # bump the chunk_index

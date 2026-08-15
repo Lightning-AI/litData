@@ -23,9 +23,12 @@ from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _associate_chunks_and_intervals_to_workers,
     _associate_whole_chunks_to_workers,
-    _intra_node_chunk_shuffle,
+    _associate_within_nodes,
+    _permute_node_chunk_indexes,
+    _unique_chunk_indexes_per_node,
     _window_shuffle,
     _window_shuffle_chunks_and_intervals,
+    node_shard_fits_in_cache,
 )
 
 _DEFAULT_POSIX_SHUFFLE_WINDOW = 16
@@ -110,49 +113,74 @@ class FullShuffle(Shuffle):
     As a result, we lose at most (number of ranks) items. However, as some chunks are shared across ranks. This leads to
     the same chunk to be downloaded multiple times.
 
+    Multi-node: epoch 1 is a global permute. Later epochs stay inside each node's unique chunk
+    set when that shard fits in ``max_cache_size``; otherwise chunks are re-scheduled globally.
+
     """
+
+    def __init__(self, cache: Cache, seed: int, drop_last: bool):
+        super().__init__(cache, seed, drop_last)
+        self.node_shard_fits: bool = True
+
+    def _global_assign(
+        self,
+        distributed_env: _DistributedEnv,
+        chunk_intervals: Any,
+        num_workers: int,
+        batch_size: int,
+        seed_shift: int,
+    ) -> tuple[Any, Any]:
+        indexes = range(len(chunk_intervals))
+        shuffled_indexes = np.random.RandomState([self.seed, seed_shift]).permutation(indexes)
+        shuffled_chunk_intervals = np.asarray(chunk_intervals)[shuffled_indexes].tolist()
+        return _associate_chunks_and_intervals_to_workers(
+            distributed_env, shuffled_indexes, shuffled_chunk_intervals, self.drop_last, num_workers, batch_size
+        )
+
+    def _chunk_byte_sizes(self) -> list[int]:
+        config = getattr(self.cache._reader, "_config", None)
+        if config is None:
+            try_load = getattr(self.cache._reader, "_try_load_config", None)
+            if callable(try_load):
+                try_load()
+            config = getattr(self.cache._reader, "_config", None)
+        chunks = getattr(config, "_chunks", None) if config is not None else None
+        if not chunks:
+            return [0] * len(self.cache.get_chunk_intervals())
+        return [int(chunk["chunk_bytes"]) for chunk in chunks]
+
+    def _max_cache_size(self) -> int:
+        return int(getattr(self.cache._reader, "_max_cache_size", 0) or 0)
 
     @lru_cache(maxsize=10)
     def get_chunks_and_intervals_per_workers(
         self, distributed_env: _DistributedEnv, num_workers: int, batch_size: int, current_epoch: int
     ) -> Any:
-        # 1. Get the intervals
         chunk_intervals = self.cache.get_chunk_intervals()
+        sizes = self._chunk_byte_sizes()
+        max_cache_size = self._max_cache_size()
 
-        # 2. Shuffle them
-        indexes = range(len(chunk_intervals))
+        if distributed_env.num_nodes == 1:
+            self.node_shard_fits = node_shard_fits_in_cache(sum(sizes), max_cache_size)
+            return self._global_assign(distributed_env, chunk_intervals, num_workers, batch_size, current_epoch)
 
-        # If we have multiple nodes, the seed_shift is constant here.
-        # Here is why. When you are running epoch 1, we need to shuffle the chunks
-        # and associate to each rank. This is done there.
-        # When you are running epoch 2 or more, we need to keep the same shuffling
-        # than in epoch 1 because shuffle a second time within the node.
-        # This is done slighyly down this function.
-        seed_shift = 1 if distributed_env.num_nodes > 1 else current_epoch
-        shuffled_indexes = np.random.RandomState([self.seed, seed_shift]).permutation(indexes)
-        shuffled_chunk_intervals = np.asarray(chunk_intervals)[shuffled_indexes].tolist()
-
-        # 3. Compute the items budget of each rank
-        workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-            distributed_env, shuffled_indexes, shuffled_chunk_intervals, self.drop_last, num_workers, batch_size
+        workers_chunks, workers_intervals = self._global_assign(
+            distributed_env, chunk_intervals, num_workers, batch_size, seed_shift=1
         )
+        unique_per_node = _unique_chunk_indexes_per_node(workers_chunks, distributed_env, num_workers)
+        node_bytes = [sum(sizes[int(i)] for i in ids) for ids in unique_per_node]
+        self.node_shard_fits = node_shard_fits_in_cache(max(node_bytes, default=0), max_cache_size)
 
-        # For the first epoch, no need of further shuffling
-        if current_epoch == 1 or distributed_env.num_nodes == 1:
+        if current_epoch == 1:
             return workers_chunks, workers_intervals
 
-        # Perform shuffle within the nodes to avoid cache miss.
-        # Note: It is possible for the overlapping chunks to change due to the changing order.
-        shuffled_indexes = _intra_node_chunk_shuffle(
-            distributed_env, num_workers, workers_chunks, self.seed, current_epoch
-        )
-        shuffled_chunk_intervals = np.asarray(chunk_intervals)[shuffled_indexes].tolist()
+        if not self.node_shard_fits:
+            return self._global_assign(distributed_env, chunk_intervals, num_workers, batch_size, current_epoch)
 
-        workers_chunks, workers_intervals = _associate_chunks_and_intervals_to_workers(
-            distributed_env, shuffled_indexes, shuffled_chunk_intervals, self.drop_last, num_workers, batch_size
+        permuted = _permute_node_chunk_indexes(unique_per_node, self.seed, current_epoch)
+        return _associate_within_nodes(
+            distributed_env, permuted, chunk_intervals, self.drop_last, num_workers, batch_size
         )
-
-        return workers_chunks, workers_intervals
 
     def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()

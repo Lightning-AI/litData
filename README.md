@@ -1064,7 +1064,7 @@ Rough ImageNet order-of-magnitude on a Studio (not hard guarantees; right tuning
 | `drop_last` | `True` if distributed else `False` | Equal length across ranks |
 | `seed` | `42` | Shuffle / subsample RNG |
 | `serializers` | built-ins | Custom serialize/deserialize map |
-| `max_cache_size` | `"100GB"` | Evict consumed chunks beyond this size |
+| `max_cache_size` | `None` | Evict consumed chunks beyond this size. Default: ~20% of free disk, leaving ≥50GB when possible (checkpoints). Pin with `"50GB"` or `MAX_CACHE_SIZE`. |
 | `max_pre_download` | `2` | Chunks each worker may prefetch (raise for throughput; watch disk / RAM) |
 | `subsample` | `1.0` | Fraction of data (`0.01`) or upsample (`2.5`) |
 | `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom |
@@ -2127,7 +2127,9 @@ outputs = optimize(
 
 Control how much disk the local chunk cache may use. Downloaded chunks are deleted after use once the cache exceeds the limit.
 
-Default `max_cache_size` is **`100GB`**. Peak disk in flight is roughly:
+Default `max_cache_size` is **`None`**: LitData uses about **20% of currently free disk** and still leaves **≥50GB** free when the volume is large enough for checkpoints. On smaller disks it uses 10% of free space. Pass a size or set `MAX_CACHE_SIZE` to pin the budget.
+
+Peak disk in flight is roughly:
 
 ```
 num_workers × max_pre_download × mean_chunk_size
