@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Before/after microbench for BinaryWriter, BinaryReader, and serializers.
 
-  PYTHONPATH=src python scripts/bench/bench_writer_reader.py --label after
-  PYTHONPATH=/path/to/old/src python scripts/bench/bench_writer_reader.py --label before
+PYTHONPATH=src python scripts/bench/bench_writer_reader.py --label after
+PYTHONPATH=/path/to/old/src python scripts/bench/bench_writer_reader.py --label before
 """
 
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import sys
 import tempfile
@@ -70,7 +69,7 @@ def main() -> None:
     def add(name: str, fn) -> None:
         best, med = _repeat(fn, args.repeats)
         rows.append((name, best, med))
-        print(f"  {name:42s}  best={best*1e3:8.2f} ms  median={med*1e3:8.2f} ms")
+        print(f"  {name:42s}  best={best * 1e3:8.2f} ms  median={med * 1e3:8.2f} ms")
 
     add("_get_serializers x200", lambda: [_get_serializers(None) for _ in range(200)])
 
@@ -162,7 +161,7 @@ def main() -> None:
     print()
     print(f"{'bench':42s}  {'best_ms':>10s}  {'median_ms':>10s}  [{args.label}]")
     for name, best, med in rows:
-        print(f"{name:42s}  {best*1e3:10.2f}  {med*1e3:10.2f}")
+        print(f"{name:42s}  {best * 1e3:10.2f}  {med * 1e3:10.2f}")
 
 
 if __name__ == "__main__":

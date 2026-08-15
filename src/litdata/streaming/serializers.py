@@ -21,7 +21,7 @@ import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import suppress
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import asdict
 from itertools import chain
 from typing import Any
@@ -30,7 +30,6 @@ import numpy as np
 import tifffile
 import torch
 
-from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
 from litdata.constants import (
     _AV_AVAILABLE,
     _NIBABEL_AVAILABLE,
@@ -38,11 +37,11 @@ from litdata.constants import (
     _PDFPLUMBER_AVAILABLE,
     _PIL_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
-    _TORCHCODEC_AVAILABLE,
     _TORCH_VISION_LESS_THAN_0_26,
+    _TORCHCODEC_AVAILABLE,
     _TRIMESH_AVAILABLE,
 )
-
+from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
 
 _torchcodec_ok: bool | None = None
 
@@ -526,7 +525,9 @@ def _read_media_bytes(item: Any, _extensions: tuple[str, ...] = ()) -> tuple[byt
     if isinstance(item, _MediaRef) and item.path is None and item.bytes is None:
         extras = [name for name in ("array", "image", "mesh", "pdf") if getattr(item, name, None) is not None]
         if extras:
-            raise TypeError(f"{type(item).__name__} has {extras} but no path/bytes; the serializer should encode those first.")
+            raise TypeError(
+                f"{type(item).__name__} has {extras} but no path/bytes; the serializer should encode those first."
+            )
         raise TypeError(f"{type(item).__name__} needs path=, bytes=, or a native payload (array=/image=/...).")
     if path:
         if os.path.isfile(path):
@@ -702,7 +703,7 @@ def _encode_image_ref(item: Any, default_format: str = "PNG", default_quality: i
     explicit_format = getattr(item, "format", None)
     if image is not None or array is not None:
         pil = image if image is not None else _pil_from_array(array)
-        fmt = explicit_format or ( _native_pil_format(pil) if image is not None else default_format)
+        fmt = explicit_format or (_native_pil_format(pil) if image is not None else default_format)
         return _save_pil(pil, fmt, quality=quality, mode=mode)
     data, ext = _read_media_bytes(item)
     if quality is None and mode is None and getattr(item, "format", None) is None:
@@ -973,9 +974,7 @@ class AudioSerializer(Serializer):
 
             tensor = array if isinstance(array, torch.Tensor) else torch.from_numpy(array.astype(np.float32))
             buffer = io.BytesIO()
-            AudioEncoder(tensor, sample_rate=rate).to_file_like(
-                buffer, format="wav", num_channels=channels
-            )
+            AudioEncoder(tensor, sample_rate=rate).to_file_like(buffer, format="wav", num_channels=channels)
             return buffer.getvalue()
         import wave
 

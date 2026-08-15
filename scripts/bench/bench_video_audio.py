@@ -49,9 +49,8 @@ def main() -> None:
     parser.add_argument("--video", default="/tmp/litdata_av.mp4")
     args = parser.parse_args()
 
-    from litdata.streaming.serializers import VideoSerializer
-
     import litdata
+    from litdata.streaming.serializers import VideoSerializer
 
     src = Path(litdata.__file__).resolve().parent
     print(f"label={args.label}  litdata={src}")
@@ -99,7 +98,10 @@ def main() -> None:
             dec_audio = AudioSerializer(decode="decoder")
             add("audio.deserialize default x50", lambda: [dec_audio.deserialize(audio_bytes) for _ in range(50)])
             samples_ser = AudioSerializer(decode="samples")
-            add("audio.deserialize decode=samples x20", lambda: [samples_ser.deserialize(audio_bytes) for _ in range(20)])
+            add(
+                "audio.deserialize decode=samples x20",
+                lambda: [samples_ser.deserialize(audio_bytes) for _ in range(20)],
+            )
         except Exception as exc:
             print(f"  audio decoder skipped: {type(exc).__name__}: {exc}")
     else:

@@ -9,19 +9,19 @@ import pytest
 import torch
 
 from litdata.streaming.serializers import (
+    _SERIALIZERS,
     AudioSerializer,
     ImageSerializer,
     JPEGArraySerializer,
     NoHeaderTensorSerializer,
     TensorSerializer,
     VideoSerializer,
-    _SERIALIZERS,
     _get_serializers,
     _image_array_for_pil,
     _jpeg_has_exif_app1,
     _read_media_bytes,
 )
-from litdata.types import Audio, Image, Jpeg, JpegArray, Tensor, Video
+from litdata.types import Audio, Image, Jpeg, JpegArray, Tensor
 from litdata.utilities._pytree import tree_flatten
 
 

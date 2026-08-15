@@ -25,31 +25,31 @@ import torch
 from lightning_utilities.core.imports import RequirementCache
 
 from litdata.constants import _TORCHCODEC_AVAILABLE
-from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tiff, Video
 from litdata.streaming.serializers import (
     _AV_AVAILABLE,
     _NUMPY_DTYPES_MAPPING,
     _SERIALIZERS,
     _TORCH_DTYPES_MAPPING,
+    AudioSerializer,
     BooleanSerializer,
+    FileSerializer,
+    ImageSerializer,
     IntegerSerializer,
     JPEGArraySerializer,
     JPEGSerializer,
+    MeshSerializer,
+    NiftiSerializer,
     NoHeaderNumpySerializer,
     NoHeaderTensorSerializer,
     NumpySerializer,
+    PDFSerializer,
     PILSerializer,
     TensorSerializer,
     TIFFSerializer,
-    AudioSerializer,
-    FileSerializer,
-    ImageSerializer,
-    MeshSerializer,
-    NiftiSerializer,
-    PDFSerializer,
     VideoSerializer,
     _get_serializers,
 )
+from litdata.types import Audio, File, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tiff, Video
 
 
 def seed_everything(random_seed):

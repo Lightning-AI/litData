@@ -92,8 +92,7 @@ def _bench_parquet(pq_path: Path, work: Path, num_rows: int) -> dict[str, float]
     results: dict[str, float] = {}
     meta = pq.ParquetFile(str(pq_path)).metadata
     print(
-        f"parquet: {pq_path.name} rows={meta.num_rows} "
-        f"row_groups={meta.num_row_groups} bytes={pq_path.stat().st_size}"
+        f"parquet: {pq_path.name} rows={meta.num_rows} row_groups={meta.num_row_groups} bytes={pq_path.stat().st_size}"
     )
 
     legacy_dir = work / "legacy_shards"
@@ -196,7 +195,7 @@ def _bench_media(kind: str, paths: list[str], output_dir: Path, workers: int) ->
         read_t, n = _time(lambda: sum(1 for _ in ds))
         sample = ds[0]
         sample_type = type(sample).__name__
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"  {kind}: optimize={t:.2f}s stream failed: {exc}")
         return {"optimize_s": t, "stream_s": -1.0, "n": 0.0}
     print(f"  {kind}: optimize={t:.2f}s stream={read_t:.2f}s n={n} sample_type={sample_type}")

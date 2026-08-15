@@ -1228,9 +1228,7 @@ class ParquetLoader(BaseItemLoader):
             del self._chunk_row_groups[chunk_index][row_group_index]
             del self._chunk_row_group_item_read_count[chunk_index][row_group_index]
 
-        return {
-            name: row_group_df.column(name)[row_index_within_group].as_py() for name in row_group_df.column_names
-        }
+        return {name: row_group_df.column(name)[row_index_within_group].as_py() for name in row_group_df.column_names}
 
     def _get_item(self, chunk_index: int, chunk_filepath: str, index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk by loading the entire chunk into memory.
