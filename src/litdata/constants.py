@@ -72,9 +72,7 @@ _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
 # ``LITDATA_CHECK_UPDATES=1`` turns it back on. ``LITDATA_DISABLE_VERSION_CHECK``
 # still wins when set.
 _LITDATA_CHECK_UPDATES = int(os.getenv("LITDATA_CHECK_UPDATES", "0"))
-_LITDATA_DISABLE_VERSION_CHECK = int(
-    os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0" if _LITDATA_CHECK_UPDATES else "1")
-)
+_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0" if _LITDATA_CHECK_UPDATES else "1"))
 # Experimental async chunk prefetch (see ``litdata.streaming.async_prefetch``).
 # Default: on for remote datasets when ``LITDATA_ASYNC_CHUNK_PREFETCH`` is unset;
 # force with ``LITDATA_ASYNC_CHUNK_PREFETCH=0/1``.

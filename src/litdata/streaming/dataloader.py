@@ -24,8 +24,6 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data._utils.collate import default_collate
-
-from litdata.streaming.collate import pyg_collate
 from torch.utils.data._utils.fetch import _BaseDatasetFetcher
 from torch.utils.data.dataloader import (
     DataLoader,
@@ -39,6 +37,7 @@ from torch.utils.data.sampler import BatchSampler, Sampler
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
 from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
+from litdata.streaming.collate import pyg_collate
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.elastic import _round_down_drop_first, sample_in_epoch_from_state, topology_changed

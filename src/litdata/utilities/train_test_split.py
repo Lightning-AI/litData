@@ -102,9 +102,7 @@ def train_test_split(
     return new_datasets
 
 
-def subset_dataset(
-    streaming_dataset: StreamingDataset, indices: Sequence[int] | slice
-) -> StreamingDataset:
+def subset_dataset(streaming_dataset: StreamingDataset, indices: Sequence[int] | slice) -> StreamingDataset:
     """Return a copy of ``streaming_dataset`` restricted to ``indices`` (global item order)."""
     new_dataset = deepcopy_dataset(streaming_dataset)
 

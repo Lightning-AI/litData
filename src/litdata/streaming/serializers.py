@@ -40,7 +40,22 @@ from litdata.constants import (
     _TORCHCODEC_AVAILABLE,
     _TRIMESH_AVAILABLE,
 )
-from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Tiff, Video, _MediaRef
+from litdata.types import (
+    Audio,
+    File,
+    Graph,
+    Image,
+    Jpeg,
+    JpegArray,
+    Mesh,
+    Nifti,
+    Pdf,
+    Pil,
+    Tensor,
+    Tiff,
+    Video,
+    _MediaRef,
+)
 
 _torchcodec_ok: bool | None = None
 
