@@ -63,7 +63,7 @@ def _torchcodec_usable() -> bool:
 
 def _as_bytes(data: bytes | bytearray | memoryview) -> bytes:
     """Convert mmap slices to ``bytes`` so torchcodec can construct a decoder."""
-    return data if isinstance(data, (bytes, bytearray)) else bytes(data)
+    return bytes(data)
 
 
 class Serializer(ABC):
