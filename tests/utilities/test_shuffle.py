@@ -42,7 +42,6 @@ def test_intra_node_chunk_shuffle():
         )
         for rank in range(4)
     ]
-    expected = [4, 3, 7, 6, 0, 1, 5, 2, 12, 11, 15, 14, 8, 9, 13, 10]
     assert shuffled_per_rank[0] == shuffled_per_rank[1] == shuffled_per_rank[2] == shuffled_per_rank[3]
     assert sorted(shuffled_per_rank[0]) == list(range(16))
     assert set(shuffled_per_rank[0][:8]) == set(range(8))
