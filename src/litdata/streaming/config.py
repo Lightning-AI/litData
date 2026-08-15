@@ -16,9 +16,10 @@ import logging
 import os
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import suppress
-from time import sleep, time
-from typing import Any, Callable, Optional
+from time import time
+from typing import Any, Optional
 
 from filelock import FileLock, Timeout
 

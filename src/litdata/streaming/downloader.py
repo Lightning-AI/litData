@@ -18,9 +18,10 @@ import shutil
 import tempfile
 import threading
 from abc import ABC
+from collections.abc import Callable
 from contextlib import suppress
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib import parse
 
 from filelock import FileLock, Timeout
