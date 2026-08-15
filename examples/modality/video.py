@@ -6,10 +6,10 @@ Decoders do not stack — collate to a list.
 
 from pathlib import Path
 
-import torch
-from torchvision.io import write_video
+import numpy as np
 
 from litdata import StreamingDataLoader, StreamingDataset, Video, list_media_folder, optimize
+from litdata.streaming.serializers import _encode_video_array
 
 
 def make_sample(item: dict) -> dict:
@@ -24,8 +24,8 @@ def seed_folder(root: Path) -> None:
         folder = root / label
         folder.mkdir(parents=True, exist_ok=True)
         for index in range(2):
-            frames = torch.randint(0, 256, (8, 64, 64, 3), dtype=torch.uint8)
-            write_video(str(folder / f"{index}.mp4"), frames, fps=25)
+            frames = np.random.randint(0, 256, (8, 64, 64, 3), np.uint8)
+            (folder / f"{index}.mp4").write_bytes(_encode_video_array(frames, 25))
 
 
 def collate_fn(samples: list) -> dict:

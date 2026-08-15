@@ -257,6 +257,8 @@ class JPEGArraySerializer(Serializer):
 
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
         images = item.images if isinstance(item, JpegArray) else item
+        if not images:
+            raise ValueError("JpegArray.images must be a non-empty list.")
         # Store number of images as first 4 bytes
         n_images_bytes = np.uint32(len(images)).tobytes()
 
@@ -393,7 +395,6 @@ class TensorSerializer(Serializer):
         data_bytes = numpy_item.tobytes()
         return b"".join([header_bytes, shape_bytes, data_bytes]), None
 
-    # ... (rest of the class remains the same) ...
     def deserialize(self, data: bytes) -> torch.Tensor:
         buffer_view = memoryview(data)
         dtype_indice, rank = self._header_struct.unpack_from(buffer_view, 0)
@@ -443,7 +444,9 @@ class NoHeaderTensorSerializer(Serializer):
 
     def can_serialize(self, item: torch.Tensor) -> bool:
         if isinstance(item, Tensor):
-            return item.array is None or len(item.array.shape) == 1
+            if item.array is not None:
+                return len(item.array.shape) == 1
+            return (item.path is not None or item.bytes is not None) and item.dtype is not None
         return isinstance(item, torch.Tensor) and len(item.shape) == 1
 
 
@@ -721,7 +724,6 @@ class FileSerializer(Serializer):
         if isinstance(item, (File, _MediaRef)):
             data, ext = _read_media_bytes(item)
             return data, f"file:{ext}" if ext else "file"
-        print("FileSerializer will be removed in the future.")
         filepath = item
         _, file_extension = os.path.splitext(filepath)
         with open(filepath, "rb") as f:
@@ -729,7 +731,7 @@ class FileSerializer(Serializer):
             return f.read(), f"file:{file_extension}"
 
     def deserialize(self, data: bytes) -> Any:
-        return data
+        return bytes(data)
 
     def can_serialize(self, data: Any) -> bool:
         return isinstance(data, File)
@@ -756,7 +758,7 @@ def _read_media_bytes(item: Any, _extensions: tuple[str, ...] = ()) -> tuple[byt
     if payload is not None:
         return payload, _extension(path)
     if isinstance(item, _MediaRef) and item.path is None and item.bytes is None:
-        extras = [name for name in ("array", "image", "mesh", "pdf") if getattr(item, name, None) is not None]
+        extras = [name for name in ("array", "image", "mesh", "pdf", "text") if getattr(item, name, None) is not None]
         if extras:
             raise TypeError(
                 f"{type(item).__name__} has {extras} but no path/bytes; the serializer should encode those first."
@@ -913,7 +915,9 @@ class _LitAudioDecoder:
     def __getitem__(self, key: str) -> Any:
         if key == "array":
             samples = self._decoder.get_all_samples().data.cpu().numpy()
-            return np.mean(samples, axis=tuple(range(samples.ndim - 1))) if samples.ndim > 1 else samples
+            if samples.ndim == 2 and samples.shape[0] == 1:
+                return samples[0]
+            return samples
         if key == "sampling_rate":
             return self._decoder.get_samples_played_in_range(0, 0).sample_rate
         raise KeyError(key)
@@ -972,15 +976,28 @@ def _encode_video_array(array: Any, fps: float) -> bytes:
         frames = frames.to(torch.uint8)
     with tempfile.TemporaryDirectory() as dirname:
         path = os.path.join(dirname, "clip.mp4")
-        try:
-            from torchvision.io import write_video
+        write_video = None
+        with suppress(Exception):
+            from torchvision.io import write_video as _write_video
 
+            write_video = _write_video
+        if write_video is not None:
             write_video(path, frames, fps=float(fps))
-        except Exception as exc:
+        elif _torchcodec_usable():
+            try:
+                from torchcodec.encoders import VideoEncoder
+
+                VideoEncoder(frames.permute(0, 3, 1, 2), frame_rate=float(fps)).to_file(path)
+            except Exception as exc:
+                raise TypeError(
+                    "Encoding Video(array=...) requires torchvision.io.write_video or torchcodec. "
+                    "Pass Video(path=...) or Video(bytes=...)."
+                ) from exc
+        else:
             raise TypeError(
-                "Encoding Video(array=...) requires torchvision video writing. "
+                "Encoding Video(array=...) requires torchvision.io.write_video or torchcodec. "
                 "Pass Video(path=...) or Video(bytes=...)."
-            ) from exc
+            )
         with open(path, "rb") as handle:
             return handle.read()
 
@@ -1061,15 +1078,8 @@ class VideoSerializer(Serializer):
                     "Encoding a VideoDecoder that was not produced by LitData/HF decode is not supported. "
                     "Pass Video(path=...) or Video(bytes=...) instead."
                 )
-        if isinstance(item, Video):
-            if item.stream_index is not None:
-                self.stream_index = item.stream_index
-            self.dimension_order = item.dimension_order
-            self.num_ffmpeg_threads = item.num_ffmpeg_threads
-            self.seek_mode = item.seek_mode
-            self.device = item.device
-            if item.array is not None:
-                return _encode_video_array(item.array, item.fps), "video:mp4"
+        if isinstance(item, Video) and item.array is not None:
+            return _encode_video_array(item.array, item.fps), "video:mp4"
         data, ext = _read_media_bytes(item, self._EXTENSIONS)
         return data, f"video:{ext or 'mp4'}"
 
@@ -1173,25 +1183,25 @@ class AudioSerializer(Serializer):
                 return self._serialize_decoder(item), "audio:wav"
 
         array, rate = None, None
+        num_channels = self.num_channels
         if isinstance(item, Audio):
             array, rate = item.array, item.sampling_rate
             if item.num_channels is not None:
-                self.num_channels = item.num_channels
-            if item.stream_index is not None:
-                self.stream_index = item.stream_index
+                num_channels = item.num_channels
             if item.sampling_rate is not None:
-                self.sampling_rate = item.sampling_rate
+                rate = item.sampling_rate
         elif isinstance(item, dict) and item.get("array") is not None:
             array, rate = item["array"], item.get("sampling_rate")
 
         if array is not None:
             if rate is None:
                 raise KeyError("Audio waveform encode requires sampling_rate.")
-            return self._serialize_array(array, int(rate)), "audio:wav"
+            return self._serialize_array(array, int(rate), num_channels=num_channels), "audio:wav"
 
         path, payload = _media_path_bytes(item)
         if path and str(path).lower().endswith(".pcm"):
-            return self._serialize_pcm(path, payload, rate or self.sampling_rate), "audio:wav"
+            pcm_rate = rate or self.sampling_rate
+            return self._serialize_pcm(path, payload, pcm_rate, num_channels=num_channels), "audio:wav"
 
         data, ext = _read_media_bytes(item, self._EXTENSIONS)
         return data, f"audio:{ext or 'wav'}"
@@ -1209,14 +1219,16 @@ class AudioSerializer(Serializer):
             channels = int(samples.data.shape[0])
         return self._serialize_array(samples.data.cpu().numpy(), int(samples.sample_rate), num_channels=channels)
 
-    def _serialize_pcm(self, path: str, payload: bytes | None, sampling_rate: int | None) -> bytes:
+    def _serialize_pcm(
+        self, path: str, payload: bytes | None, sampling_rate: int | None, num_channels: int | None = None
+    ) -> bytes:
         if sampling_rate is None:
             raise KeyError("To encode PCM, set Audio(sampling_rate=...) or AudioSerializer(sampling_rate=...).")
         if payload is not None:
             waveform = np.frombuffer(payload, dtype=np.int16).astype(np.float32) / 32767.0
         else:
             waveform = np.memmap(path, dtype="h", mode="r").astype(np.float32) / 32767.0
-        return self._serialize_array(waveform, int(sampling_rate))
+        return self._serialize_array(waveform, int(sampling_rate), num_channels=num_channels)
 
     def _serialize_array(self, array: Any, rate: int, num_channels: int | None = None) -> bytes:
         array = np.asarray(array)
@@ -1484,8 +1496,11 @@ class TextSerializer(Serializer):
     """Store UTF-8 text. ``path=`` / ``bytes=`` are stored as-is; ``text=`` encodes."""
 
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
-        if isinstance(item, Text) and item.text is not None:
-            return item.text.encode("utf-8"), "text"
+        if isinstance(item, Text):
+            if item.text is not None:
+                return item.text.encode("utf-8"), "text"
+            if item.path is None and item.bytes is None:
+                raise TypeError("Text needs path=, bytes=, or text=.")
         data, _ext = _read_media_bytes(item)
         return data, "text"
 

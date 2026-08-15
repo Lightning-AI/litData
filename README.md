@@ -390,7 +390,12 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 <td>nifti.get_fdata()  # Nibabel</td>
 </tr>
 <tr>
-<td colspan="3"><strong>Tensor and Graph</strong></td>
+<td colspan="3"><strong>Array and Graph</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/numpy_array.py">Numpy</a></td>
+<td>np.load("a.npy")<br>np.zeros((3, 4, 4))</td>
+<td>array  # NumPy</td>
 </tr>
 <tr>
 <td valign="top"><a href="examples/modality/tensor.py">Tensor</a></td>
@@ -401,6 +406,14 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 <td valign="top"><a href="examples/modality/graph.py">Graph</a></td>
 <td>Data(x=…, edge_index=…, y=…)<br>Graph(x=…, edge_index=…, y=…)<br>Graph(data=pyg_data)</td>
 <td>graph.x, graph.edge_index  # PyG Data or Graph — <a href="#pyg-graphs">PyG graphs</a></td>
+</tr>
+<tr>
+<td colspan="3"><strong>Parquet</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/parquet.py">Parquet</a></td>
+<td>folder of .parquet files<br>StreamingDataset(..., item_loader=ParquetLoader())</td>
+<td>row["col"]  # dict of columns — <a href="#stream-parquet">stream parquet</a></td>
 </tr>
 </table>
 

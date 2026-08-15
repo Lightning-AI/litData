@@ -1068,7 +1068,11 @@ class TokensLoader(BaseItemLoader):
             - bytes: The raw byte representation of tokenized data.
             - dimension: The number of tokens in the data (extracted from `flattened[0].shape[0]`).
         """
-        return data[0], flattened[0].shape[0]
+        leaf = flattened[0]
+        shape = getattr(leaf, "shape", None)
+        if shape is not None and len(shape) > 0:
+            return data[0], int(shape[0])
+        return data[0], len(leaf)
 
 
 class ParquetLoader(BaseItemLoader):

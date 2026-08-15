@@ -20,6 +20,9 @@ def test_list_media_folder_labels(tmpdir):
         ("b.png", "dogs"),
     ]
 
+    texts = list_media_folder(str(tmpdir), kind="text")
+    assert [os.path.basename(item["path"]) for item in texts] == ["skip.txt"]
+
 
 def test_iter_webdataset_tar(tmpdir):
     tar_path = os.path.join(tmpdir, "shard.tar")

@@ -184,8 +184,65 @@ def test_pytree_wrapper_is_single_leaf():
 
 
 def test_serializers_registry_has_media_keys():
-    for key in ("video", "audio", "image", "nifti", "mesh", "pdf"):
+    for key in ("video", "audio", "image", "nifti", "mesh", "pdf", "text", "graph"):
         assert key in _SERIALIZERS
+
+
+def test_empty_tensor_is_not_claimed():
+    assert not NoHeaderTensorSerializer().can_serialize(Tensor())
+    assert not TensorSerializer().can_serialize(Tensor())
+    tokens = Tensor(bytes=b"\x00" * 16, dtype=torch.int64)
+    assert NoHeaderTensorSerializer().can_serialize(tokens)
+    assert not TensorSerializer().can_serialize(tokens)
+
+
+def test_empty_text_raises():
+    from litdata.streaming.serializers import TextSerializer
+
+    with pytest.raises(TypeError, match="text="):
+        TextSerializer().serialize(Text())
+
+
+def test_jpeg_array_empty_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        JPEGArraySerializer().serialize(JpegArray(images=[]))
+
+
+def test_tokens_loader_accepts_python_list():
+    from litdata.streaming.item_loader import TokensLoader
+
+    ids = [1, 2, 3, 4]
+    data = np.asarray(ids, dtype=np.int64).tobytes()
+    _, dim = TokensLoader.encode_data([data], [len(data)], [ids])
+    assert dim == 4
+
+
+def test_audio_serialize_does_not_mutate_serializer():
+    serializer = AudioSerializer(sampling_rate=16000, num_channels=1)
+    serializer.serialize(Audio(array=np.zeros(16, dtype=np.float32), sampling_rate=8000, num_channels=1))
+    assert serializer.sampling_rate == 16000
+    assert serializer.num_channels == 1
+
+
+def test_audio_getitem_keeps_stereo():
+    class _FakeDecoder:
+        def get_all_samples(self):
+            class _Samples:
+                data = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+
+            return _Samples()
+
+        def get_samples_played_in_range(self, start: float, end: float):
+            class _Range:
+                sample_rate = 8000
+
+            return _Range()
+
+    from litdata.streaming.serializers import _LitAudioDecoder
+
+    decoder = _LitAudioDecoder(_FakeDecoder())
+    assert decoder["array"].shape == (2, 4)
+    assert decoder["sampling_rate"] == 8000
 
 
 def test_tensor_wrapper_routes_1d_and_nd():
