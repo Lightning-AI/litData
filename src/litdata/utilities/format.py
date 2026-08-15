@@ -143,7 +143,7 @@ def _is_absolute_cache_size(value: int | float | str) -> bool:
 
 
 def _resolve_max_cache_size(max_cache_size: int | float | str | None, cache_path: str | None = None) -> int:
-    """``MAX_CACHE_SIZE`` wins; else size (``\"100G\"``), fraction (``0.90``), or default 75% + 50GB reserve."""
+    """``MAX_CACHE_SIZE`` wins; else size (``100G``), fraction (``0.90``), or default 75% + 50GB reserve."""
     env = os.getenv("MAX_CACHE_SIZE")
     if env is not None and str(env).strip():
         max_cache_size = str(env).strip()
