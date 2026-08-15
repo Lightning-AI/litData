@@ -8,9 +8,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+## [0.2.71] - 2026-08-15
+
 ### Added
 
-- `StreamingDataLoader(..., profile_cprofile=True)` writes stdlib cProfile stats for the main process and worker 0 (`cprofile_main.prof` / `cprofile_worker0.prof` plus `.txt` summaries). No extra dependency. Cannot be combined with `profile_batches` (viztracer).
+- `StreamingDataLoader(..., profile_cprofile=True)` writes stdlib cProfile stats for the main process and worker 0 (`cprofile_main.prof` / `cprofile_worker0.prof` plus `.txt` summaries). No extra dependency. Cannot be combined with `profile_batches` (viztracer). ([#885](https://github.com/Lightning-AI/litData/pull/885))
 
 ### Fixed
 
