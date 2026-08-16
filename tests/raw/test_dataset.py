@@ -91,7 +91,7 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
         (32, None, 100_000, 16),  # 512//32
         # Large objects (≥1 MiB): bandwidth-only (no Little's-law pin at 240)
         (4, None, 10 * 1024 * 1024, 8),  # budget=floor 32, 32//4=8
-        (16, None, 10 * 1024 * 1024, 8),  # 32//16=2 → floor 8
+        (16, None, 10 * 1024 * 1024, 2),  # budget=floor 32, 32//16=2
         # Unknown size uses default median (256KiB) → latency arm (240)
         (8, None, None, 30),  # 240//8
     ],
@@ -541,31 +541,41 @@ def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
     assert gds[0] == b"abc"
 
 
-def test_bandwidth_tracker_ema_and_partitioning():
+def test_bandwidth_tracker_basic():
+    import pytest
+
     from litdata.raw.dataset import BandwidthTracker
 
     tracker = BandwidthTracker(alpha=0.2)
     assert tracker.sample_count == 0
 
-    # Small GET (< 256 KB) updates latency EMA
-    tracker.record_observation(100_000, 0.020)
-    bps, lat, count = tracker.get_metrics()
-    assert count == 1
-    assert bps is None
-    assert pytest.approx(lat, abs=1e-6) == 0.020
-
+    # Tiny GET (< 64 KB) updates latency EMA only
     tracker.record_observation(50_000, 0.010)
-    _, lat, count = tracker.get_metrics()
-    assert count == 2
-    # EMA: 0.2 * 0.010 + 0.8 * 0.020 = 0.018
-    assert pytest.approx(lat, abs=1e-6) == 0.018
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 1
+    assert bps_count == 0
+    assert lat_count == 1
+    assert bps is None
+    assert pytest.approx(lat, abs=1e-6) == 0.010
 
-    # Large GET (>= 1 MiB) updates bandwidth EMA
-    tracker.record_observation(10 * 1024 * 1024, 0.118)
-    bps, lat, count = tracker.get_metrics()
-    assert count == 3
+    # Small/Medium GET (64 KB <= size < 256 KB) updates BOTH latency & bandwidth EMA
+    tracker.record_observation(100_000, 0.020)
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 2
+    assert bps_count == 1
+    assert lat_count == 2
     assert bps is not None
-    assert pytest.approx(bps, abs=1.0) == 104_857_600.0
+    assert pytest.approx(bps, abs=1.0) == 5_000_000.0
+    # EMA for latency: 0.2 * 0.020 + 0.8 * 0.010 = 0.012
+    assert pytest.approx(lat, abs=1e-6) == 0.012
+
+    # Large GET (>= 256 KB) updates bandwidth EMA
+    tracker.record_observation(10 * 1024 * 1024, 0.118)
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 3
+    assert bps_count == 2
+    assert lat_count == 2
+    assert bps is not None
 
 
 def test_bandwidth_tracker_pickle():
@@ -579,6 +589,8 @@ def test_bandwidth_tracker_pickle():
     blob = pickle.dumps(tracker)
     restored = pickle.loads(blob)  # noqa: S301
     assert restored.sample_count == tracker.sample_count
+    assert restored.bps_sample_count == tracker.bps_sample_count
+    assert restored.lat_sample_count == tracker.lat_sample_count
     assert restored.bandwidth_bps_ema == tracker.bandwidth_bps_ema
     assert restored.request_latency_s_ema == tracker.request_latency_s_ema
 
@@ -618,6 +630,37 @@ def test_concurrency_budget_high_and_low_bandwidth_adaptation():
     assert budget_low == 32
 
 
+def test_class_gated_observation_isolation():
+    from litdata.raw.dataset import (
+        BandwidthTracker,
+        _aggregate_concurrency_budget,
+    )
+
+    # Scenario 1: 5 small GETs (< 64 KB) -> lat_sample_count = 5, bps_sample_count = 0
+    tracker_small = BandwidthTracker()
+    for _ in range(5):
+        tracker_small.record_observation(10_000, 0.010)
+
+    bps, lat, bps_cnt, lat_cnt = tracker_small.get_metrics()
+    assert bps_cnt == 0
+    assert lat_cnt == 5
+    assert bps is None
+
+    # Budget for large 10 MB objects must STILL use static default aggregate bandwidth because bps_sample_count < 5
+    # Clamped to floor 32
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker_small) == 32
+
+    # Scenario 2: 5 large GETs (>= 256 KB) -> bps_sample_count = 5, lat_sample_count = 0
+    tracker_large = BandwidthTracker()
+    for _ in range(5):
+        tracker_large.record_observation(10 * 1024 * 1024, 0.001)
+
+    bps, lat, bps_cnt, lat_cnt = tracker_large.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 0
+    assert lat is None
+
+
 def test_environment_variable_overrides(monkeypatch):
     from litdata.raw.dataset import (
         _aggregate_concurrency_budget,
@@ -631,3 +674,105 @@ def test_environment_variable_overrides(monkeypatch):
 
     assert _aggregate_concurrency_budget(100_000) == 1024
     assert _effective_concurrency(None, num_workers=1, median_file_bytes=100_000) == 256
+
+
+def test_no_latency_concurrency_inflation():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Record 5 latency observations with high latency (200ms vs assumed 40ms)
+    for _ in range(5):
+        tracker.record_observation(100_000, 0.200)
+
+    # Budget with high latency must not inflate above baseline (240 for sub-1MB)
+    budget = _aggregate_concurrency_budget(100_000, tracker=tracker)
+    assert budget <= 240
+
+
+def test_concurrency_latency_monotonicity():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    latencies = [0.040, 0.080, 0.200, 0.500]
+    budgets = []
+
+    for lat in latencies:
+        tracker = BandwidthTracker()
+        for _ in range(5):
+            tracker.record_observation(100_000, lat)
+        budgets.append(_aggregate_concurrency_budget(100_000, tracker=tracker))
+
+    # For latencies above target (40ms), increasing latency must not increase computed budget
+    for i in range(len(budgets) - 1):
+        assert budgets[i + 1] <= budgets[i]
+
+
+def test_concurrency_latency_recovery():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Inject high latency
+    for _ in range(5):
+        tracker.record_observation(100_000, 0.200)
+    budget_degraded = _aggregate_concurrency_budget(100_000, tracker=tracker)
+
+    # Now inject healthy latency
+    for _ in range(10):
+        tracker.record_observation(100_000, 0.040)
+    budget_recovered = _aggregate_concurrency_budget(100_000, tracker=tracker)
+
+    assert budget_recovered > budget_degraded
+
+
+def test_imagenet_bandwidth_observation():
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    # ImageNet JPEG size ~150 KB
+    imagenet_file_size = 150 * 1024
+    for _ in range(5):
+        tracker.record_observation(imagenet_file_size, 0.015)
+
+    bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 5
+    assert lat is not None
+    assert abs(lat - 0.015) < 1e-4
+    # ImageNet files (150 KB) MUST record bandwidth observation (bps != None)
+    assert bps is not None
+    assert bps > 0
+
+
+def test_guarded_adaptive_floor_reduction():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Low bandwidth (<10 MiB/s) AND high latency (>100 ms)
+    for _ in range(5):
+        tracker.record_observation(128 * 1024, 0.500)
+
+    # Under severe evidence (low bandwidth + high latency), budget can drop below default 32 floor
+    budget = _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker)
+    assert budget < 32
+
+
+def test_worker_allocation_respects_aggregate_budget():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget, _effective_concurrency
+
+    test_cases = [
+        (512, 8, 100_000),
+        (32, 8, 10_000_000),
+        (32, 16, 10_000_000),
+        (32, 64, 10_000_000),
+    ]
+
+    for expected_budget_cap, workers, median_bytes in test_cases:
+        tracker = BandwidthTracker()
+        budget = _aggregate_concurrency_budget(median_bytes, tracker=tracker)
+        total_permits = sum(
+            _effective_concurrency(
+                None, num_workers=workers, median_file_bytes=median_bytes, tracker=tracker, worker_id=w
+            )
+            for w in range(workers)
+        )
+        # Sum of per-worker permits across all workers must not exceed aggregate budget
+        assert total_permits <= budget

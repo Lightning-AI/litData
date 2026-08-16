@@ -109,7 +109,10 @@ _SINGLE_PROCESS_CONCURRENCY_CAP = 128
 # (8 MiB duplicate-GET hedge policy).
 _LATENCY_MODEL_MAX_MEDIAN_BYTES = 1024 * 1024
 _LATENCY_OBSERVATION_MAX_BYTES = 256 * 1024
-_BANDWIDTH_OBSERVATION_MIN_BYTES = 1024 * 1024
+_BANDWIDTH_OBSERVATION_MIN_BYTES = 64 * 1024
+_MIN_EMPIRICAL_SAMPLES = 5
+_LOW_BANDWIDTH_THRESHOLD_BPS = 10 * 1024 * 1024  # 10 MiB/s policy threshold
+_HIGH_LATENCY_THRESHOLD_S = 0.100  # 100 ms policy threshold
 
 
 def _env_float(name: str, default: float) -> float:
@@ -167,37 +170,47 @@ class BandwidthTracker:
         self.alpha = max(0.01, min(1.0, alpha))
         self.bandwidth_bps_ema: float | None = None
         self.request_latency_s_ema: float | None = None
-        self.sample_count: int = 0
+        self.bps_sample_count: int = 0
+        self.lat_sample_count: int = 0
+        self._sample_count: int = 0
         self._lock = threading.Lock()
+
+    @property
+    def sample_count(self) -> int:
+        """Total GET requests observed by the tracker."""
+        with self._lock:
+            return self._sample_count
 
     def record_observation(self, size_bytes: int, duration_s: float) -> None:
         if size_bytes <= 0 or duration_s <= 0:
             return
         with self._lock:
-            self.sample_count += 1
+            self._sample_count += 1
             if size_bytes < _LATENCY_OBSERVATION_MAX_BYTES:
+                self.lat_sample_count += 1
                 if self.request_latency_s_ema is None:
                     self.request_latency_s_ema = duration_s
                 else:
                     self.request_latency_s_ema = (
                         self.alpha * duration_s + (1.0 - self.alpha) * self.request_latency_s_ema
                     )
-            elif size_bytes >= _BANDWIDTH_OBSERVATION_MIN_BYTES:
-                lat_est = (
-                    self.request_latency_s_ema
-                    if self.request_latency_s_ema is not None
-                    else _get_assumed_request_latency_s()
-                )
-                transfer_time = max(0.001, duration_s - lat_est)
-                obs_bps = float(size_bytes) / transfer_time
+            if size_bytes >= _BANDWIDTH_OBSERVATION_MIN_BYTES:
+                self.bps_sample_count += 1
+                obs_bps = float(size_bytes) / duration_s
                 if self.bandwidth_bps_ema is None:
                     self.bandwidth_bps_ema = obs_bps
                 else:
                     self.bandwidth_bps_ema = self.alpha * obs_bps + (1.0 - self.alpha) * self.bandwidth_bps_ema
 
-    def get_metrics(self) -> tuple[float | None, float | None, int]:
+    def get_metrics(self) -> tuple[float | None, float | None, int, int]:
+        """Returns (bandwidth_bps_ema, request_latency_s_ema, bps_sample_count, lat_sample_count)."""
         with self._lock:
-            return self.bandwidth_bps_ema, self.request_latency_s_ema, self.sample_count
+            return (
+                self.bandwidth_bps_ema,
+                self.request_latency_s_ema,
+                self.bps_sample_count,
+                self.lat_sample_count,
+            )
 
     def __getstate__(self) -> dict[str, Any]:
         with self._lock:
@@ -205,14 +218,24 @@ class BandwidthTracker:
                 "alpha": self.alpha,
                 "bandwidth_bps_ema": self.bandwidth_bps_ema,
                 "request_latency_s_ema": self.request_latency_s_ema,
-                "sample_count": self.sample_count,
+                "bps_sample_count": self.bps_sample_count,
+                "lat_sample_count": self.lat_sample_count,
+                "sample_count": self._sample_count,
             }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.alpha = state.get("alpha", 0.2)
         self.bandwidth_bps_ema = state.get("bandwidth_bps_ema")
         self.request_latency_s_ema = state.get("request_latency_s_ema")
-        self.sample_count = state.get("sample_count", 0)
+        self.bps_sample_count = state.get("bps_sample_count", 0)
+        self.lat_sample_count = state.get("lat_sample_count", 0)
+        self._sample_count = state.get("sample_count", self.bps_sample_count + self.lat_sample_count)
+        if "bps_sample_count" not in state and "sample_count" in state:
+            legacy_count = state.get("sample_count", 0)
+            if self.bandwidth_bps_ema is not None:
+                self.bps_sample_count = legacy_count
+            if self.request_latency_s_ema is not None:
+                self.lat_sample_count = legacy_count
         self._lock = threading.Lock()
 
 
@@ -526,17 +549,12 @@ def _aggregate_concurrency_budget(
 ) -> int:
     """Aggregate in-flight download slots across all workers (size-aware, clamped).
 
-    Takes the max of two models then clamps to ``[floor, cap]``:
+    Calculates unconstrained baseline capacity: max(bandwidth model, Little's-law model).
+    `max` is used intentionally so the baseline is not constrained by single-model
+    underestimation.
 
-    - **bandwidth**: ``(aggregate_bps × pipeline_s) // median_file_bytes`` — keep
-      ~50 MiB moving for large objects.
-    - **latency / Little's law**: ``target_rate × assumed_latency`` (~6000×0.040 ≈
-      240) **only when** ``median < _LATENCY_MODEL_MAX_MEDIAN_BYTES`` (1 MiB) so
-      tiny-object paths are not request-starved. Medians ≥1 MiB stay
-      bandwidth-bounded (avoids pinning at 240 slots → multi-GB in flight).
-
-    Uses empirical EMA metrics from ``tracker`` when ``sample_count >= 5``.
-    Per-worker floor of 8 means realized aggregate is ``max(budget, 8 × num_workers)``.
+    If empirical measurements indicate congestion (latency > target), applies
+    stateless backoff factor (L_target / L_obs).
     """
     default_median = _get_default_median_file_bytes()
     median = median_file_bytes if median_file_bytes and median_file_bytes > 0 else default_median
@@ -546,10 +564,13 @@ def _aggregate_concurrency_budget(
 
     obs_bps: float | None = None
     obs_lat: float | None = None
+    bps_samples: int = 0
+    lat_samples: int = 0
     if tracker is not None:
-        bps_ema, lat_ema, samples = tracker.get_metrics()
-        if samples >= 5:
+        bps_ema, lat_ema, bps_samples, lat_samples = tracker.get_metrics()
+        if bps_samples >= _MIN_EMPIRICAL_SAMPLES:
             obs_bps = bps_ema
+        if lat_samples >= _MIN_EMPIRICAL_SAMPLES:
             obs_lat = lat_ema
 
     bandwidth_bps = obs_bps if obs_bps is not None and obs_bps > 0 else _get_assumed_aggregate_bandwidth_bps()
@@ -557,15 +578,39 @@ def _aggregate_concurrency_budget(
     bandwidth_model = max(1, target_bytes // median)
 
     # Size-gate: Little's-law arm is for request-overhead-bound tiny objects only.
+    # Fixed baseline: target_rate * target_latency. Observed latency is NEVER multiplied in.
+    target_lat = _get_assumed_request_latency_s()
     if median < _LATENCY_MODEL_MAX_MEDIAN_BYTES:
         req_rate = _get_assumed_request_rate()
-        req_lat = obs_lat if obs_lat is not None and obs_lat > 0 else _get_assumed_request_latency_s()
-        latency_model = max(1, int(req_rate * req_lat))
+        latency_model = max(1, int(req_rate * target_lat))
     else:
         latency_model = 0
 
-    raw = max(bandwidth_model, latency_model)
-    return max(floor, min(cap, raw))
+    # max is intentional to avoid underestimating baseline capacity
+    baseline_budget = max(bandwidth_model, latency_model)
+
+    # Stateless congestion control backoff: latency > target => reduce budget
+    if obs_lat is not None and obs_lat > target_lat:
+        backoff_factor = min(1.0, target_lat / obs_lat)
+        computed_budget = max(1, int(baseline_budget * backoff_factor))
+    else:
+        computed_budget = baseline_budget
+
+    # Guarded adaptive floor reduction: require high-confidence combined evidence
+    if (
+        bps_samples >= _MIN_EMPIRICAL_SAMPLES
+        and lat_samples >= _MIN_EMPIRICAL_SAMPLES
+        and obs_bps is not None
+        and obs_bps < _LOW_BANDWIDTH_THRESHOLD_BPS
+        and obs_lat is not None
+        and obs_lat > _HIGH_LATENCY_THRESHOLD_S
+    ):
+        effective_floor = 1
+    else:
+        effective_floor = floor
+
+    # Enforce authoritative MAX cap (512) and effective MIN floor
+    return max(effective_floor, min(cap, computed_budget))
 
 
 def _effective_concurrency(
@@ -573,13 +618,13 @@ def _effective_concurrency(
     num_workers: int,
     median_file_bytes: int | None = None,
     tracker: BandwidthTracker | None = None,
+    worker_id: int | None = None,
 ) -> int:
     """Per-worker download permits for the Stage 1 static/adaptive clamp.
 
     - ``max_concurrent_downloads is None`` (default): adaptive —
-      ``max(floor, budget // num_workers)`` with ``budget`` from
-      :func:`_aggregate_concurrency_budget`. When ``num_workers <= 1``, returns
-      ``min(budget, _SINGLE_PROCESS_CONCURRENCY_CAP)`` (unbenchmarked path).
+      budget split across workers while strictly maintaining aggregate budget
+      invariant: sum(worker_permits) <= aggregate_budget.
     - Explicit ``int``: **exactly** that many permits (no silent clamp). ``<= 0``
       collapses to 1.
     """
@@ -588,7 +633,24 @@ def _effective_concurrency(
     budget = _aggregate_concurrency_budget(median_file_bytes, tracker=tracker)
     if num_workers <= 1:
         return min(budget, _get_single_process_concurrency_cap())
-    return max(_MIN_CONCURRENCY_PER_WORKER, budget // num_workers)
+
+    if budget >= num_workers:
+        return budget // num_workers
+
+    # When aggregate budget < num_workers, allocate 1 permit to ranks < budget
+    w_id = worker_id
+    if w_id is None:
+        try:
+            from torch.utils.data import get_worker_info
+
+            info = get_worker_info()
+            if info is not None:
+                w_id = info.id
+        except ImportError:
+            pass
+    if w_id is not None and w_id >= budget:
+        return 0
+    return 1
 
 
 def _num_dataloader_workers() -> int:
