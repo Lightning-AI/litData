@@ -113,6 +113,12 @@ _BANDWIDTH_OBSERVATION_MIN_BYTES = 64 * 1024
 _MIN_EMPIRICAL_SAMPLES = 5
 _LOW_BANDWIDTH_THRESHOLD_BPS = 10 * 1024 * 1024  # 10 MiB/s policy threshold
 _HIGH_LATENCY_THRESHOLD_S = 0.100  # 100 ms policy threshold
+# Minimum estimated request latency (seconds). Prevents the transfer-subtracted
+# latency estimate from collapsing to zero or going negative on fast / cached
+# responses. 1 ms is a reasonable floor: well below any real WAN RTT, but
+# large enough to keep EMA arithmetic well-conditioned.
+_LATENCY_EPSILON_S = 0.001
+_LATENCY_RTT_EPSILON = _LATENCY_EPSILON_S
 
 
 def _env_float(name: str, default: float) -> float:
@@ -182,18 +188,61 @@ class BandwidthTracker:
             return self._sample_count
 
     def record_observation(self, size_bytes: int, duration_s: float) -> None:
+        """Record an empirical GET observation and update EMA estimates.
+
+        Evaluation order is intentional and matters for correctness:
+
+        1. Read the **current** (pre-update) bandwidth EMA.
+        2. Estimate transfer-subtracted request latency using that prior estimate
+           (if empirical bandwidth sample threshold is met) and update ``request_latency_s_ema``.
+        3. Update ``bandwidth_bps_ema`` with the current observation.
+
+        This ordering avoids a circular estimation problem: if the bandwidth EMA
+        were updated first, the freshly-observed ``size / duration`` would be used
+        to explain its own transfer time, which collapses the latency estimate
+        towards ``_LATENCY_EPSILON_S`` on every sample — defeating the purpose
+        of the subtraction entirely.
+
+        The latency stored in ``request_latency_s_ema`` is *not* TCP RTT; it is
+        the estimated request latency after removing the payload-transfer
+        component from wall-clock GET time (connection setup, TLS, server
+        processing, scheduling, and proxy overhead are all included).
+        """
         if size_bytes <= 0 or duration_s <= 0:
             return
         with self._lock:
             self._sample_count += 1
+
+            # Step 1: capture the PREVIOUS bandwidth estimate before modifying it.
+            # This is the key invariant: the current sample must not be used to
+            # explain its own transfer time.
+            prev_bps_ema = self.bandwidth_bps_ema
+
+            # Step 2: update transfer-subtracted latency EMA for small objects.
             if size_bytes < _LATENCY_OBSERVATION_MAX_BYTES:
                 self.lat_sample_count += 1
+                # Fall back to assumed aggregate bandwidth when empirical BPS sample
+                # threshold (_MIN_EMPIRICAL_SAMPLES = 5) has not yet been met.
+                effective_bps = (
+                    prev_bps_ema
+                    if self.bps_sample_count >= _MIN_EMPIRICAL_SAMPLES
+                    and prev_bps_ema is not None
+                    and prev_bps_ema > 0
+                    else _get_assumed_aggregate_bandwidth_bps()
+                )
+                transfer_time_s = float(size_bytes) / effective_bps
+                # Estimated request latency: wall-clock minus payload-transfer time.
+                # Clamped to _LATENCY_EPSILON_S to stay well-conditioned.
+                estimated_request_latency_s = max(_LATENCY_EPSILON_S, duration_s - transfer_time_s)
                 if self.request_latency_s_ema is None:
-                    self.request_latency_s_ema = duration_s
+                    self.request_latency_s_ema = estimated_request_latency_s
                 else:
                     self.request_latency_s_ema = (
-                        self.alpha * duration_s + (1.0 - self.alpha) * self.request_latency_s_ema
+                        self.alpha * estimated_request_latency_s
+                        + (1.0 - self.alpha) * self.request_latency_s_ema
                     )
+
+            # Step 3: now update bandwidth EMA with the current observation.
             if size_bytes >= _BANDWIDTH_OBSERVATION_MIN_BYTES:
                 self.bps_sample_count += 1
                 obs_bps = float(size_bytes) / duration_s

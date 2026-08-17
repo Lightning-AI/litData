@@ -544,21 +544,34 @@ def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
 def test_bandwidth_tracker_basic():
     import pytest
 
-    from litdata.raw.dataset import BandwidthTracker
+    from litdata.raw.dataset import (
+        _ASSUMED_AGGREGATE_BANDWIDTH_BPS,
+        _LATENCY_RTT_EPSILON,
+        BandwidthTracker,
+    )
 
+    assumed_bps = float(_ASSUMED_AGGREGATE_BANDWIDTH_BPS)
     tracker = BandwidthTracker(alpha=0.2)
     assert tracker.sample_count == 0
 
-    # Tiny GET (< 64 KB) updates latency EMA only
+    # --- Tiny GET (50 KB < 64 KB) ---
+    # Only updates latency EMA; no bandwidth observation recorded.
+    # prev_bps_ema = None → fallback to assumed bandwidth for transfer estimate.
     tracker.record_observation(50_000, 0.010)
     bps, lat, bps_count, lat_count = tracker.get_metrics()
     assert tracker.sample_count == 1
     assert bps_count == 0
     assert lat_count == 1
     assert bps is None
-    assert pytest.approx(lat, abs=1e-6) == 0.010
+    transfer1 = 50_000 / assumed_bps
+    expected_lat1 = max(_LATENCY_RTT_EPSILON, 0.010 - transfer1)
+    assert pytest.approx(lat, abs=1e-6) == expected_lat1
+    # Sanity: transfer-subtracted latency must be strictly less than raw duration.
+    assert lat < 0.010
 
-    # Small/Medium GET (64 KB <= size < 256 KB) updates BOTH latency & bandwidth EMA
+    # --- Small/Medium GET (100 KB: 64 KB <= size < 256 KB) ---
+    # Updates BOTH latency and bandwidth EMAs.
+    # prev_bps_ema is still None (previous obs was below bandwidth threshold) → fallback.
     tracker.record_observation(100_000, 0.020)
     bps, lat, bps_count, lat_count = tracker.get_metrics()
     assert tracker.sample_count == 2
@@ -566,15 +579,18 @@ def test_bandwidth_tracker_basic():
     assert lat_count == 2
     assert bps is not None
     assert pytest.approx(bps, abs=1.0) == 5_000_000.0
-    # EMA for latency: 0.2 * 0.020 + 0.8 * 0.010 = 0.012
-    assert pytest.approx(lat, abs=1e-6) == 0.012
+    transfer2 = 100_000 / assumed_bps  # prev_bps_ema still None before this obs
+    est_lat2 = max(_LATENCY_RTT_EPSILON, 0.020 - transfer2)
+    expected_lat2 = 0.2 * est_lat2 + 0.8 * expected_lat1
+    assert pytest.approx(lat, abs=1e-6) == expected_lat2
 
-    # Large GET (>= 256 KB) updates bandwidth EMA
+    # --- Large GET (10 MiB >= 256 KB) ---
+    # Updates bandwidth EMA only; size >= _LATENCY_OBSERVATION_MAX_BYTES.
     tracker.record_observation(10 * 1024 * 1024, 0.118)
     bps, lat, bps_count, lat_count = tracker.get_metrics()
     assert tracker.sample_count == 3
     assert bps_count == 2
-    assert lat_count == 2
+    assert lat_count == 2  # unchanged — large GETs do not update latency EMA
     assert bps is not None
 
 
@@ -724,10 +740,12 @@ def test_concurrency_latency_recovery():
 
 
 def test_imagenet_bandwidth_observation():
+    import pytest
+
     from litdata.raw.dataset import BandwidthTracker
 
     tracker = BandwidthTracker()
-    # ImageNet JPEG size ~150 KB
+    # ImageNet JPEG size ~150 KB — straddles both latency (<256 KB) and bandwidth (>=64 KB) thresholds.
     imagenet_file_size = 150 * 1024
     for _ in range(5):
         tracker.record_observation(imagenet_file_size, 0.015)
@@ -735,11 +753,17 @@ def test_imagenet_bandwidth_observation():
     bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
     assert bps_cnt == 5
     assert lat_cnt == 5
-    assert lat is not None
-    assert abs(lat - 0.015) < 1e-4
-    # ImageNet files (150 KB) MUST record bandwidth observation (bps != None)
-    assert bps is not None
-    assert bps > 0
+
+    # ImageNet files MUST record both EMA estimates.
+    assert bps is not None and bps > 0
+    assert lat is not None and lat > 0
+
+    # Transfer-subtracted latency must be strictly less than raw wall-clock duration.
+    # (transfer time is non-zero for a 150 KB file)
+    assert lat < 0.015
+
+    # Epsilon floor must hold: estimated latency must not go below _LATENCY_RTT_EPSILON.
+    assert lat >= 0.001
 
 
 def test_guarded_adaptive_floor_reduction():
@@ -776,3 +800,98 @@ def test_worker_allocation_respects_aggregate_budget():
         )
         # Sum of per-worker permits across all workers must not exceed aggregate budget
         assert total_permits <= budget
+
+
+def test_transfer_subtracted_latency():
+    """Pre-seed the tracker with 5 large GETs to reach sample threshold and establish a known bandwidth EMA (20 MB/s),
+    then record a 200 KB request taking 30 ms. Verify latency EMA is approximately 30 ms - transfer_time (10 ms) = 20 ms.
+    """
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    prior_bps = 20 * 1024 * 1024  # 20 MB/s
+    large_size = 10 * 1024 * 1024  # 10 MiB (bandwidth-only GET)
+
+    # Record 5 observations to pass the _MIN_EMPIRICAL_SAMPLES = 5 threshold
+    for _ in range(5):
+        tracker.record_observation(large_size, large_size / prior_bps)
+
+    bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 0
+    assert pytest.approx(bps, rel=1e-5) == prior_bps
+
+    # Now record 200 KB GET taking 30 ms
+    size = 200 * 1024
+    duration = 0.030
+    tracker.record_observation(size, duration)
+
+    _, lat_after, _, _ = tracker.get_metrics()
+    expected_lat = duration - (size / prior_bps)  # 30 ms - 10 ms = 20 ms
+    assert lat_after is not None
+    assert pytest.approx(lat_after, abs=1e-4) == expected_lat
+
+
+def test_transfer_subtracted_latency_bootstrap():
+    """When no empirical bandwidth exists or bps_sample_count < 5, verify the configured/default bandwidth is used."""
+    import pytest
+
+    from litdata.raw.dataset import _ASSUMED_AGGREGATE_BANDWIDTH_BPS, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    assert tracker.bandwidth_bps_ema is None
+
+    # Record a 50 KB GET taking 10 ms (sample 1, below 5 threshold)
+    size = 50 * 1024
+    duration = 0.010
+    tracker.record_observation(size, duration)
+
+    _, lat, _, _ = tracker.get_metrics()
+    expected_transfer = size / float(_ASSUMED_AGGREGATE_BANDWIDTH_BPS)
+    expected_lat = max(0.001, duration - expected_transfer)
+    assert lat is not None
+    assert pytest.approx(lat, abs=1e-6) == expected_lat
+
+
+def test_transfer_subtracted_latency_clamped():
+    """Provide an observation where estimated transfer time > observed duration (e.g. cached/fast GET).
+    Verify resulting latency is clamped to epsilon (0.001s) rather than becoming zero or negative.
+    """
+    import pytest
+
+    from litdata.raw.dataset import _LATENCY_EPSILON_S, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # Seed 5 large GETs at a slow prior BPS (1 MB/s)
+    slow_bps = 1 * 1024 * 1024
+    large_size = 10 * 1024 * 1024
+    for _ in range(5):
+        tracker.record_observation(large_size, large_size / slow_bps)
+
+    # Now record a 100 KB GET arriving in only 5 ms (faster than 100 ms transfer estimate)
+    tracker.record_observation(100 * 1024, 0.005)
+    _, lat, _, _ = tracker.get_metrics()
+
+    assert lat is not None
+    assert pytest.approx(lat, abs=1e-9) == _LATENCY_EPSILON_S
+
+
+def test_current_bandwidth_sample_does_not_explain_itself():
+    """Verify that the bandwidth calculated from the current observation is NOT used to calculate
+    that observation's own transfer time.
+    """
+    import pytest
+
+    from litdata.raw.dataset import _LATENCY_EPSILON_S, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # Record a single 200 KB GET taking 30 ms (bps_sample_count = 0 before this sample).
+    # If circular, it would use 200 KB / 30 ms to calculate transfer = 30 ms -> lat = 0 -> clamped to epsilon (1 ms).
+    # Since it correctly uses fallback default (100 MB/s), transfer = 2 ms -> lat = 28 ms.
+    tracker.record_observation(200 * 1024, 0.030)
+    _, lat, _, _ = tracker.get_metrics()
+
+    assert lat is not None
+    assert lat > 10 * _LATENCY_EPSILON_S  # 28 ms is >> 1 ms epsilon
