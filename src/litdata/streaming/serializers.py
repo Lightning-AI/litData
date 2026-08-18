@@ -477,7 +477,7 @@ class NumpySerializer(Serializer):
             shape.append(np.frombuffer(data[8 + 4 * shape_idx : 8 + 4 * (shape_idx + 1)], np.uint32).item())
 
         # deserialize the numpy array bytes
-        tensor = np.frombuffer(data[8 + 4 * shape_size : len(data)], dtype=dtype)
+        tensor = np.frombuffer(data[8 + 4 * shape_size : len(data)], dtype=dtype).copy()
         if tensor.shape == shape:
             return tensor
         return np.reshape(tensor, shape)
@@ -503,7 +503,7 @@ class NoHeaderNumpySerializer(Serializer):
 
     def deserialize(self, data: bytes) -> np.ndarray:
         assert self._dtype
-        return np.frombuffer(data, dtype=self._dtype)
+        return np.frombuffer(data, dtype=self._dtype).copy()
 
     def can_serialize(self, item: np.ndarray) -> bool:
         return isinstance(item, np.ndarray) and len(item.shape) == 1

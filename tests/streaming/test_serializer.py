@@ -255,6 +255,7 @@ def test_numpy_serializer():
             data, _ = serializer_tensor.serialize(tensor)
             deserialized_tensor = serializer_tensor.deserialize(data)
             assert deserialized_tensor.dtype == dtype
+            assert deserialized_tensor.flags.writeable
             np.testing.assert_equal(tensor, deserialized_tensor)
 
 
@@ -290,6 +291,7 @@ def test_assert_no_header_numpy_serializer():
     serializer.setup(name)
     assert serializer._dtype == np.dtype("float64")
     new_t = serializer.deserialize(data)
+    assert new_t.flags.writeable
     np.testing.assert_equal(t, new_t)
 
 
