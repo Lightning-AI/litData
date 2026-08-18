@@ -1168,3 +1168,100 @@ def test_permit_refresh_respects_reduced_budget_for_new_acquisitions():
             sem.release()
 
     asyncio.run(_run())
+
+
+def test_record_observation_returns_atomic_sample_counts():
+    """Verify record_observation returns (prev_sample_count, new_sample_count) tuple atomically."""
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    assert tracker.record_observation(-1, 0.1) is None
+    assert tracker.record_observation(100, -0.5) is None
+
+    res1 = tracker.record_observation(100_000, 0.05)
+    assert res1 == (0, 1)
+
+    res2 = tracker.record_observation(200_000, 0.04)
+    assert res2 == (1, 2)
+
+    assert tracker.sample_count == 2
+
+
+def test_record_download_observation_uses_configured_sample_and_refresh_thresholds(tmp_path, monkeypatch):
+    """Verify permit cache invalidation uses min_empirical_samples and permit_refresh_interval configs."""
+    monkeypatch.setenv("LITDATA_MIN_EMPIRICAL_SAMPLES", "3")
+    monkeypatch.setenv("LITDATA_PERMIT_REFRESH_INTERVAL", "4")
+
+    (tmp_path / "file1.jpg").write_bytes(b"x")
+    from litdata.raw.dataset import StreamingRawDataset
+
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+
+    cm._cached_permits = 64
+    cm._cached_permits_pid = os.getpid()
+
+    # Sample 1 & 2 (< min_samples 3) -> should not invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits == 64
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits == 64
+
+    # Sample 3 (== min_samples 3) -> should invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits is None
+
+    cm._cached_permits = 64
+    cm._cached_permits_pid = os.getpid()
+
+    # Sample 4 (% refresh 4 == 0) -> should invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits is None
+
+
+@pytest.mark.asyncio
+async def test_telemetry_duration_excludes_permit_queue_wait(tmp_path):
+    """Verify semaphore queue wait time is excluded from recorded telemetry duration."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    (tmp_path / "file.jpg").write_bytes(b"12345")
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+
+    # Force 1 permit max
+    cm.max_concurrent_downloads = 1
+    cm._downloader = AsyncMock()
+    cm._downloader_pid = os.getpid()
+    cm._downloader_loop = asyncio.get_running_loop()
+
+    async def mock_download(file_path):
+        await asyncio.sleep(0.02)  # actual download takes 20ms
+        return b"12345"
+
+    cm.downloader.adownload_fileobj.side_effect = mock_download
+
+    recorded_durations = []
+
+    def mock_record(size, dur):
+        recorded_durations.append(dur)
+
+    cm._record_download_observation = mock_record
+
+    # Task 1 holds permit for 0.1s
+    async def task1():
+        async with cm._permit(True):
+            await asyncio.sleep(0.1)
+
+    # Task 2 waits for permit (>= 0.1s wait) then performs fetch
+    async def task2():
+        await asyncio.sleep(0.01)  # start after task1 holds permit
+        await cm._fetch_bytes(str(tmp_path / "file.jpg"), size=5, gated=True)
+
+    await asyncio.gather(task1(), task2())
+
+    assert len(recorded_durations) == 1
+    # Duration recorded must measure only task2's actual fetch (20ms), excluding the ~100ms permit queue wait
+    assert recorded_durations[0] < 0.08

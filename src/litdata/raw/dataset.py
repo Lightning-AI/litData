@@ -247,8 +247,10 @@ class BandwidthTracker:
         with self._lock:
             return self._sample_count
 
-    def record_observation(self, size_bytes: int, duration_s: float) -> None:
+    def record_observation(self, size_bytes: int, duration_s: float) -> tuple[int, int] | None:
         """Record an empirical GET observation and update EMA estimates.
+
+        Returns (prev_sample_count, new_sample_count) tuple on success, or None for invalid observation.
 
         Evaluation order is intentional and matters for correctness:
 
@@ -269,9 +271,11 @@ class BandwidthTracker:
         processing, scheduling, and proxy overhead are all included).
         """
         if size_bytes <= 0 or duration_s <= 0:
-            return
+            return None
         with self._lock:
+            prev_sample_count = self._sample_count
             self._sample_count += 1
+            new_sample_count = self._sample_count
 
             # Step 1: capture the PREVIOUS bandwidth estimate before modifying it.
             # This is the key invariant: the current sample must not be used to
@@ -308,6 +312,8 @@ class BandwidthTracker:
                 else:
                     self.bandwidth_bps_ema = self.alpha * obs_bps + (1.0 - self.alpha) * self.bandwidth_bps_ema
 
+            return (prev_sample_count, new_sample_count)
+
     def get_metrics(self) -> tuple[float | None, float | None, int, int]:
         """Returns (bandwidth_bps_ema, request_latency_s_ema, bps_sample_count, lat_sample_count)."""
         with self._lock:
@@ -327,6 +333,7 @@ class BandwidthTracker:
                 "bps_sample_count": self.bps_sample_count,
                 "lat_sample_count": self.lat_sample_count,
                 "sample_count": self._sample_count,
+                "backoff_factor": self._backoff_factor,
             }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -336,6 +343,7 @@ class BandwidthTracker:
         self.bps_sample_count = state.get("bps_sample_count", 0)
         self.lat_sample_count = state.get("lat_sample_count", 0)
         self._sample_count = state.get("sample_count", self.bps_sample_count + self.lat_sample_count)
+        self._backoff_factor = state.get("backoff_factor", 1.0)
         if "bps_sample_count" not in state and "sample_count" in state:
             legacy_count = state.get("sample_count", 0)
             if self.bandwidth_bps_ema is not None:
@@ -367,6 +375,9 @@ class _DynamicSemaphore:
                 self._sem.release()
         elif diff < 0:
             self._sem._value -= abs(diff)
+
+    def locked(self) -> bool:
+        return self._sem.locked()
 
     async def acquire(self) -> None:
         await self._sem.acquire()
@@ -1062,10 +1073,15 @@ class CacheManager:
 
     def _record_download_observation(self, size_bytes: int, duration_s: float) -> None:
         """Record an empirical GET transfer observation and refresh cached permits when needed."""
-        prev_count = self._bandwidth_tracker.sample_count
-        self._bandwidth_tracker.record_observation(size_bytes, duration_s)
-        new_count = self._bandwidth_tracker.sample_count
-        if (prev_count < 5 and new_count >= 5) or (new_count >= 5 and new_count % 10 == 0):
+        res = self._bandwidth_tracker.record_observation(size_bytes, duration_s)
+        if res is None:
+            return
+        prev_count, new_count = res
+        min_samples = _get_min_empirical_samples()
+        refresh_interval = _get_permit_refresh_interval()
+        if (prev_count < min_samples and new_count >= min_samples) or (
+            new_count >= min_samples and new_count % refresh_interval == 0
+        ):
             self._cached_permits = None
 
     def _effective_download_permits(self) -> int:
@@ -1352,9 +1368,9 @@ class CacheManager:
                 # Unique scratch per attempt so first/hedge never share a path.
                 scratch = f"{base_scratch}.{offset}.{uuid4().hex}"
                 try:
-                    t0_c = time.monotonic()
                     async with self._permit(gated):
-                        await asyncio.get_running_loop().run_in_executor(
+                        t0_c = time.monotonic()
+                        res = await asyncio.get_running_loop().run_in_executor(
                             executor,
                             downloader.download_bytes,
                             file_path,
@@ -1362,8 +1378,12 @@ class CacheManager:
                             length,
                             scratch,
                         )
-                        data = Path(scratch).read_bytes()
-                    dur_c = time.monotonic() - t0_c
+                        data = (
+                            res
+                            if isinstance(res, (bytes, bytearray))
+                            else (Path(scratch).read_bytes() if os.path.exists(scratch) else b"")
+                        )
+                        dur_c = time.monotonic() - t0_c
                     if len(data) != length:
                         raise RuntimeError(
                             f"Ranged GET short read for {file_path}: offset={offset} expected={length} got={len(data)}"
@@ -1409,19 +1429,19 @@ class CacheManager:
         delay = _effective_hedge_delay(self.hedge_delay, size) if self._is_remote_object(file_path) else None
         # Pay-per-use: hedging off/ineligible → bare permit + download (batch enforces timeout).
         if delay is None:
-            t0 = time.monotonic()
             async with self._permit(gated):
+                t0 = time.monotonic()
                 data = await self.downloader.adownload_fileobj(file_path)
-            dur = time.monotonic() - t0
+                dur = time.monotonic() - t0
             if len(data) > 0:
                 self._record_download_observation(len(data), dur)
             return data
 
         async def once() -> bytes:
-            t0_once = time.monotonic()
             async with self._permit(gated):
+                t0_once = time.monotonic()
                 res = await self.downloader.adownload_fileobj(file_path)
-            dur_once = time.monotonic() - t0_once
+                dur_once = time.monotonic() - t0_once
             if len(res) > 0:
                 self._record_download_observation(len(res), dur_once)
             return res
