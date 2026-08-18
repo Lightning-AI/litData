@@ -121,52 +121,85 @@ _LATENCY_EPSILON_S = 0.001
 _LATENCY_RTT_EPSILON = _LATENCY_EPSILON_S
 
 
-def _env_float(name: str, default: float) -> float:
-    val = os.getenv(name)
-    if val is None:
+def _env_float(name: str, default: float, min_val: float = 0.0, max_val: float | None = None) -> float:
+    val_str = os.getenv(name)
+    if val_str is None:
         return default
     try:
-        return float(val)
+        val = float(val_str)
+        if val <= min_val or (max_val is not None and val > max_val):
+            logger.warning("Environment variable %s=%r out of bounds; using default %g", name, val_str, default)
+            return default
+        return val
     except ValueError:
+        logger.warning("Environment variable %s=%r invalid float; using default %g", name, val_str, default)
         return default
 
 
-def _env_int(name: str, default: int) -> int:
-    val = os.getenv(name)
-    if val is None:
+def _env_int(name: str, default: int, min_val: int = 1) -> int:
+    val_str = os.getenv(name)
+    if val_str is None:
         return default
     try:
-        return int(val)
+        val = int(val_str)
+        if val < min_val:
+            logger.warning(
+                "Environment variable %s=%r must be >= %d; using default %d",
+                name,
+                val_str,
+                min_val,
+                default,
+            )
+            return default
+        return val
     except ValueError:
+        logger.warning("Environment variable %s=%r invalid integer; using default %d", name, val_str, default)
         return default
 
 
 def _get_assumed_aggregate_bandwidth_bps() -> int:
-    return _env_int("LITDATA_ASSUMED_BANDWIDTH_BPS", _ASSUMED_AGGREGATE_BANDWIDTH_BPS)
+    return _env_int("LITDATA_ASSUMED_BANDWIDTH_BPS", _ASSUMED_AGGREGATE_BANDWIDTH_BPS, min_val=1)
 
 
 def _get_assumed_request_rate() -> float:
-    return _env_float("LITDATA_ASSUMED_REQUEST_RATE", _ASSUMED_REQUEST_RATE)
+    return _env_float("LITDATA_ASSUMED_REQUEST_RATE", _ASSUMED_REQUEST_RATE, min_val=0.0)
 
 
 def _get_assumed_request_latency_s() -> float:
-    return _env_float("LITDATA_ASSUMED_REQUEST_LATENCY_S", _ASSUMED_REQUEST_LATENCY_S)
+    return _env_float("LITDATA_ASSUMED_REQUEST_LATENCY_S", _ASSUMED_REQUEST_LATENCY_S, min_val=0.0)
 
 
 def _get_default_median_file_bytes() -> int:
-    return _env_int("LITDATA_DEFAULT_MEDIAN_FILE_BYTES", _DEFAULT_MEDIAN_FILE_BYTES)
+    return _env_int("LITDATA_DEFAULT_MEDIAN_FILE_BYTES", _DEFAULT_MEDIAN_FILE_BYTES, min_val=1)
 
 
 def _get_single_process_concurrency_cap() -> int:
-    return _env_int("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", _SINGLE_PROCESS_CONCURRENCY_CAP)
+    return _env_int("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", _SINGLE_PROCESS_CONCURRENCY_CAP, min_val=1)
 
 
 def _get_aggregate_concurrency_budget_cap() -> int:
-    return _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", _AGGREGATE_CONCURRENCY_BUDGET_CAP)
+    return _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", _AGGREGATE_CONCURRENCY_BUDGET_CAP, min_val=1)
 
 
 def _get_aggregate_concurrency_budget_floor() -> int:
-    return _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", _AGGREGATE_CONCURRENCY_BUDGET_FLOOR)
+    floor = _env_int("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", _AGGREGATE_CONCURRENCY_BUDGET_FLOOR, min_val=1)
+    cap = _get_aggregate_concurrency_budget_cap()
+    if floor > cap:
+        logger.warning("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR=%d exceeds cap=%d; using floor=%d", floor, cap, cap)
+        return cap
+    return floor
+
+
+def _get_backoff_recovery_alpha() -> float:
+    return _env_float("LITDATA_BACKOFF_RECOVERY_ALPHA", 0.1, min_val=0.0, max_val=1.0)
+
+
+def _get_min_empirical_samples() -> int:
+    return _env_int("LITDATA_MIN_EMPIRICAL_SAMPLES", _MIN_EMPIRICAL_SAMPLES, min_val=1)
+
+
+def _get_permit_refresh_interval() -> int:
+    return _env_int("LITDATA_PERMIT_REFRESH_INTERVAL", 10, min_val=1)
 
 
 class BandwidthTracker:
@@ -179,7 +212,34 @@ class BandwidthTracker:
         self.bps_sample_count: int = 0
         self.lat_sample_count: int = 0
         self._sample_count: int = 0
+        self._backoff_factor: float = 1.0
         self._lock = threading.Lock()
+
+    def get_backoff_factor(self, target_lat: float) -> float:
+        """Return stateful backoff factor with 10% deadband and gradual recovery.
+
+        - Congested (obs_lat > 1.1 * target_lat): Immediate backoff.
+        - Deadband (target_lat < obs_lat <= 1.1 * target_lat): Hold current backoff factor.
+        - Healthy (obs_lat <= target_lat): Recover slowly toward 1.0.
+        """
+        with self._lock:
+            min_samples = _get_min_empirical_samples()
+            if self.request_latency_s_ema is None or self.lat_sample_count < min_samples:
+                return 1.0
+            obs_lat = self.request_latency_s_ema
+            deadband_lat = 1.1 * target_lat
+            alpha_rec = _get_backoff_recovery_alpha()
+
+            if obs_lat > deadband_lat:
+                # Immediate backoff under congestion
+                target_factor = min(1.0, target_lat / obs_lat)
+                self._backoff_factor = min(self._backoff_factor, target_factor)
+            elif obs_lat <= target_lat:
+                # Gradual recovery under healthy latency
+                self._backoff_factor = min(1.0, self._backoff_factor + alpha_rec * (1.0 - self._backoff_factor))
+            # In deadband (target_lat < obs_lat <= deadband_lat), hold current self._backoff_factor
+
+            return self._backoff_factor
 
     @property
     def sample_count(self) -> int:
@@ -225,9 +285,7 @@ class BandwidthTracker:
                 # threshold (_MIN_EMPIRICAL_SAMPLES = 5) has not yet been met.
                 effective_bps = (
                     prev_bps_ema
-                    if self.bps_sample_count >= _MIN_EMPIRICAL_SAMPLES
-                    and prev_bps_ema is not None
-                    and prev_bps_ema > 0
+                    if self.bps_sample_count >= _MIN_EMPIRICAL_SAMPLES and prev_bps_ema is not None and prev_bps_ema > 0
                     else _get_assumed_aggregate_bandwidth_bps()
                 )
                 transfer_time_s = float(size_bytes) / effective_bps
@@ -238,8 +296,7 @@ class BandwidthTracker:
                     self.request_latency_s_ema = estimated_request_latency_s
                 else:
                     self.request_latency_s_ema = (
-                        self.alpha * estimated_request_latency_s
-                        + (1.0 - self.alpha) * self.request_latency_s_ema
+                        self.alpha * estimated_request_latency_s + (1.0 - self.alpha) * self.request_latency_s_ema
                     )
 
             # Step 3: now update bandwidth EMA with the current observation.
@@ -286,6 +343,42 @@ class BandwidthTracker:
             if self.request_latency_s_ema is not None:
                 self.lat_sample_count = legacy_count
         self._lock = threading.Lock()
+
+
+class _DynamicSemaphore:
+    """An asyncio-compatible semaphore supporting dynamic permit quota updates.
+
+    Replaces standard un-coordinated ``asyncio.Semaphore`` instantiation when
+    budget updates happen mid-flight. When downscaling (e.g. 32 -> 16), excess
+    permits are acquired/withheld so new tasks must wait until active in-flight
+    downloads drain to the new quota.
+    """
+
+    def __init__(self, value: int = 1) -> None:
+        self.target_permits = max(1, value)
+        self._sem = asyncio.Semaphore(self.target_permits)
+
+    def update_target(self, new_target: int) -> None:
+        new_target = max(1, new_target)
+        diff = new_target - self.target_permits
+        self.target_permits = new_target
+        if diff > 0:
+            for _ in range(diff):
+                self._sem.release()
+        elif diff < 0:
+            self._sem._value -= abs(diff)
+
+    async def acquire(self) -> None:
+        await self._sem.acquire()
+
+    def release(self) -> None:
+        self._sem.release()
+
+    async def __aenter__(self) -> None:
+        await self.acquire()
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.release()
 
 
 _RUNNER_LOCK = threading.Lock()
@@ -638,12 +731,15 @@ def _aggregate_concurrency_budget(
     # max is intentional to avoid underestimating baseline capacity
     baseline_budget = max(bandwidth_model, latency_model)
 
-    # Stateless congestion control backoff: latency > target => reduce budget
-    if obs_lat is not None and obs_lat > target_lat:
+    # Stateful congestion control backoff with 10% deadband and gradual recovery
+    if tracker is not None:
+        backoff_factor = tracker.get_backoff_factor(target_lat)
+    elif obs_lat is not None and obs_lat > target_lat:
         backoff_factor = min(1.0, target_lat / obs_lat)
-        computed_budget = max(1, int(baseline_budget * backoff_factor))
     else:
-        computed_budget = baseline_budget
+        backoff_factor = 1.0
+
+    computed_budget = max(1, int(baseline_budget * backoff_factor))
 
     # Guarded adaptive floor reduction: require high-confidence combined evidence
     if (
@@ -991,16 +1087,16 @@ class CacheManager:
         self._cached_permits_pid = pid
         return permits
 
-    def _get_semaphore(self) -> asyncio.Semaphore:
-        """Return a semaphore bound to the current event loop with effective permits.
+    def _get_semaphore(self) -> _DynamicSemaphore | asyncio.Semaphore:
+        """Return a dynamic semaphore bound to the current event loop with effective permits.
 
         Permit count comes from :meth:`_effective_download_permits` (cached per
-        process). Loop-keyed like other runtime clients; cleared by
-        ``reset_runtime_state``.
+        process). Reuses active dynamic semaphore and adjusts target quota when
+        permits change instead of replacing in-flight semaphores.
         """
         loop = asyncio.get_running_loop()
         permits = self._effective_download_permits()
-        if self._semaphore is None or self._semaphore_loop is not loop or self._semaphore_permits != permits:
+        if self._semaphore is None or self._semaphore_loop is not loop:
             n_workers = _num_dataloader_workers()
             budget = (
                 _aggregate_concurrency_budget(self._median_file_bytes, tracker=self._bandwidth_tracker)
@@ -1014,8 +1110,14 @@ class CacheManager:
                 n_workers,
                 permits,
             )
-            self._semaphore = asyncio.Semaphore(permits)
+            self._semaphore = _DynamicSemaphore(permits)
             self._semaphore_loop = loop
+            self._semaphore_permits = permits
+        elif self._semaphore_permits != permits:
+            if isinstance(self._semaphore, _DynamicSemaphore):
+                self._semaphore.update_target(permits)
+            else:
+                self._semaphore = _DynamicSemaphore(permits)
             self._semaphore_permits = permits
         return self._semaphore
 
@@ -1250,8 +1352,9 @@ class CacheManager:
                 # Unique scratch per attempt so first/hedge never share a path.
                 scratch = f"{base_scratch}.{offset}.{uuid4().hex}"
                 try:
+                    t0_c = time.monotonic()
                     async with self._permit(gated):
-                        data = await asyncio.get_running_loop().run_in_executor(
+                        await asyncio.get_running_loop().run_in_executor(
                             executor,
                             downloader.download_bytes,
                             file_path,
@@ -1259,11 +1362,16 @@ class CacheManager:
                             length,
                             scratch,
                         )
+                        data = Path(scratch).read_bytes()
+                    dur_c = time.monotonic() - t0_c
                     if len(data) != length:
                         raise RuntimeError(
                             f"Ranged GET short read for {file_path}: offset={offset} expected={length} got={len(data)}"
                         )
+                    if len(data) > 0:
+                        self._record_download_observation(len(data), dur_c)
                     return data
+
                 finally:
                     with contextlib.suppress(OSError):
                         os.remove(scratch)
@@ -1274,15 +1382,11 @@ class CacheManager:
                 data = await fetch()
             return offset, data
 
-        t0 = time.monotonic()
         parts = await asyncio.gather(*(one(o, n) for o, n in ranges))
-        dur = time.monotonic() - t0
         parts.sort(key=lambda x: x[0])
         joined = b"".join(data for _, data in parts)
         if len(joined) != size:
             raise RuntimeError(f"Ranged download size mismatch for {file_path}: expected={size} got={len(joined)}")
-        if len(joined) > 0:
-            self._record_download_observation(len(joined), dur)
         return joined
 
     async def _fetch_bytes(self, file_path: str, size: int | None = None, *, gated: bool = True) -> bytes:
@@ -1314,15 +1418,15 @@ class CacheManager:
             return data
 
         async def once() -> bytes:
+            t0_once = time.monotonic()
             async with self._permit(gated):
-                return await self.downloader.adownload_fileobj(file_path)
+                res = await self.downloader.adownload_fileobj(file_path)
+            dur_once = time.monotonic() - t0_once
+            if len(res) > 0:
+                self._record_download_observation(len(res), dur_once)
+            return res
 
-        t0_h = time.monotonic()
-        data = await self._hedged(once, delay)
-        dur_h = time.monotonic() - t0_h
-        if len(data) > 0:
-            self._record_download_observation(len(data), dur_h)
-        return data
+        return await self._hedged(once, delay)
 
     def _schedule_write_behind(self, local_path: str, data: bytes) -> None:
         """Atomically publish ``data`` to ``local_path`` on a worker thread."""
