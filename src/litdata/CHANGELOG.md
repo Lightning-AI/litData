@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - `StreamingDataset` / `Cache` `max_cache_size`: `None` uses 75% of free disk (leave ≥50GB when possible). `"100G"` / `"50GB"` pins bytes; `0.90` (or `MAX_CACHE_SIZE=0.90`) uses that fraction of currently free space.
+- `optimize` no longer serializes its full input list into every spawned worker process.
 
 ## [0.2.71] - 2026-08-15
 

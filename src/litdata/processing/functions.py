@@ -210,6 +210,18 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
 
         self.prepare_item = self._prepare_item_generator if self.is_generator else self._prepare_item  # type: ignore
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Exclude the full input sequence from the serialized data that will be passed to the workers.
+
+        The parent process passes each worker only the items it is responsible for processing. Worker processes do not
+        need the original full input sequence stored on this recipe. With the ``spawn`` multiprocessing start method,
+        the recipe is pickled into every worker process. Keeping the complete ``_inputs`` sequence in that pickle could
+        multiply peak memory by the worker count.
+        """
+        state = self.__dict__.copy()
+        state["_inputs"] = None
+        return state
+
     def check_fn(self) -> None:
         if (
             isinstance(self._fn, (partial, FunctionType))

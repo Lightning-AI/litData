@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 import os
+import pickle
 import random
 import sys
 import tempfile
@@ -47,7 +48,7 @@ from litdata.processing.data_processor import (
     _wait_for_file_to_exist,
     resolve_keep_data_ordered,
 )
-from litdata.processing.functions import LambdaMapRecipe, _get_input_dir, map, optimize
+from litdata.processing.functions import LambdaDataChunkRecipe, LambdaMapRecipe, _get_input_dir, map, optimize
 from litdata.streaming import StreamingDataLoader, StreamingDataset, resolver
 from litdata.streaming.cache import Cache, Dir
 from litdata.streaming.serializers import _torchcodec_usable
@@ -1346,6 +1347,19 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
+
+
+def test_lambda_data_chunk_recipe_pickle():
+    inputs = [bytearray(1024 * 1024)]
+    data_recipe = LambdaDataChunkRecipe(str, inputs, 1, None, None)
+    worker_recipe = pickle.loads(pickle.dumps(data_recipe))
+
+    # The original recipe instance (in the parent process) keeps the full input sequence.
+    assert data_recipe.prepare_structure(None) is inputs
+    # The deserialized worker copy drops `_inputs` to avoid duplicating large input lists.
+    assert worker_recipe.prepare_structure(None) is None
+    # Worker execution still uses the callable path and returns the expected transformed value.
+    assert worker_recipe.prepare_item(123) == "123"
 
 
 def test_lambda_transform_recipe(monkeypatch):
