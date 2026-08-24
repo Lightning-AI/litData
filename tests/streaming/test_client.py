@@ -722,3 +722,95 @@ def test_unpickled_client_rerolls_its_refresh_jitter():
     restored = [pickle.loads(pickle.dumps(s3)) for _ in range(20)]  # noqa: S301
 
     assert len({r._refetch_deadline for r in restored} | {s3._refetch_deadline}) > 1
+
+
+def _s3_client_failing_n_times(monkeypatch, failures):
+    """An S3Client whose first `failures` creation attempts fail, then succeed."""
+    boto3_session = mock.MagicMock()
+    monkeypatch.setattr(client, "boto3", mock.MagicMock(Session=boto3_session))
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(storage_options={"region_name": "us-east-1"})
+    real_create = s3._create_client
+    attempts = {"n": 0}
+
+    def flaky_create():
+        attempts["n"] += 1
+        if attempts["n"] <= failures:
+            raise RuntimeError("control plane unavailable")
+        real_create()
+
+    s3._create_client = flaky_create
+    return s3, attempts
+
+
+def test_initial_creation_retries_until_the_control_plane_returns(monkeypatch, caplog):
+    """The first client has nothing to fall back on, so it waits the outage out."""
+    monkeypatch.setattr(client, "_REFRESH_RETRY_INTERVAL", 0)
+    s3, attempts = _s3_client_failing_n_times(monkeypatch, failures=3)
+
+    with caplog.at_level(logging.WARNING, logger="litdata.streaming.client"):
+        assert s3.client is not None
+
+    assert attempts["n"] == 4
+    assert caplog.text.count("data loading is blocked") == 3
+
+
+def test_initial_creation_gives_up_after_the_grace_period(monkeypatch):
+    """Waiting is bounded: a control plane that never comes back fails with a clear reason."""
+    monkeypatch.setattr(client, "_REFRESH_RETRY_INTERVAL", 0)
+    monkeypatch.setattr(client, "_REFRESH_GRACE_PERIOD", 0)
+    s3, attempts = _s3_client_failing_n_times(monkeypatch, failures=99)
+
+    with pytest.raises(RuntimeError, match="Could not get credentials after"):
+        _ = s3.client
+
+    assert attempts["n"] == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "match"),
+    [
+        (client._CredentialsConfigurationError("data_connection_id is required"), "data_connection_id is required"),
+        (client._credentials_error(403, "Failed to get credentials: 403"), "Failed to get credentials: 403"),
+    ],
+)
+def test_initial_creation_does_not_retry_a_permanent_failure(failure, match, monkeypatch):
+    """Missing config or rejected auth must fail now, not after minutes of pointless retrying."""
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(storage_options={"region_name": "us-east-1"})
+    attempts = {"n": 0}
+
+    def failing_create():
+        attempts["n"] += 1
+        raise failure
+
+    s3._create_client = failing_create
+
+    with pytest.raises(RuntimeError, match=match):
+        _ = s3.client
+
+    assert attempts["n"] == 1
+
+
+def test_refresh_does_not_limp_on_after_a_permanent_failure(monkeypatch):
+    """Revoked access will not come back, so surface it instead of serving until expiry."""
+    s3, _, _ = _client_with_failing_refresh(monkeypatch)
+
+    def rejected_create():
+        raise client._credentials_error(403, "Failed to get credentials: 403")
+
+    s3._create_client = rejected_create
+
+    with pytest.raises(RuntimeError, match="Failed to get credentials: 403"):
+        _ = s3.client
+
+
+def test_transient_statuses_stay_retryable():
+    """408 and 429 are the 4xx that do fix themselves."""
+    assert isinstance(client._credentials_error(429, "x"), client._CredentialsConfigurationError) is False
+    assert isinstance(client._credentials_error(408, "x"), client._CredentialsConfigurationError) is False
+    assert isinstance(client._credentials_error(503, "x"), client._CredentialsConfigurationError) is False
+    assert isinstance(client._credentials_error(401, "x"), client._CredentialsConfigurationError)

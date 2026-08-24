@@ -16,7 +16,7 @@ import logging
 import os
 import random
 import threading
-from time import time
+from time import sleep, time
 from typing import Any
 
 import boto3
@@ -53,6 +53,17 @@ _REFRESH_RETRY_INTERVAL = 60  # seconds
 # Fraction of the interval by which each process refreshes early. DataLoader workers are forked
 # together, so without jitter they all reach the interval — and stampede — in the same instant.
 _REFETCH_JITTER_RATIO = 0.1
+
+
+class _CredentialsConfigurationError(RuntimeError):
+    """A credential failure that retrying cannot fix: missing configuration, or rejected auth."""
+
+
+def _credentials_error(status_code: int, message: str) -> RuntimeError:
+    """Classify an HTTP failure. A 4xx other than 408/429 will not fix itself on a retry."""
+    if 400 <= status_code < 500 and status_code not in (408, 429):
+        return _CredentialsConfigurationError(message)
+    return RuntimeError(message)
 
 
 class _CustomRetryAdapter(HTTPAdapter):
@@ -100,7 +111,7 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID")
 
     if not all([api_key, username, project_id]):
-        raise RuntimeError("Missing required environment variables")
+        raise _CredentialsConfigurationError("Missing required environment variables")
 
     # Login to get token
     payload = {"apiKey": api_key, "username": username}
@@ -110,7 +121,9 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     # Check the status before the body: a proxy in front of the API answers with HTML, which
     # would otherwise surface as a JSONDecodeError with nothing pointing back at the login call.
     if response.status_code != 200:
-        raise RuntimeError(f"Failed to log in to the Lightning Cloud API: {response.status_code}")
+        raise _credentials_error(
+            response.status_code, f"Failed to log in to the Lightning Cloud API: {response.status_code}"
+        )
 
     try:
         token = response.json()["token"]
@@ -126,7 +139,9 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     credentials_response = session.get(credentials_url, headers=headers, timeout=10)
 
     if credentials_response.status_code != 200:
-        raise RuntimeError(f"Failed to get credentials: {credentials_response.status_code}")
+        raise _credentials_error(
+            credentials_response.status_code, f"Failed to get credentials: {credentials_response.status_code}"
+        )
 
     return credentials_response.json()
 
@@ -239,6 +254,38 @@ class S3Client:
         self._refetch_deadline = self._jittered_refetch_interval()
         self._refresh_retry_time = None
 
+    def _create_initial_client(self) -> None:
+        """Create the first client, waiting out a control plane that is briefly unavailable.
+
+        Unlike a refresh there are no credentials to fall back on, so this has to keep trying
+        rather than hand the caller an error. Bounded by the same grace period: a job that
+        cannot reach the control plane for that long should fail with a clear reason.
+        """
+        started = time()
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self._create_client()
+            except _CredentialsConfigurationError:
+                raise
+            except Exception as e:
+                waited = time() - started
+                if waited + _REFRESH_RETRY_INTERVAL >= _REFRESH_GRACE_PERIOD:
+                    raise RuntimeError(f"Could not get credentials after {waited:.0f}s of retrying: {e}") from e
+                logger.warning(
+                    "Could not get credentials (attempt %d, %.0fs elapsed), so data loading is blocked; "
+                    "retrying in %ds: %s",
+                    attempt,
+                    waited,
+                    _REFRESH_RETRY_INTERVAL,
+                    e,
+                )
+                sleep(_REFRESH_RETRY_INTERVAL)
+            else:
+                self._mark_refreshed()
+                return
+
     def _refresh_client(self) -> None:
         """Re-mint credentials, tolerating a control plane that is briefly unavailable.
 
@@ -253,6 +300,10 @@ class S3Client:
 
         try:
             self._create_client()
+        except _CredentialsConfigurationError:
+            # Missing config or revoked access will not come back on its own, and limping on
+            # until the current credentials expire only turns it into a confusing S3 403.
+            raise
         except Exception as e:
             held_for = 0.0 if self._last_time is None else now - self._last_time
             if held_for > self._refetch_deadline + _REFRESH_GRACE_PERIOD:
@@ -260,7 +311,13 @@ class S3Client:
                     f"Failed to refresh credentials for {held_for:.0f}s, so they are assumed expired: {e}"
                 ) from e
             self._refresh_retry_time = now + _REFRESH_RETRY_INTERVAL
-            logger.warning("Failed to refresh credentials, reusing the current ones for now: %s", e)
+            logger.warning(
+                "Could not refresh credentials (%.0fs since the last successful refresh); reusing the current "
+                "ones and retrying in %ds: %s",
+                held_for,
+                _REFRESH_RETRY_INTERVAL,
+                e,
+            )
             return
 
         self._mark_refreshed()
@@ -274,8 +331,7 @@ class S3Client:
 
         with self._client_lock:
             if self._client is None:
-                self._create_client()
-                self._mark_refreshed()
+                self._create_initial_client()
             # Re-generate credentials for EC2 / temporary Studio creds
             elif self._last_time is None or (time() - self._last_time) > self._refetch_deadline:
                 self._refresh_client()
@@ -317,6 +373,8 @@ class R2Client(S3Client):
                 "endpoint_url": endpoint_url,
             }
 
+        except _CredentialsConfigurationError:
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to get R2 credentials: {e}") from e
 
@@ -325,7 +383,7 @@ class R2Client(S3Client):
         # Get data connection ID from storage options
         data_connection_id = self._base_storage_options.get("data_connection_id")
         if not data_connection_id:
-            raise RuntimeError("data_connection_id is required in storage_options for R2 client")
+            raise _CredentialsConfigurationError("data_connection_id is required in storage_options for R2 client")
 
         # Get fresh R2 credentials
         r2_credentials = self.get_r2_bucket_credentials(data_connection_id)
