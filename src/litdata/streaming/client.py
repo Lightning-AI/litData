@@ -46,7 +46,12 @@ _DEFAULT_REQUEST_TIMEOUT = 30  # seconds
 # the window in which a failed refresh can be retried while the credentials in hand still work.
 _DEFAULT_REFETCH_INTERVAL = 2700  # seconds
 # How long past the refetch interval we keep serving existing credentials while refreshes fail.
-_REFRESH_GRACE_PERIOD = 900  # seconds
+# Sized against the TTL, not comfort: 2700 + 600 leaves ~5 minutes before the 1 hour S3 expiry,
+# so we stop before reads start failing as unexplained S3 403s.
+_REFRESH_GRACE_PERIOD = 600  # seconds
+# How long to wait for the control plane when there are no credentials yet. No TTL constrains
+# this one — nothing is being served — so it can be more patient than the refresh grace.
+_INITIAL_RETRY_BUDGET = 900  # seconds
 # Spacing between refresh attempts once one has failed. Without it every subsequent read
 # re-requests credentials, turning one control-plane blip into a request storm per worker.
 _REFRESH_RETRY_INTERVAL = 60  # seconds
@@ -55,15 +60,28 @@ _REFRESH_RETRY_INTERVAL = 60  # seconds
 _REFETCH_JITTER_RATIO = 0.1
 
 
-class _CredentialsConfigurationError(RuntimeError):
+class _CredentialsError(RuntimeError):
+    """Raised when credentials could not be obtained from the control plane or IMDS.
+
+    Only these are retried. Anything else out of ``_create_client`` — a bad ``storage_options``
+    key, a malformed endpoint — is a local mistake that no amount of waiting fixes, and must
+    reach the caller immediately rather than stalling the job for the retry budget.
+    """
+
+
+class _CredentialsUnavailableError(_CredentialsError):
+    """A credential failure that may clear on its own: unreachable, timed out, 5xx, 429."""
+
+
+class _CredentialsConfigurationError(_CredentialsError):
     """A credential failure that retrying cannot fix: missing configuration, or rejected auth."""
 
 
-def _credentials_error(status_code: int, message: str) -> RuntimeError:
+def _credentials_error(status_code: int, message: str) -> _CredentialsError:
     """Classify an HTTP failure. A 4xx other than 408/429 will not fix itself on a retry."""
     if 400 <= status_code < 500 and status_code not in (408, 429):
         return _CredentialsConfigurationError(message)
-    return RuntimeError(message)
+    return _CredentialsUnavailableError(message)
 
 
 class _CustomRetryAdapter(HTTPAdapter):
@@ -72,7 +90,11 @@ class _CustomRetryAdapter(HTTPAdapter):
         super().__init__(*args, **kwargs)
 
     def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
-        kwargs["timeout"] = kwargs.get("timeout", self.timeout)
+        # requests always passes `timeout` explicitly, as None when the caller gave none, so a
+        # `kwargs.get("timeout", self.timeout)` default never applied and every request without
+        # an explicit timeout could hang forever.
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.timeout
         return super().send(request, **kwargs)
 
 
@@ -116,7 +138,10 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     # Login to get token
     payload = {"apiKey": api_key, "username": username}
     login_url = f"{cloud_url}/v1/auth/login"
-    response = session.post(login_url, data=json.dumps(payload))
+    try:
+        response = session.post(login_url, data=json.dumps(payload))
+    except requests.exceptions.RequestException as e:
+        raise _CredentialsUnavailableError(f"Could not reach the Lightning Cloud API to log in: {e}") from e
 
     # Check the status before the body: a proxy in front of the API answers with HTML, which
     # would otherwise surface as a JSONDecodeError with nothing pointing back at the login call.
@@ -136,7 +161,10 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
         f"{cloud_url}/v1/projects/{project_id}/data-connections/{data_connection_id}/temp-bucket-credentials"
     )
 
-    credentials_response = session.get(credentials_url, headers=headers, timeout=10)
+    try:
+        credentials_response = session.get(credentials_url, headers=headers, timeout=10)
+    except requests.exceptions.RequestException as e:
+        raise _CredentialsUnavailableError(f"Could not reach the Lightning Cloud API for credentials: {e}") from e
 
     if credentials_response.status_code != 200:
         raise _credentials_error(
@@ -216,7 +244,10 @@ class S3Client:
             )
         else:
             provider = InstanceMetadataProvider(iam_role_fetcher=InstanceMetadataFetcher(timeout=3600, num_attempts=5))
-            credentials = provider.load()
+            try:
+                credentials = provider.load()
+            except Exception as e:
+                raise _CredentialsUnavailableError(f"Could not load instance metadata credentials: {e}") from e
             session = boto3.Session()
             self._client = session.client(
                 "s3",
@@ -258,7 +289,7 @@ class S3Client:
         """Create the first client, waiting out a control plane that is briefly unavailable.
 
         Unlike a refresh there are no credentials to fall back on, so this has to keep trying
-        rather than hand the caller an error. Bounded by the same grace period: a job that
+        rather than hand the caller an error. Bounded by ``_INITIAL_RETRY_BUDGET``: a job that
         cannot reach the control plane for that long should fail with a clear reason.
         """
         started = time()
@@ -267,11 +298,11 @@ class S3Client:
             attempt += 1
             try:
                 self._create_client()
-            except _CredentialsConfigurationError:
-                raise
-            except Exception as e:
+            # Only a control plane that might come back is worth waiting for. A configuration
+            # error, or any local failure building the client, propagates on the first attempt.
+            except _CredentialsUnavailableError as e:
                 waited = time() - started
-                if waited + _REFRESH_RETRY_INTERVAL >= _REFRESH_GRACE_PERIOD:
+                if waited + _REFRESH_RETRY_INTERVAL >= _INITIAL_RETRY_BUDGET:
                     raise RuntimeError(f"Could not get credentials after {waited:.0f}s of retrying: {e}") from e
                 logger.warning(
                     "Could not get credentials (attempt %d, %.0fs elapsed), so data loading is blocked; "
@@ -300,11 +331,10 @@ class S3Client:
 
         try:
             self._create_client()
-        except _CredentialsConfigurationError:
-            # Missing config or revoked access will not come back on its own, and limping on
-            # until the current credentials expire only turns it into a confusing S3 403.
-            raise
-        except Exception as e:
+        # Both kinds get the grace period here, unlike initial creation. The credentials in hand
+        # still work, so there is nothing to gain by failing fast on a 403 that might be a proxy
+        # misbehaving mid-deploy — and if it is a real revocation, the deadline still catches it.
+        except _CredentialsError as e:
             held_for = 0.0 if self._last_time is None else now - self._last_time
             if held_for > self._refetch_deadline + _REFRESH_GRACE_PERIOD:
                 raise RuntimeError(
@@ -373,7 +403,7 @@ class R2Client(S3Client):
                 "endpoint_url": endpoint_url,
             }
 
-        except _CredentialsConfigurationError:
+        except _CredentialsError:
             raise
         except Exception as e:
             raise RuntimeError(f"Failed to get R2 credentials: {e}") from e

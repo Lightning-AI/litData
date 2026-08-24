@@ -5,6 +5,7 @@ from time import sleep, time
 from unittest import mock
 
 import pytest
+import requests
 
 from litdata.streaming import client
 
@@ -662,12 +663,15 @@ def _client_with_failing_refresh(monkeypatch, refetch_interval=0):
 
     s3 = client.S3Client(refetch_interval=refetch_interval, storage_options={"region_name": "us-east-1"})
     live_client = s3.client
+    # Windows resolves time.time() to ~15ms, so `elapsed > deadline` can still be False on the
+    # next access. Age the stamp rather than depending on the clock having ticked.
+    s3._last_time -= 1
 
     attempts = {"n": 0}
 
     def failing_create():
         attempts["n"] += 1
-        raise RuntimeError("control plane unavailable")
+        raise client._CredentialsUnavailableError("control plane unavailable")
 
     s3._create_client = failing_create
     return s3, live_client, attempts
@@ -737,7 +741,7 @@ def _s3_client_failing_n_times(monkeypatch, failures):
     def flaky_create():
         attempts["n"] += 1
         if attempts["n"] <= failures:
-            raise RuntimeError("control plane unavailable")
+            raise client._CredentialsUnavailableError("control plane unavailable")
         real_create()
 
     s3._create_client = flaky_create
@@ -759,7 +763,7 @@ def test_initial_creation_retries_until_the_control_plane_returns(monkeypatch, c
 def test_initial_creation_gives_up_after_the_grace_period(monkeypatch):
     """Waiting is bounded: a control plane that never comes back fails with a clear reason."""
     monkeypatch.setattr(client, "_REFRESH_RETRY_INTERVAL", 0)
-    monkeypatch.setattr(client, "_REFRESH_GRACE_PERIOD", 0)
+    monkeypatch.setattr(client, "_INITIAL_RETRY_BUDGET", 0)
     s3, attempts = _s3_client_failing_n_times(monkeypatch, failures=99)
 
     with pytest.raises(RuntimeError, match="Could not get credentials after"):
@@ -795,22 +799,73 @@ def test_initial_creation_does_not_retry_a_permanent_failure(failure, match, mon
     assert attempts["n"] == 1
 
 
-def test_refresh_does_not_limp_on_after_a_permanent_failure(monkeypatch):
-    """Revoked access will not come back, so surface it instead of serving until expiry."""
-    s3, _, _ = _client_with_failing_refresh(monkeypatch)
+def test_refresh_rides_out_a_rejected_response(monkeypatch):
+    """A 403 mid-refresh may be a proxy misbehaving, and the current credentials still work."""
+    s3, live_client, _ = _client_with_failing_refresh(monkeypatch)
 
     def rejected_create():
         raise client._credentials_error(403, "Failed to get credentials: 403")
 
     s3._create_client = rejected_create
 
-    with pytest.raises(RuntimeError, match="Failed to get credentials: 403"):
+    assert s3.client is live_client
+
+    # ...but the deadline still catches a real revocation.
+    s3._last_time = time() - (client._REFRESH_GRACE_PERIOD + 60)
+    s3._refresh_retry_time = None
+    with pytest.raises(RuntimeError, match="assumed expired"):
         _ = s3.client
 
 
-def test_transient_statuses_stay_retryable():
-    """408 and 429 are the 4xx that do fix themselves."""
-    assert isinstance(client._credentials_error(429, "x"), client._CredentialsConfigurationError) is False
-    assert isinstance(client._credentials_error(408, "x"), client._CredentialsConfigurationError) is False
-    assert isinstance(client._credentials_error(503, "x"), client._CredentialsConfigurationError) is False
-    assert isinstance(client._credentials_error(401, "x"), client._CredentialsConfigurationError)
+@pytest.mark.parametrize("status", [408, 429, 500, 503])
+def test_statuses_that_may_clear_are_retryable(status):
+    """408 and 429 are the 4xx that do fix themselves; 5xx always might."""
+    assert isinstance(client._credentials_error(status, "x"), client._CredentialsUnavailableError)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_statuses_that_will_not_clear_are_permanent(status):
+    assert isinstance(client._credentials_error(status, "x"), client._CredentialsConfigurationError)
+
+
+def test_local_failures_are_not_retried(monkeypatch):
+    """A bad storage_options key is a caller mistake, not an outage: fail on the first attempt."""
+    monkeypatch.setattr(client, "_REFRESH_RETRY_INTERVAL", 0)
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(storage_options={"region_name": "us-east-1"})
+    attempts = {"n": 0}
+
+    def bad_kwarg_create():
+        attempts["n"] += 1
+        raise TypeError("client() got an unexpected keyword argument 'bogus_option'")
+
+    s3._create_client = bad_kwarg_create
+
+    with pytest.raises(TypeError, match="bogus_option"):
+        _ = s3.client
+
+    assert attempts["n"] == 1
+
+
+def test_adapter_applies_its_default_timeout(monkeypatch):
+    """Requests passes timeout=None explicitly, so the adapter has to fill it in itself."""
+    captured = {}
+
+    class _Recorder(client._CustomRetryAdapter):
+        def send(self, request, *args, **kwargs):
+            super().send(request, *args, **kwargs)
+
+    def fake_send(self, request, **kwargs):
+        captured.update(kwargs)
+        raise requests.exceptions.ConnectionError("stop")
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", fake_send)
+
+    session = requests.Session()
+    session.mount("http://", _Recorder(timeout=client._DEFAULT_REQUEST_TIMEOUT))
+    with pytest.raises(requests.exceptions.ConnectionError):
+        session.post("http://127.0.0.1:1/x", data="{}")
+
+    assert captured["timeout"] == client._DEFAULT_REQUEST_TIMEOUT
