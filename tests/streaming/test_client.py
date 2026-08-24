@@ -1,3 +1,4 @@
+import logging
 import sys
 import threading
 from time import sleep, time
@@ -142,7 +143,7 @@ def test_r2_client_initialization():
     """Test R2Client initialization with different parameters."""
     # Test with default parameters
     r2_client = client.R2Client()
-    assert r2_client._refetch_interval == 3300
+    assert r2_client._refetch_interval == 2700
     assert r2_client._last_time is None
     assert r2_client._client is None
     assert r2_client._base_storage_options == {}
@@ -188,6 +189,7 @@ def test_r2_client_get_r2_bucket_credentials_success(monkeypatch):
 
     # Mock login response
     login_response = mock.MagicMock()
+    login_response.status_code = 200
     login_response.json.return_value = {"token": "test-token-456"}
 
     # Mock credentials response
@@ -237,19 +239,44 @@ def test_r2_client_get_r2_bucket_credentials_missing_env_vars(monkeypatch):
         r2_client.get_r2_bucket_credentials("test-connection")
 
 
-def test_r2_client_get_r2_bucket_credentials_login_failure(monkeypatch):
-    """Test R2 credential fetching fails when login fails."""
-    # Mock environment variables
+def _mock_login_env(monkeypatch):
     monkeypatch.setenv("LIGHTNING_CLOUD_URL", "https://test.lightning.ai")
     monkeypatch.setenv("LIGHTNING_API_KEY", "test-api-key")
     monkeypatch.setenv("LIGHTNING_USERNAME", "test-user")
     monkeypatch.setenv("LIGHTNING_CLOUD_PROJECT_ID", "test-project-123")
 
-    # Mock failed login response
-    login_response = mock.MagicMock()
-    login_response.json.return_value = {"error": "Invalid credentials"}
 
-    requests_mock = mock.MagicMock(return_value=login_response)
+def test_r2_client_get_r2_bucket_credentials_login_rejected(monkeypatch):
+    """A non-200 from the login endpoint reports the status, not a missing-token error."""
+    _mock_login_env(monkeypatch)
+
+    login_response = mock.MagicMock()
+    login_response.status_code = 401
+
+    requests_mock = mock.MagicMock()
+    requests_mock.post = mock.MagicMock(return_value=login_response)
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
+
+    r2_client = client.R2Client()
+
+    with pytest.raises(RuntimeError, match="Failed to log in to the Lightning Cloud API: 401"):
+        r2_client.get_r2_bucket_credentials("test-connection")
+
+
+@pytest.mark.parametrize("body", [{"error": "Invalid credentials"}, ValueError("not json")])
+def test_r2_client_get_r2_bucket_credentials_login_without_token(body, monkeypatch):
+    """A 200 login that carries no usable token is reported as a missing token."""
+    _mock_login_env(monkeypatch)
+
+    login_response = mock.MagicMock()
+    login_response.status_code = 200
+    if isinstance(body, Exception):
+        login_response.json.side_effect = body
+    else:
+        login_response.json.return_value = body
+
+    requests_mock = mock.MagicMock()
+    requests_mock.post = mock.MagicMock(return_value=login_response)
     monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
 
     r2_client = client.R2Client()
@@ -268,6 +295,7 @@ def test_r2_client_get_r2_bucket_credentials_api_failure(monkeypatch):
 
     # Mock successful login response
     login_response = mock.MagicMock()
+    login_response.status_code = 200
     login_response.json.return_value = {"token": "test-token-456"}
 
     # Mock failed credentials response
@@ -554,6 +582,7 @@ def test_r2_client_api_call_format(monkeypatch):
 
     # Mock login response
     login_response = mock.MagicMock()
+    login_response.status_code = 200
     login_response.json.return_value = {"token": "bearer-token-789"}
     mock_post.return_value = login_response
 
@@ -587,3 +616,109 @@ def test_r2_client_api_call_format(monkeypatch):
         headers={"Authorization": "Bearer bearer-token-789", "Content-Type": "application/json"},
         timeout=10,
     )
+
+
+def _successful_login_session(monkeypatch):
+    """Wire requests.Session so a full credential fetch succeeds, and hand back the mock."""
+    login_response = mock.MagicMock()
+    login_response.status_code = 200
+    login_response.json.return_value = {"token": "test-token"}
+
+    credentials_response = mock.MagicMock()
+    credentials_response.status_code = 200
+    credentials_response.json.return_value = {
+        "accessKeyId": "test-access-key",
+        "secretAccessKey": "test-secret-key",
+        "sessionToken": "test-session-token",
+        "accountId": "test-account-id",
+    }
+
+    requests_mock = mock.MagicMock()
+    requests_mock.post = mock.MagicMock(return_value=login_response)
+    requests_mock.get = mock.MagicMock(return_value=credentials_response)
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
+    return requests_mock
+
+
+def test_login_post_is_retried(monkeypatch):
+    """urllib3 leaves POST out of its default allowed_methods, so the login must opt in."""
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+
+    client._login_and_get_temp_bucket_credentials("test-connection")
+
+    mounted_adapters = [mount_call.args[1] for mount_call in requests_mock.mount.call_args_list]
+    assert mounted_adapters
+    for adapter in mounted_adapters:
+        assert "POST" in adapter.max_retries.allowed_methods
+        assert 429 in adapter.max_retries.status_forcelist
+
+
+def _client_with_failing_refresh(monkeypatch, refetch_interval=0):
+    """An S3Client holding a live client whose next refresh will fail."""
+    boto3_session = mock.MagicMock()
+    monkeypatch.setattr(client, "boto3", mock.MagicMock(Session=boto3_session))
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(refetch_interval=refetch_interval, storage_options={"region_name": "us-east-1"})
+    live_client = s3.client
+
+    attempts = {"n": 0}
+
+    def failing_create():
+        attempts["n"] += 1
+        raise RuntimeError("control plane unavailable")
+
+    s3._create_client = failing_create
+    return s3, live_client, attempts
+
+
+def test_failed_refresh_keeps_serving_the_current_client(monkeypatch, caplog):
+    """Credentials are refreshed early, so a failed refresh must not fail the read."""
+    s3, live_client, attempts = _client_with_failing_refresh(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="litdata.streaming.client"):
+        assert s3.client is live_client
+
+    assert attempts["n"] == 1
+    assert "reusing the current ones" in caplog.text
+
+
+def test_failed_refresh_is_not_retried_on_every_access(monkeypatch):
+    """One outage must not become a request storm from every worker."""
+    s3, live_client, attempts = _client_with_failing_refresh(monkeypatch)
+
+    for _ in range(10):
+        assert s3.client is live_client
+
+    assert attempts["n"] == 1
+
+
+def test_failed_refresh_raises_once_past_the_grace_period(monkeypatch):
+    """Past the grace period the credentials are assumed dead, so stop pretending."""
+    s3, _, _ = _client_with_failing_refresh(monkeypatch)
+    s3._last_time = time() - (client._REFRESH_GRACE_PERIOD + 60)
+
+    with pytest.raises(RuntimeError, match="assumed expired"):
+        _ = s3.client
+
+
+def test_refetch_deadline_is_jittered_below_the_interval(monkeypatch):
+    """Forked workers all reach the interval together, so each refreshes slightly early."""
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    deadlines = {client.S3Client(refetch_interval=3600)._refetch_deadline for _ in range(20)}
+
+    assert len(deadlines) > 1
+    assert all(3600 * (1 - client._REFETCH_JITTER_RATIO) <= deadline <= 3600 for deadline in deadlines)
+
+
+def test_unpickled_client_rerolls_its_refresh_jitter():
+    """A DataLoader worker inherits the parent's schedule unless the jitter is re-rolled."""
+    import pickle
+
+    s3 = client.S3Client(refetch_interval=3600)
+    restored = [pickle.loads(pickle.dumps(s3)) for _ in range(20)]  # noqa: S301
+
+    assert len({r._refetch_deadline for r in restored} | {s3._refetch_deadline}) > 1

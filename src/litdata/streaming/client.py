@@ -12,7 +12,9 @@
 # limitations under the License.
 
 import json
+import logging
 import os
+import random
 import threading
 from time import time
 from typing import Any
@@ -27,13 +29,30 @@ from urllib3.util.retry import Retry
 
 from litdata.constants import _IS_IN_STUDIO
 
+logger = logging.getLogger("litdata.streaming.client")
+
 # Constants for the retry adapter. Docs: https://urllib3.readthedocs.io/en/stable/reference/urllib3.util.html
-# Maximum number of total connection retry attempts (e.g., 2880 retries = 24 hours with 30s timeout per request)
-_CONNECTION_RETRY_TOTAL = 2880
+# Retries per request. Deliberately small: a refresh runs inline on whichever DataLoader worker
+# thread crossed the interval and holds the client lock for its whole duration, so it has to
+# return in seconds, not hours. `S3Client._refresh_client` is what rides out a longer outage.
+_CONNECTION_RETRY_TOTAL = 4
 # Backoff factor for connection retries (wait time increases by this factor after each failure)
 _CONNECTION_RETRY_BACKOFF_FACTOR = 0.5
 # Default timeout for each HTTP request in seconds
 _DEFAULT_REQUEST_TIMEOUT = 30  # seconds
+
+# The control plane mints credentials with a 1 hour TTL for S3 project-role data connections, and
+# the response carries no expiry for us to read, so refresh well inside it. The remaining time is
+# the window in which a failed refresh can be retried while the credentials in hand still work.
+_DEFAULT_REFETCH_INTERVAL = 2700  # seconds
+# How long past the refetch interval we keep serving existing credentials while refreshes fail.
+_REFRESH_GRACE_PERIOD = 900  # seconds
+# Spacing between refresh attempts once one has failed. Without it every subsequent read
+# re-requests credentials, turning one control-plane blip into a request storm per worker.
+_REFRESH_RETRY_INTERVAL = 60  # seconds
+# Fraction of the interval by which each process refreshes early. DataLoader workers are forked
+# together, so without jitter they all reach the interval — and stampede — in the same instant.
+_REFETCH_JITTER_RATIO = 0.1
 
 
 class _CustomRetryAdapter(HTTPAdapter):
@@ -57,6 +76,10 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     retry_strategy = Retry(
         total=_CONNECTION_RETRY_TOTAL,
         backoff_factor=_CONNECTION_RETRY_BACKOFF_FACTOR,
+        # urllib3 leaves POST out of its default allowed_methods, which left the login below
+        # unretried: a single 429 or 502 there failed the whole refresh even though the
+        # credentials GET would have retried it. Minting a token is safe to repeat.
+        allowed_methods=Retry.DEFAULT_ALLOWED_METHODS | {"POST"},
         status_forcelist=[
             408,  # Request Timeout
             429,  # Too Many Requests
@@ -84,10 +107,15 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str,
     login_url = f"{cloud_url}/v1/auth/login"
     response = session.post(login_url, data=json.dumps(payload))
 
-    if "token" not in response.json():
-        raise RuntimeError("Failed to get authentication token")
+    # Check the status before the body: a proxy in front of the API answers with HTML, which
+    # would otherwise surface as a JSONDecodeError with nothing pointing back at the login call.
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to log in to the Lightning Cloud API: {response.status_code}")
 
-    token = response.json()["token"]
+    try:
+        token = response.json()["token"]
+    except (ValueError, KeyError) as e:
+        raise RuntimeError("Failed to get authentication token") from e
 
     # Get temporary bucket credentials
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -108,17 +136,33 @@ class S3Client:
 
     def __init__(
         self,
-        refetch_interval: int = 3300,
+        refetch_interval: int = _DEFAULT_REFETCH_INTERVAL,
         storage_options: dict | None = {},
         session_options: dict | None = {},
     ) -> None:
         self._refetch_interval = refetch_interval
         self._last_time: float | None = None
-        self._client: Any | None = None
         self._storage_options: dict = storage_options or {}
         self._session_options: dict = session_options or {}
+        self._reset_process_state()
+
+    def _reset_process_state(self) -> None:
+        """Reset the state that must not be shared across a fork.
+
+        Re-rolls the refresh jitter too: DataLoader workers inherit the parent's timings, so
+        without a fresh roll per process they would all refresh in the same instant.
+        """
+        self._client: Any | None = None
         # Guards lazy create + credential refresh (range GETs hit .client from many threads).
         self._client_lock = threading.Lock()
+        self._owner_pid = os.getpid()
+        self._refetch_deadline = self._jittered_refetch_interval()
+        self._refresh_retry_time: float | None = None
+
+    def _jittered_refetch_interval(self) -> float:
+        # Only ever early, never late: callers set the interval as an upper bound on how long
+        # a set of credentials is held, and the grace period below is measured against it.
+        return self._refetch_interval * (1.0 - random.uniform(0.0, _REFETCH_JITTER_RATIO))  # noqa: S311
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -130,9 +174,7 @@ class S3Client:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
-        self._client = None
-        self._client_lock = threading.Lock()
-        self._owner_pid = os.getpid()
+        self._reset_process_state()
 
     def _create_client(self) -> None:
         # S3 data connections marked available on non-AWS providers can't reach the bucket via the
@@ -192,24 +234,51 @@ class S3Client:
             },
         )
 
+    def _mark_refreshed(self) -> None:
+        self._last_time = time()
+        self._refetch_deadline = self._jittered_refetch_interval()
+        self._refresh_retry_time = None
+
+    def _refresh_client(self) -> None:
+        """Re-mint credentials, tolerating a control plane that is briefly unavailable.
+
+        Credentials are refreshed before they expire, so a failed refresh is not immediately
+        fatal — the ones already in hand still work. Keep serving those and retry on a timer
+        until the grace period runs out, rather than failing the read on the first error, which
+        kills the DataLoader worker and with it the run.
+        """
+        now = time()
+        if self._refresh_retry_time is not None and now < self._refresh_retry_time:
+            return
+
+        try:
+            self._create_client()
+        except Exception as e:
+            held_for = 0.0 if self._last_time is None else now - self._last_time
+            if held_for > self._refetch_deadline + _REFRESH_GRACE_PERIOD:
+                raise RuntimeError(
+                    f"Failed to refresh credentials for {held_for:.0f}s, so they are assumed expired: {e}"
+                ) from e
+            self._refresh_retry_time = now + _REFRESH_RETRY_INTERVAL
+            logger.warning("Failed to refresh credentials, reusing the current ones for now: %s", e)
+            return
+
+        self._mark_refreshed()
+
     @property
     def client(self) -> Any:
         # boto3 clients are thread-safe for requests; construction/refresh is not.
-        pid = os.getpid()
-        if getattr(self, "_owner_pid", None) != pid:
-            # DataLoader fork: drop the inherited client and lock.
-            self._client = None
-            self._client_lock = threading.Lock()
-            self._owner_pid = pid
+        if getattr(self, "_owner_pid", None) != os.getpid():
+            # DataLoader fork: drop the inherited client, lock and refresh schedule.
+            self._reset_process_state()
+
         with self._client_lock:
             if self._client is None:
                 self._create_client()
-                self._last_time = time()
-
+                self._mark_refreshed()
             # Re-generate credentials for EC2 / temporary Studio creds
-            if self._last_time is None or (time() - self._last_time) > self._refetch_interval:
-                self._create_client()
-                self._last_time = time()
+            elif self._last_time is None or (time() - self._last_time) > self._refetch_deadline:
+                self._refresh_client()
 
             return self._client
 
@@ -219,7 +288,7 @@ class R2Client(S3Client):
 
     def __init__(
         self,
-        refetch_interval: int = 3300,
+        refetch_interval: int = _DEFAULT_REFETCH_INTERVAL,
         storage_options: dict | None = {},
         session_options: dict | None = {},
     ) -> None:
@@ -249,9 +318,7 @@ class R2Client(S3Client):
             }
 
         except Exception as e:
-            # Fallback to hardcoded credentials if API call fails
-            print(f"Failed to get R2 credentials from API: {e}. Using fallback credentials.")
-            raise RuntimeError(f"Failed to get R2 credentials and no fallback available: {e}")
+            raise RuntimeError(f"Failed to get R2 credentials: {e}") from e
 
     def _create_client(self) -> None:
         """Create a new R2 client with fresh credentials."""
