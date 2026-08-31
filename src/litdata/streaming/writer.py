@@ -515,15 +515,18 @@ class BinaryWriter:
 
         current_chunk_bytes = len(data)
 
-        if self._chunk_bytes and current_chunk_bytes > self._chunk_bytes:
+        if (
+            self._chunk_bytes
+            and current_chunk_bytes > self._chunk_bytes
+            and (n == 1 or current_chunk_bytes > int(self._chunk_bytes * 1.1))
+        ):
             # Packing includes the item that crossed the target (~0.1–1%). Only
             # warn when one sample is larger than the target or overshoot is >10%.
-            if n == 1 or current_chunk_bytes > int(self._chunk_bytes * 1.1):
-                warnings.warn(
-                    f"An item was larger than the target chunk size ({_human_readable_bytes(self._chunk_bytes)})."
-                    f" The current chunk will be {_human_readable_bytes(current_chunk_bytes)} in size.",
-                    UserWarning,
-                )
+            warnings.warn(
+                f"An item was larger than the target chunk size ({_human_readable_bytes(self._chunk_bytes)})."
+                f" The current chunk will be {_human_readable_bytes(current_chunk_bytes)} in size.",
+                UserWarning,
+            )
 
         if self._chunk_size:
             assert num_items.item() <= self._chunk_size
