@@ -13,6 +13,7 @@ from litdata.constants import (
     _POLARS_AVAILABLE,
     _PYARROW_AVAILABLE,
     _TORCH_DTYPES_MAPPING,
+    _ZSTD_AVAILABLE,
 )
 from litdata.streaming import Cache, item_loader
 from litdata.streaming.dataset import StreamingDataset
@@ -833,3 +834,277 @@ def test_flat_chunk_skips_file_zstd(tmp_path):
     assert len(rows) == 32
     ds = StreamingDataset(str(out))
     assert ds[10] == {"text": "row 10", "label": 0}
+
+
+def _pytree_int_sample(i: int):
+    """Plain ints stay on the pytree serializer (str/int dicts use Arrow IPC)."""
+    return i
+
+
+def _pytree_tensor_sample(i: int):
+    return {"image": torch.zeros(3, 8, 8, dtype=torch.uint8), "label": i}
+
+
+def _pytree_bytes_sample(i: int):
+    # A tensor leaf keeps this off the Arrow IPC footer path.
+    return {"blob": bytes([i % 256]) * 512, "id": i, "t": torch.tensor([i])}
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
+    """Text/int pytree with >256 rows writes multiple zstd frames in a .bin (not .zstd.bin)."""
+    import json
+
+    from litdata import optimize
+    from litdata.streaming.framed_zstd import _FRAMED_MAGIC, parse_framed_header
+
+    n = 300
+    out = tmp_path / "framed-text"
+    optimize(
+        fn=_pytree_int_sample,
+        inputs=list(range(n)),
+        output_dir=str(out),
+        chunk_size=n,
+        num_workers=1,
+        compression="zstd",
+        compression_level="batch",
+    )
+    bins = [p for p in out.glob("*.bin") if ".zstd.bin" not in p.name]
+    assert bins, "expected a .bin chunk"
+    assert not any(".zstd.bin" in p.name for p in out.iterdir())
+    index = json.loads((out / "index.json").read_text())
+    assert index["config"]["compression"] == "zstd"
+    assert index["config"]["compression_level"] == "batch"
+    assert index["config"]["compression_batch_size"] == 256
+    raw = bins[0].read_bytes()
+    assert raw[:8] == _FRAMED_MAGIC
+    header = parse_framed_header(raw)
+    assert header.num_items == n
+    assert header.frame_rows == 256
+    assert len(header.frames) == 2
+    ds = StreamingDataset(str(out))
+    assert len(ds) == n
+    assert ds[0] == 0
+    assert ds[255] == 255
+    assert ds[256] == 256
+    assert ds[n - 1] == n - 1
+    legacy_n = struct.unpack_from("<I", raw, 0)[0]
+    assert legacy_n != n
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_batch_tensor_and_bytes_roundtrip(tmp_path):
+    """Heavy leaves use K=32 frames; bytes blobs still roundtrip."""
+    from litdata import optimize
+    from litdata.streaming.framed_zstd import parse_framed_header
+
+    n = 70
+    tensor_dir = tmp_path / "framed-tensor"
+    optimize(
+        fn=_pytree_tensor_sample,
+        inputs=list(range(n)),
+        output_dir=str(tensor_dir),
+        chunk_size=n,
+        num_workers=1,
+        compression="zstd",
+        compression_level="batch",
+    )
+    raw = next(tensor_dir.glob("chunk-*.bin")).read_bytes()
+    header = parse_framed_header(raw)
+    assert header.frame_rows == 32
+    assert len(header.frames) == 3
+    ds = StreamingDataset(str(tensor_dir))
+    assert torch.equal(ds[0]["image"], torch.zeros(3, 8, 8, dtype=torch.uint8))
+    assert ds[32]["label"] == 32
+    assert ds[n - 1]["label"] == n - 1
+
+    bytes_dir = tmp_path / "framed-bytes"
+    optimize(
+        fn=_pytree_bytes_sample,
+        inputs=list(range(40)),
+        output_dir=str(bytes_dir),
+        chunk_size=40,
+        num_workers=1,
+        compression="zstd",
+        compression_level="batch",
+        compression_batch_size=8,
+    )
+    header = parse_framed_header(next(bytes_dir.glob("chunk-*.bin")).read_bytes())
+    assert header.frame_rows == 8
+    bds = StreamingDataset(str(bytes_dir))
+    assert bds[0]["blob"] == bytes([0]) * 512
+    assert bds[39]["id"] == 39
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_legacy_zstd_still_whole_file(tmp_path):
+    """compression='zstd' (chunk default) still writes whole-file .zstd.bin."""
+    from litdata.streaming.cache import Cache
+
+    cache = Cache(str(tmp_path / "zstd"), chunk_size=10, compression="zstd")
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    names = os.listdir(tmp_path / "zstd")
+    assert any(name.endswith(".zstd.bin") for name in names)
+    ds = StreamingDataset(str(tmp_path / "zstd"))
+    assert [ds[i] for i in range(20)] == list(range(20))
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_batch_fails_closed_without_magic(tmp_path):
+    """Indexed as compression_level=batch but missing LDFZ01 must not unpack_from empty item bytes."""
+    import json
+
+    from litdata.streaming.cache import Cache
+    from litdata.streaming.framed_zstd import parse_framed_header
+
+    out = tmp_path / "framed-fail"
+    cache = Cache(str(out), chunk_size=8, compression="zstd", compression_level="batch")
+    for i in range(8):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    bin_path = next(p for p in out.glob("chunk-*.bin") if ".zstd.bin" not in p.name)
+    parse_framed_header(bin_path.read_bytes())
+    n = 8
+    header_len = 4 + 4 * (n + 1)
+    fake = bytearray(header_len)
+    struct.pack_into("<I", fake, 0, n)
+    offsets = [header_len] * (n + 1)
+    struct.pack_into("<" + "I" * (n + 1), fake, 4, *offsets)
+    bin_path.write_bytes(bytes(fake))
+    index = json.loads((out / "index.json").read_text())
+    index["chunks"][0]["chunk_bytes"] = len(fake)
+    (out / "index.json").write_text(json.dumps(index, sort_keys=True))
+    assert index["config"]["compression"] == "zstd"
+    assert index["config"]["compression_level"] == "batch"
+    ds = StreamingDataset(str(out))
+    with pytest.raises(RuntimeError, match="LDFZ01"):
+        _ = ds[0]
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_sample_roundtrip(tmp_path):
+    """compression_level=sample zstd-compresses each item between classic offsets."""
+    import json
+
+    from litdata.streaming.cache import Cache
+    from litdata.streaming.framed_zstd import is_framed_chunk
+
+    out = tmp_path / "sample-zstd"
+    cache = Cache(str(out), chunk_size=12, compression="zstd", compression_level="sample")
+    for i in range(12):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    bins = [p for p in out.glob("chunk-*.bin") if ".zstd.bin" not in p.name]
+    assert bins
+    raw = bins[0].read_bytes()
+    assert not is_framed_chunk(raw)
+    n = struct.unpack_from("<I", raw, 0)[0]
+    assert n == 12
+    index = json.loads((out / "index.json").read_text())
+    assert index["config"]["compression"] == "zstd"
+    assert index["config"]["compression_level"] == "sample"
+    ds = StreamingDataset(str(out))
+    assert [ds[i] for i in range(12)] == list(range(12))
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_batch_optimize_smoke(tmp_path):
+    from litdata import optimize
+
+    out = tmp_path / "framed-opt"
+    optimize(
+        fn=_pytree_int_sample,
+        inputs=list(range(16)),
+        output_dir=str(out),
+        chunk_size=16,
+        num_workers=1,
+        compression="zstd",
+        compression_level="batch",
+    )
+    ds = StreamingDataset(str(out))
+    assert [ds[i] for i in range(16)] == list(range(16))
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_framed_name_rejected(tmp_path):
+    from litdata.streaming.writer import BinaryWriter
+
+    with pytest.raises(ValueError, match="compression_level='batch'"):
+        BinaryWriter(str(tmp_path), chunk_size=4, compression="zstd_framed")
+    with pytest.raises(ValueError, match="zstd:4"):
+        BinaryWriter(str(tmp_path), chunk_size=4, compression="zstd", compression_level=4)
+
+
+def _classic_pytree_ints(n: int) -> bytes:
+    payloads = [struct.pack("<I", i) + bytes([i % 256]) * 48 for i in range(n)]
+    header = 4 + 4 * (n + 1)
+    offsets = [header]
+    for payload in payloads:
+        offsets.append(offsets[-1] + len(payload))
+    out = bytearray(offsets[-1])
+    struct.pack_into("<I", out, 0, n)
+    struct.pack_into("<" + "I" * (n + 1), out, 4, *offsets)
+    pos = header
+    for payload in payloads:
+        out[pos : pos + len(payload)] = payload
+        pos += len(payload)
+    return bytes(out)
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_framed_zstd_arrow_codec_inflate():
+    """Arrow C++ Codec inflates LDFZ01 frames (python-zstd written or Arrow-written)."""
+    from litdata.streaming.framed_zstd import (
+        _FRAMED_MAGIC,
+        _PythonZstdCodec,
+        inflate_frame,
+        make_zstd_codec,
+        pack_framed_zstd,
+        parse_framed_header,
+    )
+
+    classic = _classic_pytree_ints(8)
+    python_codec = _PythonZstdCodec(4)
+    packed = pack_framed_zstd(classic, python_codec, frame_rows=4)
+    assert packed[:8] == _FRAMED_MAGIC
+    header = parse_framed_header(packed)
+    assert len(header.frames) == 2
+
+    codec = make_zstd_codec("zstd")
+    if _PYARROW_AVAILABLE:
+        assert codec.name == "arrow-zstd"
+    view = memoryview(packed)
+    for frame_i in range(len(header.frames)):
+        raw_arrow = inflate_frame(view, header, frame_i, codec)
+        raw_python = inflate_frame(view, header, frame_i, python_codec)
+        assert bytes(raw_arrow) == bytes(raw_python)
+        assert len(raw_arrow) == header.frames[frame_i].uncompressed_len
+
+    packed_arrow = pack_framed_zstd(classic, codec, frame_rows=4)
+    header_arrow = parse_framed_header(packed_arrow)
+    raw = inflate_frame(memoryview(packed_arrow), header_arrow, 0, codec)
+    assert len(raw) == header_arrow.frames[0].uncompressed_len
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE or not _PYARROW_AVAILABLE, reason="Requires zstd and pyarrow")
+def test_pytree_loader_reuses_arrow_zstd_codec(tmp_path):
+    cache = Cache(str(tmp_path / "arrow-codec"), chunk_size=8, compression="zstd", compression_level="batch")
+    for i in range(8):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    ds = StreamingDataset(str(tmp_path / "arrow-codec"))
+    assert [ds[i] for i in range(8)] == list(range(8))
+    loader = ds.cache._reader._item_loader
+    assert loader._framed_decompressor is not None
+    assert loader._framed_decompressor.name == "arrow-zstd"
+    first = loader._framed_decompressor
+    _ = ds[0]
+    assert loader._framed_decompressor is first
+    assert loader._framed_inflate_buf is not None
+

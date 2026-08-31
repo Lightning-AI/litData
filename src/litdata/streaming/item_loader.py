@@ -41,6 +41,15 @@ from litdata.constants import (
 )
 from litdata.debugger import CAT_DELETE, trace_span
 from litdata.exceptions import ChunkWaitTimeoutError
+from litdata.streaming.framed_zstd import (
+    FramedHeader,
+    frame_index_for_item,
+    inflate_frame,
+    is_framed_chunk,
+    make_zstd_codec,
+    parse_compression_level,
+    parse_framed_header,
+)
 from litdata.streaming.posix_fast import advise_willneed, madvise_mmap, posix_page_bytes
 from litdata.streaming.serializers import JsonLeaf, Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
@@ -455,6 +464,8 @@ class BaseItemLoader(ABC):
         # hot path avoids a dict lookup per leaf and a config lookup per item.
         self._serializers_list = [self._serializers[data_format] for data_format in self._data_format]
         self._data_spec = self._config["data_spec"]
+        self._compression_level = parse_compression_level(self._config.get("compression_level"))
+        self._sample_compression = self._compression_level == "sample"
         # Compile a specialized unflatten for this dataset's fixed treespec. Falls back to the
         # stock pytree path only when there is no data_spec (e.g. some parquet/MDS shapes).
         self._unflatten = (
@@ -680,6 +691,11 @@ class PyTreeLoader(BaseItemLoader):
         self._arrow_reader: Any | None = None
         self._arrow_reader_index: int | None = None
         self._arrow_reader_is_file = False
+        self._framed_meta: dict[int, FramedHeader] = {}
+        self._framed_decompressor: Any | None = None
+        self._framed_inflate_buf: bytes | memoryview | None = None
+        self._compression_level = "chunk"
+        self._sample_compression = False
 
     def set_batch_decode(self, batch_decode: Any) -> None:
         self._batch_decode = batch_decode
@@ -818,10 +834,68 @@ class PyTreeLoader(BaseItemLoader):
             else:
                 assert self._open_handle
                 data = self._load_data(self._open_handle, offset)
+            data = self._maybe_inflate_sample(data)
 
         if "format" in self._config and self._config["format"] == "mds":
             return self.mds_deserialize(data, chunk_index)
         return self.deserialize(data)
+
+    def _framed_compressor(self) -> Any:
+        """Reused Arrow C++ zstd codec (python-zstd if pyarrow is missing)."""
+        if self._framed_decompressor is None:
+            name = (self._config or {}).get("compression") or "zstd"
+            self._framed_decompressor = make_zstd_codec(name)
+        return self._framed_decompressor
+
+    def _maybe_inflate_sample(self, raw: bytes | bytearray | memoryview) -> bytes | bytearray | memoryview:
+        if not getattr(self, "_sample_compression", False):
+            return raw
+        payload = raw if isinstance(raw, (bytes, bytearray)) else bytes(raw)
+        return self._framed_compressor().decompress(payload)
+
+    def _missing_framed_magic_error(self, chunk_filepath: str) -> RuntimeError:
+        return RuntimeError(
+            f"Chunk {chunk_filepath} is indexed as compression_level='batch' but missing LDFZ01 magic. "
+            "Refusing to unpack item bytes."
+        )
+
+    def _resolve_framed_header(self, chunk_index: int, view: bytes | bytearray | memoryview) -> FramedHeader | None:
+        cached = self._framed_meta.get(chunk_index)
+        if cached is not None:
+            return cached
+        if is_framed_chunk(view):
+            header = parse_framed_header(view)
+            self._framed_meta[chunk_index] = header
+            return header
+        if parse_compression_level((self._config or {}).get("compression_level")) == "batch":
+            raise self._missing_framed_magic_error(self._chunk_filepath or "")
+        return None
+
+    def _fill_framed_window(
+        self,
+        view: bytes | bytearray | memoryview,
+        chunk_index: int,
+        table_idx: int,
+        header: FramedHeader,
+    ) -> Any:
+        frame_i = frame_index_for_item(header, table_idx)
+        frame = header.frames[frame_i]
+        first = frame.first_item
+        n_items = frame.n_items
+        rows = self._chunk_rows
+        if (
+            rows is not None
+            and self._chunk_rows_index == chunk_index
+            and self._win_start == first
+            and len(rows) == n_items
+        ):
+            return rows[table_idx - first]
+        raw = inflate_frame(view, header, frame_i, self._framed_compressor())
+        self._framed_inflate_buf = raw
+        base = header.offsets[first]
+        local_offsets = [int(off) - base for off in header.offsets[first : first + n_items + 1]]
+        decoded = self._batch_deserialize_payload(raw, local_offsets, chunk_index, 0, n_items)
+        return self._store_decode_window(chunk_index, first, decoded, table_idx)
 
     def _load_batched_item(self, chunk_index: int, chunk_filepath: str, table_idx: int) -> Any:
         """Return a cached/windowed row, or ``_BATCH_SKIP`` to decode this item alone."""
@@ -846,6 +920,9 @@ class PyTreeLoader(BaseItemLoader):
                 assert self._mmap is not None
                 view = memoryview(self._mmap)
                 self._mmap_view = view
+            header = self._resolve_framed_header(chunk_index, view)
+            if header is not None:
+                return self._fill_framed_window(view, chunk_index, table_idx, header)
             arrow = self._try_arrow_footer_rows(view, chunk_index, table_idx)
             if arrow is not _BATCH_SKIP:
                 return arrow
@@ -853,6 +930,11 @@ class PyTreeLoader(BaseItemLoader):
                 return _BATCH_SKIP
             return self._fill_decode_window_mmap(chunk_index, table_idx, batch_rows)
         if not batch_rows:
+            with open(chunk_filepath, "rb") as handle:
+                blob = handle.read()
+            header = self._resolve_framed_header(chunk_index, blob)
+            if header is not None:
+                return self._fill_framed_window(blob, chunk_index, table_idx, header)
             return _BATCH_SKIP
         return self._fill_decode_window_path(chunk_index, chunk_filepath, table_idx, batch_rows)
 
@@ -915,10 +997,11 @@ class PyTreeLoader(BaseItemLoader):
         """Decode ``offsets[start:end]`` from a local chunk buffer."""
         n = end - start
         rows: list[Any] = [None] * n
+        inflate = self._maybe_inflate_sample
         if self._config.get("format") == "mds":
             for i in range(n):
                 idx = start + i
-                rows[i] = self.mds_deserialize(view[offsets[idx] : offsets[idx + 1]], chunk_index)
+                rows[i] = self.mds_deserialize(inflate(view[offsets[idx] : offsets[idx + 1]]), chunk_index)
             return rows
         shift = self._shift_idx
         sizes_struct = self._sizes_struct
@@ -928,7 +1011,7 @@ class PyTreeLoader(BaseItemLoader):
         if sizes_struct is not None and unflatten is not None:
             for i in range(n):
                 idx = start + i
-                raw = view[offsets[idx] : offsets[idx + 1]]
+                raw = inflate(view[offsets[idx] : offsets[idx + 1]])
                 sizes = sizes_struct.unpack_from(raw, 0)
                 leaves: list[Any] = [None] * n_leaves
                 cursor = shift
@@ -940,7 +1023,7 @@ class PyTreeLoader(BaseItemLoader):
         deserialize = self.deserialize
         for i in range(n):
             idx = start + i
-            rows[i] = deserialize(view[offsets[idx] : offsets[idx + 1]])
+            rows[i] = deserialize(inflate(view[offsets[idx] : offsets[idx + 1]]))
         return rows
 
     def _store_decode_window(self, chunk_index: int, start: int, rows: list[Any], table_idx: int | None = None) -> Any:
@@ -980,6 +1063,9 @@ class PyTreeLoader(BaseItemLoader):
     def _fill_decode_window_path(self, chunk_index: int, chunk_filepath: str, table_idx: int, batch_rows: int) -> Any:
         with open(chunk_filepath, "rb") as handle:
             blob = handle.read()
+        header = self._resolve_framed_header(chunk_index, blob)
+        if header is not None:
+            return self._fill_framed_window(blob, chunk_index, table_idx, header)
         n = struct.unpack_from("<I", blob, 0)[0]
         offsets = list(struct.unpack_from("<" + "I" * (n + 1), blob, 4))
         start, end = self._window_bounds(table_idx, n, batch_rows)
@@ -1128,18 +1214,38 @@ class PyTreeLoader(BaseItemLoader):
             self._mmap_handles[chunk_index] = handle
         else:
             handle.close()
-        header_num_items = int(np.frombuffer(chunk_mmap, dtype=np.uint32, count=1, offset=0)[0])
         index_num_items = int(self._chunks[chunk_index]["chunk_size"])
-        if header_num_items != index_num_items:
-            chunk_mmap.close()
-            handle = self._mmap_handles.pop(chunk_index, None)
-            if handle is not None:
-                handle.close()
-            raise RuntimeError(
-                f"Chunk {chunk_index} header item count ({header_num_items}) does not match "
-                f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
-            )
-        offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
+        if is_framed_chunk(chunk_mmap):
+            header = parse_framed_header(chunk_mmap)
+            if header.num_items != index_num_items:
+                chunk_mmap.close()
+                handle = self._mmap_handles.pop(chunk_index, None)
+                if handle is not None:
+                    handle.close()
+                raise RuntimeError(
+                    f"Chunk {chunk_index} framed item count ({header.num_items}) does not match "
+                    f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
+                )
+            self._framed_meta[chunk_index] = header
+            offsets = header.offsets
+        else:
+            if parse_compression_level((self._config or {}).get("compression_level")) == "batch":
+                chunk_mmap.close()
+                handle = self._mmap_handles.pop(chunk_index, None)
+                if handle is not None:
+                    handle.close()
+                raise self._missing_framed_magic_error(chunk_filepath)
+            header_num_items = int(np.frombuffer(chunk_mmap, dtype=np.uint32, count=1, offset=0)[0])
+            if header_num_items != index_num_items:
+                chunk_mmap.close()
+                handle = self._mmap_handles.pop(chunk_index, None)
+                if handle is not None:
+                    handle.close()
+                raise RuntimeError(
+                    f"Chunk {chunk_index} header item count ({header_num_items}) does not match "
+                    f"index.json chunk_size ({index_num_items}) for {chunk_filepath}."
+                )
+            offsets = np.frombuffer(chunk_mmap, dtype=np.uint32, count=header_num_items + 1, offset=4).tolist()
         madvise_mmap(chunk_mmap, willneed=self._posix_willneed)
         self._mapped[chunk_index] = (chunk_mmap, offsets, chunk_filepath)
         self._mapped.move_to_end(chunk_index)
@@ -1183,6 +1289,7 @@ class PyTreeLoader(BaseItemLoader):
         if handle is not None:
             with contextlib.suppress(OSError):
                 handle.close()
+        self._framed_meta.pop(chunk_index, None)
         with contextlib.suppress(BufferError, ValueError, OSError):
             chunk_mmap.close()
 
@@ -1210,6 +1317,7 @@ class PyTreeLoader(BaseItemLoader):
         self._chunk_rows_index = None
         self._win_start = 0
         self._clear_arrow_footer()
+        self._framed_meta.clear()
         for idx in list(self._mapped):
             cached = self._mapped.pop(idx, None)
             if cached is not None:
@@ -1306,6 +1414,9 @@ class PyTreeLoader(BaseItemLoader):
         state["_arrow_reader"] = None
         state["_arrow_reader_index"] = None
         state["_arrow_reader_is_file"] = False
+        state["_framed_meta"] = {}
+        state["_framed_decompressor"] = None
+        state["_framed_inflate_buf"] = None
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
         state["_sizes_struct"] = None
@@ -1337,6 +1448,10 @@ class PyTreeLoader(BaseItemLoader):
             self._arrow_reader = None
             self._arrow_reader_index = None
             self._arrow_reader_is_file = False
+        if not hasattr(self, "_framed_meta"):
+            self._framed_meta = {}
+            self._framed_decompressor = None
+            self._framed_inflate_buf = None
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)

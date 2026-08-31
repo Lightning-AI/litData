@@ -26,6 +26,7 @@ from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
 from litdata.debugger import CAT_LOCK, emit_trace
 from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
+from litdata.streaming.framed_zstd import is_in_file_compression
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
@@ -114,11 +115,19 @@ class ChunksConfig:
                 raise ValueError(
                     "No compression algorithms are installed. To use zstd compression,  run `pip install zstd`."
                 )
-            if self._compressor_name not in _COMPRESSORS:
+            # Batch/sample frames live inside ``.bin``; do not whole-file inflate.
+            if is_in_file_compression(self._config.get("compression_level")):
+                if self._compressor_name not in _COMPRESSORS:
+                    raise ValueError(
+                        f"The provided compression {self._compressor_name} isn't available in {sorted(_COMPRESSORS)}",
+                    )
+                self._compressor = None
+            elif self._compressor_name not in _COMPRESSORS:
                 raise ValueError(
                     f"The provided compression {self._compressor_name} isn't available in {sorted(_COMPRESSORS)}",
                 )
-            self._compressor = _COMPRESSORS[self._compressor_name]
+            else:
+                self._compressor = _COMPRESSORS[self._compressor_name]
 
         self._skip_chunk_indexes_deletion: list[int] | None = None
         # Chunk indexes that are shared across workers on this node. Shared chunks are

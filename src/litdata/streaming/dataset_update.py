@@ -245,6 +245,8 @@ class DatasetUpdate:
                 tmp_dir,
                 chunk_size=len(samples),
                 compression=compression,
+                compression_level=config.get("compression_level"),
+                compression_batch_size=config.get("compression_batch_size"),
                 chunk_index=chunk_index,
             )
             writer._rank = rank

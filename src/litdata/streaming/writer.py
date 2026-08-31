@@ -27,11 +27,19 @@ import numpy as np
 from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABLE
 from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
+from litdata.streaming.framed_zstd import (
+    is_in_file_compression,
+    make_zstd_codec,
+    pack_framed_zstd,
+    pack_sample_zstd,
+    parse_compression_level,
+)
 from litdata.streaming.item_loader import (
     _ARROW_FOOTER_MAGIC,
     BaseItemLoader,
     ParquetLoader,
     PyTreeLoader,
+    _auto_batch_rows,
     append_arrow_row_footer,
 )
 from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
@@ -98,6 +106,8 @@ class BinaryWriter:
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         follow_tensor_dimension: bool = True,
         serializers: dict[str, Serializer] | None = None,
@@ -111,7 +121,13 @@ class BinaryWriter:
             cache_dir: The path to where the chunks will be saved.
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
-            compression: The compression algorithm to use.
+            compression: The compression algorithm to use (``"zstd"`` or ``"zstd:N"``).
+            compression_level: Pytree wrap granularity: ``"chunk"`` (default, whole-file
+                ``.zstd.bin``), ``"batch"`` (framed zstd inside ``.bin``), or ``"sample"``
+                (per-item zstd inside ``.bin``). Not the zstd numeric level — use
+                ``compression="zstd:4"`` for that.
+            compression_batch_size: Items per zstd frame when ``compression_level="batch"``.
+                Default is :func:`_auto_batch_rows` (256 cheap leaves, ~32 images).
             encryption: The encryption algorithm to use.
             follow_tensor_dimension: Whether to follow the tensor dimension when serializing the data.
             serializers: Provide your own serializers.
@@ -139,6 +155,17 @@ class BinaryWriter:
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
+        if compression and (compression == "zstd_framed" or str(compression).startswith("zstd_framed:")):
+            raise ValueError(
+                "compression='zstd_framed' is not a codec. Use compression='zstd' with "
+                "compression_level='batch' (framed .bin) or 'chunk' (whole-file .zstd.bin)."
+            )
+        self._compression_level = parse_compression_level(compression_level) if compression else "chunk"
+        self._compression_batch_size = compression_batch_size
+        if compression and self._compression_level != "chunk" and not str(compression).startswith("zstd"):
+            raise ValueError("compression_level='batch'/'sample' is only supported with compression='zstd'.")
+        if compression_batch_size is not None and int(compression_batch_size) < 1:
+            raise ValueError("compression_batch_size must be a positive integer.")
         self._encryption = encryption
         self._item_loader = item_loader or PyTreeLoader()
         self.msg_queue = msg_queue
@@ -157,6 +184,13 @@ class BinaryWriter:
                     f"The provided compression {self._compression} isn't available in {sorted(_COMPRESSORS)}"
                 )
             self._compressor: Compressor = _COMPRESSORS[self._compression]
+            if is_in_file_compression(self._compression_level):
+                if self._encryption is not None:
+                    raise ValueError("compression_level='batch'/'sample' does not support encryption.")
+                if not isinstance(self._item_loader, PyTreeLoader):
+                    raise ValueError(
+                        "compression_level='batch'/'sample' is only supported for pytree chunks (PyTreeLoader)."
+                    )
 
         self._serialized_items: dict[int, Item] = {}
         self._chunk_index = chunk_index or 0
@@ -168,6 +202,7 @@ class BinaryWriter:
         # must not advertise ``compression="zstd"`` or the reader will inflate
         # already-readable ``.bin`` files through Python.
         self._file_compression_used = False
+        self._framed_compression_used = False
         self._ipc_compression_used = False
         # On-disk bytes per nested row from the last flushed Arrow chunk. ``_should_write``
         # used discarded pytree JSON lengths, so a 64MB target became ~23MB zstd IPC files.
@@ -211,7 +246,17 @@ class BinaryWriter:
     def get_config(self) -> dict[str, Any]:
         """Returns the config of the writer."""
         return {
-            "compression": self._compression if (self._file_compression_used or not self._chunks_info) else None,
+            "compression": self._compression
+            if (self._file_compression_used or self._framed_compression_used or not self._chunks_info)
+            else None,
+            "compression_level": self._compression_level
+            if self._framed_compression_used and self._compression_level != "chunk"
+            else None,
+            "compression_batch_size": (
+                self._resolved_batch_size()
+                if self._framed_compression_used and self._compression_level == "batch"
+                else None
+            ),
             "ipc_compression": self._ipc_codec() if self._ipc_compression_used else None,
             "chunk_size": self._chunk_size,
             "chunk_bytes": self._chunk_bytes,
@@ -413,6 +458,10 @@ class BinaryWriter:
             data = bytes(data)
             if is_arrow_footer_type(self._types) and _data_format_is_arrow_safe(self._data_format):
                 data = append_arrow_row_footer(data, samples, ipc_compression=self._ipc_codec())
+            elif self._compression_level == "batch":
+                data = pack_framed_zstd(data, self._in_file_zstd_codec(), self._resolved_batch_size())
+            elif self._compression_level == "sample":
+                data = pack_sample_zstd(data, self._in_file_zstd_codec())
 
         # Whether to encrypt the data at the chunk level
         if self._encryption and self._encryption.level == EncryptionLevel.CHUNK:
@@ -441,6 +490,19 @@ class BinaryWriter:
         }
 
         return data, nested_arrow_only, chunk_info
+
+    def _resolved_batch_size(self) -> int:
+        if self._compression_batch_size is not None:
+            return max(1, int(self._compression_batch_size))
+        return _auto_batch_rows(self._data_format)
+
+    def _in_file_zstd_codec(self) -> Any:
+        """Arrow C++ zstd for framed/sample wraps; python-zstd if pyarrow is missing."""
+        codec = getattr(self, "_in_file_zstd", None)
+        if codec is None:
+            self._in_file_zstd = make_zstd_codec(self._compression)
+            codec = self._in_file_zstd
+        return codec
 
     def _ipc_codec(self) -> str | None:
         """Arrow IPC codec when the user asked for compression; nested skips file-level zstd."""
@@ -474,12 +536,16 @@ class BinaryWriter:
     def write_chunk(self, on_done: bool = False) -> str:
         """Write a chunk to the filesystem."""
         data, nested_arrow_only, chunk_info = self._create_chunk(on_done=on_done)
-        use_file_compression = bool(self._compression) and not nested_arrow_only
+        use_file_compression = (
+            bool(self._compression) and not nested_arrow_only and self._compression_level == "chunk"
+        )
         if nested_arrow_only:
             self._ipc_compression_used = self._ipc_codec() is not None
             n_rows = int(chunk_info["chunk_size"])
             if n_rows:
                 self._nested_on_disk_bpi = int(chunk_info["chunk_bytes"]) / n_rows
+        elif is_in_file_compression(self._compression_level):
+            self._framed_compression_used = True
         filename = self.get_chunk_filename(file_compression=use_file_compression)
         chunk_info["filename"] = filename
         self._chunks_info.append(chunk_info)
