@@ -927,35 +927,37 @@ dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
 
 Default I/O **prefetches** whole parquet files in the background, then reads locally (`to_pylist()`).
 
-### Hub suite: LitData binary vs parquet vs HF streaming
+### Hub suite: `optimize_hf` Arrow IPC vs parquet vs HF streaming
 
 15 significant mixed-modality Hub splits (text/JSON, images, audio; tiny NLP toys omitted). Sequential, **one epoch**, never wrap. 200-row warmup, then a **cold** timed pass (payload cache wiped; `index.json` kept). First pass capped at 200,000 rows or `len`; large sets may run a second cold pass toward 120 seconds (still ≤ `len`). Reproduce: `scripts/bench/bench_hf_hub_suite.py` / `scripts/bench/bench_hf_suite_64mb.json`.
 
-- **Binary** — `optimize_hf(..., chunk_bytes="64MB", compression="zstd")` onto object storage, then `StreamingDataset(opt_dir, max_pre_download=8)`. Nested JSON and Hub `{bytes, path}` media use an Arrow IPC footer (`bytes` as binary; no `Image()` / `Audio()` / `Video()` wrap).
-- **Parquet** — `StreamingDataset("hf://...")` from the Hub (`hf_hub_download`), no range_read.
+This table is **not** classic LitData binary (`optimize()` pytree chunks: per-item serializers, offsets, optional whole-file zstd — the path used for tensors and explicit `Image()` / `Audio()`). The **binary** arm here is parquet converted into an **Arrow IPC file** (256-row zstd batches of JSON / binary columns) stored as LitData `.bin` on R2.
+
+- **Binary (`optimize_hf` → Arrow IPC)** — `optimize_hf(..., chunk_bytes="64MB", compression="zstd")` onto object storage, then `StreamingDataset(opt_dir, max_pre_download=8)`. Nested JSON and Hub `{bytes, path}` media stay Arrow binary (`bytes` as binary, `path` as string; no `Image()` / `Audio()` / `Video()` wrap, so `[0]` is `{bytes, path}` not a decoded tensor).
+- **Parquet** — `StreamingDataset("hf://...")` native parquet from the Hub (`hf_hub_download`), no range_read.
 - **HF** — `load_dataset(..., streaming=True)` library defaults.
 
-Binary is **not** always fastest: **8/15** binary, **7/15** parquet faster (OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, superb ks). Row counts can differ when the 120s heuristic raises the cap for faster streams; rates are still rows/s.
+IPC-from-parquet is **not** always fastest: **10/15** IPC, **5/15** parquet faster (OpenThoughts, minipile, food101, cifar100, superb ks). Row counts can differ when the 120s heuristic raises the cap for faster streams; rates are still rows/s.
 
 | Dataset | Binary rows/s | Parquet rows/s | HF rows/s | bin/pq | bin/hf | Binary TTFB | Parquet TTFB | HF TTFB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| HuggingFaceH4/ultrachat_200k / train_sft | 54,948 | 30,927 | 7,606 | 1.78× | 7.22× | 1.46s | 3.03s | 1.03s |
-| open-thoughts/OpenThoughts-114k / train | 5,985 | 12,661 | 1,939 | 0.47× | 3.09× | 1.02s | 2.14s | 1.46s |
-| abisee/cnn_dailymail / train / 3.0.0 | 67,467 | 41,757 | 9,780 | 1.62× | 6.90× | 1.00s | 3.02s | 1.21s |
-| teknium/OpenHermes-2.5 / train | 120,170 | 64,878 | 2,609 | 1.85× | 46.07× | 1.77s | 6.06s | 96.30s |
-| roneneldan/TinyStories / train | 191,450 | 135,728 | 56,189 | 1.41× | 3.41× | 1.01s | 3.02s | 6.29s |
-| fancyzhx/amazon_polarity / train | 243,459 | 147,151 | 10,637 | 1.65× | 22.89× | 4.15s | 5.05s | 14.92s |
-| Yelp/yelp_review_full / train | 221,131 | 82,897 | 38,878 | 2.67× | 5.69× | 1.13s | 3.77s | 2.35s |
-| EdinburghNLP/xsum / train | 47,548 | 24,684 | 10,150 | 1.93× | 4.68× | 3.36s | 6.34s | 4.29s |
-| Anthropic/hh-rlhf / train | 61,311 | 37,075 | 18,785 | 1.65× | 3.26× | 1.96s | 3.13s | 0.31s |
-| JeanKaddour/minipile / train | 12,686 | 27,865 | 1,607 | 0.46× | 7.90× | 1.00s | 3.03s | 10.41s |
-| ethz/food101 / train | 431 | 2,608 | 268 | 0.17× | 1.61× | 1.08s | 6.02s | 1.15s |
-| zh-plus/tiny-imagenet / train | 15,894 | 35,777 | 2,385 | 0.44× | 6.66× | 0.81s | 2.17s | 5.22s |
-| uoft-cs/cifar10 / train | 10,437 | 22,407 | 8,856 | 0.47× | 1.18× | 1.29s | 1.79s | 1.01s |
-| uoft-cs/cifar100 / train | 9,687 | 14,750 | 6,964 | 0.66× | 1.39× | 1.59s | 3.01s | 2.12s |
-| s3prl/superb / train / ks | 592 | 5,351 | 124 | 0.11× | 4.75× | 0.06s | 7.83s | 3.65s |
+| HuggingFaceH4/ultrachat_200k / train_sft | 47,285 | 31,209 | 6,752 | 1.52× | 7.00× | 1.01s | 3.04s | 1.08s |
+| open-thoughts/OpenThoughts-114k / train | 6,508 | 12,292 | 1,492 | 0.53× | 4.36× | 1.02s | 3.09s | 0.77s |
+| abisee/cnn_dailymail / train / 3.0.0 | 57,944 | 44,286 | 13,874 | 1.31× | 4.18× | 2.01s | 2.65s | 0.74s |
+| teknium/OpenHermes-2.5 / train | 108,420 | 74,502 | 8,280 | 1.46× | 13.09× | 1.01s | 4.82s | 51.27s |
+| roneneldan/TinyStories / train | 164,825 | 141,235 | 58,331 | 1.17× | 2.83× | 2.01s | 2.03s | 9.18s |
+| fancyzhx/amazon_polarity / train | 214,217 | 162,448 | 14,613 | 1.32× | 14.66× | 2.03s | 3.04s | 14.79s |
+| Yelp/yelp_review_full / train | 123,670 | 88,400 | 58,621 | 1.40× | 2.11× | 3.48s | 3.39s | 1.61s |
+| EdinburghNLP/xsum / train | 55,941 | 37,684 | 15,377 | 1.48× | 3.64× | 2.75s | 3.53s | 1.73s |
+| Anthropic/hh-rlhf / train | 92,741 | 46,573 | 18,263 | 1.99× | 5.08× | 1.07s | 2.30s | 0.35s |
+| JeanKaddour/minipile / train | 13,045 | 31,976 | 3,100 | 0.41× | 4.21× | 1.01s | 3.03s | 1.33s |
+| ethz/food101 / train | 508 | 3,613 | 391 | 0.14× | 1.30× | 7.89s | 4.61s | 1.69s |
+| zh-plus/tiny-imagenet / train | 57,855 | 43,535 | 6,491 | 1.33× | 8.91× | 1.44s | 1.69s | 1.70s |
+| uoft-cs/cifar10 / train | 31,671 | 20,657 | 8,843 | 1.53× | 3.58× | 1.44s | 2.05s | 1.00s |
+| uoft-cs/cifar100 / train | 22,448 | 24,332 | 7,553 | 0.92× | 2.97× | 2.06s | 1.71s | 1.80s |
+| s3prl/superb / train / ks | 1,883 | 5,988 | 275 | 0.31× | 6.84× | 1.42s | 6.04s | 2.76s |
 
-Parquet is faster on OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, and `s3prl/superb` (keyword spotting; 51,094 rows, 1.5GB parquet) in the **R2** table above (those image/audio rows still used the old `Image()` / `Audio()` wrap). Local `/tmp` bytes-vs-bytes re-bench (same harness, no Image wrap; `[0]` is `{bytes, path}` on binary and parquet): cifar100 **324,324** / 14,476 / 7,257; cifar10 **300,510** / 19,114 / 8,926; tiny-imagenet **344,897** / 31,106 / 3,388. food101 and superb still to re-bench on the official R2 opt-root.
+Parquet is faster on OpenThoughts, minipile, food101, cifar100, and `s3prl/superb` (keyword spotting; 51,094 rows, 1.5GB parquet). Hub `{bytes, path}` on the IPC arm is Arrow binary (confirmed `img`/`image`/`audio` `[0]` is `{bytes, path}`, not `Tensor`); food101 and superb remain parquet-faster on R2 because those payloads are large blobs, not because of an `Image()` / `Audio()` wrap.
 
 See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
