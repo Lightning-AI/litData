@@ -211,7 +211,9 @@ def test_optimize_hf_media_bytes_stay_arrow_binary(tmp_path, monkeypatch):
     )
     pq_path = tmp_path / "media.parquet"
     pq.write_table(table, pq_path)
-    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/media")
+    monkeypatch.setattr(
+        "litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/media"
+    )
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)])
     out = tmp_path / "media-opt"
     optimize_hf("org/media", output_dir=str(out), chunk_size=10, num_workers=1, compression="zstd")
