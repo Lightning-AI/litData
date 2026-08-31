@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Changed
+
+- `optimize` / `map` no longer pickle the full input list into every spawned worker. ([#890](https://github.com/Lightning-AI/litData/pull/890))
+
 ## [0.2.72] - 2026-08-24
 
 ### Fixed
