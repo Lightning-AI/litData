@@ -99,6 +99,16 @@ def index_hf_dataset(dataset_url: str, cache_dir: str | None = None, storage_opt
     return dest
 
 
+def _optimize_hf_output_has_index(output_dir: str, storage_options: dict | None = None) -> bool:
+    """True when ``output_dir`` already has ``index.json`` (local or remote)."""
+    from litdata.processing.utilities import construct_storage_options, read_index_file_content
+    from litdata.streaming.resolver import _resolve_dir
+
+    resolved = _resolve_dir(output_dir)
+    merged = construct_storage_options(storage_options or {}, resolved)
+    return read_index_file_content(resolved, merged) is not None
+
+
 def optimize_hf(
     name: str,
     output_dir: str,
@@ -128,7 +138,8 @@ def optimize_hf(
        ``{bytes, path}`` media stays Arrow binary (no ``Image`` / ``Audio`` /
        ``Video`` wrap).
 
-    Later calls reuse ``output_dir`` when it already has ``index.json``.
+    Later calls reuse ``output_dir`` when it already has ``index.json``
+    (local path, ``s3://`` / ``gs://`` / ``r2://``, or lightning storage).
 
     Example::
 
@@ -156,8 +167,7 @@ def optimize_hf(
     Returns:
         ``output_dir``.
     """
-    dest_index = os.path.join(output_dir, _INDEX_FILENAME)
-    if os.path.isfile(dest_index) and not overwrite:
+    if not overwrite and _optimize_hf_output_has_index(output_dir, storage_options):
         if is_local_rank_0():
             print(f"Using existing optimized dataset at {output_dir}.")
         return output_dir

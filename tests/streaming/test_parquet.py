@@ -137,6 +137,71 @@ def test_optimize_hf(tmp_path, write_pq_data, monkeypatch):
     assert optimize_hf("org/name", output_dir=str(out), chunk_size=10) == str(out)
 
 
+@pytest.mark.parametrize("remote_dir", ["r2://bucket/imdb-opt", "s3://bucket/imdb-opt"])
+def test_optimize_hf_reuses_remote_index(monkeypatch, remote_dir):
+    dummy_index = {"chunks": [{"filename": "chunk-0-0.bin"}], "config": {}}
+
+    def fake_download(remote_path, local_path):
+        assert remote_path.rstrip("/").endswith(_INDEX_FILENAME)
+        with open(local_path, "w") as f:
+            json.dump(dummy_index, f)
+
+    fs_provider = Mock()
+    fs_provider.download_file = fake_download
+    monkeypatch.setattr("litdata.processing.utilities._get_fs_provider", Mock(return_value=fs_provider))
+
+    optimize_calls = []
+
+    def fake_optimize(*_args, **_kwargs):
+        optimize_calls.append(True)
+
+    monkeypatch.setattr("litdata.processing.functions.optimize", fake_optimize)
+    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name")
+    monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *_a, **_k: ["x.parquet"])
+
+    assert optimize_hf("org/name", output_dir=remote_dir, overwrite=False) == remote_dir
+    assert optimize_calls == []
+
+    assert optimize_hf("org/name", output_dir=remote_dir, overwrite=True, chunk_size=10, num_workers=1) == remote_dir
+    assert optimize_calls == [True]
+
+
+def test_optimize_hf_reuses_lightning_storage_index(monkeypatch):
+    from litdata.streaming.resolver import Dir
+
+    dummy_index = {"chunks": [{"filename": "chunk-0-0.bin"}], "config": {}}
+    dest = Dir(
+        path="/teamspace/lightning_storage/ds/imdb-opt",
+        url="r2://bucket/imdb-opt",
+        data_connection_id="dc-1",
+    )
+    monkeypatch.setattr("litdata.streaming.resolver._resolve_dir", lambda _p: dest)
+
+    seen_storage_options = []
+
+    def fake_download(remote_path, local_path):
+        with open(local_path, "w") as f:
+            json.dump(dummy_index, f)
+
+    def fake_get_fs_provider(url, storage_options=None):
+        seen_storage_options.append(dict(storage_options or {}))
+        provider = Mock()
+        provider.download_file = fake_download
+        return provider
+
+    monkeypatch.setattr("litdata.processing.utilities._get_fs_provider", fake_get_fs_provider)
+
+    optimize_calls = []
+    monkeypatch.setattr("litdata.processing.functions.optimize", lambda *_a, **_k: optimize_calls.append(True))
+    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name")
+    monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *_a, **_k: ["x.parquet"])
+
+    out = "/teamspace/lightning_storage/ds/imdb-opt"
+    assert optimize_hf("org/name", output_dir=out, overwrite=False) == out
+    assert optimize_calls == []
+    assert seen_storage_options and seen_storage_options[0].get("data_connection_id") == "dc-1"
+
+
 def test_hf_parquet_cache_is_outside_chunk_dir(monkeypatch):
     monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
     chunk_dir = os.path.join(os.sep, "cache", "chunks")

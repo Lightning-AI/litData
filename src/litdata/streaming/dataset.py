@@ -410,6 +410,12 @@ class StreamingDataset(IterableDataset):
 
         return cache
 
+    def _resume_item_shuffle_window(self, state: dict[str, Any]) -> int:
+        """Window from a checkpoint, or the pre-PR full in-chunk permute if omitted."""
+        if "item_shuffle_window" in state:
+            return resolve_item_shuffle_window(state["item_shuffle_window"])
+        return 0
+
     def _create_shuffler(self, cache: Cache) -> Shuffle:
         seed = self.seed
         drop_last = self.drop_last
@@ -418,8 +424,7 @@ class StreamingDataset(IterableDataset):
             state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
-            if "item_shuffle_window" in state:
-                item_window = resolve_item_shuffle_window(state["item_shuffle_window"])
+            item_window = self._resume_item_shuffle_window(state)
         if not self.shuffle:
             return NoShuffle(cache, seed, drop_last)
         if self.posix_fast is not None and self.posix_fast.window_shuffle:
@@ -1071,9 +1076,13 @@ class StreamingDataset(IterableDataset):
             logger.warning(f"Overriding state item_loader {state['item_loader']} to {self.item_loader.state_dict()}.")
             state["item_loader"] = self.item_loader.state_dict()
 
-        saved_item_window = (
-            resolve_item_shuffle_window(state["item_shuffle_window"]) if "item_shuffle_window" in state else None
-        )
+        if "item_shuffle_window" not in state:
+            # Pre-PR checkpoints omitted this field and used a full in-chunk permute.
+            state["item_shuffle_window"] = 0
+            self._item_shuffle_window = 0
+            saved_item_window = None
+        else:
+            saved_item_window = resolve_item_shuffle_window(state["item_shuffle_window"])
         if saved_item_window is not None and saved_item_window != self._item_shuffle_window:
             if not self._force_override_state_dict:
                 raise ValueError(

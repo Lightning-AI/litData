@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- ``optimize_hf(..., overwrite=False)`` reuses a remote ``index.json`` (``r2://``, ``s3://``, lightning storage) the same way ``optimize`` does, not only a local file.
+- ``StreamingDataset.load_state_dict`` treats a missing ``item_shuffle_window`` as the pre-PR full in-chunk shuffle (``0``), not the new 256 default.
 - Nested Arrow ``chunk_bytes`` accounting no longer assumes 3× zstd before the first flush. First shards of Hub JPEG/WAV were 140–188MB on a 64MB target. The writer now counts sample payload bytes, then uses measured on-disk bytes/item.
 - Unordered ``optimize()`` workers load items from a unique temp pickle instead of a shared ``node-{rank}-items.pkl`` under the chunk cache, so overlapping runs (pytest-xdist) no longer ``IndexError`` or mix inputs.
 - Process-level cache of Lightning Cloud temp-bucket credentials **and** the boto3 R2 client, keyed by ``data_connection_id`` (TTL aligned to the 2700s refetch interval). A new ``StreamingDataset`` / ``R2Client`` in the same process no longer re-logins (~1s) or rebuilds boto3 (~50ms) on the first GET. Scheduled refresh still mints new credentials. R2 clients skip optional SDK checksums. Tiny indexed chunks (<8MB) use ``get_object`` instead of TransferManager/obstore. ``clear_temp_bucket_credentials_cache()`` isolates tests.

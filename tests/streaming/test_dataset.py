@@ -87,6 +87,40 @@ def test_item_shuffle_window_on_dataset(tmpdir, monkeypatch):
     assert named._item_shuffle_window == 0
 
 
+def test_load_state_dict_omits_item_shuffle_window_uses_legacy(tmpdir, monkeypatch):
+    """Old checkpoints without ``item_shuffle_window`` restore a full in-chunk permute."""
+    monkeypatch.delenv("LITDATA_ITEM_SHUFFLE_WINDOW", raising=False)
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    cache = Cache(str(tmpdir), chunk_size=400)
+    for i in range(400):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    blocked = StreamingDataset(str(tmpdir), shuffle=True, seed=42)
+    _ = next(iter(blocked))
+    state = dict(blocked.state_dict(0, 1, 1))
+    assert state["item_shuffle_window"] == 256
+    del state["item_shuffle_window"]
+    state["num_samples_yielded"] = 0
+
+    legacy = StreamingDataset(str(tmpdir), shuffle=True, seed=42, item_shuffle_window=0)
+    default = StreamingDataset(str(tmpdir), shuffle=True, seed=42)
+    resumed = StreamingDataset(str(tmpdir), shuffle=True, seed=42)
+    resumed.load_state_dict(state)
+
+    legacy_items = list(legacy)
+    default_items = list(default)
+    resumed_items = list(resumed)
+
+    assert default._item_shuffle_window == 256
+    assert resumed.shuffler.item_window == 0
+    assert resumed._item_shuffle_window == 0
+    assert legacy_items != default_items
+    assert resumed_items == legacy_items
+    assert resumed_items != default_items
+
+
 @pytest.mark.parametrize(
     "compression",
     [
