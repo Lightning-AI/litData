@@ -558,25 +558,30 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
         )
         self._num_workers = loader.num_workers
         self._cprofile: cProfile.Profile | None = None
-        self._orig_worker_loop: Any = None
 
         distributed_env = _DistributedEnv.detect()
         profile_cprofile = bool(getattr(self._loader, "_profile_cprofile", False))
+        from torch.utils.data._utils import worker
+
+        original_worker_loop: Any = None
 
         if distributed_env.global_rank == 0:
-            from torch.utils.data._utils import worker
-
             if self._loader._profile_batches and _VIZ_TRACKER_AVAILABLE:
+                original_worker_loop = worker._worker_loop
                 worker._worker_loop = _ProfileWorkerLoop(
                     self._loader._profile_batches, self._loader._profile_skip_batches, self._loader._profile_dir
                 )
             elif profile_cprofile:
-                self._orig_worker_loop = worker._worker_loop
+                original_worker_loop = worker._worker_loop
                 worker._worker_loop = _CProfileWorkerLoop(_cprofile_output_dir(self._loader._profile_dir))
 
         # Workers fork/spawn here. Enable the parent profiler only after that so
         # the child does not inherit an active cProfile (one profiler per process).
-        super().__init__(loader)
+        try:
+            super().__init__(loader)
+        finally:
+            if original_worker_loop is not None:
+                worker._worker_loop = original_worker_loop
 
         if profile_cprofile and distributed_env.global_rank == 0:
             self._cprofile = cProfile.Profile()
@@ -587,11 +592,6 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
             stem = os.path.join(_cprofile_output_dir(self._loader._profile_dir), _CPROFILE_MAIN_STEM)
             _dump_cprofile(self._cprofile, stem)
             self._cprofile = None
-        if self._orig_worker_loop is not None:
-            from torch.utils.data._utils import worker
-
-            worker._worker_loop = self._orig_worker_loop
-            self._orig_worker_loop = None
         super()._shutdown_workers()
 
     def _try_put_index(self) -> None:

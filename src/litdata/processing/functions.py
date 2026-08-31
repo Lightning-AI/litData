@@ -147,6 +147,17 @@ class LambdaMapRecipe(MapRecipe):
         self._contains_device = "device" in params
         self._contains_is_last = "is_last" in params
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop the full input sequence when pickling into spawn workers.
+
+        The parent already shards items onto per-worker queues. Workers only need
+        ``prepare_item``; keeping ``_inputs`` in the pickle would duplicate the list
+        once per process.
+        """
+        state = self.__dict__.copy()
+        state["_inputs"] = None
+        return state
+
     def prepare_structure(self, _: str | None) -> Any:
         return self._inputs
 
@@ -209,6 +220,17 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         self.check_fn()
 
         self.prepare_item = self._prepare_item_generator if self.is_generator else self._prepare_item  # type: ignore
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop the full input sequence when pickling into spawn workers.
+
+        The parent already shards items onto per-worker queues. Workers only need
+        ``prepare_item``; keeping ``_inputs`` in the pickle would duplicate the list
+        once per process.
+        """
+        state = self.__dict__.copy()
+        state["_inputs"] = None
+        return state
 
     def check_fn(self) -> None:
         if (

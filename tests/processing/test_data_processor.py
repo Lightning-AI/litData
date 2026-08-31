@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 import os
+import pickle
 import random
 import sys
 import tempfile
@@ -47,7 +48,7 @@ from litdata.processing.data_processor import (
     _wait_for_file_to_exist,
     resolve_keep_data_ordered,
 )
-from litdata.processing.functions import LambdaMapRecipe, _get_input_dir, map, optimize
+from litdata.processing.functions import LambdaDataChunkRecipe, LambdaMapRecipe, _get_input_dir, map, optimize
 from litdata.streaming import StreamingDataLoader, StreamingDataset, resolver
 from litdata.streaming.cache import Cache, Dir
 from litdata.streaming.serializers import _torchcodec_usable
@@ -1346,6 +1347,24 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
+
+
+def _noop_map_item(item: Any, output_dir: str) -> None:
+    return None
+
+
+def test_lambda_recipe_pickle_drops_inputs():
+    inputs = [bytearray(1024)]
+    chunk_recipe = LambdaDataChunkRecipe(str, inputs, 1, None, None)
+    map_recipe = LambdaMapRecipe(_noop_map_item, inputs)
+    pickled_chunk = pickle.loads(pickle.dumps(chunk_recipe))  # noqa: S301
+    pickled_map = pickle.loads(pickle.dumps(map_recipe))  # noqa: S301
+
+    assert chunk_recipe.prepare_structure(None) is inputs
+    assert map_recipe.prepare_structure(None) is inputs
+    assert pickled_chunk.prepare_structure(None) is None
+    assert pickled_map.prepare_structure(None) is None
+    assert pickled_chunk.prepare_item(123) == "123"
 
 
 def test_lambda_transform_recipe(monkeypatch):
