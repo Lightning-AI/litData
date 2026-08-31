@@ -46,6 +46,7 @@
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#modality">Modality</a> •
+  <a href="#huggingface-datasets">Hugging Face Datasets</a> •
   <a href="#key-features">Features</a> •
   <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
@@ -419,6 +420,91 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 </table>
 
 Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
+
+----
+
+# Hugging Face Datasets 🤗 <a id="huggingface-datasets"></a><a id="stream-hf"></a>
+
+Train on the Hub datasets you already use. Drop in a Hugging Face dataset with one call — then optimize once onto Lightning Cloud storage when you want faster training I/O than Hub parquet or Hugging Face `datasets` streaming.
+
+<details>
+  <summary>How to get the dataset URL</summary>
+
+https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
+
+</details>
+
+```bash
+pip install 'litdata[extras]' huggingface_hub
+
+# Optional: faster downloads on high-bandwidth networks
+pip install hf_transfer
+export HF_HUB_ENABLE_HF_TRANSFER=1
+```
+
+Gated datasets: set `HF_TOKEN`.
+
+**Load from the Hub**
+
+```python
+import litdata as ld
+
+dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
+print("Sample", dataset[0])
+
+dataloader = ld.StreamingDataLoader(
+    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
+)
+for sample in dataloader:
+    pass
+```
+
+**Optimize once for faster training**
+
+```python
+import litdata as ld
+
+ld.optimize_hf("stanfordnlp/imdb", output_dir="imdb-opt", split="train")
+dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
+```
+
+`optimize_hf` converts a Hub dataset into LitData chunks. Later calls reuse `output_dir` if it is already optimized. Pass `revision=`, `config=`, `chunk_size=`, or `fn=` when you need them.
+
+### Faster than Hub parquet and `datasets` streaming
+
+`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **10/15** prefer `optimize_hf`; parquet stays ahead on OpenThoughts, minipile, food101, cifar100, and superb.
+
+Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
+
+| Dataset | `optimize_hf` rows/s | parquet (`hf://`) rows/s | HF streaming rows/s |
+| --- | ---: | ---: | ---: |
+| HuggingFaceH4/ultrachat_200k / train_sft | **47,285** | 31,209 | 6,752 |
+| open-thoughts/OpenThoughts-114k / train | 6,508 | **12,292** | 1,492 |
+| abisee/cnn_dailymail / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
+| teknium/OpenHermes-2.5 / train | **108,420** | 74,502 | 8,280 |
+| roneneldan/TinyStories / train | **164,825** | 141,235 | 58,331 |
+| fancyzhx/amazon_polarity / train | **214,217** | 162,448 | 14,613 |
+| Yelp/yelp_review_full / train | **123,670** | 88,400 | 58,621 |
+| EdinburghNLP/xsum / train | **55,941** | 37,684 | 15,377 |
+| Anthropic/hh-rlhf / train | **92,741** | 46,573 | 18,263 |
+| JeanKaddour/minipile / train | 13,045 | **31,976** | 3,100 |
+| ethz/food101 / train | 508 | **3,613** | 391 |
+| zh-plus/tiny-imagenet / train | **57,855** | 43,535 | 6,491 |
+| uoft-cs/cifar10 / train | **31,671** | 20,657 | 8,843 |
+| uoft-cs/cifar100 / train | 22,448 | **24,332** | 7,553 |
+| s3prl/superb / train / ks | 1,883 | **5,988** | 275 |
+
+Your own parquet on disk or S3 → [Stream parquet datasets](#stream-parquet).
+
+### LitData `Optimize` v/s `Parquet`
+<!-- TODO: Update benchmark -->
+Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that **`optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files`**.
+
+| **Operation**                    | **Size (GB)** | **Time (seconds)** | **Throughput (images/sec)** |
+|-----------------------------------|---------------|---------------------|-----------------------------|
+| LitData Optimize Dataset          | 45            | 283.17             | 4000-4700                  |
+| Parquet Optimize Dataset          | 51            | 465.96             | 3600-3900                  |
+| Index Parquet Dataset (overhead)  | N/A           | 6                  | N/A                         |
 
 ----
 
@@ -864,102 +950,6 @@ for sample in dataloader:
 ✅ **Easy migration:**        Move from MosaicML Streaming to LitData without re-optimizing.    
 
 > **Note:** Encrypted data loading is not currently supported for the MDS format.
-
-</details>
-
-<details>
-  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
-
-&nbsp;
-
-To use your favorite  Hugging Face dataset with LitData, simply pass its URL to `StreamingDataset`.
-
-<details>
-  <summary>How to get HF dataset URI?</summary>
-
-https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
-
-</details>
-
-**Prerequisites:**
-
-```sh
-pip install 'litdata[extras]' huggingface_hub
-
-# Optional: faster downloads on high-bandwidth networks
-pip install hf_transfer
-export HF_HUB_ENABLE_HF_TRANSFER=1
-```
-
-**Supported for HF:** datasets stored as **Parquet** only. Gated datasets: set `HF_TOKEN`.
-
-**Stream Hugging Face dataset** (auto-index + auto `ParquetLoader`):
-
-```python
-import litdata as ld
-
-# Indexes on first open, persists index.json, reuses it next time.
-dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
-print("Sample", dataset[0])  # dict of columns
-
-# With workers on Linux, use spawn (same as other ParquetLoader usage)
-dataloader = ld.StreamingDataLoader(
-    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
-)
-for sample in dataloader:
-    pass
-```
-
-Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes on first open and reuses that index later. You do not need to call an indexer.
-
-Optional extras: `cache_dir=` pins the local cache; `ld.index_hf_dataset(uri)` pre-builds the index; `index_path=` points at an `index.json` you already have.
-
-**Optimize once, then stream faster** (optional):
-
-```python
-import litdata as ld
-
-ld.optimize_hf("stanfordnlp/imdb", output_dir="imdb-opt", split="train")
-dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
-```
-
-`optimize_hf` converts a Hub dataset into LitData chunks. Later calls reuse `output_dir` if it is already optimized. Pass `revision=`, `config=`, `chunk_size=`, or `fn=` when you need them.
-
-### Hub streaming speed
-
-`StreamingDataset("hf://...")` streams Hub parquet as-is. Run `optimize_hf` once, then stream the chunks when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **10/15** prefer `optimize_hf`; parquet stays ahead on OpenThoughts, minipile, food101, cifar100, and superb.
-
-Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
-
-| Dataset | `optimize_hf` rows/s | parquet (`hf://`) rows/s | HF streaming rows/s |
-| --- | ---: | ---: | ---: |
-| HuggingFaceH4/ultrachat_200k / train_sft | **47,285** | 31,209 | 6,752 |
-| open-thoughts/OpenThoughts-114k / train | 6,508 | **12,292** | 1,492 |
-| abisee/cnn_dailymail / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
-| teknium/OpenHermes-2.5 / train | **108,420** | 74,502 | 8,280 |
-| roneneldan/TinyStories / train | **164,825** | 141,235 | 58,331 |
-| fancyzhx/amazon_polarity / train | **214,217** | 162,448 | 14,613 |
-| Yelp/yelp_review_full / train | **123,670** | 88,400 | 58,621 |
-| EdinburghNLP/xsum / train | **55,941** | 37,684 | 15,377 |
-| Anthropic/hh-rlhf / train | **92,741** | 46,573 | 18,263 |
-| JeanKaddour/minipile / train | 13,045 | **31,976** | 3,100 |
-| ethz/food101 / train | 508 | **3,613** | 391 |
-| zh-plus/tiny-imagenet / train | **57,855** | 43,535 | 6,491 |
-| uoft-cs/cifar10 / train | **31,671** | 20,657 | 8,843 |
-| uoft-cs/cifar100 / train | 22,448 | **24,332** | 7,553 |
-| s3prl/superb / train / ks | 1,883 | **5,988** | 275 |
-
-See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
-
-### LitData `Optimize` v/s `Parquet`
-<!-- TODO: Update benchmark -->
-Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that **`optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files`**.
-
-| **Operation**                    | **Size (GB)** | **Time (seconds)** | **Throughput (images/sec)** |
-|-----------------------------------|---------------|---------------------|-----------------------------|
-| LitData Optimize Dataset          | 45            | 283.17             | 4000-4700                  |
-| Parquet Optimize Dataset          | 51            | 465.96             | 3600-3900                  |
-| Index Parquet Dataset (overhead)  | N/A           | 6                  | N/A                         |
 
 </details>
 
@@ -1821,7 +1811,7 @@ The `overwrite` mode will delete the existing data and start from fresh.
   <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
-Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face parquet datasets are covered in [Stream Hugging Face datasets](#stream-hf).
+Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face Hub datasets are covered in [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream vs optimize vs map
 
@@ -1866,7 +1856,7 @@ ld.index_parquet_dataset(
 - Lists **top-level** `.parquet` files only (not recursive subfolders).
 - All files must share the same schema.
 - Supported for indexing today: local, `s3://`, `gs://`, `hf://` (not `r2://` / `azure://` yet).
-- For HF, prefer `index_hf_dataset(uri)` (returns a local cache dir) or auto-index via `StreamingDataset("hf://...")` — see [HF section](#stream-hf).
+- For Hub datasets, use `StreamingDataset("hf://...")` — see [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream with `ParquetLoader`
 
