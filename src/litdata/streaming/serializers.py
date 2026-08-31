@@ -187,12 +187,16 @@ class JPEGSerializer(Serializer):
         from PIL.WebPImagePlugin import WebPImageFile
 
         if isinstance(item, Jpeg):
-            if item.array is not None or item.image is not None or item.mode:
+            if (
+                item.array is not None
+                or item.image is not None
+                or item.mode
+                or item.quality is not None
+                or item.max_quality is not None
+            ):
                 data, _ = _encode_image_ref(item, default_format="JPEG", default_quality=item.quality)
                 return data, None
-            data, ext = _read_media_bytes(item)
-            if item.quality != 95:
-                data, _ = _encode_image_ref(item, default_format="JPEG", default_quality=item.quality)
+            data, _ = _read_media_bytes(item)
             return data, None
 
         if isinstance(item, JpegImageFile):
@@ -239,7 +243,12 @@ class ImageSerializer(Serializer):
 
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
         if isinstance(item, Image) and (
-            item.array is not None or item.image is not None or item.quality is not None or item.mode or item.format
+            item.array is not None
+            or item.image is not None
+            or item.quality is not None
+            or item.max_quality is not None
+            or item.mode
+            or item.format
         ):
             data, ext = _encode_image_ref(item, default_format=item.format or "PNG", default_quality=item.quality)
             return data, f"image:{ext}"
@@ -270,15 +279,29 @@ class JPEGArraySerializer(Serializer):
         image_bytes = []
         for image in images:
             if isinstance(image, Jpeg):
-                if isinstance(item, JpegArray) and image.quality == 95 and item.quality != 95:
-                    image = Jpeg(
-                        path=image.path,
-                        bytes=image.bytes,
-                        array=image.array,
-                        image=image.image,
-                        mode=image.mode,
-                        quality=item.quality,
-                    )
+                if isinstance(item, JpegArray):
+                    if item.quality is not None and image.quality != item.quality:
+                        image = Jpeg(
+                            path=image.path,
+                            bytes=image.bytes,
+                            array=image.array,
+                            image=image.image,
+                            mode=image.mode,
+                            quality=item.quality,
+                            max_quality=None,
+                        )
+                    elif (
+                        item.max_quality is not None and image.quality is None and image.max_quality != item.max_quality
+                    ):
+                        image = Jpeg(
+                            path=image.path,
+                            bytes=image.bytes,
+                            array=image.array,
+                            image=image.image,
+                            mode=image.mode,
+                            quality=None,
+                            max_quality=item.max_quality,
+                        )
                 image_bytes.append(self._jpeg_serializer.serialize(image)[0])
             elif isinstance(image, Image):
                 image_bytes.append(ImageSerializer().serialize(image)[0])
@@ -1123,6 +1146,240 @@ def _native_pil_format(image: Any) -> str:
     return "PNG" if image.mode in {"1", "L", "LA", "RGB", "RGBA"} else "TIFF"
 
 
+# Independent JPEG Group luminance table (natural order) used to estimate quality.
+_JPEG_STD_LUMA_QT = (
+    16,
+    11,
+    10,
+    16,
+    24,
+    40,
+    51,
+    61,
+    12,
+    12,
+    14,
+    19,
+    26,
+    58,
+    60,
+    55,
+    14,
+    13,
+    16,
+    24,
+    40,
+    57,
+    69,
+    56,
+    14,
+    17,
+    22,
+    29,
+    51,
+    87,
+    80,
+    62,
+    18,
+    22,
+    37,
+    56,
+    68,
+    109,
+    103,
+    77,
+    24,
+    35,
+    55,
+    64,
+    81,
+    104,
+    113,
+    92,
+    49,
+    64,
+    78,
+    87,
+    103,
+    121,
+    120,
+    101,
+    72,
+    92,
+    95,
+    98,
+    112,
+    100,
+    103,
+    99,
+)
+# DQT stores coefficients in zigzag order; IJG / Pillow quantization is natural order.
+_JPEG_ZIGZAG_TO_NATURAL = (
+    0,
+    1,
+    8,
+    16,
+    9,
+    2,
+    3,
+    10,
+    17,
+    24,
+    32,
+    25,
+    18,
+    11,
+    4,
+    5,
+    12,
+    19,
+    26,
+    33,
+    40,
+    48,
+    41,
+    34,
+    27,
+    20,
+    13,
+    6,
+    7,
+    14,
+    21,
+    28,
+    35,
+    42,
+    49,
+    56,
+    57,
+    50,
+    43,
+    36,
+    29,
+    22,
+    15,
+    23,
+    30,
+    37,
+    44,
+    51,
+    58,
+    59,
+    52,
+    45,
+    38,
+    31,
+    39,
+    46,
+    53,
+    60,
+    61,
+    54,
+    47,
+    55,
+    62,
+    63,
+)
+
+
+def _ijg_luma_qt(quality: int) -> tuple[int, ...]:
+    scale = 5000 // quality if quality < 50 else 200 - quality * 2
+    return tuple(min(255, max(1, (coeff * scale + 50) // 100)) for coeff in _JPEG_STD_LUMA_QT)
+
+
+_IJG_LUMA_BY_QUALITY: tuple[tuple[int, ...], ...] = tuple(_ijg_luma_qt(quality) for quality in range(1, 101))
+_IJG_LUMA_TO_QUALITY = {table: quality for quality, table in enumerate(_IJG_LUMA_BY_QUALITY, start=1)}
+
+
+def _jpeg_luma_qtable(data: bytes) -> tuple[int, ...] | None:
+    """Return the first / table-0 luminance DQT in natural order, or ``None``."""
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    idx = 2
+    first: tuple[int, ...] | None = None
+    while idx + 4 <= len(data):
+        if data[idx] != 0xFF:
+            return first
+        marker = data[idx + 1]
+        if marker == 0xDA:  # SOS
+            break
+        if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            idx += 2
+            continue
+        length = int.from_bytes(data[idx + 2 : idx + 4], "big")
+        if length < 2 or idx + 2 + length > len(data):
+            return first
+        if marker == 0xDB:  # DQT
+            payload = data[idx + 4 : idx + 2 + length]
+            pos = 0
+            while pos < len(payload):
+                info = payload[pos]
+                pos += 1
+                precision = info >> 4
+                table_id = info & 0x0F
+                n_bytes = 64 * (2 if precision else 1)
+                if pos + n_bytes > len(payload):
+                    return first
+                raw = payload[pos : pos + n_bytes]
+                pos += n_bytes
+                zigzag = struct.unpack(">" + "H" * 64, raw) if precision else tuple(raw)
+                natural = [0] * 64
+                for zig, nat in enumerate(_JPEG_ZIGZAG_TO_NATURAL):
+                    natural[nat] = zigzag[zig]
+                table = tuple(natural)
+                if first is None:
+                    first = table
+                if table_id == 0:
+                    return table
+        idx += 2 + length
+    return first
+
+
+def _estimate_jpeg_quality(data: bytes) -> int | None:
+    """Estimate JPEG quality from the luminance quantization table (IJG scale).
+
+    Returns ``None`` when the file is not JPEG or has no DQT (fail closed: keep bytes).
+    """
+    table = _jpeg_luma_qtable(data)
+    if table is None or len(table) != 64:
+        return None
+    exact = _IJG_LUMA_TO_QUALITY.get(table)
+    if exact is not None:
+        return exact
+    best_quality, best_err = 1, None
+    for quality, candidate in enumerate(_IJG_LUMA_BY_QUALITY, start=1):
+        err = sum(abs(left - right) for left, right in zip(table, candidate))
+        if best_err is None or err < best_err:
+            best_quality, best_err = quality, err
+    return best_quality
+
+
+def _keep_jpeg_under_max_quality(data: bytes, max_quality: int) -> bool:
+    """True when ``data`` is JPEG that should not be re-encoded under the cap."""
+    if len(data) < 2 or data[:2] != b"\xff\xd8":
+        return False
+    estimated = _estimate_jpeg_quality(data)
+    return estimated is None or estimated <= max_quality
+
+
+def _jpeg_encode_quality(item: Any, default_quality: int | None) -> int | None:
+    quality = getattr(item, "quality", default_quality)
+    if quality is not None:
+        return int(quality)
+    max_quality = getattr(item, "max_quality", None)
+    if max_quality is not None:
+        return int(max_quality)
+    return None
+
+
+def _original_jpeg_bytes_from_pil(image: Any) -> bytes | None:
+    filename = getattr(image, "filename", None)
+    if filename and os.path.isfile(filename) and str(filename).lower().endswith((".jpg", ".jpeg")):
+        with open(filename, "rb") as handle:
+            return handle.read()
+    return None
+
+
 def _save_pil(image: Any, fmt: str, quality: int | None = None, mode: str | None = None) -> tuple[bytes, str]:
     if mode and image.mode != mode:
         image = image.convert(mode)
@@ -1225,25 +1482,45 @@ def _nifti_encoded_bytes(image: Any) -> tuple[bytes, str]:
 
 
 def _encode_image_ref(item: Any, default_format: str = "PNG", default_quality: int | None = None) -> tuple[bytes, str]:
-    """Encode ``Image`` / ``Jpeg`` / ``Pil`` from path, bytes, array, or PIL image."""
+    """Encode ``Image`` / ``Jpeg`` / ``Pil`` from path, bytes, array, or PIL image.
+
+    ``quality`` force-encodes at that JPEG quality. ``max_quality`` is a cap: existing
+    JPEG bytes whose estimated quality is at or below the cap are kept (unknown
+    quality is kept so Hub q=75 is not inflated to 95). Pixels / PNG / higher-quality
+    JPEGs encode at ``max_quality``.
+    """
     array = getattr(item, "array", None)
     image = getattr(item, "image", None)
     mode = getattr(item, "mode", None)
     quality = getattr(item, "quality", default_quality)
+    max_quality = getattr(item, "max_quality", None)
     explicit_format = getattr(item, "format", None)
+    encode_quality = _jpeg_encode_quality(item, default_quality)
+
+    def _save(pil: Any, fmt: str) -> tuple[bytes, str]:
+        if max_quality is not None:
+            fmt = "JPEG"
+        return _save_pil(pil, fmt, quality=encode_quality, mode=mode)
+
     if image is not None or array is not None:
+        if max_quality is not None and image is not None:
+            original = _original_jpeg_bytes_from_pil(image)
+            if original is not None and _keep_jpeg_under_max_quality(original, int(max_quality)):
+                return original, "jpg"
         pil = image if image is not None else _pil_from_array(array)
         fmt = explicit_format or (_native_pil_format(pil) if image is not None else default_format)
-        return _save_pil(pil, fmt, quality=quality, mode=mode)
+        return _save(pil, fmt)
     data, ext = _read_media_bytes(item)
-    if quality is None and mode is None and getattr(item, "format", None) is None:
+    if quality is None and max_quality is None and mode is None and explicit_format is None:
         return data, ext or default_format.lower()
+    if max_quality is not None and _keep_jpeg_under_max_quality(data, int(max_quality)):
+        return data, ext or "jpg"
     if not _PIL_AVAILABLE:
         raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
     from PIL import Image as PILImage
 
     pil = PILImage.open(io.BytesIO(data))
-    return _save_pil(pil, explicit_format or ext or default_format, quality=quality, mode=mode)
+    return _save(pil, explicit_format or ext or default_format)
 
 
 def _encode_video_array(array: Any, fps: float) -> bytes:

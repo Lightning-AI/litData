@@ -17,9 +17,11 @@ from litdata.streaming.serializers import (
     GraphSerializer,
     ImageSerializer,
     JPEGArraySerializer,
+    JPEGSerializer,
     NoHeaderTensorSerializer,
     TensorSerializer,
     VideoSerializer,
+    _estimate_jpeg_quality,
     _get_serializers,
     _image_array_for_pil,
     _jpeg_has_exif_app1,
@@ -103,12 +105,65 @@ def test_image_roundtrip_array_quality():
     assert tensor.dtype == torch.uint8
 
 
-def _tiny_jpeg_bytes() -> bytes:
+def _tiny_jpeg_bytes(quality: int = 95) -> bytes:
     from PIL import Image as PILImage
 
     buf = __import__("io").BytesIO()
-    PILImage.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(buf, format="JPEG", quality=95)
+    array = np.arange(16 * 16 * 3, dtype=np.uint8).reshape(16, 16, 3)
+    PILImage.fromarray(array).save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def test_quality_and_max_quality_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        Image(bytes=b"\xff\xd8", quality=80, max_quality=95)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        Jpeg(bytes=b"\xff\xd8", quality=80, max_quality=95)
+    jpeg = Jpeg(bytes=b"\xff\xd8")
+    assert jpeg.quality is None
+    assert jpeg.max_quality == 95
+    forced = Jpeg(bytes=b"\xff\xd8", quality=80)
+    assert forced.quality == 80
+    assert forced.max_quality is None
+    image = Image(bytes=b"\xff\xd8")
+    assert image.quality is None
+    assert image.max_quality is None
+
+
+def test_max_quality_keeps_q75_jpeg_bytes():
+    original = _tiny_jpeg_bytes(75)
+    assert _estimate_jpeg_quality(original) == 75
+    kept, name = ImageSerializer().serialize(Image(bytes=original, max_quality=95))
+    assert name == "image:jpg"
+    assert kept == original
+    jpeg, _ = JPEGSerializer().serialize(Jpeg(bytes=original))
+    assert jpeg == original
+    jpeg_cap, _ = JPEGSerializer().serialize(Jpeg(bytes=original, max_quality=95))
+    assert jpeg_cap == original
+
+
+def test_max_quality_encodes_array_and_high_q_jpeg():
+    array = np.arange(16 * 16 * 3, dtype=np.uint8).reshape(16, 16, 3)
+    data, name = ImageSerializer().serialize(Image(array=array, max_quality=95))
+    assert name == "image:jpg"
+    assert data[:2] == b"\xff\xd8"
+    assert data != array.tobytes()
+    assert _estimate_jpeg_quality(data) == 95
+
+    jpeg, _ = JPEGSerializer().serialize(Jpeg(array=array))
+    assert jpeg[:2] == b"\xff\xd8"
+    assert _estimate_jpeg_quality(jpeg) == 95
+
+    high_q = _tiny_jpeg_bytes(100)
+    assert _estimate_jpeg_quality(high_q) == 100
+    capped, _ = ImageSerializer().serialize(Image(bytes=high_q, max_quality=95))
+    assert capped != high_q
+    assert capped[:2] == b"\xff\xd8"
+    assert _estimate_jpeg_quality(capped) == 95
+
+    unknown = b"\xff\xd8\xff\xda"
+    kept, _ = ImageSerializer().serialize(Image(bytes=unknown, max_quality=95))
+    assert kept == unknown
 
 
 def test_jpeg_array_does_not_mutate_quality():

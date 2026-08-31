@@ -73,33 +73,91 @@ class Video(_MediaRef):
     device: str = "cpu"
 
 
+class _Unset:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<UNSET>"
+
+
+_UNSET = _Unset()
+
+
+def _reject_quality_and_max_quality(cls_name: str, quality: int | None, max_quality: int | None) -> None:
+    if quality is not None and max_quality is not None:
+        raise ValueError(
+            f"{cls_name}.quality and {cls_name}.max_quality are mutually exclusive. "
+            "Use quality= to re-encode at that JPEG quality, or max_quality= to cap "
+            "(keep existing JPEG bytes when estimated quality is already at or below the cap)."
+        )
+
+
 @dataclass
 class Image(_MediaRef):
-    """Image sample: path, bytes, numpy/tensor ``array=``, or a PIL ``image=``."""
+    """Image sample: path, bytes, numpy/tensor ``array=``, or a PIL ``image=``.
+
+    ``quality``: re-encode at this JPEG quality (from array/PIL, or force re-encode of
+    path/bytes). ``max_quality``: cap. If the sample is already JPEG and estimated
+    quality is at or below the cap, keep the original bytes (do not upgrade Hub
+    tiny-imagenet q=75 to 95). Higher-quality JPEGs, PNG, or raw pixels are encoded
+    at ``max_quality``. Only one of ``quality`` and ``max_quality`` may be set.
+    Both default to ``None`` (path/bytes pass through). Prefer ``Jpeg`` when you
+    want a default cap of 95.
+    """
 
     array: Any = None
     image: Any = None
     mode: str | None = None
     format: str | None = None
     quality: int | None = None
+    max_quality: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _reject_quality_and_max_quality("Image", self.quality, self.max_quality)
 
 
 @dataclass
 class Jpeg(_MediaRef):
-    """JPEG sample. ``quality`` defaults to 95 when encoding from ``array=`` / ``image=``."""
+    """JPEG sample.
+
+    ``quality``: re-encode at this JPEG quality (from array/PIL, or force re-encode of
+    path/bytes). ``max_quality``: cap (default 95). If the sample is already JPEG and
+    estimated quality is at or below the cap, keep the original bytes (do not upgrade
+    Hub tiny-imagenet q=75 to 95). Higher-quality JPEGs, PNG, or raw pixels are
+    encoded at ``max_quality``. Only one of ``quality`` and ``max_quality`` may be
+    set. ``Jpeg(quality=80)`` clears the default cap so the two are not both set.
+    """
 
     array: Any = None
     image: Any = None
     mode: str | None = None
-    quality: int = 95
+    quality: int | None = None
+    max_quality: Any = _UNSET
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.max_quality is _UNSET:
+            self.max_quality = None if self.quality is not None else 95
+        _reject_quality_and_max_quality("Jpeg", self.quality, self.max_quality)
 
 
 @dataclass
 class JpegArray:
-    """List of JPEGs (``JPEGArraySerializer``)."""
+    """List of JPEGs (``JPEGArraySerializer``).
+
+    Same ``quality`` / ``max_quality`` rules as ``Jpeg`` (default cap 95). Applied to
+    child ``Jpeg`` samples that still use the default cap.
+    """
 
     images: list[Any] = field(default_factory=list)
-    quality: int = 95
+    quality: int | None = None
+    max_quality: Any = _UNSET
+
+    def __post_init__(self) -> None:
+        if self.max_quality is _UNSET:
+            self.max_quality = None if self.quality is not None else 95
+        _reject_quality_and_max_quality("JpegArray", self.quality, self.max_quality)
 
 
 @dataclass

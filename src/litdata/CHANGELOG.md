@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- ``Jpeg`` / ``JpegArray`` default to ``max_quality=95`` with ``quality=None``. ``max_quality`` is a cap: existing JPEG bytes whose estimated quality (IJG luminance q-table) is already ≤ the cap are kept as-is (Hub tiny-imagenet q=75 stays q=75). Higher-quality JPEGs, PNG, or raw pixels encode at the cap. ``quality=`` still force-encodes at that JPEG quality. ``quality`` and ``max_quality`` are mutually exclusive. ``Image`` leaves both unset so path/bytes stay pass-through unless you set one.
 - Pytree ``optimize(..., compression="zstd")`` accepts ``compression_level="chunk"|"batch"|"sample"`` (omitted zstd defaults to ``batch``: framed ``.bin`` with ``compression_batch_size=256``, matching Arrow IPC / decode windows). ``chunk`` is whole-file ``.zstd.bin``. ``sample`` zstd-compresses each item payload between offsets. Numeric zstd levels stay ``compression="zstd:N"``. Nested Arrow IPC is unchanged.
 
 ### Fixed
