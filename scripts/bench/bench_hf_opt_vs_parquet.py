@@ -6,6 +6,7 @@ Resume: writes --out after every dataset. optimize_hf reuses output_dir/index.js
 
   PYTHONPATH=src python scripts/bench/bench_hf_opt_vs_parquet.py
 """
+
 from __future__ import annotations
 
 import argparse
@@ -144,9 +145,7 @@ def main() -> None:
             rec["binary_rows_per_s"] = n_bin / elapsed_bin if elapsed_bin else 0.0
             rec["parquet_rows"] = n_pq
             rec["parquet_rows_per_s"] = n_pq / elapsed_pq if elapsed_pq else 0.0
-            rec["ratio"] = (
-                rec["binary_rows_per_s"] / rec["parquet_rows_per_s"] if rec["parquet_rows_per_s"] else None
-            )
+            rec["ratio"] = rec["binary_rows_per_s"] / rec["parquet_rows_per_s"] if rec["parquet_rows_per_s"] else None
             rec["binary_faster"] = bool(rec["ratio"] and rec["ratio"] > 1)
             print(
                 f"{label:<48} {rec['optimize_s']:7.1f} {rec['binary_rows_per_s']:9.0f} "

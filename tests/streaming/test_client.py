@@ -1029,4 +1029,3 @@ def test_temp_bucket_credentials_concurrent_first_access_fetches_once(monkeypatc
 
     assert not errors
     assert requests_mock.post.call_count == 1
-

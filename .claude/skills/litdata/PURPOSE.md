@@ -13,9 +13,10 @@ Manually authored expert skill for the LitData library and codebase. Predates Wi
 
 ## Evolution history
 
-| Iter | Change | Gate |
-| ---- | ------ | ---- |
-| 0    | Initial manual skill (`SKILL.md` + `reference/`) | n/a |
-| 1    | Parquet/HF comparison: `to_pylist` + Hub range-read caveat | bench + tests |
+| Iter | Change                                                      | Gate               |
+| ---- | ----------------------------------------------------------- | ------------------ |
+| 0    | Initial manual skill (`SKILL.md` + `reference/`)            | n/a                |
+| 1    | Parquet/HF comparison: `to_pylist` + Hub range-read caveat  | bench + tests      |
 | 2    | Hub bench: prefetch is the `hf://` default; range_read lost | UltraChat 7.82× HF |
+
 - [hf-prefetch-vs-range](../../../wiki/patterns/hf-prefetch-vs-range.md) — keep prefetch as the hf:// default; range_read lost the Hub bench

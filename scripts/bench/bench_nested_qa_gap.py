@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Why nested QA lost to parquet, and whether struct-as-pytree closes it.
 
-  PYTHONPATH=src python scripts/bench/bench_nested_qa_gap.py
+PYTHONPATH=src python scripts/bench/bench_nested_qa_gap.py
 """
+
 from __future__ import annotations
 
 import json
@@ -105,11 +106,16 @@ def micro_decode(table: pa.Table) -> dict[str, float]:
     return {
         "parquet_to_pylist_us": timed(pq_pylist, loops=5),
         "opaque_choices_dict_us": timed(lambda: [_nested_loads(b) for b in choice_blobs]),
-        "two_list_leaves_us": timed(lambda: [(_nested_loads(a), _nested_loads(b)) for a, b in zip(list_text, list_label)]),
+        "two_list_leaves_us": timed(
+            lambda: [(_nested_loads(a), _nested_loads(b)) for a, b in zip(list_text, list_label)]
+        ),
         "answers_list_us": timed(lambda: [_nested_loads(b) for b in answer_blobs]),
         "starts_list_us": timed(lambda: [_nested_loads(b) for b in start_blobs]),
         "utf8_decode_8_strs_us": timed(
-            lambda: [[x.decode() for x in texts] + [x.decode() for x in labels] for texts, labels in zip(text_blobs, label_blobs)]
+            lambda: [
+                [x.decode() for x in texts] + [x.decode() for x in labels]
+                for texts, labels in zip(text_blobs, label_blobs)
+            ]
         ),
     }
 

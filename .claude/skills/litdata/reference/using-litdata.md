@@ -492,10 +492,10 @@ ds = StreamingDataset("s3://bucket/data/train-*.parquet", item_loader=ParquetLoa
 StreamingDataLoader(ds, num_workers=4, multiprocessing_context="spawn")  # required on Linux
 ```
 
-| `ParquetLoader` arg | Default | Notes                                                         |
-| ------------------- | ------- | ------------------------------------------------------------- |
+| `ParquetLoader` arg | Default | Notes                                                                                                                                                                                                                                                                      |
+| ------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `low_memory`        | `True`  | Row-group path (pyarrow). Each group is `to_pylist()` once (HF-style), not per-cell `as_py()`. `False` = full file in RAM via Polars. On `hf://`, default still **downloads** the file in `PrepareChunksThread` then reads locally (faster than HF streaming once cached). |
-| `pre_load_chunk`    | `False` | Only effective when `low_memory=False`                        |
+| `pre_load_chunk`    | `False` | Only effective when `low_memory=False`                                                                                                                                                                                                                                     |
 
 **`ParquetReader`** (`litdata.processing.readers`) for `map`/`optimize` `reader=` — splits oversized parquet inputs by `num_rows` into a cache folder; `fn` receives a `ParquetFile`.
 

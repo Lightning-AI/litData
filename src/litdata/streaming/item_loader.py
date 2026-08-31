@@ -977,9 +977,7 @@ class PyTreeLoader(BaseItemLoader):
         rows = self._batch_deserialize_payload(view, offsets, chunk_index, start, end)
         return self._store_decode_window(chunk_index, start, rows, table_idx)
 
-    def _fill_decode_window_path(
-        self, chunk_index: int, chunk_filepath: str, table_idx: int, batch_rows: int
-    ) -> Any:
+    def _fill_decode_window_path(self, chunk_index: int, chunk_filepath: str, table_idx: int, batch_rows: int) -> Any:
         with open(chunk_filepath, "rb") as handle:
             blob = handle.read()
         n = struct.unpack_from("<I", blob, 0)[0]

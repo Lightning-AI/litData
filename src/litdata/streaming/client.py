@@ -169,9 +169,7 @@ def _cached_temp_bucket_credentials(
         return fetched_at, dict(creds)
 
 
-def _login_and_get_temp_bucket_credentials(
-    data_connection_id: str, *, force_refresh: bool = False
-) -> dict[str, Any]:
+def _login_and_get_temp_bucket_credentials(data_connection_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
     """Mint temporary bucket credentials for a data connection via the Lightning Cloud API.
 
     Shared by R2 (lightning storage) connections and by S3 connections marked
@@ -487,9 +485,7 @@ class R2Client(S3Client):
     def get_r2_bucket_credentials(self, data_connection_id: str, *, force_refresh: bool = False) -> dict[str, str]:
         """Fetch temporary R2 credentials for the current lightning storage connection."""
         try:
-            temp_credentials = _login_and_get_temp_bucket_credentials(
-                data_connection_id, force_refresh=force_refresh
-            )
+            temp_credentials = _login_and_get_temp_bucket_credentials(data_connection_id, force_refresh=force_refresh)
             with _temp_creds_lock_for_pid():
                 cached = _temp_creds_cache.get(data_connection_id)
             self._creds_fetched_at = cached[0] if cached is not None else None

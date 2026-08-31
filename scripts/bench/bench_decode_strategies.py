@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Per-item vs windowed vs whole-chunk binary decode, vs parquet, by schema.
 
-  PYTHONPATH=src python scripts/bench/bench_decode_strategies.py
+PYTHONPATH=src python scripts/bench/bench_decode_strategies.py
 """
+
 from __future__ import annotations
 
 import json
@@ -133,7 +134,9 @@ def main() -> None:
         ("win_1024", {"LITDATA_BATCH_ROWS": "1024"}),
         ("chunk", {"LITDATA_BATCH_DECODE": "all"}),
     ]
-    print(f"\n{'schema':<12} {'per_item':>10} {'win256':>10} {'win1024':>10} {'chunk':>10} {'parquet':>10} {'best':>10}")
+    print(
+        f"\n{'schema':<12} {'per_item':>10} {'win256':>10} {'win1024':>10} {'chunk':>10} {'parquet':>10} {'best':>10}"
+    )
     results = []
     for name, (opt, pq_dir) in prepared.items():
         scores = {}
@@ -141,7 +144,11 @@ def main() -> None:
             clean = {k: v for k, v in env.items() if v}
             scores[label] = median_rps(opt, env=clean)
         scores["parquet"] = median_rps(pq_dir, loader=ParquetLoader())
-        best_bin = max(label for label in ("per_item", "win_256", "win_1024", "chunk") if scores[label] == max(scores[k] for k in ("per_item", "win_256", "win_1024", "chunk")))
+        best_bin = max(
+            label
+            for label in ("per_item", "win_256", "win_1024", "chunk")
+            if scores[label] == max(scores[k] for k in ("per_item", "win_256", "win_1024", "chunk"))
+        )
         print(
             f"{name:<12} {scores['per_item']:10.0f} {scores['win_256']:10.0f} "
             f"{scores['win_1024']:10.0f} {scores['chunk']:10.0f} {scores['parquet']:10.0f} {best_bin:>10}"

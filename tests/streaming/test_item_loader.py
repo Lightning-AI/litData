@@ -80,9 +80,7 @@ def test_streaming_dataset_exposes_batch_decode(tmp_path):
     pinned = StreamingDataset(str(tmp_path / "ds"), batch_decode=4)
     assert pinned.batch_decode == 4
     loader = PyTreeLoader(batch_decode=4)
-    assert (
-        _batch_rows_for_format(["str", "int"], [{"chunk_bytes": 100, "chunk_size": 8}], loader._batch_decode) == 4
-    )
+    assert _batch_rows_for_format(["str", "int"], [{"chunk_bytes": 100, "chunk_size": 8}], loader._batch_decode) == 4
 
 
 def test_encode_data_size_header_is_little_endian_uint32():

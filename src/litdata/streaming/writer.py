@@ -28,10 +28,10 @@ from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABL
 from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.item_loader import (
+    _ARROW_FOOTER_MAGIC,
     BaseItemLoader,
     ParquetLoader,
     PyTreeLoader,
-    _ARROW_FOOTER_MAGIC,
     append_arrow_row_footer,
 )
 from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
@@ -498,9 +498,7 @@ class BinaryWriter:
         if self._encryption and self._encryption.level == EncryptionLevel.SAMPLE:
             data = self._encryption.encrypt(data)
 
-        keep_sample = isinstance(original, dict) and (
-            is_arrow_footer_type(self._types) or is_json_row(original)
-        )
+        keep_sample = isinstance(original, dict) and (is_arrow_footer_type(self._types) or is_json_row(original))
         self._serialized_items[index] = Item(
             index=index,
             data=data,

@@ -34,6 +34,7 @@ Token: ``HF_TOKEN`` / ``HUGGING_FACE_HUB_TOKEN``. Never printed.
 Resume: writes ``--out`` after every dataset. Previous runs with a different
 ``rows`` or ``target_seconds`` value are not treated as done.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,8 +51,18 @@ from pathlib import Path
 # Significant splits only: ≥50k rows and/or ≥50–100MB parquet. No wrap-padding.
 DATASETS: list[tuple[str, str, str | None, str | None]] = [
     # nested / long text
-    ("HuggingFaceH4/ultrachat_200k", "train_sft", None, "hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet"),
-    ("open-thoughts/OpenThoughts-114k", "train", None, "hf://datasets/open-thoughts/OpenThoughts-114k/data/train-*.parquet"),
+    (
+        "HuggingFaceH4/ultrachat_200k",
+        "train_sft",
+        None,
+        "hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet",
+    ),
+    (
+        "open-thoughts/OpenThoughts-114k",
+        "train",
+        None,
+        "hf://datasets/open-thoughts/OpenThoughts-114k/data/train-*.parquet",
+    ),
     ("abisee/cnn_dailymail", "train", "3.0.0", None),
     ("teknium/OpenHermes-2.5", "train", None, None),
     ("roneneldan/TinyStories", "train", None, None),
@@ -115,7 +126,9 @@ def target_rows_for_seconds(n: int, elapsed: float, length: int, target_seconds:
     return min(length, max(n, math.ceil((n / elapsed) * target_seconds)))
 
 
-def _arm_metrics(n: int, ttfb: float, elapsed: float, first_n: int, first_ttfb: float, first_elapsed: float, target: int) -> dict:
+def _arm_metrics(
+    n: int, ttfb: float, elapsed: float, first_n: int, first_ttfb: float, first_elapsed: float, target: int
+) -> dict:
     rps = n / elapsed if elapsed else 0.0
     first_rps = first_n / first_elapsed if first_elapsed else 0.0
     return {
@@ -185,12 +198,9 @@ def _storage_options_for_opt(opt_dir: str) -> tuple[object, dict]:
     if dest.url:
         if not dest.data_connection_id:
             raise RuntimeError(
-                f"Resolved {opt_dir} to {dest.url} without data_connection_id; "
-                "cannot mint R2 credentials."
+                f"Resolved {opt_dir} to {dest.url} without data_connection_id; cannot mint R2 credentials."
             )
-        storage_options = construct_storage_options(
-            {"data_connection_id": dest.data_connection_id}, dest
-        )
+        storage_options = construct_storage_options({"data_connection_id": dest.data_connection_id}, dest)
     return dest, storage_options
 
 
@@ -418,9 +428,7 @@ def bench_one(
     # 3) Optimize onto lightning_storage, then stream binary from R2 (fresh cache).
     try:
         need_rows = max(rows, pq["target"], n_pq or 0) + warmup
-        opt_s, opt_files = optimize_to_storage(
-            url, opt_dir, cache_root, need_rows, overwrite=overwrite_opt, slug=slug
-        )
+        opt_s, opt_files = optimize_to_storage(url, opt_dir, cache_root, need_rows, overwrite=overwrite_opt, slug=slug)
         if os.path.isdir(bin_cache):
             shutil.rmtree(bin_cache)
         os.makedirs(bin_cache, exist_ok=True)
@@ -537,9 +545,7 @@ def main() -> None:
     if (allow or splits) and not picked:
         raise SystemExit(f"No datasets matched --repo {sorted(allow or [])} --split {sorted(splits or [])}")
 
-    print(
-        f"{'dataset':<48} {'bin/s':>8} {'pq/s':>8} {'hf/s':>8} {'bin/pq':>7} {'pq/hf':>7}"
-    )
+    print(f"{'dataset':<48} {'bin/s':>8} {'pq/s':>8} {'hf/s':>8} {'bin/pq':>7} {'pq/hf':>7}")
     for repo, split, config, explicit in picked:
         key = (repo, split, config)
         if key in done:
@@ -555,9 +561,7 @@ def main() -> None:
                 print(f"  skip {rec['error']}")
             else:
                 print(f"  url={url}")
-                opt_dir = str(
-                    Path(args.opt_root) / repo.replace("/", "--") / f"{split}-{config or 'default'}"
-                )
+                opt_dir = str(Path(args.opt_root) / repo.replace("/", "--") / f"{split}-{config or 'default'}")
                 slug = f"{repo.replace('/', '--')}-{split}-{config or 'default'}"
                 rec = bench_one(
                     repo,

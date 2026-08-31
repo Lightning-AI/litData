@@ -366,9 +366,7 @@ def type_to_json(schema: JsonType) -> Any:
     payload: dict[str, Any] = {"type": schema.kind}
     if schema.optional:
         payload["optional"] = True
-    if schema.kind == "list":
-        payload["value"] = type_to_json(schema.value) if schema.value else "json"
-    elif schema.kind == "map":
+    if schema.kind == "list" or schema.kind == "map":
         payload["value"] = type_to_json(schema.value) if schema.value else "json"
     elif schema.kind == "struct":
         payload["fields"] = {key: type_to_json(item) for key, item in (schema.fields or {}).items()}
@@ -394,7 +392,9 @@ def type_from_json(obj: Any) -> JsonType:
         return JsonType("map", value=type_from_json(obj.get("value", "json")), optional=optional)
     if kind == "struct":
         raw_fields = obj.get("fields") or {}
-        return JsonType("struct", fields={key: type_from_json(item) for key, item in raw_fields.items()}, optional=optional)
+        return JsonType(
+            "struct", fields={key: type_from_json(item) for key, item in raw_fields.items()}, optional=optional
+        )
     return JsonType(str(kind), optional=optional)
 
 
@@ -447,12 +447,19 @@ def _from_pa_type(pa_type: Any, *, optional: bool = False) -> JsonType:
     is_fixed = getattr(pa.types, "is_fixed_size_list", lambda _: False)(pa_type)
     if is_list_type or is_fixed:
         value_type = getattr(pa_type, "value_type", None) or getattr(pa_type, "type", None)
-        return JsonType("list", value=_from_pa_type(value_type) if value_type is not None else JsonType("json"), optional=optional)
+        return JsonType(
+            "list", value=_from_pa_type(value_type) if value_type is not None else JsonType("json"), optional=optional
+        )
     if pa.types.is_map(pa_type):
         item_type = getattr(pa_type, "item_type", None)
-        return JsonType("map", value=_from_pa_type(item_type) if item_type is not None else JsonType("json"), optional=optional)
+        return JsonType(
+            "map", value=_from_pa_type(item_type) if item_type is not None else JsonType("json"), optional=optional
+        )
     if pa.types.is_struct(pa_type):
-        fields = {pa_type.field(i).name: _from_pa_type(pa_type.field(i).type, optional=bool(pa_type.field(i).nullable)) for i in range(pa_type.num_fields)}
+        fields = {
+            pa_type.field(i).name: _from_pa_type(pa_type.field(i).type, optional=bool(pa_type.field(i).nullable))
+            for i in range(pa_type.num_fields)
+        }
         return JsonType("struct", fields=fields, optional=optional)
     if pa.types.is_integer(pa_type):
         return JsonType("int", optional=optional)
@@ -553,7 +560,7 @@ def wrap_for_pytree(
     Arrow footer (original sample).
     """
     if wrap_leaf is None:
-        wrap_leaf = lambda value: value  # noqa: E731
+        wrap_leaf = lambda value: value
     if schema.kind == "struct" and isinstance(sample, dict):
         fields = schema.fields or {}
         order = keys if keys is not None else list(fields)

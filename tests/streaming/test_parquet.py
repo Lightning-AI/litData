@@ -14,12 +14,12 @@ from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.hf_dataset import (
     _hf_cache_root,
+    _persist_hf_parquet_files,
     _stabilize_hf_row,
     hf_parquet_cache_path,
     index_hf_dataset,
     optimize_hf,
     resolve_hf_dataset_url,
-    _persist_hf_parquet_files,
 )
 from litdata.utilities.parquet import (
     CloudParquetDir,
@@ -203,9 +203,7 @@ def test_optimize_hf_variable_length_lists(tmp_path, monkeypatch):
     pq_path = tmp_path / "nested.parquet"
     pq.write_table(table, pq_path)
     monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/qa")
-    monkeypatch.setattr(
-        "litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)]
-    )
+    monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)])
     out = tmp_path / "qa-opt"
     optimize_hf("org/qa", output_dir=str(out), chunk_size=10, num_workers=1)
     ds = StreamingDataset(str(out))
@@ -259,9 +257,7 @@ def test_persist_hf_parquet_skips_complete_file(tmp_path, monkeypatch):
         raise AssertionError("should not download a complete file")
 
     monkeypatch.setattr("litdata.streaming.downloader.get_downloader", boom)
-    paths = _persist_hf_parquet_files(
-        url, [{"filename": "a.parquet", "chunk_bytes": 10}], str(tmp_path), {}
-    )
+    paths = _persist_hf_parquet_files(url, [{"filename": "a.parquet", "chunk_bytes": 10}], str(tmp_path), {})
     assert paths == [local]
 
 
@@ -419,9 +415,11 @@ def test_parse_hf_url():
     from litdata.utilities.hf_fs import parse_hf_url
 
     assert parse_hf_url("hf://datasets/org/name/data/train.parquet") == ("org/name", None, "data/train.parquet")
-    assert parse_hf_url(
-        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet"
-    ) == ("yahma/alpaca-cleaned", "refs/convert/parquet", "default/train/0000.parquet")
+    assert parse_hf_url("hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet") == (
+        "yahma/alpaca-cleaned",
+        "refs/convert/parquet",
+        "default/train/0000.parquet",
+    )
     assert parse_hf_url("hf://datasets/org/name@main/split/file.parquet") == (
         "org/name",
         "main",

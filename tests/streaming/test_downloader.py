@@ -313,9 +313,7 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 def test_hf_downloader_revision(tmpdir, huggingface_hub_mock):
     mock_hf_hub_download = MagicMock(return_value=os.path.join(tmpdir, "0000.parquet"))
     huggingface_hub_mock.hf_hub_download = mock_hf_hub_download
-    downloader = HFDownloader(
-        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet", tmpdir, [], {}
-    )
+    downloader = HFDownloader("hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet", tmpdir, [], {})
     local_filepath = os.path.join(tmpdir, "default", "train", "0000.parquet")
     downloader.download_file(
         "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet",

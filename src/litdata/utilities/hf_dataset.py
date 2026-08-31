@@ -13,8 +13,8 @@ from typing import Any
 
 from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.serializers import JsonLeaf
-from litdata.types import types_from_arrow, wrap_for_pytree
 from litdata.streaming.writer import index_parquet_dataset
+from litdata.types import types_from_arrow, wrap_for_pytree
 from litdata.utilities.dataset_utilities import generate_md5_hash, get_default_cache_dir
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
@@ -45,9 +45,7 @@ def hf_parquet_cache_path(dataset_url: str, cache_dir: str | None = None) -> str
     return os.path.join(_hf_cache_root(cache_dir), "hf-parquet", generate_md5_hash(dataset_url))
 
 
-def index_hf_dataset(
-    dataset_url: str, cache_dir: str | None = None, storage_options: dict | None = None
-) -> str:
+def index_hf_dataset(dataset_url: str, cache_dir: str | None = None, storage_options: dict | None = None) -> str:
     """Indexes a Hugging Face dataset and returns the path to the cache directory.
 
     The index is persisted at ``{cache_dir}/hf-index/<url_hash>/index.json`` so later
@@ -252,8 +250,7 @@ def resolve_hf_dataset_url(
             return url
 
     raise FileNotFoundError(
-        f"No parquet files found for dataset {name!r} "
-        f"(revision={revision!r}, split={split!r}, config={config!r})."
+        f"No parquet files found for dataset {name!r} (revision={revision!r}, split={split!r}, config={config!r})."
     )
 
 
@@ -289,8 +286,7 @@ def _chunks_from_index(index_dir: str, pattern: str | None) -> list[dict[str, An
     return [
         chunk
         for chunk in chunks
-        if fnmatch(chunk.get("filename", ""), pattern)
-        or fnmatch(os.path.basename(chunk.get("filename", "")), pattern)
+        if fnmatch(chunk.get("filename", ""), pattern) or fnmatch(os.path.basename(chunk.get("filename", "")), pattern)
     ]
 
 
@@ -340,9 +336,7 @@ def _list_hf_parquet_urls(dataset_url: str, storage_options: dict | None) -> lis
     urls: list[str] = []
     for rec in files:
         name = str(rec.get("name") or "")
-        if pattern and not (
-            fnmatch(name, pattern) or fnmatch(os.path.basename(name), pattern)
-        ):
+        if pattern and not (fnmatch(name, pattern) or fnmatch(os.path.basename(name), pattern)):
             continue
         if name.startswith("hf://"):
             urls.append(name)
