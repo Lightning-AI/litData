@@ -119,7 +119,8 @@ def test_local_posix_keeps_full_shuffle(tmpdir):
 
 def test_posix_fast_loads_a_page_of_items(tmpdir):
     data_dir = _write_int_dataset(tmpdir, num_items=80, chunk_size=40)
-    dataset = StreamingDataset(data_dir, shuffle=True, seed=42)
+    # Page fill is the per-item mmap path; auto batch_decode serves a decode window instead.
+    dataset = StreamingDataset(data_dir, shuffle=True, seed=42, batch_decode=0)
     items = list(iter(dataset))
     assert sorted(items) == list(range(80))
     loader = dataset.cache._reader._item_loader

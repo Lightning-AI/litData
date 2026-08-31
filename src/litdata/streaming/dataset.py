@@ -366,10 +366,14 @@ class StreamingDataset(IterableDataset):
                     self.input_dir.url = self.input_dir.path
                     self.input_dir.path = cache_path
 
-        if self.item_loader is None:
-            self.item_loader = PyTreeLoader(batch_decode=self.batch_decode)
+        # Keep ``self.item_loader`` as the constructor value so checkpoints stay
+        # ``item_loader: None`` when the user did not pass one. Workers still get a
+        # PyTreeLoader via the local Cache; assigning here made resume see ``{}``.
+        item_loader = self.item_loader
+        if item_loader is None:
+            item_loader = PyTreeLoader(batch_decode=self.batch_decode)
         else:
-            set_batch = getattr(self.item_loader, "set_batch_decode", None)
+            set_batch = getattr(item_loader, "set_batch_decode", None)
             if callable(set_batch):
                 set_batch(self.batch_decode)
 
@@ -377,7 +381,7 @@ class StreamingDataset(IterableDataset):
             input_dir=self.input_dir,
             subsampled_files=self.subsampled_files,
             region_of_interest=self.region_of_interest,
-            item_loader=self.item_loader,
+            item_loader=item_loader,
             chunk_bytes=1,
             serializers=self.serializers,
             max_cache_size=self.max_cache_size,

@@ -36,6 +36,8 @@ from litdata.streaming.item_loader import (
 )
 from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
 from litdata.types import (
+    _MEDIA_KINDS,
+    JsonType,
     fuse_schema_json,
     fuse_type,
     infer_type,
@@ -65,6 +67,16 @@ def _is_node_index_file(filename: str) -> bool:
 def _config_body(config: dict[str, Any]) -> dict[str, Any]:
     """Config equality for merge, ignoring fused ``types`` (workers see different rows)."""
     return {key: value for key, value in config.items() if key != "types"}
+
+
+_MEDIA_FORMAT_KEYS = frozenset(_MEDIA_KINDS.values()) | {"no_header_tensor", "no_header_numpy"}
+
+
+def _data_format_is_arrow_safe(data_format: list[str] | None) -> bool:
+    """False when a leaf is media/tensor — those stay on pytree serializers, not IPC."""
+    if not data_format:
+        return True
+    return all(name.split(":", 1)[0].lower() not in _MEDIA_FORMAT_KEYS for name in data_format)
 
 
 @dataclass
@@ -133,7 +145,7 @@ class BinaryWriter:
 
         self._data_format: list[str] | None = None
         self._data_spec: PyTree | None = None
-        self._types = None
+        self._types: JsonType | None = None
         self._pytree_keys: list[str] | None = None
 
         if self._compression:
@@ -364,7 +376,11 @@ class BinaryWriter:
         num_items = np.uint32(n)
         header = 4 + 4 * (n + 1)
         samples = [item.sample for item in items]
-        arrow_rows = is_arrow_footer_type(self._types) and all(sample is not None for sample in samples)
+        arrow_rows = (
+            is_arrow_footer_type(self._types)
+            and _data_format_is_arrow_safe(self._data_format)
+            and all(sample is not None for sample in samples)
+        )
         nested_arrow_only = False
         if arrow_rows:
             # Header + Arrow footer only. The pytree body duplicated every JSON
@@ -395,7 +411,7 @@ class BinaryWriter:
                 data[pos:end] = item.data
                 pos = end
             data = bytes(data)
-            if is_arrow_footer_type(self._types):
+            if is_arrow_footer_type(self._types) and _data_format_is_arrow_safe(self._data_format):
                 data = append_arrow_row_footer(data, samples, ipc_compression=self._ipc_codec())
 
         # Whether to encrypt the data at the chunk level
@@ -435,7 +451,11 @@ class BinaryWriter:
 
     def _item_account_bytes(self, item: Item) -> int:
         """Bytes that count toward ``chunk_bytes``. Arrow JSON is discarded; use on-disk size."""
-        if item.sample is None or not is_arrow_footer_type(self._types):
+        if (
+            item.sample is None
+            or not is_arrow_footer_type(self._types)
+            or not _data_format_is_arrow_safe(self._data_format)
+        ):
             return item.bytes
         if self._nested_on_disk_bpi is not None:
             return max(1, int(round(self._nested_on_disk_bpi)))
@@ -498,7 +518,11 @@ class BinaryWriter:
         if self._encryption and self._encryption.level == EncryptionLevel.SAMPLE:
             data = self._encryption.encrypt(data)
 
-        keep_sample = isinstance(original, dict) and (is_arrow_footer_type(self._types) or is_json_row(original))
+        keep_sample = (
+            isinstance(original, dict)
+            and _data_format_is_arrow_safe(self._data_format)
+            and (is_arrow_footer_type(self._types) or is_json_row(original))
+        )
         self._serialized_items[index] = Item(
             index=index,
             data=data,

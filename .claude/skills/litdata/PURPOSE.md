@@ -8,8 +8,8 @@ Manually authored expert skill for the LitData library and codebase. Predates Wi
 
 ## Patterns addressed
 
-- [parquet-batch-pylist](../../../wiki/patterns/parquet-batch-pylist.md) — document `to_pylist()` vs per-cell `as_py()`
-- [hf-remote-range-reads](../../../wiki/patterns/hf-remote-range-reads.md) — do not claim Hub `hf://` matches HF streaming remotely
+- `wiki/patterns/parquet-batch-pylist.md` — document `to_pylist()` vs per-cell `as_py()`
+- `wiki/patterns/hf-remote-range-reads.md` — do not claim Hub `hf://` matches HF streaming remotely
 
 ## Evolution history
 
@@ -19,4 +19,4 @@ Manually authored expert skill for the LitData library and codebase. Predates Wi
 | 1    | Parquet/HF comparison: `to_pylist` + Hub range-read caveat  | bench + tests      |
 | 2    | Hub bench: prefetch is the `hf://` default; range_read lost | UltraChat 7.82× HF |
 
-- [hf-prefetch-vs-range](../../../wiki/patterns/hf-prefetch-vs-range.md) — keep prefetch as the hf:// default; range_read lost the Hub bench
+- `wiki/patterns/hf-prefetch-vs-range.md` — keep prefetch as the hf:// default; range_read lost the Hub bench

@@ -775,7 +775,7 @@ except ImportError:
         return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
     def _json_loads(data: bytes | bytearray | memoryview) -> Any:
-        return json.loads(data)
+        return json.loads(bytes(data) if isinstance(data, memoryview) else data)
 
 
 def _enc_json(value: Any) -> bytes:
@@ -888,7 +888,7 @@ def _enc_recs(rows: list[dict[str, Any]]) -> bytes | None:
     return b"".join(parts)
 
 
-def _read_utf8(raw: bytes, offset: int) -> tuple[str, int]:
+def _read_utf8(raw: bytes | bytearray, offset: int) -> tuple[str, int]:
     length = _U32.unpack_from(raw, offset)[0]
     offset += 4
     return raw[offset : offset + length].decode("utf-8"), offset + length
@@ -905,7 +905,7 @@ def _nested_loads(data: bytes | bytearray | memoryview) -> Any:
     return value
 
 
-def _nested_loads_at(raw: bytes, offset: int) -> tuple[Any, int]:
+def _nested_loads_at(raw: bytes | bytearray, offset: int) -> tuple[Any, int]:
     tag = raw[offset]
     if tag == _NEST_JSON:
         n = _U32.unpack_from(raw, offset + 1)[0]
@@ -949,11 +949,11 @@ def _nested_loads_at(raw: bytes, offset: int) -> tuple[Any, int]:
     if tag == _NEST_DICT:
         n = _U32.unpack_from(raw, offset + 1)[0]
         offset += 5
-        out: dict[str, Any] = {}
+        mapping: dict[str, Any] = {}
         for _ in range(n):
             key, offset = _read_utf8(raw, offset)
-            out[key], offset = _nested_loads_at(raw, offset)
-        return out, offset
+            mapping[key], offset = _nested_loads_at(raw, offset)
+        return mapping, offset
     if tag == _NEST_RECS:
         n = _U32.unpack_from(raw, offset + 1)[0]
         n_keys = _U32.unpack_from(raw, offset + 5)[0]

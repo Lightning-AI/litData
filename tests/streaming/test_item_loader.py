@@ -642,7 +642,8 @@ def test_nested_chunk_skips_file_zstd(tmp_path):
     raw = bins[0].read_bytes()
     assert raw[-8:] == _ARROW_FOOTER_MAGIC
     rows = load_arrow_row_footer(raw)
-    assert rows is not None and len(rows) == 32
+    assert rows is not None
+    assert len(rows) == 32
 
     ds = StreamingDataset(str(out))
     assert ds[10]["id"] == "q10"
@@ -691,7 +692,8 @@ def test_nested_ipc_file_has_multiple_record_batches(tmp_path, compression):
     reader = pa.ipc.open_file(ipc)
     assert reader.num_record_batches > 1
     rows = load_arrow_row_footer(raw)
-    assert rows is not None and len(rows) == n
+    assert rows is not None
+    assert len(rows) == n
 
     ds = StreamingDataset(str(out))
     assert ds[0]["id"] == "q0"
@@ -730,7 +732,8 @@ def test_legacy_ipc_stream_footer_still_reads():
     struct.pack_into("<I", blob, header_len + len(ipc), len(ipc))
     blob[-8:] = _ARROW_FOOTER_MAGIC
     rows = load_arrow_row_footer(bytes(blob))
-    assert rows is not None and len(rows) == 8
+    assert rows is not None
+    assert len(rows) == 8
     assert rows[0]["id"] == "q0"
     assert rows[2]["answers"] == ["span", "span"]
 
@@ -787,7 +790,8 @@ def test_flat_chunk_uses_arrow_footer(tmp_path):
     raw = chunk.read_bytes()
     assert raw[-8:] == _ARROW_FOOTER_MAGIC
     rows = load_arrow_row_footer(raw)
-    assert rows is not None and len(rows) == 16
+    assert rows is not None
+    assert len(rows) == 16
     assert rows[0]["text"] == "row 0"
     assert rows[0]["label"] == 0
     ds = StreamingDataset(str(out))
@@ -825,6 +829,7 @@ def test_flat_chunk_skips_file_zstd(tmp_path):
     raw = bins[0].read_bytes()
     assert raw[-8:] == _ARROW_FOOTER_MAGIC
     rows = load_arrow_row_footer(raw)
-    assert rows is not None and len(rows) == 32
+    assert rows is not None
+    assert len(rows) == 32
     ds = StreamingDataset(str(out))
     assert ds[10] == {"text": "row 10", "label": 0}

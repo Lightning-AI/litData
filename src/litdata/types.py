@@ -278,6 +278,10 @@ def infer_type(value: Any) -> JsonType:
     media = _MEDIA_KINDS.get(cls_name)
     if media is not None:
         return JsonType(media)
+    # PIL plugin classes (JpegImageFile, PngImageFile, …) are not the wrapper names above.
+    module = getattr(type(value), "__module__", "") or ""
+    if module.startswith("PIL.") and (cls_name.endswith("ImageFile") or cls_name == "Image"):
+        return JsonType("pil")
     if isinstance(value, bool):
         return JsonType("bool")
     if isinstance(value, int):
@@ -570,8 +574,8 @@ def wrap_for_pytree(
             if field_t is None:
                 continue
             value = sample.get(key)
-            if type(value).__name__ == "JsonLeaf" and hasattr(value, "value"):
-                value = value.value
+            if value is not None and type(value).__name__ == "JsonLeaf":
+                value = getattr(value, "value", value)
             if value is None:
                 value = default_for(field_t)
             out[key] = _wrap_value(value, field_t, wrap_leaf)
@@ -581,6 +585,9 @@ def wrap_for_pytree(
 
 def _wrap_value(value: Any, schema: JsonType, wrap_leaf: Any) -> Any:
     if schema.kind in {"list", "map", "json"}:
+        # Unknown objects are typed as ``json`` but must not be JSON-serialized (PIL, tensors).
+        if schema.kind == "json" and not is_json_row(value):
+            return value
         return wrap_leaf(value)
     if schema.kind == "struct":
         if not isinstance(value, dict):

@@ -77,7 +77,7 @@ class _HTTPClient:
         adapter = _CustomRetryAdapter(max_retries=retry_strategy, timeout=_DEFAULT_REQUEST_TIMEOUT)
         self.session = requests.Session()
 
-        self.session.hooks = {"response": _response}
+        self.session.hooks = {"response": [_response]}
 
         if use_retry:
             self.session.mount("http://", adapter)

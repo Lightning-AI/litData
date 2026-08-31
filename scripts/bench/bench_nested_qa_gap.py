@@ -81,10 +81,10 @@ def micro_decode(table: pa.Table) -> dict[str, float]:
     choices = [row["choices"] for row in rows]
     answers = [row["answers"] for row in rows]
     starts = [row["answer_start"] for row in rows]
-    ser = JsonSerializer()
-    choice_blobs = [ser.serialize(JsonLeaf(c))[0] for c in choices]
-    answer_blobs = [ser.serialize(JsonLeaf(a))[0] for a in answers]
-    start_blobs = [ser.serialize(JsonLeaf(s))[0] for s in starts]
+    json_ser = JsonSerializer()
+    choice_blobs = [json_ser.serialize(JsonLeaf(c))[0] for c in choices]
+    answer_blobs = [json_ser.serialize(JsonLeaf(a))[0] for a in answers]
+    start_blobs = [json_ser.serialize(JsonLeaf(s))[0] for s in starts]
     text_blobs = [[t.encode() for t in c["text"]] for c in choices]
     label_blobs = [[t.encode() for t in c["label"]] for c in choices]
     list_text = [_nested_dumps(c["text"]) for c in choices]

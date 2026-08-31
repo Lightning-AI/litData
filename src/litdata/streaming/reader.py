@@ -138,9 +138,7 @@ class PrepareChunksThread(Thread):
             return False
         # One tiny chunk: asyncio/obstore startup is larger than the GET (sst2-sized).
         chunks = self._config._chunks or []
-        if len(chunks) == 1 and int(chunks[0].get("chunk_bytes") or 0) < 8 * 1024 * 1024:
-            return False
-        return True
+        return not (len(chunks) == 1 and int(chunks[0].get("chunk_bytes") or 0) < 8 * 1024 * 1024)
 
     def _async_gather_width(self) -> int:
         """How many queued chunk indexes to download together."""
@@ -545,7 +543,7 @@ class PrepareChunksThread(Thread):
         self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
     def _force_download(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
-        if getattr(self._item_loader, "uses_direct_remote", False):
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
             return
         chunk_index = _get_from_queue(self._force_download_queue, timeout=timeout)
         if chunk_index is None:
@@ -609,7 +607,7 @@ class PrepareChunksThread(Thread):
         """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
         if not chunk_indexes:
             return
-        if getattr(self._item_loader, "uses_direct_remote", False):
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
             for chunk_index in dict.fromkeys(int(idx) for idx in chunk_indexes):
                 self._pre_load_chunk(chunk_index)
                 self._pre_download_counter += 1

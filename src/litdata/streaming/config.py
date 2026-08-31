@@ -211,7 +211,7 @@ class ChunksConfig:
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
         # ``hf://`` parquet is opened with fsspec range reads; do not GET the whole file.
-        if getattr(self._item_loader, "uses_direct_remote", False):
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
             return
 
         assert self._chunks is not None

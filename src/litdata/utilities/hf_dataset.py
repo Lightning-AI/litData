@@ -385,7 +385,7 @@ def _materialize_hf_parquet(
         token=hf_token(storage_options),
     )
     if local:
-        os.makedirs(os.path.dirname(local) or persist_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(local) or persist_dir or ".", exist_ok=True)
         tmp = f"{local}.tmp.{os.getpid()}"
         shutil.copy2(downloaded, tmp)
         os.replace(tmp, local)
