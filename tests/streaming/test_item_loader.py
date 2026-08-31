@@ -1107,4 +1107,3 @@ def test_pytree_loader_reuses_arrow_zstd_codec(tmp_path):
     _ = ds[0]
     assert loader._framed_decompressor is first
     assert loader._framed_inflate_buf is not None
-

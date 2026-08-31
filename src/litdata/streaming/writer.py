@@ -536,9 +536,7 @@ class BinaryWriter:
     def write_chunk(self, on_done: bool = False) -> str:
         """Write a chunk to the filesystem."""
         data, nested_arrow_only, chunk_info = self._create_chunk(on_done=on_done)
-        use_file_compression = (
-            bool(self._compression) and not nested_arrow_only and self._compression_level == "chunk"
-        )
+        use_file_compression = bool(self._compression) and not nested_arrow_only and self._compression_level == "chunk"
         if nested_arrow_only:
             self._ipc_compression_used = self._ipc_codec() is not None
             n_rows = int(chunk_info["chunk_size"])

@@ -26,8 +26,8 @@ from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
 from litdata.debugger import CAT_LOCK, emit_trace
 from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
-from litdata.streaming.framed_zstd import is_in_file_compression
 from litdata.streaming.downloader import get_downloader
+from litdata.streaming.framed_zstd import is_in_file_compression
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer
