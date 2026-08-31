@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""In-file zstd for pytree chunks (``compression="zstd"`` + ``compression_level``).
+r"""In-file zstd for pytree chunks (``compression="zstd"`` + ``compression_level``).
 
 Omitted ``compression_level`` with ``compression="zstd"`` / ``"zstd:N"`` is
 ``"batch"`` (``compression_batch_size`` defaults to 256, matching Arrow IPC
@@ -160,9 +160,11 @@ def pack_framed_zstd(classic_chunk: bytes, compressor: Any, frame_rows: int) -> 
     _PREFIX_STRUCT.pack_into(out, 0, _FRAMED_MAGIC, _FRAMED_VERSION, 0, n, k, n_frames)
     out[prefix_len : prefix_len + offsets_len] = logical.tobytes()
     table_off = prefix_len + offsets_len
-    for i, (first, n_items, coff, clen, ulen) in enumerate(frames):
-        _FRAME_STRUCT.pack_into(out, table_off + i * _FRAME_STRUCT.size, first, n_items, coff, clen, ulen)
-        out[coff : coff + clen] = compressed_parts[i]
+    for i, (first, n_items, coff, compressed_len, uncompressed_len) in enumerate(frames):
+        _FRAME_STRUCT.pack_into(
+            out, table_off + i * _FRAME_STRUCT.size, first, n_items, coff, compressed_len, uncompressed_len
+        )
+        out[coff : coff + compressed_len] = compressed_parts[i]
     return bytes(out)
 
 
@@ -187,16 +189,22 @@ def parse_framed_header(view: bytes | bytearray | memoryview) -> FramedHeader:
     pos = offsets_end
     view_len = len(view)
     for _ in range(n_frames):
-        first, n_items, coff, clen, ulen = _FRAME_STRUCT.unpack_from(view, pos)
-        if n_items <= 0 or clen <= 0 or ulen <= 0 or coff < table_end or coff + clen > view_len:
+        first, n_items, coff, compressed_len, uncompressed_len = _FRAME_STRUCT.unpack_from(view, pos)
+        if (
+            n_items <= 0
+            or compressed_len <= 0
+            or uncompressed_len <= 0
+            or coff < table_end
+            or coff + compressed_len > view_len
+        ):
             raise RuntimeError("framed zstd frame table is invalid or truncated")
         frames.append(
             FrameSpec(
                 first_item=int(first),
                 n_items=int(n_items),
                 compressed_off=int(coff),
-                compressed_len=int(clen),
-                uncompressed_len=int(ulen),
+                compressed_len=int(compressed_len),
+                uncompressed_len=int(uncompressed_len),
             )
         )
         pos += _FRAME_STRUCT.size

@@ -1,6 +1,8 @@
 # Copyright The Lightning AI team.
 import json
 
+import pytest
+
 from litdata.streaming.serializers import JsonLeaf
 from litdata.types import (
     Image,
@@ -69,6 +71,26 @@ def test_wrap_fills_missing_and_wraps_lists():
     assert isinstance(out["answers"], JsonLeaf)
     assert out["answers"].value == []
     assert isinstance(out["choices"]["text"], JsonLeaf)
+
+
+def test_wrap_does_not_jsonleaf_jpeg_lists():
+    """PIL JPEG lists stay unwrapped so jpeg_array can serialize them."""
+    pytest.importorskip("PIL")
+    import io
+
+    from PIL import Image as PILImage
+
+    frames = []
+    for _ in range(2):
+        buf = io.BytesIO()
+        PILImage.new("RGB", (4, 4)).save(buf, format="JPEG")
+        frames.append(PILImage.open(io.BytesIO(buf.getvalue())))
+    schema = infer_type({"index": 0, "images": frames})
+    out = wrap_for_pytree({"index": 1, "images": frames}, schema, wrap_leaf=JsonLeaf)
+    assert out["index"] == 1
+    assert out["images"] is frames
+    assert not isinstance(out["images"], JsonLeaf)
+    assert not is_arrow_footer_type(schema)
 
 
 def test_wrap_locks_first_sample_keys():

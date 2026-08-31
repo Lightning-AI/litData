@@ -643,8 +643,9 @@ def wrap_for_pytree(
 
 def _wrap_value(value: Any, schema: JsonType, wrap_leaf: Any) -> Any:
     if schema.kind in {"list", "map", "json"}:
-        # Unknown objects are typed as ``json`` but must not be JSON-serialized (PIL, tensors).
-        if schema.kind == "json" and not is_json_row(value):
+        # Lists of PIL/tensors stay one pytree leaf (jpeg_array, …). Do not wrap
+        # them as JsonLeaf — orjson cannot dump JpegImageFile.
+        if not is_json_row(value):
             return value
         return wrap_leaf(value)
     if schema.kind == "struct":
