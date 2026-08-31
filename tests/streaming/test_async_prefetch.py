@@ -47,6 +47,8 @@ class _FakeAsyncDownloader(Downloader):
         super().__init__(remote_dir, cache_dir, chunks, {})
         self.delay_s = delay_s
         self.calls: list[str] = []
+        self._in_flight = 0
+        self.max_in_flight = 0
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         time.sleep(self.delay_s)
@@ -56,9 +58,14 @@ class _FakeAsyncDownloader(Downloader):
             f.write(b"x" * 16)
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        await asyncio.sleep(self.delay_s)
-        self.calls.append(remote_filepath)
-        return b"x" * 16
+        self._in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        try:
+            await asyncio.sleep(self.delay_s)
+            self.calls.append(remote_filepath)
+            return b"x" * 16
+        finally:
+            self._in_flight -= 1
 
 
 def _seed_local_chunks(tmpdir, n_chunks: int = 4, chunk_size: int = 4) -> str:
@@ -164,8 +171,12 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
     asyncio.run(adownload_chunk_indexes(cfg, indexes))  # type: ignore[arg-type]
     elapsed = time.perf_counter() - t0
 
-    # Three 50ms downloads overlapped should finish well under serial 150ms.
-    assert elapsed < 0.12
+    # Overlap is the contract: all three GETs must be in flight together.
+    # Wall time also includes asyncio.run / to_thread(try_decompress) / fs
+    # publish, which on GitHub runners has exceeded a 120ms bound (~141ms)
+    # even when gather is correct. Serial 3×50ms is 150ms of sleep alone.
+    assert fake.max_in_flight == 3
+    assert elapsed < 1.0
     assert len(fake.calls) == 3
     for idx in indexes:
         assert os.path.exists(os.path.join(cache_dir, chunks[idx]["filename"]))
