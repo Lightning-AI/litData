@@ -8,9 +8,16 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+## [0.2.73] - 2026-08-31
+
 ### Changed
 
 - `optimize` / `map` no longer pickle the full input list into every spawned worker. ([#890](https://github.com/Lightning-AI/litData/pull/890))
+
+### Fixed
+
+- Multi-node `optimize(mode="append")` no longer repeats existing chunks once per node in the merged `index.json`. ([#866](https://github.com/Lightning-AI/litData/pull/866))
+- Restore PyTorch's process-global DataLoader worker loop after VizTracer/cProfile setup, so a later loader in the same process does not inherit LitData's profiling worker. ([#893](https://github.com/Lightning-AI/litData/pull/893))
 
 ## [0.2.72] - 2026-08-24
 
