@@ -156,7 +156,9 @@ def test_optimize_hf_reuses_remote_index(monkeypatch, remote_dir):
         optimize_calls.append(True)
 
     monkeypatch.setattr("litdata.processing.functions.optimize", fake_optimize)
-    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name")
+    monkeypatch.setattr(
+        "litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name"
+    )
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *_a, **_k: ["x.parquet"])
 
     assert optimize_hf("org/name", output_dir=remote_dir, overwrite=False) == remote_dir
@@ -193,7 +195,9 @@ def test_optimize_hf_reuses_lightning_storage_index(monkeypatch):
 
     optimize_calls = []
     monkeypatch.setattr("litdata.processing.functions.optimize", lambda *_a, **_k: optimize_calls.append(True))
-    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name")
+    monkeypatch.setattr(
+        "litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *_a, **_k: "hf://datasets/org/name"
+    )
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *_a, **_k: ["x.parquet"])
 
     out = "/teamspace/lightning_storage/ds/imdb-opt"
