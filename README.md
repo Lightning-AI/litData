@@ -436,10 +436,6 @@ https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
 
 ```bash
 pip install 'litdata[extras]' huggingface_hub
-
-# Optional: faster downloads on high-bandwidth networks
-pip install hf_transfer
-export HF_HUB_ENABLE_HF_TRANSFER=1
 ```
 
 Gated datasets: set `HF_TOKEN`.
@@ -472,41 +468,29 @@ dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
 
 ### Faster than Hub parquet and `datasets` streaming
 
-`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **10/15** prefer `optimize_hf`; parquet stays ahead on OpenThoughts, minipile, food101, cifar100, and superb.
+`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **10/15** prefer `optimize_hf`; parquet stays ahead on [OpenThoughts](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k), [minipile](https://huggingface.co/datasets/JeanKaddour/minipile), [food101](https://huggingface.co/datasets/ethz/food101), [cifar100](https://huggingface.co/datasets/uoft-cs/cifar100), and [superb](https://huggingface.co/datasets/s3prl/superb).
 
 Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
 
 | Dataset | `optimize_hf` rows/s | parquet (`hf://`) rows/s | HF streaming rows/s |
 | --- | ---: | ---: | ---: |
-| HuggingFaceH4/ultrachat_200k / train_sft | **47,285** | 31,209 | 6,752 |
-| open-thoughts/OpenThoughts-114k / train | 6,508 | **12,292** | 1,492 |
-| abisee/cnn_dailymail / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
-| teknium/OpenHermes-2.5 / train | **108,420** | 74,502 | 8,280 |
-| roneneldan/TinyStories / train | **164,825** | 141,235 | 58,331 |
-| fancyzhx/amazon_polarity / train | **214,217** | 162,448 | 14,613 |
-| Yelp/yelp_review_full / train | **123,670** | 88,400 | 58,621 |
-| EdinburghNLP/xsum / train | **55,941** | 37,684 | 15,377 |
-| Anthropic/hh-rlhf / train | **92,741** | 46,573 | 18,263 |
-| JeanKaddour/minipile / train | 13,045 | **31,976** | 3,100 |
-| ethz/food101 / train | 508 | **3,613** | 391 |
-| zh-plus/tiny-imagenet / train | **57,855** | 43,535 | 6,491 |
-| uoft-cs/cifar10 / train | **31,671** | 20,657 | 8,843 |
-| uoft-cs/cifar100 / train | 22,448 | **24,332** | 7,553 |
-| s3prl/superb / train / ks | 1,883 | **5,988** | 275 |
+| [HuggingFaceH4/ultrachat_200k](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k) / train_sft | **47,285** | 31,209 | 6,752 |
+| [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) / train | 6,508 | **12,292** | 1,492 |
+| [abisee/cnn_dailymail](https://huggingface.co/datasets/abisee/cnn_dailymail) / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
+| [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) / train | **108,420** | 74,502 | 8,280 |
+| [roneneldan/TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) / train | **164,825** | 141,235 | 58,331 |
+| [fancyzhx/amazon_polarity](https://huggingface.co/datasets/fancyzhx/amazon_polarity) / train | **214,217** | 162,448 | 14,613 |
+| [Yelp/yelp_review_full](https://huggingface.co/datasets/Yelp/yelp_review_full) / train | **123,670** | 88,400 | 58,621 |
+| [EdinburghNLP/xsum](https://huggingface.co/datasets/EdinburghNLP/xsum) / train | **55,941** | 37,684 | 15,377 |
+| [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) / train | **92,741** | 46,573 | 18,263 |
+| [JeanKaddour/minipile](https://huggingface.co/datasets/JeanKaddour/minipile) / train | 13,045 | **31,976** | 3,100 |
+| [ethz/food101](https://huggingface.co/datasets/ethz/food101) / train | 508 | **3,613** | 391 |
+| [zh-plus/tiny-imagenet](https://huggingface.co/datasets/zh-plus/tiny-imagenet) / train | **57,855** | 43,535 | 6,491 |
+| [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) / train | **31,671** | 20,657 | 8,843 |
+| [uoft-cs/cifar100](https://huggingface.co/datasets/uoft-cs/cifar100) / train | 22,448 | **24,332** | 7,553 |
+| [s3prl/superb](https://huggingface.co/datasets/s3prl/superb) / train / ks | 1,883 | **5,988** | 275 |
 
 Your own parquet on disk or S3 → [Stream parquet datasets](#stream-parquet).
-
-### LitData `Optimize` v/s `Parquet`
-<!-- TODO: Update benchmark -->
-Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that **`optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files`**.
-
-| **Operation**                    | **Size (GB)** | **Time (seconds)** | **Throughput (images/sec)** |
-|-----------------------------------|---------------|---------------------|-----------------------------|
-| LitData Optimize Dataset          | 45            | 283.17             | 4000-4700                  |
-| Parquet Optimize Dataset          | 51            | 465.96             | 3600-3900                  |
-| Index Parquet Dataset (overhead)  | N/A           | 6                  | N/A                         |
-
-----
 
 # Key Features
 
