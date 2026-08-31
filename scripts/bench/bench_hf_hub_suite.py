@@ -76,8 +76,8 @@ DATASETS: list[tuple[str, str, str | None, str | None]] = [
     ("zh-plus/tiny-imagenet", "train", None, None),
     ("uoft-cs/cifar10", "train", None, None),
     ("uoft-cs/cifar100", "train", None, None),
-    # audio
-    ("google/speech_commands", "train", "v0.02", None),
+    # audio (pytree Image/Audio wrappers, not Arrow JSON footer)
+    ("s3prl/superb", "train", "ks", None),
 ]
 
 # repo, split, config → modality label for JSON / logs
@@ -96,7 +96,7 @@ MODALITY: dict[tuple[str, str, str | None], str] = {
     ("zh-plus/tiny-imagenet", "train", None): "image",
     ("uoft-cs/cifar10", "train", None): "image",
     ("uoft-cs/cifar100", "train", None): "image",
-    ("google/speech_commands", "train", "v0.02"): "audio",
+    ("s3prl/superb", "train", "ks"): "audio",
 }
 
 

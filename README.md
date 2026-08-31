@@ -935,7 +935,7 @@ Default I/O **prefetches** whole parquet files in the background, then reads loc
 - **Parquet** — `StreamingDataset("hf://...")` from the Hub (`hf_hub_download`), no range_read.
 - **HF** — `load_dataset(..., streaming=True)` library defaults.
 
-Binary is **not** always fastest: **8/15** binary, **6/15** parquet faster (OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100), **1** error. Row counts can differ when the 120s heuristic raises the cap for faster streams; rates are still rows/s.
+Binary is **not** always fastest: **8/15** binary, **7/15** parquet faster (OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, superb ks). Row counts can differ when the 120s heuristic raises the cap for faster streams; rates are still rows/s.
 
 | Dataset | Binary rows/s | Parquet rows/s | HF rows/s | bin/pq | bin/hf | Binary TTFB | Parquet TTFB | HF TTFB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -953,9 +953,9 @@ Binary is **not** always fastest: **8/15** binary, **6/15** parquet faster (Open
 | zh-plus/tiny-imagenet / train | 15,894 | 35,777 | 2,385 | 0.44× | 6.66× | 0.81s | 2.17s | 5.22s |
 | uoft-cs/cifar10 / train | 10,437 | 22,407 | 8,856 | 0.47× | 1.18× | 1.29s | 1.79s | 1.01s |
 | uoft-cs/cifar100 / train | 9,687 | 14,750 | 6,964 | 0.66× | 1.39× | 1.59s | 3.01s | 2.12s |
-| google/speech_commands / train / v0.02 | — | — | error | — | — | — | — | — |
+| s3prl/superb / train / ks | 592 | 5,351 | 124 | 0.11× | 4.75× | 0.06s | 7.83s | 3.65s |
 
-`google/speech_commands`: HF `load_dataset` failed with `RuntimeError: Dataset scripts are no longer supported, but found speech_commands.py`. Binary and parquet were not timed for this split.
+Parquet is faster on OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, and `s3prl/superb` (keyword spotting; 51,094 rows, 1.5GB parquet). Audio uses pytree serializers, same as image rows.
 
 See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
