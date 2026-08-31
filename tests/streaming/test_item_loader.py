@@ -774,9 +774,40 @@ def test_nested_chunk_bytes_matches_on_disk(tmp_path, compression):
     assert len(chunks) >= 2
     bins = sorted(p for p in (tmp_path / "ds").glob("*.bin") if ".zstd.bin" not in p.name)
     assert bins
-    full = [int(c["chunk_bytes"]) for c in chunks[:-1]]
+    # First chunk is sized from uncompressed payload (no 3× zstd guess); later
+    # chunks use measured on-disk bytes/item. Last chunk may be a remainder.
+    assert chunks[0]["chunk_bytes"] <= 1.6 * target
+    full = [int(c["chunk_bytes"]) for c in chunks[1:-1]]
     for size in full:
         assert 0.45 * target <= size <= 1.6 * target, (size, target, full)
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_binary_heavy_chunk_bytes_no_zstd_guess(tmp_path):
+    """Hub JPEG/WAV rows must not assume 3× zstd; first shards stay near ``chunk_bytes``."""
+    from litdata.constants import _ZSTD_AVAILABLE
+    from litdata.streaming.cache import Cache
+
+    if not _ZSTD_AVAILABLE:
+        pytest.skip("Requires zstd")
+
+    target = 256 * 1024
+    jpeg = b"\xff\xd8\xff" + os.urandom(4096)
+    cache = Cache(str(tmp_path / "jpeg"), chunk_bytes=target, compression="zstd")
+    for i in range(120):
+        cache[i] = {"image": {"bytes": jpeg, "path": f"{i}.jpg"}, "label": i}
+    cache.done()
+    cache.merge()
+    import json
+
+    index = json.loads((tmp_path / "jpeg" / "index.json").read_text())
+    chunks = index["chunks"]
+    assert len(chunks) >= 2
+    assert index["config"].get("ipc_compression") is None
+    assert chunks[0]["chunk_bytes"] <= 1.5 * target
+    full = [int(c["chunk_bytes"]) for c in chunks[:-1]]
+    for size in full:
+        assert 0.5 * target <= size <= 1.5 * target, (size, target, full)
 
 
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")

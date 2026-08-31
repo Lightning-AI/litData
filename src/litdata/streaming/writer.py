@@ -78,6 +78,46 @@ def _config_body(config: dict[str, Any]) -> dict[str, Any]:
 
 
 _MEDIA_FORMAT_KEYS = frozenset(_MEDIA_KINDS.values()) | {"no_header_tensor", "no_header_numpy"}
+# Hub JPEG/WAV barely compress; treating them as 3× zstd packed first shards to 140–188MB.
+_BINARY_HEAVY_RATIO = 0.6
+
+
+def _sample_leaf_bytes(value: Any) -> tuple[int, int]:
+    """Return ``(binary_bytes, total_bytes)`` for an Arrow sample tree."""
+    if value is None:
+        return 0, 0
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        n = len(value)
+        return n, n
+    if isinstance(value, str):
+        return 0, len(value)
+    if isinstance(value, dict):
+        binary = total = 0
+        for item in value.values():
+            b, t = _sample_leaf_bytes(item)
+            binary += b
+            total += t
+        return binary, total
+    if isinstance(value, (list, tuple)):
+        binary = total = 0
+        for item in value:
+            b, t = _sample_leaf_bytes(item)
+            binary += b
+            total += t
+        return binary, total
+    return 0, 8
+
+
+def _sample_account_bytes(sample: Any) -> int:
+    """Uncompressed payload estimate from the kept Arrow row (not pytree JSON)."""
+    _, total = _sample_leaf_bytes(sample)
+    return total
+
+
+def _sample_is_binary_heavy(sample: Any) -> bool:
+    """True when Hub ``{bytes, path}`` JPEG/WAV (or similar) dominate the row."""
+    binary, total = _sample_leaf_bytes(sample)
+    return total > 0 and binary / total >= _BINARY_HEAVY_RATIO
 
 
 def _data_format_is_arrow_safe(data_format: list[str] | None) -> bool:
@@ -206,6 +246,10 @@ class BinaryWriter:
         self._file_compression_used = False
         self._framed_compression_used = False
         self._ipc_compression_used = False
+        # Skip Arrow IPC zstd when the row is already-compressed binary (JPEG/WAV).
+        # Decided from the first Arrow sample so food101/superb do not pay inflate.
+        self._skip_ipc_zstd = False
+        self._ipc_zstd_decided = False
         # On-disk bytes per nested row from the last flushed Arrow chunk. ``_should_write``
         # used discarded pytree JSON lengths, so a 64MB target became ~23MB zstd IPC files.
         self._nested_on_disk_bpi: float | None = None
@@ -472,11 +516,14 @@ class BinaryWriter:
         current_chunk_bytes = len(data)
 
         if self._chunk_bytes and current_chunk_bytes > self._chunk_bytes:
-            warnings.warn(
-                f"An item was larger than the target chunk size ({_human_readable_bytes(self._chunk_bytes)})."
-                f" The current chunk will be {_human_readable_bytes(current_chunk_bytes)} in size.",
-                UserWarning,
-            )
+            # Packing includes the item that crossed the target (~0.1–1%). Only
+            # warn when one sample is larger than the target or overshoot is >10%.
+            if n == 1 or current_chunk_bytes > int(self._chunk_bytes * 1.1):
+                warnings.warn(
+                    f"An item was larger than the target chunk size ({_human_readable_bytes(self._chunk_bytes)})."
+                    f" The current chunk will be {_human_readable_bytes(current_chunk_bytes)} in size.",
+                    UserWarning,
+                )
 
         if self._chunk_size:
             assert num_items.item() <= self._chunk_size
@@ -508,7 +555,7 @@ class BinaryWriter:
 
     def _ipc_codec(self) -> str | None:
         """Arrow IPC codec when the user asked for compression; nested skips file-level zstd."""
-        if not self._compression:
+        if not self._compression or self._skip_ipc_zstd:
             return None
         codec = self._compression.split(":")[0]
         return codec if codec in {"zstd", "lz4"} else None
@@ -523,10 +570,11 @@ class BinaryWriter:
             return item.bytes
         if self._nested_on_disk_bpi is not None:
             return max(1, int(round(self._nested_on_disk_bpi)))
-        raw = max(1, item.bytes)
-        if self._ipc_codec() is not None:
-            return max(1, raw // 3)
-        return raw
+        # Before the first flush there is no measured on-disk size. Count the
+        # sample payload — not pytree JSON and not a 3× zstd guess. JPEG/WAV
+        # ratios are ~1.0–1.4; the old ``raw // 3`` packed first shards to 140–188MB.
+        estimated = _sample_account_bytes(item.sample)
+        return max(1, estimated if estimated else item.bytes)
 
     def get_chunk_filename(self, file_compression: bool | None = None) -> str:
         if file_compression is None:
@@ -589,6 +637,9 @@ class BinaryWriter:
             and _data_format_is_arrow_safe(self._data_format)
             and (is_arrow_footer_type(self._types) or is_json_row(original))
         )
+        if keep_sample and not self._ipc_zstd_decided:
+            self._skip_ipc_zstd = _sample_is_binary_heavy(original)
+            self._ipc_zstd_decided = True
         self._serialized_items[index] = Item(
             index=index,
             data=data,

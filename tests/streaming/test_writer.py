@@ -352,6 +352,17 @@ def test_zstd_decompress_file_roundtrip(tmpdir):
         assert f.read() == payload
 
 
+def test_sample_account_bytes_and_binary_heavy():
+    from litdata.streaming.writer import _sample_account_bytes, _sample_is_binary_heavy
+
+    jpeg = {"image": {"bytes": b"\xff\xd8" + b"x" * 4000, "path": "a.jpg"}, "label": 1}
+    text = {"text": "hello world " * 20, "id": "n"}
+    assert _sample_is_binary_heavy(jpeg)
+    assert not _sample_is_binary_heavy(text)
+    assert _sample_account_bytes(jpeg) >= 4000
+    assert _sample_account_bytes(text) == len("hello world " * 20) + 1
+
+
 def test_writer_filled_false_during_optimize_append(tmpdir, monkeypatch):
     from litdata.constants import _INDEX_FILENAME
 

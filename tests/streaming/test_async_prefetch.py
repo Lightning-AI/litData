@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 from litdata.streaming import Cache
 from litdata.streaming.async_prefetch import (
     adownload_chunk_indexes,
+    adaptive_pre_download,
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
     async_download_concurrency,
@@ -104,6 +105,19 @@ def test_apply_async_pre_download_floor(monkeypatch):
     assert apply_async_pre_download_floor(2) == 2
 
 
+def test_adaptive_pre_download_covers_many_remote_chunks(monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    chunks_64 = [{"chunk_bytes": 64 * 1024 * 1024} for _ in range(36)]
+    # 3GB / 64MB = 48, capped at n_chunks then 32.
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64) == 32
+    chunks_256 = [{"chunk_bytes": 256 * 1024 * 1024} for _ in range(15)]
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_256) == 12
+    tiny = [{"chunk_bytes": 16} for _ in range(4)]
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=tiny) == 4
+    assert adaptive_pre_download(8, remote_dir=None, chunks=chunks_64) == 8
+
+
 def test_downloader_supports_adownload_detects_override():
     assert downloader_supports_adownload(None) is False
     base = Downloader("remote", "cache", [], {})
@@ -160,7 +174,7 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
 def test_async_download_concurrency_caps_gather(monkeypatch):
     monkeypatch.delenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", raising=False)
     assert async_download_concurrency(3) == 3
-    assert async_download_concurrency(32) == 8
+    assert async_download_concurrency(32) == 16
     monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "2")
     assert async_download_concurrency(32) == 2
     monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "1")
@@ -219,14 +233,17 @@ def test_should_start_download_refills_in_gather_batches(tmpdir, monkeypatch):
     assert cfg is not None
     cfg._remote_dir = "r2://bucket/data"
     thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=8)
+    # Four tiny remote chunks: adaptive prefetch caps at n_chunks.
+    cap = thread._max_pre_download
+    assert cap == 4
     assert thread._should_start_download(over_budget=False) is True
     thread._pre_download_counter = 1
     assert thread._should_start_download(over_budget=False) is True
-    thread._pre_download_counter = 7
+    thread._pre_download_counter = cap - 1
     assert thread._should_start_download(over_budget=False) is True
-    thread._pre_download_counter = 8
+    thread._pre_download_counter = cap
     assert thread._should_start_download(over_budget=False) is False
-    thread._pre_download_counter = 4
+    thread._pre_download_counter = max(0, cap // 2)
     assert thread._should_start_download(over_budget=False) is True
 
 

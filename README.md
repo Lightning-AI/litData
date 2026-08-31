@@ -468,7 +468,7 @@ dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
 
 ### Faster than Hub parquet and `datasets` streaming
 
-`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **10/15** prefer `optimize_hf`; parquet stays ahead on [OpenThoughts](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k), [minipile](https://huggingface.co/datasets/JeanKaddour/minipile), [food101](https://huggingface.co/datasets/ethz/food101), [cifar100](https://huggingface.co/datasets/uoft-cs/cifar100), and [superb](https://huggingface.co/datasets/s3prl/superb).
+`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **12/15** prefer `optimize_hf`; parquet stays ahead on [OpenThoughts](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k), [food101](https://huggingface.co/datasets/ethz/food101), and [cifar100](https://huggingface.co/datasets/uoft-cs/cifar100). Minipile, food101, and superb ks were re-measured with current defaults; the other twelve rows are unchanged.
 
 Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
 
@@ -483,12 +483,12 @@ Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/benc
 | [Yelp/yelp_review_full](https://huggingface.co/datasets/Yelp/yelp_review_full) / train | **123,670** | 88,400 | 58,621 |
 | [EdinburghNLP/xsum](https://huggingface.co/datasets/EdinburghNLP/xsum) / train | **55,941** | 37,684 | 15,377 |
 | [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) / train | **92,741** | 46,573 | 18,263 |
-| [JeanKaddour/minipile](https://huggingface.co/datasets/JeanKaddour/minipile) / train | 13,045 | **31,976** | 3,100 |
-| [ethz/food101](https://huggingface.co/datasets/ethz/food101) / train | 508 | **3,613** | 391 |
+| [JeanKaddour/minipile](https://huggingface.co/datasets/JeanKaddour/minipile) / train | **81,871** | 50,160 | 3,928 |
+| [ethz/food101](https://huggingface.co/datasets/ethz/food101) / train | 1,989 | **4,782** | 384 |
 | [zh-plus/tiny-imagenet](https://huggingface.co/datasets/zh-plus/tiny-imagenet) / train | **57,855** | 43,535 | 6,491 |
 | [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) / train | **31,671** | 20,657 | 8,843 |
 | [uoft-cs/cifar100](https://huggingface.co/datasets/uoft-cs/cifar100) / train | 22,448 | **24,332** | 7,553 |
-| [s3prl/superb](https://huggingface.co/datasets/s3prl/superb) / train / ks | 1,883 | **5,988** | 275 |
+| [s3prl/superb](https://huggingface.co/datasets/s3prl/superb) / train / ks | **7,101** | 6,775 | 314 |
 
 Your own parquet on disk or S3 → [Stream parquet datasets](#stream-parquet).
 

@@ -24,7 +24,7 @@ kept (metadata only).
 * **Parquet** — ``StreamingDataset("hf://...")``. Files are pulled from the Hub
   (``hf_hub_download``), not from a local folder or FUSE mount. No range_read.
 * **HF** — ``load_dataset(..., streaming=True)`` (library defaults).
-* **Binary** — ``optimize_hf(..., chunk_bytes="64MB", compression="zstd")`` into
+* **Binary** — ``optimize_hf(..., compression="zstd")`` (default ``chunk_bytes="256MB"``) into
   ``--opt-root`` on lightning_storage (R2 upload), then
   ``StreamingDataset(opt_dir, max_pre_download=8)``. Nested JSON uses the Arrow
   IPC footer (including Hub ``{bytes, path}`` media as Arrow binary). ``chunk_bytes`` is
@@ -205,7 +205,7 @@ def _storage_options_for_opt(opt_dir: str) -> tuple[object, dict]:
 
 
 def _existing_opt_is_packed(existing: dict | None, need_rows: int) -> bool:
-    """Reuse chunks if they already have IPC zstd (~64MB) or tiny whole-file zstd."""
+    """Reuse chunks if they already have large IPC objects or tiny whole-file zstd."""
     if not existing:
         return False
     chunks = existing.get("chunks") or []
@@ -215,10 +215,13 @@ def _existing_opt_is_packed(existing: dict | None, need_rows: int) -> bool:
     if not sizes:
         return False
     tiny = sum(sizes) < 50 * 1024 * 1024
-    # Flat tiny sets (sst2) never grow an IPC footer; whole-file zstd is packed.
+    large = max(sizes) >= 50 * 1024 * 1024
+    # Text keeps IPC zstd. JPEG/WAV skip it; large chunks are still packed.
     if cfg.get("ipc_compression") != "zstd":
-        return bool(tiny and cfg.get("compression") == "zstd" and rows > 0)
-    if not (tiny or max(sizes) >= 50 * 1024 * 1024):
+        if tiny and cfg.get("compression") == "zstd" and rows > 0:
+            return True
+        return bool(large and rows >= need_rows)
+    if not (tiny or large):
         return False
     return tiny or rows >= need_rows
 
@@ -252,7 +255,6 @@ def optimize_to_storage(
         optimize_hf(
             url,
             output_dir=opt_dir,
-            chunk_bytes="64MB",
             compression="zstd",
             overwrite=True,
             cache_dir=cache_root,
@@ -472,7 +474,7 @@ def main() -> None:
     parser.add_argument(
         "--opt-root",
         default="/teamspace/lightning_storage/testing/litdata_hf_opt_v2",
-        help="Optimized 64MB chunks (lightning_storage → R2, not FUSE reads).",
+        help="Optimized chunks (lightning_storage → R2, not FUSE reads).",
     )
     parser.add_argument("--out", default="/tmp/bench_hf_triad.json")
     parser.add_argument("--rows", type=int, default=200_000)

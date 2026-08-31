@@ -122,7 +122,7 @@ def optimize_hf(
     3. Download each parquet into ``{hf_cache}/hf-parquet/<hash>/`` (skip if the size matches).
        That tree is a *sibling* of the chunk cache so ``optimize`` cannot delete it.
     4. ``optimize`` from ``hf://`` URLs (workers re-download if a persist file is missing)
-       into **64MB** chunks unless ``chunk_size`` / ``chunk_bytes`` is set.
+       into **256MB** chunks unless ``chunk_size`` / ``chunk_bytes`` is set.
     5. Variable-length lists/dicts are stored as one JSON leaf so samples keep a
        stable ``data_format`` (SQuAD answers, UltraChat messages, …). Hub
        ``{bytes, path}`` media stays Arrow binary (no ``Image`` / ``Audio`` /
@@ -142,8 +142,8 @@ def optimize_hf(
         revision: Git revision (``main``, ``refs/convert/parquet``, a commit). Default: auto.
         split: Optional split (``train``, ``train_sft``, …). Omit to convert every parquet found.
         config: Optional dataset config / subset (``plain_text``, ``main``, …).
-        chunk_size: Samples per chunk. Prefer ``chunk_bytes`` (64MB) for training I/O.
-        chunk_bytes: Chunk size in bytes (default ``64MB`` when ``chunk_size`` is omitted).
+        chunk_size: Samples per chunk. Prefer ``chunk_bytes`` (256MB) for remote I/O.
+        chunk_bytes: Chunk size in bytes (default ``256MB`` when ``chunk_size`` is omitted).
         fn: Optional picklable ``row dict -> sample``. Default writes the row as-is.
         num_workers: Optimize workers. Default is ``min(n_files, cpu count)``.
         columns: Optional parquet column projection.
@@ -179,7 +179,7 @@ def optimize_hf(
     if chunk_size is not None:
         kwargs["chunk_size"] = chunk_size
     else:
-        kwargs["chunk_bytes"] = chunk_bytes if chunk_bytes is not None else "64MB"
+        kwargs["chunk_bytes"] = chunk_bytes if chunk_bytes is not None else "256MB"
 
     optimize(
         fn=partial(

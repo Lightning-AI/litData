@@ -825,7 +825,7 @@ def merge_datasets(
         compression = config["compression"]
         for chunk in input_dir_file_content["chunks"]:
             assert isinstance(chunk, dict)
-            old_filename = chunk["filename"]
+            old_filename = chunk["filename"] 
             new_filename = (
                 f"chunk-0-{counter}.{compression}.bin"
                 if compression is not None and not is_in_file_compression(config.get("compression_level"))

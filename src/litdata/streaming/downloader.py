@@ -46,16 +46,68 @@ logger = logging.getLogger("litdata.streaming.downloader")
 # Tiny R2 objects pay boto3 TransferManager / obstore startup more than transfer.
 # Prefer a single get_object when index.json says the chunk is under this size.
 _TINY_R2_GET_BYTES = 8 * 1024 * 1024
+# Parallel Range GETs once the indexed object is large enough that one stream
+# cannot hide R2 RTT (first 64–256MB GET was ~23MB/s on a cold connection).
+_PARALLEL_GET_MIN_BYTES = 16 * 1024 * 1024
+_PARALLEL_GET_MAX_PARTS = 8
 
 
-def _tiny_r2_chunk(chunks: list[dict[str, Any]] | None, object_path: str) -> bool:
-    """True when ``object_path`` is an indexed chunk smaller than ``_TINY_R2_GET_BYTES``."""
+def _indexed_object_bytes(chunks: list[dict[str, Any]] | None, object_path: str) -> int:
+    """Indexed ``chunk_bytes`` for ``object_path``, or 0 when unknown."""
     name = os.path.basename(object_path)
     for chunk in chunks or []:
         filename = os.path.basename(chunk.get("filename") or "")
         if filename == name:
-            return int(chunk.get("chunk_bytes") or 0) < _TINY_R2_GET_BYTES
-    return False
+            return int(chunk.get("chunk_bytes") or 0)
+    return 0
+
+
+def _tiny_r2_chunk(chunks: list[dict[str, Any]] | None, object_path: str) -> bool:
+    """True when ``object_path`` is an indexed chunk smaller than ``_TINY_R2_GET_BYTES``."""
+    size = _indexed_object_bytes(chunks, object_path)
+    return bool(size) and size < _TINY_R2_GET_BYTES
+
+
+def _range_parts(size: int) -> tuple[list[int], list[int]] | None:
+    """Split ``size`` into parallel Range GET ``(starts, lengths)``, or ``None``."""
+    if size < _PARALLEL_GET_MIN_BYTES:
+        return None
+    raw = os.getenv("LITDATA_OBSTORE_RANGE_PARTS")
+    if raw:
+        n_parts = max(2, min(_PARALLEL_GET_MAX_PARTS, int(raw)))
+    else:
+        # ~32MB per part: 64MB → 4, 256MB → 8.
+        n_parts = min(_PARALLEL_GET_MAX_PARTS, max(4, size // (32 * 1024 * 1024)))
+    part = size // n_parts
+    if part < 4 * 1024 * 1024:
+        n_parts = max(2, size // (4 * 1024 * 1024))
+        part = size // n_parts
+    starts = [i * part for i in range(n_parts)]
+    lengths = [part] * (n_parts - 1) + [size - part * (n_parts - 1)]
+    return starts, lengths
+
+
+def _write_obstore_ranges_to_tmp(tmp_path: str, parts: Any) -> None:
+    with open(tmp_path, "wb") as f:
+        for part in parts:
+            _write_obstore_chunk(f, part)
+
+
+def _obstore_get_to_tmp(store: Any, key: str, tmp_path: str, size_hint: int = 0) -> None:
+    """Single GET, or parallel ``get_ranges`` when ``size_hint`` is large enough."""
+    import obstore as obs
+
+    ranges = _range_parts(size_hint)
+    if ranges is not None:
+        try:
+            starts, lengths = ranges
+            parts = obs.get_ranges(store, key, starts=starts, lengths=lengths)
+            _write_obstore_ranges_to_tmp(tmp_path, parts)
+            return
+        except Exception:
+            logger.debug("obstore get_ranges failed; falling back to get", exc_info=True)
+    resp = obs.get(store, key)
+    _obstore_stream_resp_to_tmp(tmp_path, resp)
 
 
 # Obstore stream yield size. Default matches boto3 multipart chunksize (8MB).
@@ -90,7 +142,9 @@ async def _obstore_astream_resp_to_tmp(tmp_path: str, resp: Any) -> None:
             _write_obstore_chunk(f, chunk)
 
 
-async def _obstore_adownload_file(downloader: "Downloader", store: Any, key: str, local_filepath: str) -> None:
+async def _obstore_adownload_file(
+    downloader: "Downloader", store: Any, key: str, local_filepath: str, size_hint: int = 0
+) -> None:
     """Stream an object to ``local_filepath`` (prefer this over :meth:`Downloader.adownload_fileobj`)."""
     import obstore as obs
 
@@ -99,6 +153,16 @@ async def _obstore_adownload_file(downloader: "Downloader", store: Any, key: str
     tmp_path = downloader._temp_download_path(local_filepath)
     try:
         os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+        ranges = _range_parts(size_hint)
+        if ranges is not None:
+            try:
+                starts, lengths = ranges
+                parts = await obs.get_ranges_async(store, key, starts=starts, lengths=lengths)
+                _write_obstore_ranges_to_tmp(tmp_path, parts)
+                downloader._publish_file(tmp_path, local_filepath)
+                return
+            except Exception:
+                logger.debug("obstore get_ranges_async failed; falling back to get", exc_info=True)
         resp = await obs.get_async(store, key)
         await _obstore_astream_resp_to_tmp(tmp_path, resp)
         downloader._publish_file(tmp_path, local_filepath)
@@ -136,7 +200,12 @@ async def _obstore_aupload_file(store: Any, key: str, local_filepath: str) -> No
 
 # Obstore default request timeout is 30s; large chunk GETs under worker
 # contention can exceed that. Speed-neutral, avoids spurious retries.
-_OBSTORE_CLIENT_OPTIONS = cast("ClientConfig", {"timeout": "200s"})
+# Long timeout for large chunk GETs; keep a warm idle pool so sequential
+# 64–256MB R2 objects reuse the first connection (cold first GET was ~23MB/s).
+_OBSTORE_CLIENT_OPTIONS = cast(
+    "ClientConfig",
+    {"timeout": "200s", "pool_max_idle_per_host": "32", "pool_idle_timeout": "90s"},
+)
 
 # PID that first built an obstore store in this process lineage. Obstore's
 # Rust/tokio runtime is process-global and not fork-safe: a new S3Store in a
@@ -448,11 +517,13 @@ class S3Downloader(Downloader):
             try:
                 os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
                 if _use_obstore_for_s3_key(obj.path):
-                    import obstore as obs
-
                     store = self._get_store(obj.netloc)
-                    resp = obs.get(store, obj.path.lstrip("/"))
-                    _obstore_stream_resp_to_tmp(tmp_path, resp)
+                    _obstore_get_to_tmp(
+                        store,
+                        obj.path.lstrip("/"),
+                        tmp_path,
+                        _indexed_object_bytes(self._chunks, obj.path),
+                    )
                 else:
                     from boto3.s3.transfer import TransferConfig
 
@@ -519,7 +590,13 @@ class S3Downloader(Downloader):
         if obj.scheme != "s3":
             raise ValueError(f"Expected obj.scheme to be `s3`, instead, got {obj.scheme} for remote={remote_filepath}")
 
-        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+        await _obstore_adownload_file(
+            self,
+            self._get_store(obj.netloc),
+            obj.path.lstrip("/"),
+            local_filepath,
+            _indexed_object_bytes(self._chunks, obj.path),
+        )
 
     async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -570,11 +647,8 @@ class R2Downloader(Downloader):
                     with open(tmp_path, "wb") as handle:
                         shutil.copyfileobj(resp["Body"], handle, length=1024 * 1024)
                 elif _use_obstore_for_s3_key(obj.path):
-                    import obstore as obs
-
                     store = self._get_store(obj.netloc)
-                    resp = obs.get(store, key)
-                    _obstore_stream_resp_to_tmp(tmp_path, resp)
+                    _obstore_get_to_tmp(store, key, tmp_path, _indexed_object_bytes(self._chunks, obj.path))
                 else:
                     from boto3.s3.transfer import TransferConfig
 
@@ -651,7 +725,13 @@ class R2Downloader(Downloader):
 
             await asyncio.to_thread(self.download_file, remote_filepath, local_filepath)
             return
-        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+        await _obstore_adownload_file(
+            self,
+            self._get_store(obj.netloc),
+            obj.path.lstrip("/"),
+            local_filepath,
+            _indexed_object_bytes(self._chunks, obj.path),
+        )
 
     async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -783,7 +863,13 @@ class GCPDownloader(Downloader):
         if obj.scheme != "gs":
             raise ValueError(f"Expected scheme 'gs', got '{obj.scheme}' for remote={remote_filepath}")
 
-        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+        await _obstore_adownload_file(
+            self,
+            self._get_store(obj.netloc),
+            obj.path.lstrip("/"),
+            local_filepath,
+            _indexed_object_bytes(self._chunks, obj.path),
+        )
 
     async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -888,7 +974,13 @@ class AzureDownloader(Downloader):
                 f"Expected obj.scheme to be `azure`, instead, got {obj.scheme} for remote={remote_filepath}"
             )
 
-        await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
+        await _obstore_adownload_file(
+            self,
+            self._get_store(obj.netloc),
+            obj.path.lstrip("/"),
+            local_filepath,
+            _indexed_object_bytes(self._chunks, obj.path),
+        )
 
     async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)

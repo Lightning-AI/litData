@@ -15,6 +15,8 @@ from litdata.streaming.downloader import (
     LocalDownloaderWithCache,
     R2Downloader,
     S3Downloader,
+    _indexed_object_bytes,
+    _range_parts,
     get_downloader,
     register_downloader,
     shutil,
@@ -25,6 +27,23 @@ from litdata.streaming.downloader import (
 class DummyDownloader(Downloader):
     def download_file(self, remote_path: str, local_path: str) -> None:
         pass
+
+
+def test_range_parts_and_indexed_bytes():
+    assert _range_parts(8 * 1024 * 1024) is None
+    parts = _range_parts(64 * 1024 * 1024)
+    assert parts is not None
+    starts, lengths = parts
+    assert len(starts) == 4
+    assert sum(lengths) == 64 * 1024 * 1024
+    assert starts[0] == 0
+    big = _range_parts(256 * 1024 * 1024)
+    assert big is not None
+    assert len(big[0]) == 8
+    assert sum(big[1]) == 256 * 1024 * 1024
+    chunks = [{"filename": "chunk-0-1.bin", "chunk_bytes": 64 * 1024 * 1024}]
+    assert _indexed_object_bytes(chunks, "/data/chunk-0-1.bin") == 64 * 1024 * 1024
+    assert _indexed_object_bytes(chunks, "missing.bin") == 0
 
 
 def test_register_downloader():

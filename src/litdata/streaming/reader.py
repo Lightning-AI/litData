@@ -31,7 +31,7 @@ from filelock import FileLock, Timeout
 from litdata.constants import _DEBUG
 from litdata.debugger import CAT_CRASH, CAT_DOWNLOAD, CAT_READ, emit_trace, trace_span
 from litdata.streaming.async_prefetch import (
-    apply_async_pre_download_floor,
+    adaptive_pre_download,
     async_chunk_prefetch_enabled,
     async_download_concurrency,
     close_thread_event_loop,
@@ -90,7 +90,9 @@ class PrepareChunksThread(Thread):
         self._item_loader = item_loader
         # Async gather needs enough in-flight slots to overlap RTT; raise the
         # floor when async prefetch is active (real-S3 benches: 2→4).
-        self._max_pre_download = apply_async_pre_download_floor(max_pre_download, remote_dir=config._remote_dir)
+        self._max_pre_download = adaptive_pre_download(
+            max_pre_download, remote_dir=config._remote_dir, chunks=config._chunks
+        )
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
