@@ -503,11 +503,12 @@ def optimize(
             except possibly the last worker which may receive a smaller chunk. Note: this will result in uneven
             workload distribution among workers, and last worker may receive more data than others.
         compression: The compression algorithm to use over the chunks (``"zstd"`` or ``"zstd:N"``).
-        compression_level: Pytree wrap granularity: ``"chunk"`` (default, whole-file ``.zstd.bin``),
-            ``"batch"`` (framed zstd in ``.bin``), or ``"sample"`` (per-item zstd in ``.bin``).
-            Not the zstd numeric level — use ``compression="zstd:4"`` for that.
+        compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+            ``"batch"`` (framed zstd in ``.bin``). ``"chunk"`` is whole-file ``.zstd.bin``;
+            ``"sample"`` is per-item zstd in ``.bin``. Not the zstd numeric level — use
+            ``compression="zstd:4"`` for that.
         compression_batch_size: Items per zstd frame when ``compression_level="batch"``.
-            Default is 256 cheap leaves / ~32 images.
+            Default is 256 (same as Arrow IPC / decode windows).
         encryption: The encryption algorithm to use over the chunks.
         num_workers: The number of workers to use during processing
         fast_dev_run: Whether to use process only a sub part of the inputs

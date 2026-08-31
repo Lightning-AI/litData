@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Pytree ``optimize(..., compression="zstd")`` accepts ``compression_level="chunk"|"batch"|"sample"`` (default ``chunk``: whole-file ``.zstd.bin``). ``batch`` writes ``.bin`` with an uncompressed frame table and zstd frames of ``compression_batch_size`` items (default 256 cheap leaves / ~32 images). ``sample`` zstd-compresses each item payload between offsets. Numeric zstd levels stay ``compression="zstd:N"``. Nested Arrow IPC is unchanged.
+- Pytree ``optimize(..., compression="zstd")`` accepts ``compression_level="chunk"|"batch"|"sample"`` (omitted zstd defaults to ``batch``: framed ``.bin`` with ``compression_batch_size=256``, matching Arrow IPC / decode windows). ``chunk`` is whole-file ``.zstd.bin``. ``sample`` zstd-compresses each item payload between offsets. Numeric zstd levels stay ``compression="zstd:N"``. Nested Arrow IPC is unchanged.
 
 ### Fixed
 
@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 - ``StreamingDataset(batch_decode="auto")`` (default) picks a decode window from the data format and mean sample size: 256 for text/nested, down to 1 for multi-MB images/video. Pass ``0`` / ``N`` / ``"all"`` to pin it. ``LITDATA_BATCH_DECODE`` / ``LITDATA_BATCH_ROWS`` apply only when ``batch_decode`` is ``"auto"``. Decode windows are **aligned** (``[kW, (k+1)W)``). ``StreamingDataset(item_shuffle_window=...)`` (default 256 / ``"auto"``) shuffles those blocks then the items inside each, so ``shuffle=True`` still reuses the cache. ``0`` / ``"full"`` restores a full in-chunk permutation. ``LITDATA_ITEM_SHUFFLE_WINDOW`` applies only when the argument is omitted.
 - Nested HF chunks write **only** the Arrow IPC **file** footer (no duplicate JSON pytree body): ``ARROW1`` + 256-row record batches (Arrow IPC zstd when ``optimize(compression="zstd")``) + slim LitData prefix + ``LDARW01`` trailer. The same path now covers **flat JSON structs** (cnn_dailymail ``article``/``highlights``/``id``, IMDB, sst2), not only nested lists/maps. ``chunk_bytes`` is that on-disk size. LitData whole-file ``.zstd.bin`` is skipped for these chunks. The reader ``open_file``s the footer, ``get_batch(i).to_pylist()``s one batch, and caches that window like parquet row groups. Legacy IPC **stream** footers still ``read_all()`` + slice.
 - Framed pytree zstd (``compression_level="batch"``) inflates each ``LDFZ01`` frame with PyArrow's C++ ``Codec`` (``decompressed_size``, mmap ``memoryview``, one reused codec per loader). Falls back to the ``zstd`` package if pyarrow is missing.
+- Omitted ``compression_level`` with ``compression="zstd"`` / ``"zstd:N"`` now defaults to ``"batch"`` (framed ``.bin``, ``compression_batch_size=256``) instead of whole-file ``.zstd.bin``. Pass ``compression_level="chunk"`` for the previous wrap. Nested Arrow IPC still skips pytree file compression.
 
 ## [0.2.73] - 2026-08-31
 

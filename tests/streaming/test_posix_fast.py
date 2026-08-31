@@ -285,7 +285,7 @@ def test_posix_fast_tokens_do_not_exhaust_fds(tmpdir):
 
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="zstd required")
 def test_compressed_chunks_do_not_use_posix_mmap(tmpdir):
-    cache = Cache(str(tmpdir), chunk_size=10, compression="zstd")
+    cache = Cache(str(tmpdir), chunk_size=10, compression="zstd", compression_level="chunk")
     for i in range(20):
         cache[i] = i
     cache.done()

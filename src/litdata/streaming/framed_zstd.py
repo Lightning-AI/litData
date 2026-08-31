@@ -12,7 +12,10 @@
 # limitations under the License.
 """In-file zstd for pytree chunks (``compression="zstd"`` + ``compression_level``).
 
-``compression_level="chunk"`` (default) is whole-file ``.zstd.bin``.
+Omitted ``compression_level`` with ``compression="zstd"`` / ``"zstd:N"`` is
+``"batch"`` (``compression_batch_size`` defaults to 256, matching Arrow IPC
+and the aligned decode window). Explicit
+``compression_level="chunk"`` is whole-file ``.zstd.bin``.
 ``compression_level="batch"`` writes ``.bin`` with this layout (magic first so
 legacy readers fail closed — their uint32 ``num_items`` parse of ``LDFZ``
 cannot match ``index.json`` ``chunk_size``, instead of ``unpack_from`` on
@@ -22,7 +25,7 @@ empty item slices)::
     version u16                  1
     flags u16                    0
     num_items u32
-    frame_rows u32               K (256 cheap leaves, ~32 images)
+    frame_rows u32               K (default 256)
     n_frames u32
     offsets u32[N+1]             relative to uncompressed concatenated item bytes
     frames[n_frames]:
@@ -54,13 +57,17 @@ _FRAMED_VERSION = 1
 _PREFIX_STRUCT = struct.Struct("<8sHHIII")  # 24 bytes
 _FRAME_STRUCT = struct.Struct("<IIQII")  # 24 bytes
 _DEFAULT_ZSTD_LEVEL = 4
+DEFAULT_ZSTD_WRAP = "batch"
+DEFAULT_COMPRESSION_BATCH_SIZE = 256
 
 
 def parse_compression_level(value: Any) -> str:
     """Normalize ``compression_level`` to ``chunk``, ``batch``, or ``sample``.
 
     Numeric zstd levels are ``compression="zstd:4"``, not this argument.
-    ``None`` / omitted means ``chunk`` (whole-file ``.zstd.bin``).
+    ``None`` / omitted on **read** (``index.json``) means ``chunk`` so legacy
+    whole-file ``.zstd.bin`` stays whole-file. Writers use
+    :func:`resolve_write_compression_level` (omitted zstd → ``batch``).
     """
     if value is None or value == "":
         return "chunk"
@@ -76,6 +83,15 @@ def parse_compression_level(value: Any) -> str:
     if key not in _COMPRESSION_LEVELS:
         raise ValueError(f"compression_level must be 'chunk', 'batch', or 'sample', got {value!r}.")
     return key
+
+
+def resolve_write_compression_level(compression: str | None, compression_level: str | None) -> str:
+    """Write-time wrap. Omitted ``zstd`` / ``zstd:N`` is ``batch``; other codecs stay ``chunk``."""
+    if compression_level is not None and compression_level != "":
+        return parse_compression_level(compression_level)
+    if compression and str(compression).startswith("zstd"):
+        return DEFAULT_ZSTD_WRAP
+    return "chunk"
 
 
 def is_in_file_compression(level: Any) -> bool:

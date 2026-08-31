@@ -28,18 +28,18 @@ from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABL
 from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.framed_zstd import (
+    DEFAULT_COMPRESSION_BATCH_SIZE,
     is_in_file_compression,
     make_zstd_codec,
     pack_framed_zstd,
     pack_sample_zstd,
-    parse_compression_level,
+    resolve_write_compression_level,
 )
 from litdata.streaming.item_loader import (
     _ARROW_FOOTER_MAGIC,
     BaseItemLoader,
     ParquetLoader,
     PyTreeLoader,
-    _auto_batch_rows,
     append_arrow_row_footer,
 )
 from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
@@ -122,12 +122,12 @@ class BinaryWriter:
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
             compression: The compression algorithm to use (``"zstd"`` or ``"zstd:N"``).
-            compression_level: Pytree wrap granularity: ``"chunk"`` (default, whole-file
-                ``.zstd.bin``), ``"batch"`` (framed zstd inside ``.bin``), or ``"sample"``
-                (per-item zstd inside ``.bin``). Not the zstd numeric level — use
-                ``compression="zstd:4"`` for that.
+            compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+                ``"batch"`` (framed zstd inside ``.bin``). ``"chunk"`` is whole-file
+                ``.zstd.bin``; ``"sample"`` is per-item zstd inside ``.bin``. Not the
+                zstd numeric level — use ``compression="zstd:4"`` for that.
             compression_batch_size: Items per zstd frame when ``compression_level="batch"``.
-                Default is :func:`_auto_batch_rows` (256 cheap leaves, ~32 images).
+                Default is 256 (same as Arrow IPC / decode windows).
             encryption: The encryption algorithm to use.
             follow_tensor_dimension: Whether to follow the tensor dimension when serializing the data.
             serializers: Provide your own serializers.
@@ -160,7 +160,9 @@ class BinaryWriter:
                 "compression='zstd_framed' is not a codec. Use compression='zstd' with "
                 "compression_level='batch' (framed .bin) or 'chunk' (whole-file .zstd.bin)."
             )
-        self._compression_level = parse_compression_level(compression_level) if compression else "chunk"
+        self._compression_level = (
+            resolve_write_compression_level(compression, compression_level) if compression else "chunk"
+        )
         self._compression_batch_size = compression_batch_size
         if compression and self._compression_level != "chunk" and not str(compression).startswith("zstd"):
             raise ValueError("compression_level='batch'/'sample' is only supported with compression='zstd'.")
@@ -494,7 +496,7 @@ class BinaryWriter:
     def _resolved_batch_size(self) -> int:
         if self._compression_batch_size is not None:
             return max(1, int(self._compression_batch_size))
-        return _auto_batch_rows(self._data_format)
+        return DEFAULT_COMPRESSION_BATCH_SIZE
 
     def _in_file_zstd_codec(self) -> Any:
         """Arrow C++ zstd for framed/sample wraps; python-zstd if pyarrow is missing."""

@@ -62,8 +62,11 @@ class Cache:
             subsampled_files: List of subsampled chunk files loaded from `input_dir/index.json` file.
             region_of_interest: List of tuples of (start,end) of region of interest for each chunk.
             compression: The name of the algorithm to reduce the size of the chunks.
-            compression_level: Pytree wrap granularity: ``"chunk"`` (default), ``"batch"``, or ``"sample"``.
-            compression_batch_size: Items per frame when ``compression_level="batch"``.
+            compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+                ``"batch"``. ``"chunk"`` is whole-file ``.zstd.bin``; ``"sample"`` is
+                per-item zstd. Default batch size is 256.
+            compression_batch_size: Items per frame when ``compression_level="batch"``
+                (default 256).
             encryption: The encryption algorithm to use.
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.

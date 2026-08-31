@@ -852,11 +852,11 @@ def _pytree_bytes_sample(i: int):
 
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
 def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
-    """Text/int pytree with >256 rows writes multiple zstd frames in a .bin (not .zstd.bin)."""
+    """Omitted zstd wrap is batch: >256 rows write multiple zstd frames in a .bin (not .zstd.bin)."""
     import json
 
     from litdata import optimize
-    from litdata.streaming.framed_zstd import _FRAMED_MAGIC, parse_framed_header
+    from litdata.streaming.framed_zstd import DEFAULT_COMPRESSION_BATCH_SIZE, _FRAMED_MAGIC, parse_framed_header
 
     n = 300
     out = tmp_path / "framed-text"
@@ -867,7 +867,6 @@ def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
         chunk_size=n,
         num_workers=1,
         compression="zstd",
-        compression_level="batch",
     )
     bins = [p for p in out.glob("*.bin") if ".zstd.bin" not in p.name]
     assert bins, "expected a .bin chunk"
@@ -875,12 +874,12 @@ def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
     index = json.loads((out / "index.json").read_text())
     assert index["config"]["compression"] == "zstd"
     assert index["config"]["compression_level"] == "batch"
-    assert index["config"]["compression_batch_size"] == 256
+    assert index["config"]["compression_batch_size"] == DEFAULT_COMPRESSION_BATCH_SIZE
     raw = bins[0].read_bytes()
     assert raw[:8] == _FRAMED_MAGIC
     header = parse_framed_header(raw)
     assert header.num_items == n
-    assert header.frame_rows == 256
+    assert header.frame_rows == DEFAULT_COMPRESSION_BATCH_SIZE
     assert len(header.frames) == 2
     ds = StreamingDataset(str(out))
     assert len(ds) == n
@@ -894,11 +893,11 @@ def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
 
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
 def test_zstd_batch_tensor_and_bytes_roundtrip(tmp_path):
-    """Heavy leaves use K=32 frames; bytes blobs still roundtrip."""
+    """Omitted compression_batch_size is 256 for heavy leaves too; bytes blobs still roundtrip."""
     from litdata import optimize
-    from litdata.streaming.framed_zstd import parse_framed_header
+    from litdata.streaming.framed_zstd import DEFAULT_COMPRESSION_BATCH_SIZE, parse_framed_header
 
-    n = 70
+    n = 300
     tensor_dir = tmp_path / "framed-tensor"
     optimize(
         fn=_pytree_tensor_sample,
@@ -911,11 +910,11 @@ def test_zstd_batch_tensor_and_bytes_roundtrip(tmp_path):
     )
     raw = next(tensor_dir.glob("chunk-*.bin")).read_bytes()
     header = parse_framed_header(raw)
-    assert header.frame_rows == 32
-    assert len(header.frames) == 3
+    assert header.frame_rows == DEFAULT_COMPRESSION_BATCH_SIZE
+    assert len(header.frames) == 2
     ds = StreamingDataset(str(tensor_dir))
     assert torch.equal(ds[0]["image"], torch.zeros(3, 8, 8, dtype=torch.uint8))
-    assert ds[32]["label"] == 32
+    assert ds[256]["label"] == 256
     assert ds[n - 1]["label"] == n - 1
 
     bytes_dir = tmp_path / "framed-bytes"
@@ -937,11 +936,39 @@ def test_zstd_batch_tensor_and_bytes_roundtrip(tmp_path):
 
 
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
-def test_legacy_zstd_still_whole_file(tmp_path):
-    """compression='zstd' (chunk default) still writes whole-file .zstd.bin."""
+@pytest.mark.parametrize("compression", ["zstd", "zstd:4"])
+def test_zstd_omitted_level_is_batch(tmp_path, compression):
+    """compression='zstd' / 'zstd:N' with omitted level writes framed .bin, not .zstd.bin."""
+    import json
+
+    from litdata.streaming.cache import Cache
+    from litdata.streaming.framed_zstd import DEFAULT_COMPRESSION_BATCH_SIZE, _FRAMED_MAGIC
+
+    out = tmp_path / "zstd"
+    cache = Cache(str(out), chunk_size=10, compression=compression)
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    names = os.listdir(out)
+    assert not any(name.endswith(".zstd.bin") or ".zstd:" in name for name in names)
+    bins = [p for p in out.glob("chunk-*.bin") if ".zstd.bin" not in p.name]
+    assert bins
+    assert bins[0].read_bytes()[:8] == _FRAMED_MAGIC
+    index = json.loads((out / "index.json").read_text())
+    assert index["config"]["compression"] == compression
+    assert index["config"]["compression_level"] == "batch"
+    assert index["config"]["compression_batch_size"] == DEFAULT_COMPRESSION_BATCH_SIZE
+    ds = StreamingDataset(str(out))
+    assert [ds[i] for i in range(20)] == list(range(20))
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_chunk_still_whole_file(tmp_path):
+    """Explicit compression_level='chunk' still writes whole-file .zstd.bin."""
     from litdata.streaming.cache import Cache
 
-    cache = Cache(str(tmp_path / "zstd"), chunk_size=10, compression="zstd")
+    cache = Cache(str(tmp_path / "zstd"), chunk_size=10, compression="zstd", compression_level="chunk")
     for i in range(20):
         cache[i] = i
     cache.done()

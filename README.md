@@ -1968,7 +1968,7 @@ Using [zstd](https://github.com/facebook/zstd), you can achieve high compression
 | -------- | -------- | 
 | 2.8kb | 646b |
 
-`compression="zstd"` (default `compression_level="chunk"`) wraps each pytree chunk as one whole-file `.zstd.bin`. `compression_level="batch"` keeps a `.bin` with an uncompressed directory plus zstd frames of `compression_batch_size` items (256 text/int leaves, ~32 images/tensors by default). `compression_level="sample"` zstd-compresses each item between the pytree offsets. Numeric zstd levels are `compression="zstd:4"`, not `compression_level`. Nested JSON / Hub Arrow IPC still uses Arrow’s own per-batch zstd when you pass `"zstd"`.
+`compression="zstd"` (default `compression_level="batch"`, `compression_batch_size=256`) keeps a `.bin` with an uncompressed directory plus zstd frames of 256 items — the same window as Arrow IPC record batches and aligned decode. `compression_level="chunk"` wraps each pytree chunk as one whole-file `.zstd.bin`. `compression_level="sample"` zstd-compresses each item between the pytree offsets. Numeric zstd levels are `compression="zstd:4"`, not `compression_level`. Nested JSON / Hub Arrow IPC still uses Arrow’s own per-batch zstd when you pass `"zstd"`.
 
 
 </details>
@@ -2649,8 +2649,8 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
 | `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
 | `compression` | `None` | `"zstd"` or `"zstd:N"` (numeric level). Pair with `compression_level` for pytree wrap |
-| `compression_level` | `"chunk"` | `"chunk"` whole-file `.zstd.bin`; `"batch"` framed `.bin`; `"sample"` per-item zstd |
-| `compression_batch_size` | auto | Items per frame when `compression_level="batch"` (256 cheap leaves / ~32 images) |
+| `compression_level` | `"batch"` (zstd) | `"batch"` framed `.bin`; `"chunk"` whole-file `.zstd.bin`; `"sample"` per-item zstd |
+| `compression_batch_size` | `256` | Items per frame when `compression_level="batch"` (matches Arrow IPC / decode windows) |
 | `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom ([encrypt](#encrypt-decrypt)) |
 | `num_workers` | CPU count | Local workers |
 | `fast_dev_run` | `False` | Smoke a subset of inputs |

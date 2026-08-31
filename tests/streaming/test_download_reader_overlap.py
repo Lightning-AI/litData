@@ -277,7 +277,7 @@ def test_try_decompress_publishes_complete_bin(tmpdir):
 
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
-    cache = Cache(cache_dir, chunk_size=10, compression="zstd")
+    cache = Cache(cache_dir, chunk_size=10, compression="zstd", compression_level="chunk")
     for i in range(10):
         cache[i] = i
     cache.done()
