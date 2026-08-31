@@ -927,60 +927,35 @@ dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
 
 Default I/O **prefetches** whole parquet files in the background, then reads locally (`to_pylist()`).
 
-### LitData vs Hugging Face `datasets` streaming
+### Hub suite: LitData binary vs parquet vs HF streaming
 
-Same Hub split, sequential, **8k rows after a 200-row warmup**. LitData `StreamingDataset("hf://...")` vs `load_dataset(..., streaming=True)`. LitData was faster on **all 48** parquet datasets that resolved (2 skipped: too many shards / no parquet). Median **18×**, minimum **7.6×**.
+15 significant mixed-modality Hub splits (text/JSON, images, audio; tiny NLP toys omitted). Sequential, **one epoch**, never wrap. 200-row warmup, then a **cold** timed pass (payload cache wiped; `index.json` kept). First pass capped at 200,000 rows or `len`; large sets may run a second cold pass toward 120 seconds (still ≤ `len`). Reproduce: `scripts/bench/bench_hf_hub_suite.py` / `scripts/bench/bench_hf_suite_64mb.json`.
 
-| Dataset | Split | LitData rows/s | HF streaming rows/s | Speedup |
-|---|---|---:|---:|---:|
-| `abisee/cnn_dailymail/3.0.0` | train | 76,938 | 4,452 | 17.3× |
-| `abisee/cnn_dailymail/3.0.0` | validation | 73,256 | 4,735 | 15.5× |
-| `allenai/openbookqa/main` | train | 144,225 | 9,255 | 15.6× |
-| `allenai/qasc` | train | 166,333 | 15,915 | 10.5× |
-| `allenai/sciq` | train | 167,374 | 14,941 | 11.2× |
-| `allenai/winogrande/winogrande_xl` | train | 219,521 | 14,708 | 14.9× |
-| `Anthropic/hh-rlhf` | train | 136,496 | 17,873 | 7.6× |
-| `cardiffnlp/tweet_eval/sentiment` | train | 224,836 | 1,556 | 144.4× |
-| `dair-ai/emotion` | train | 226,311 | 14,499 | 15.6× |
-| `databricks/databricks-dolly-15k` | train | 179,386 | 16,178 | 11.1× |
-| `EdinburghNLP/xsum` | train | 92,970 | 4,304 | 21.6× |
-| `facebook/anli` | train_r3 | 174,544 | 8,122 | 21.5× |
-| `facebook/xnli/en` | train | 181,365 | 2,976 | 60.9× |
-| `fancyzhx/amazon_polarity` | train | 100,803 | 581 | 173.5× |
-| `fancyzhx/dbpedia_14` | train | 142,468 | 1,611 | 88.4× |
-| `garage-bAInd/Open-Platypus` | train | 153,152 | 5,796 | 26.4× |
-| `google-research-datasets/nq_open` | train | 211,815 | 11,889 | 17.8× |
-| `google-research-datasets/paws/labeled_final` | train | 201,272 | 7,588 | 26.5× |
-| `google/boolq` | train | 171,206 | 10,187 | 16.8× |
-| `Helsinki-NLP/opus_books/en-fr` | train | 172,167 | 5,662 | 30.4× |
-| `HuggingFaceH4/no_robots` | train | 115,877 | 12,580 | 9.2× |
-| `HuggingFaceH4/ultrachat_200k` | test_sft | 57,392 | 2,745 | 20.9× |
-| `HuggingFaceH4/ultrachat_200k` | train_sft | 51,470 | 6,332 | 8.1× |
-| `HuggingFaceH4/ultrafeedback_binarized` | train_sft | 72,110 | 1,524 | 47.3× |
-| `Intel/orca_dpo_pairs` | train | 116,607 | 4,817 | 24.2× |
-| `knkarthick/samsum` | train | 174,268 | 14,233 | 12.2× |
-| `nyu-mll/glue/qnli` | train | 195,710 | 7,637 | 25.6× |
-| `nyu-mll/glue/rte` | train | 183,868 | 5,679 | 32.4× |
-| `nyu-mll/glue/sst2` | train | 213,172 | 7,654 | 27.9× |
-| `nyu-mll/glue/stsb` | validation | 180,179 | 4,246 | 42.4× |
-| `open-thoughts/OpenThoughts-114k` | train | 14,859 | 1,907 | 7.8× |
-| `openai/gsm8k/main` | train | 187,161 | 14,240 | 13.1× |
-| `OpenAssistant/oasst1` | train | 42,846 | 3,005 | 14.3× |
-| `rajpurkar/squad` | train | 171,509 | 9,269 | 18.5× |
-| `rajpurkar/squad_v2` | train | 167,137 | 9,473 | 17.6× |
-| `roneneldan/TinyStories` | train | 107,208 | 1,025 | 104.6× |
-| `Rowan/hellaswag` | train | 168,438 | 943 | 178.6× |
-| `Salesforce/wikitext/wikitext-2-raw-v1` | train | 192,937 | 11,505 | 16.8× |
-| `SetFit/ag_news` | train | 191,327 | 10,317 | 18.5× |
-| `SetFit/emotion` | train | 220,503 | 23,074 | 9.6× |
-| `SetFit/sst2` | train | 218,613 | 19,903 | 11.0× |
-| `stanfordnlp/imdb` | train | 130,689 | 9,625 | 13.6× |
-| `stanfordnlp/snli` | train | 157,889 | 8,888 | 17.8× |
-| `tatsu-lab/alpaca` | train | 170,815 | 7,899 | 21.6× |
-| `tau/commonsense_qa` | train | 185,288 | 14,689 | 12.6× |
-| `teknium/OpenHermes-2.5` | train | 67,159 | 204 | 329.4× |
-| `yahma/alpaca-cleaned` | train | 157,510 | 3,503 | 45.0× |
-| `Yelp/yelp_review_full` | train | 119,513 | 1,896 | 63.0× |
+- **Binary** — `optimize_hf(..., chunk_bytes="64MB", compression="zstd")` onto object storage, then `StreamingDataset(opt_dir, max_pre_download=8)`. Nested JSON uses an Arrow IPC footer; image/audio/video rows use pytree serializers.
+- **Parquet** — `StreamingDataset("hf://...")` from the Hub (`hf_hub_download`), no range_read.
+- **HF** — `load_dataset(..., streaming=True)` library defaults.
+
+Binary is **not** always fastest: **8/15** binary, **6/15** parquet faster (OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100), **1** error. Row counts can differ when the 120s heuristic raises the cap for faster streams; rates are still rows/s.
+
+| Dataset | Binary rows/s | Parquet rows/s | HF rows/s | bin/pq | bin/hf | Binary TTFB | Parquet TTFB | HF TTFB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| HuggingFaceH4/ultrachat_200k / train_sft | 54,948 | 30,927 | 7,606 | 1.78× | 7.22× | 1.46s | 3.03s | 1.03s |
+| open-thoughts/OpenThoughts-114k / train | 5,985 | 12,661 | 1,939 | 0.47× | 3.09× | 1.02s | 2.14s | 1.46s |
+| abisee/cnn_dailymail / train / 3.0.0 | 67,467 | 41,757 | 9,780 | 1.62× | 6.90× | 1.00s | 3.02s | 1.21s |
+| teknium/OpenHermes-2.5 / train | 120,170 | 64,878 | 2,609 | 1.85× | 46.07× | 1.77s | 6.06s | 96.30s |
+| roneneldan/TinyStories / train | 191,450 | 135,728 | 56,189 | 1.41× | 3.41× | 1.01s | 3.02s | 6.29s |
+| fancyzhx/amazon_polarity / train | 243,459 | 147,151 | 10,637 | 1.65× | 22.89× | 4.15s | 5.05s | 14.92s |
+| Yelp/yelp_review_full / train | 221,131 | 82,897 | 38,878 | 2.67× | 5.69× | 1.13s | 3.77s | 2.35s |
+| EdinburghNLP/xsum / train | 47,548 | 24,684 | 10,150 | 1.93× | 4.68× | 3.36s | 6.34s | 4.29s |
+| Anthropic/hh-rlhf / train | 61,311 | 37,075 | 18,785 | 1.65× | 3.26× | 1.96s | 3.13s | 0.31s |
+| JeanKaddour/minipile / train | 12,686 | 27,865 | 1,607 | 0.46× | 7.90× | 1.00s | 3.03s | 10.41s |
+| ethz/food101 / train | 431 | 2,608 | 268 | 0.17× | 1.61× | 1.08s | 6.02s | 1.15s |
+| zh-plus/tiny-imagenet / train | 15,894 | 35,777 | 2,385 | 0.44× | 6.66× | 0.81s | 2.17s | 5.22s |
+| uoft-cs/cifar10 / train | 10,437 | 22,407 | 8,856 | 0.47× | 1.18× | 1.29s | 1.79s | 1.01s |
+| uoft-cs/cifar100 / train | 9,687 | 14,750 | 6,964 | 0.66× | 1.39× | 1.59s | 3.01s | 2.12s |
+| google/speech_commands / train / v0.02 | — | — | error | — | — | — | — | — |
+
+`google/speech_commands`: HF `load_dataset` failed with `RuntimeError: Dataset scripts are no longer supported, but found speech_commands.py`. Binary and parquet were not timed for this split.
 
 See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
