@@ -17,7 +17,7 @@ import pytest
 import torch
 from lightning_utilities.core.imports import RequirementCache
 
-from litdata.constants import _ZSTD_AVAILABLE
+from litdata.constants import _INDEX_FILENAME, _ZSTD_AVAILABLE
 from litdata.processing import data_processor as data_processor_module
 from litdata.processing import functions
 from litdata.processing.data_processor import (
@@ -2133,6 +2133,94 @@ def test_data_chunk_recipe_upload_index_with_data_connection_id(tmpdir, monkeypa
     put_mock.assert_called_once()
     assert put_mock.call_args[0][0] is output_dir
     assert put_mock.call_args[0][2] == storage_options
+
+
+class _AppendChunkRecipe(DataChunkRecipe):
+    def prepare_structure(self, input_dir: str | None) -> list:
+        return []
+
+    def prepare_item(self, item_metadata: Any) -> Any:
+        return item_metadata
+
+
+def _index_chunk(name: str) -> dict[str, Any]:
+    return {"chunk_size": 1, "chunk_bytes": 4, "column_sizes": [4], "dim": None, "filename": name}
+
+
+def _write_worker_index(directory: str, chunk_name: str) -> None:
+    with open(os.path.join(directory, f"0.{_INDEX_FILENAME}"), "w") as f:
+        json.dump({"chunks": [_index_chunk(chunk_name)], "config": None}, f)
+
+
+def _chunk_names(index_path: str) -> list[str]:
+    with open(index_path) as f:
+        return [c["filename"] for c in json.load(f)["chunks"]]
+
+
+def test_data_chunk_recipe_multinode_append_folds_existing_index_once(tmpdir, monkeypatch):
+    """Regression for #865: ``existing_index`` must not be folded into every ``{node}-index.json``.
+
+    ``DataChunkRecipe._done`` is the real two-stage merge (per-node, then last-node
+    ``_upload_index``). Spying ``Cache._merge_no_wait`` asserts the existing chunks
+    are passed only on the final merge.
+    """
+    output_path = str(tmpdir.mkdir("output"))
+    merge_cache_dir = str(tmpdir.mkdir("merge_cache"))
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda name=None: merge_cache_dir)
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 2)
+
+    existing_index = {"chunks": [_index_chunk("A.bin"), _index_chunk("B.bin")], "config": None}
+    recipe = _AppendChunkRecipe()
+    recipe.existing_index = existing_index
+    output_dir = Dir(path=output_path, url=None)
+
+    merge_calls: list[tuple[int | None, list[str] | None]] = []
+    orig_merge = data_processor_module.Cache._merge_no_wait
+
+    def _spy_merge(self, node_rank=None, existing_index=None):
+        names = None if existing_index is None else [c["filename"] for c in existing_index["chunks"]]
+        merge_calls.append((node_rank, names))
+        return orig_merge(self, node_rank=node_rank, existing_index=existing_index)
+
+    monkeypatch.setattr(data_processor_module.Cache, "_merge_no_wait", _spy_merge)
+
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+    _write_worker_index(output_path, "C.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=output_dir)
+    assert _chunk_names(os.path.join(output_path, f"0-{_INDEX_FILENAME}")) == ["C.bin"]
+
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 1)
+    _write_worker_index(output_path, "D.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=output_dir)
+
+    assert _chunk_names(os.path.join(output_path, _INDEX_FILENAME)) == ["A.bin", "B.bin", "C.bin", "D.bin"]
+    assert merge_calls == [(0, None), (1, None), (None, ["A.bin", "B.bin"])]
+
+
+def test_data_chunk_recipe_singlenode_append_folds_existing_index_on_node_merge(tmpdir, monkeypatch):
+    output_path = str(tmpdir.mkdir("output"))
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 1)
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+
+    existing_index = {"chunks": [_index_chunk("A.bin"), _index_chunk("B.bin")], "config": None}
+    recipe = _AppendChunkRecipe()
+    recipe.existing_index = existing_index
+
+    merge_calls: list[tuple[int | None, list[str] | None]] = []
+    orig_merge = data_processor_module.Cache._merge_no_wait
+
+    def _spy_merge(self, node_rank=None, existing_index=None):
+        names = None if existing_index is None else [c["filename"] for c in existing_index["chunks"]]
+        merge_calls.append((node_rank, names))
+        return orig_merge(self, node_rank=node_rank, existing_index=existing_index)
+
+    monkeypatch.setattr(data_processor_module.Cache, "_merge_no_wait", _spy_merge)
+
+    _write_worker_index(output_path, "C.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=Dir(path=output_path, url=None))
+
+    assert _chunk_names(os.path.join(output_path, _INDEX_FILENAME)) == ["A.bin", "B.bin", "C.bin"]
+    assert merge_calls == [(None, ["A.bin", "B.bin"])]
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
