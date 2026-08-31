@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Unordered ``optimize()`` workers load items from a unique temp pickle instead of a shared ``node-{rank}-items.pkl`` under the chunk cache, so overlapping runs (pytest-xdist) no longer ``IndexError`` or mix inputs.
 - Process-level cache of Lightning Cloud temp-bucket credentials **and** the boto3 R2 client, keyed by ``data_connection_id`` (TTL aligned to the 2700s refetch interval). A new ``StreamingDataset`` / ``R2Client`` in the same process no longer re-logins (~1s) or rebuilds boto3 (~50ms) on the first GET. Scheduled refresh still mints new credentials. R2 clients skip optional SDK checksums. Tiny indexed chunks (<8MB) use ``get_object`` instead of TransferManager/obstore. ``clear_temp_bucket_credentials_cache()`` isolates tests.
 - `optimize` to lightning_storage (FUSE path + R2 url) is treated as remote: leftover ``.bin`` in a shared chunk cache no longer abort index merge. Removers now run even when ``input_dir`` is empty (HF optimize). ``R2Client`` copies ``storage_options`` so ``data_connection_id`` cannot be popped off a shared dict before client create. ``optimize`` / ``DataProcessor`` / ``_read_updated_at`` merge ``data_connection_id`` from the resolved Dir into ``storage_options``. A truncated FUSE ``index.json`` falls back to the object-store copy instead of raising ``JSONDecodeError``.
 

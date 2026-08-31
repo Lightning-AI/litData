@@ -1073,6 +1073,11 @@ class BaseWorker:
             elif isinstance(combined_data, int):
                 index = combined_data
                 assert self.items is not None
+                if index < 0 or index >= len(self.items):
+                    raise IndexError(
+                        f"Optimize worker got item index {index} but only {len(self.items)} items "
+                        f"(lookup={self._items_lookup_path})."
+                    )
                 item = self.items[index]
                 paths = self.paths[index] if index < len(self.paths) else None
             else:
@@ -1125,6 +1130,8 @@ class BaseWorker:
             chunk_bytes=self.data_recipe.chunk_bytes,
             chunk_size=self.data_recipe.chunk_size,
             compression=self.data_recipe.compression,
+            compression_level=getattr(self.data_recipe, "compression_level", None),
+            compression_batch_size=getattr(self.data_recipe, "compression_batch_size", None),
             encryption=self.data_recipe.encryption,
             writer_chunk_index=self.writer_starting_chunk_index,
             item_loader=self.item_loader,
@@ -1407,6 +1414,8 @@ class ChunkWriterProcess(Process):
                 chunk_bytes=self.data_recipe.chunk_bytes,
                 chunk_size=self.data_recipe.chunk_size,
                 compression=self.data_recipe.compression,
+                compression_level=getattr(self.data_recipe, "compression_level", None),
+                compression_batch_size=getattr(self.data_recipe, "compression_batch_size", None),
                 encryption=self.data_recipe.encryption,
                 writer_chunk_index=0,
                 item_loader=self.item_loader,
@@ -1492,6 +1501,8 @@ class DataChunkRecipe(DataRecipe):
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         storage_options: dict[str, Any] = {},
         key_fn: Callable[[Any], Any] | None = None,
@@ -1503,6 +1514,8 @@ class DataChunkRecipe(DataRecipe):
         self.chunk_size = chunk_size
         self.chunk_bytes = 1 << 26 if chunk_size is None and chunk_bytes is None else chunk_bytes  # 1<<26 = 64 MB
         self.compression = compression
+        self.compression_level = compression_level
+        self.compression_batch_size = compression_batch_size
         self.encryption = encryption
         self.key_fn = key_fn
 
@@ -1890,6 +1903,11 @@ class DataProcessor:
         self.node_paths: list[list[str] | None] | None = None
         self._queue_input = False
         self._feeder_thread: Thread | None = None
+        # Unique pickle of node items for unordered workers. A shared
+        # ``node-{rank}-items.pkl`` under ``_get_cache_dir()`` raced when two
+        # ``optimize()`` runs overlapped (pytest-xdist) and ``_cleanup_cache``
+        # rmtree'd the folder.
+        self._items_lookup_path: str | None = None
         self._n_node_downloaders = 0
         self._n_node_uploaders = 0
         self.shared_write_queue: Queue | None = None
@@ -2147,6 +2165,7 @@ class DataProcessor:
 
         if self._feeder_thread is not None:
             self._feeder_thread.join(timeout=5)
+        self._unlink_items_lookup()
         self._stop_chunk_writers()
         self._stop_node_io_pools()
 
@@ -2161,6 +2180,22 @@ class DataProcessor:
             # clean up checkpoints
             self._cleanup_checkpoints()
 
+    def _drain_shared_queue(self) -> None:
+        """Unblock ``_feed_ready`` after workers die (``Queue.put`` waits on a full prefetch)."""
+        if self.shared_queue is None:
+            return
+        with suppress(Exception):
+            while True:
+                self.shared_queue.get_nowait()
+
+    def _unlink_items_lookup(self) -> None:
+        path = self._items_lookup_path
+        if not path:
+            return
+        with suppress(FileNotFoundError, OSError):
+            os.unlink(path)
+        self._items_lookup_path = None
+
     def _exit_on_error(self, error: str) -> None:
         for w in self.workers:
             # w.join(0)
@@ -2168,8 +2203,10 @@ class DataProcessor:
         for writer in self.chunk_writers:
             if writer.is_alive():
                 writer.terminate()
+        self._drain_shared_queue()
         if self._feeder_thread is not None:
-            self._feeder_thread.join(timeout=1)
+            self._feeder_thread.join(timeout=2)
+        self._unlink_items_lookup()
         raise RuntimeError(f"We found the following error {error}.")
 
     def _queue_prefetch(self) -> int:
@@ -2356,9 +2393,21 @@ class DataProcessor:
         stop_queues: list[Queue] = []
         items_lookup_path: str | None = None
         if not self.keep_data_ordered and self.node_user_items is not None:
-            items_lookup_path = os.path.join(_get_cache_dir(), f"node-{_get_node_rank()}-items.pkl")
-            with open(items_lookup_path, "wb") as handle:
-                pickle.dump((self.node_user_items, self.node_paths), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # Keep this file *outside* ``_get_cache_dir()`` so a concurrent
+            # ``optimize()`` ``rmtree`` cannot replace or delete it.
+            fd, items_lookup_path = tempfile.mkstemp(
+                prefix=f"litdata-node-{_get_node_rank()}-items-{os.getpid()}-",
+                suffix=".pkl",
+            )
+            os.close(fd)
+            try:
+                with open(items_lookup_path, "wb") as handle:
+                    pickle.dump((self.node_user_items, self.node_paths), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception:
+                with suppress(FileNotFoundError, OSError):
+                    os.unlink(items_lookup_path)
+                raise
+            self._items_lookup_path = items_lookup_path
         for worker_idx in range(self.num_workers):
             worker_user_items = workers_user_items[worker_idx] if workers_user_items is not None else None
             stop_queues.append(Queue())

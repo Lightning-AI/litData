@@ -139,11 +139,14 @@ def test_optimize_hf(tmp_path, write_pq_data, monkeypatch):
 
 def test_hf_parquet_cache_is_outside_chunk_dir(monkeypatch):
     monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
-    monkeypatch.setattr("litdata.utilities.hf_dataset.get_default_cache_dir", lambda: "/cache/chunks")
-    assert _hf_cache_root() == "/cache"
+    chunk_dir = os.path.join(os.sep, "cache", "chunks")
+    monkeypatch.setattr("litdata.utilities.hf_dataset.get_default_cache_dir", lambda: chunk_dir)
+    root = _hf_cache_root()
+    assert os.path.normpath(root) == os.path.normpath(os.path.dirname(os.path.normpath(chunk_dir)))
     dest = hf_parquet_cache_path("hf://datasets/org/name")
-    assert dest.startswith("/cache/hf-parquet/")
-    assert "/chunks/" not in dest
+    parquet_root = os.path.normpath(os.path.join(root, "hf-parquet"))
+    assert os.path.normpath(dest).startswith(parquet_root)
+    assert f"{os.sep}chunks{os.sep}" not in dest + os.sep
 
 
 def test_stabilize_hf_row_wraps_variable_lists():
