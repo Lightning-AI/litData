@@ -22,8 +22,8 @@ from unittest.mock import MagicMock
 
 from litdata.streaming import Cache
 from litdata.streaming.async_prefetch import (
-    adownload_chunk_indexes,
     adaptive_pre_download,
+    adownload_chunk_indexes,
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
     async_download_concurrency,
