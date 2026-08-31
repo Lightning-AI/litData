@@ -856,7 +856,7 @@ def test_zstd_batch_pytree_roundtrip_multiple_frames(tmp_path):
     import json
 
     from litdata import optimize
-    from litdata.streaming.framed_zstd import DEFAULT_COMPRESSION_BATCH_SIZE, _FRAMED_MAGIC, parse_framed_header
+    from litdata.streaming.framed_zstd import _FRAMED_MAGIC, DEFAULT_COMPRESSION_BATCH_SIZE, parse_framed_header
 
     n = 300
     out = tmp_path / "framed-text"
@@ -942,7 +942,7 @@ def test_zstd_omitted_level_is_batch(tmp_path, compression):
     import json
 
     from litdata.streaming.cache import Cache
-    from litdata.streaming.framed_zstd import DEFAULT_COMPRESSION_BATCH_SIZE, _FRAMED_MAGIC
+    from litdata.streaming.framed_zstd import _FRAMED_MAGIC, DEFAULT_COMPRESSION_BATCH_SIZE
 
     out = tmp_path / "zstd"
     cache = Cache(str(out), chunk_size=10, compression=compression)
