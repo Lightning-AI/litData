@@ -27,7 +27,7 @@ kept (metadata only).
 * **Binary** — ``optimize_hf(..., chunk_bytes="64MB", compression="zstd")`` into
   ``--opt-root`` on lightning_storage (R2 upload), then
   ``StreamingDataset(opt_dir, max_pre_download=8)``. Nested JSON uses the Arrow
-  IPC footer; image/audio/video rows use pytree serializers. ``chunk_bytes`` is
+  IPC footer (including Hub ``{bytes, path}`` media as Arrow binary). ``chunk_bytes`` is
   on-disk size. Do not pass R2 ``storage_options`` into ``optimize_hf``.
 
 Token: ``HF_TOKEN`` / ``HUGGING_FACE_HUB_TOKEN``. Never printed.
@@ -71,12 +71,12 @@ DATASETS: list[tuple[str, str, str | None, str | None]] = [
     ("EdinburghNLP/xsum", "train", None, None),
     ("Anthropic/hh-rlhf", "train", None, None),
     ("JeanKaddour/minipile", "train", None, None),
-    # images (PIL/bytes in parquet → pytree Image, not Arrow JSON footer)
+    # images (Hub {bytes, path} → Arrow binary, same as parquet to_pylist)
     ("ethz/food101", "train", None, None),
     ("zh-plus/tiny-imagenet", "train", None, None),
     ("uoft-cs/cifar10", "train", None, None),
     ("uoft-cs/cifar100", "train", None, None),
-    # audio (pytree Image/Audio wrappers, not Arrow JSON footer)
+    # audio (Hub {bytes, path} → Arrow binary, same as parquet)
     ("s3prl/superb", "train", "ks", None),
 ]
 

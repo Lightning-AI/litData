@@ -3,12 +3,14 @@ import json
 
 from litdata.streaming.serializers import JsonLeaf
 from litdata.types import (
+    Image,
     JsonType,
     default_for,
     fuse_schema_json,
     fuse_type,
     infer_type,
     is_arrow_footer_type,
+    is_json_row,
     is_nested_type,
     schema_from_json,
     schema_to_json,
@@ -82,7 +84,10 @@ def test_is_nested_and_defaults():
     assert is_arrow_footer_type(infer_type({"article": "x", "highlights": "y", "id": "z"}))
     assert is_arrow_footer_type(infer_type({"id": "a", "n": 1}))
     assert is_arrow_footer_type(infer_type({"answers": ["x"]}))
+    assert is_arrow_footer_type(infer_type({"img": {"bytes": b"xx", "path": "a.jpg"}, "label": 1}))
+    assert is_json_row({"img": {"bytes": b"xx", "path": "a.jpg"}, "label": 1})
     assert not is_arrow_footer_type(infer_type(1))
+    assert not is_arrow_footer_type(infer_type({"image": Image(bytes=b"xx", path="a.jpg"), "label": 1}))
     assert default_for(JsonType("list", value=JsonType("str"))) == []
     assert type_to_json(JsonType("str")) == "str"
     assert type_from_json("int").kind == "int"

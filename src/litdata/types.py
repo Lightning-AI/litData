@@ -497,8 +497,8 @@ def default_for(schema: JsonType) -> Any:
 
 
 def is_json_row(value: Any) -> bool:
-    """True for dict/list/scalar JSON — safe to keep for the Arrow footer."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    """True for dict/list/scalar JSON or raw bytes — safe to keep for the Arrow footer."""
+    if value is None or isinstance(value, (bool, int, float, str, bytes, bytearray)):
         return True
     if type(value).__name__ == "JsonLeaf" and hasattr(value, "value"):
         return is_json_row(value.value)

@@ -167,7 +167,7 @@ def test_stabilize_hf_row_wraps_variable_lists():
     assert flat == {"id": "a", "n": 1}
 
 
-def test_wrap_hf_media_features_uses_pytree_not_arrow_footer():
+def test_wrap_hf_media_features_keeps_bytes_for_arrow_footer():
     from litdata.types import Audio, Image, infer_type, is_arrow_footer_type
     from litdata.utilities.hf_dataset import _wrap_hf_media_features
 
@@ -176,12 +176,61 @@ def test_wrap_hf_media_features_uses_pytree_not_arrow_footer():
     assert is_arrow_footer_type(infer_type(text))
 
     img = _wrap_hf_media_features({"img": {"bytes": b"\xff\xd8xx", "path": "a.jpg"}, "label": 1})
-    assert isinstance(img["img"], Image)
-    assert not is_arrow_footer_type(infer_type(img))
+    assert img["img"] == {"bytes": b"\xff\xd8xx", "path": "a.jpg"}
+    assert not isinstance(img["img"], Image)
+    img_t = infer_type(img)
+    assert is_arrow_footer_type(img_t)
+    assert img_t.fields["img"].kind == "struct"
+    assert img_t.fields["img"].fields["bytes"].kind == "bytes"
+    assert img_t.fields["img"].fields["path"].kind == "str"
 
     aud = _wrap_hf_media_features({"audio": {"bytes": b"RIFF....", "path": "a.wav"}})
-    assert isinstance(aud["audio"], Audio)
-    assert not is_arrow_footer_type(infer_type(aud))
+    assert aud["audio"] == {"bytes": b"RIFF....", "path": "a.wav"}
+    assert not isinstance(aud["audio"], Audio)
+    assert is_arrow_footer_type(infer_type(aud))
+
+    vid = _wrap_hf_media_features({"video": {"bytes": b"ftyp", "path": "a.mp4"}})
+    assert vid["video"] == {"bytes": b"ftyp", "path": "a.mp4"}
+    assert is_arrow_footer_type(infer_type(vid))
+
+
+def test_optimize_hf_media_bytes_stay_arrow_binary(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC
+
+    jpeg = b"\xff\xd8\xff\xdbxx"
+    wav = b"RIFF....WAVE"
+    table = pa.table(
+        {
+            "img": [{"bytes": jpeg, "path": "a.jpg"}, {"bytes": jpeg, "path": "b.jpg"}],
+            "audio": [{"bytes": wav, "path": "a.wav"}, {"bytes": wav, "path": "b.wav"}],
+            "label": [1, 2],
+        }
+    )
+    pq_path = tmp_path / "media.parquet"
+    pq.write_table(table, pq_path)
+    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/media")
+    monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)])
+    out = tmp_path / "media-opt"
+    optimize_hf("org/media", output_dir=str(out), chunk_size=10, num_workers=1, compression="zstd")
+    ds = StreamingDataset(str(out))
+    assert len(ds) == 2
+    row = ds[0]
+    assert row["img"] == {"bytes": jpeg, "path": "a.jpg"}
+    assert row["audio"] == {"bytes": wav, "path": "a.wav"}
+    assert row["label"] == 1
+    assert not hasattr(row["img"], "array")
+    types = json.loads((out / "index.json").read_text())["config"]["types"]
+    assert types["img"]["type"] == "struct"
+    assert types["img"]["fields"]["bytes"] == "bytes"
+    assert types["audio"]["fields"]["bytes"] == "bytes"
+    fmt = json.loads((out / "index.json").read_text())["config"]["data_format"]
+    names = fmt if isinstance(fmt, list) else [fmt]
+    assert not any("image" in str(name).lower() or "audio" in str(name).lower() for name in names)
+    chunk = next(p for p in out.iterdir() if p.name.endswith(".bin"))
+    assert chunk.read_bytes()[-8:] == _ARROW_FOOTER_MAGIC
 
 
 def test_optimize_hf_variable_length_lists(tmp_path, monkeypatch):

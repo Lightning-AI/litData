@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- `optimize_hf` wraps Hub parquet ``image`` / ``img`` / ``audio`` / ``video`` ``{bytes, path}`` structs as ``Image`` / ``Audio`` / ``Video`` so they use pytree serializers instead of the Arrow JSON footer.
+- `optimize_hf` keeps Hub parquet ``image`` / ``img`` / ``audio`` / ``video`` ``{bytes, path}`` as Arrow binary/string structs (same as parquet ``to_pylist``). It no longer wraps them as ``Image`` / ``Audio`` / ``Video`` (that decoded to tensors). Explicit ``PIL.Image`` / ``litdata.Image`` still use pytree serializers.
 - `R2Downloader.download_file` prefers obstore for chunk GETs (same as S3); ``index.json`` stays on boto3 so the DataLoader parent does not start tokio before fork. Single-chunk lightning_storage streams no longer wait on serial boto3.
 - `ParquetLoader` (low-memory) converts each row group with Arrow ``to_pylist()`` instead of per-cell ``as_py()``. Sequential IMDB parquet matches Hugging Face `datasets` streaming dicts and is ~2× faster than the old cell path.
 - `StreamingDataset("hf://...")` still prefetches whole parquet files (PrepareChunksThread + ``hf_hub_download``), then converts row groups with ``to_pylist()``. Hub UltraChat: ~56k rows/s vs HF streaming ~7k once cached. Nested parquet trees are listed recursively; ``storage_options`` / ``HF_TOKEN`` are forwarded to indexing. Removed unused ``ParquetLoader(range_read=...)`` (Hub range-reads on getitem were slower than HF streaming).

@@ -124,7 +124,9 @@ def optimize_hf(
     4. ``optimize`` from ``hf://`` URLs (workers re-download if a persist file is missing)
        into **64MB** chunks unless ``chunk_size`` / ``chunk_bytes`` is set.
     5. Variable-length lists/dicts are stored as one JSON leaf so samples keep a
-       stable ``data_format`` (SQuAD answers, UltraChat messages, …).
+       stable ``data_format`` (SQuAD answers, UltraChat messages, …). Hub
+       ``{bytes, path}`` media stays Arrow binary (no ``Image`` / ``Audio`` /
+       ``Video`` wrap).
 
     Later calls reuse ``output_dir`` when it already has ``index.json``.
 
@@ -488,47 +490,15 @@ def _stabilize_hf_row(
     return out
 
 
-_HF_MEDIA_KEYS = {
-    "image": "image",
-    "img": "image",
-    "images": "image",
-    "audio": "audio",
-    "video": "video",
-}
-
-
 def _wrap_hf_media_features(sample: Any) -> Any:
-    """Turn Hub ``{bytes, path}`` media columns into ``Image`` / ``Audio`` / ``Video``.
+    """Leave Hub ``{bytes, path}`` media as dicts for the Arrow IPC footer.
 
-    ``types_from_arrow`` types those structs as JSON, which would otherwise hit
-    the Arrow IPC footer. Media must use pytree serializers.
+    ``bytes`` is an Arrow binary column and ``path`` a string. Do not wrap as
+    ``Image`` / ``Audio`` / ``Video`` — that decodes on read and skips the
+    footer. Users who pass ``PIL.Image`` or ``litdata.Image`` explicitly still
+    use pytree serializers.
     """
-    if not isinstance(sample, dict):
-        return sample
-    from litdata.types import Audio, Image, Video
-
-    out = sample
-    cloned = False
-    for key, value in sample.items():
-        kind = _HF_MEDIA_KEYS.get(key)
-        if kind is None or not isinstance(value, dict):
-            continue
-        raw = value.get("bytes")
-        if not isinstance(raw, (bytes, bytearray)) or not raw:
-            continue
-        if not cloned:
-            out = dict(sample)
-            cloned = True
-        path = value.get("path")
-        path = path if isinstance(path, str) else None
-        payload = bytes(raw)
-        if kind == "audio":
-            out[key] = Audio(bytes=payload, path=path)
-        elif kind == "video":
-            out[key] = Video(bytes=payload, path=path)
-        else:
-            out[key] = Image(bytes=payload, path=path)
-    return out
+    return sample
 
 
 def _optimize_hf_file(

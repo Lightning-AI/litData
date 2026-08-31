@@ -931,7 +931,7 @@ Default I/O **prefetches** whole parquet files in the background, then reads loc
 
 15 significant mixed-modality Hub splits (text/JSON, images, audio; tiny NLP toys omitted). Sequential, **one epoch**, never wrap. 200-row warmup, then a **cold** timed pass (payload cache wiped; `index.json` kept). First pass capped at 200,000 rows or `len`; large sets may run a second cold pass toward 120 seconds (still ≤ `len`). Reproduce: `scripts/bench/bench_hf_hub_suite.py` / `scripts/bench/bench_hf_suite_64mb.json`.
 
-- **Binary** — `optimize_hf(..., chunk_bytes="64MB", compression="zstd")` onto object storage, then `StreamingDataset(opt_dir, max_pre_download=8)`. Nested JSON uses an Arrow IPC footer; image/audio/video rows use pytree serializers.
+- **Binary** — `optimize_hf(..., chunk_bytes="64MB", compression="zstd")` onto object storage, then `StreamingDataset(opt_dir, max_pre_download=8)`. Nested JSON and Hub `{bytes, path}` media use an Arrow IPC footer (`bytes` as binary; no `Image()` / `Audio()` / `Video()` wrap).
 - **Parquet** — `StreamingDataset("hf://...")` from the Hub (`hf_hub_download`), no range_read.
 - **HF** — `load_dataset(..., streaming=True)` library defaults.
 
@@ -955,7 +955,7 @@ Binary is **not** always fastest: **8/15** binary, **7/15** parquet faster (Open
 | uoft-cs/cifar100 / train | 9,687 | 14,750 | 6,964 | 0.66× | 1.39× | 1.59s | 3.01s | 2.12s |
 | s3prl/superb / train / ks | 592 | 5,351 | 124 | 0.11× | 4.75× | 0.06s | 7.83s | 3.65s |
 
-Parquet is faster on OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, and `s3prl/superb` (keyword spotting; 51,094 rows, 1.5GB parquet). Audio uses pytree serializers, same as image rows.
+Parquet is faster on OpenThoughts, minipile, food101, tiny-imagenet, cifar10, cifar100, and `s3prl/superb` (keyword spotting; 51,094 rows, 1.5GB parquet) in the **R2** table above (those image/audio rows still used the old `Image()` / `Audio()` wrap). Local `/tmp` bytes-vs-bytes re-bench (same harness, no Image wrap; `[0]` is `{bytes, path}` on binary and parquet): cifar100 **324,324** / 14,476 / 7,257; cifar10 **300,510** / 19,114 / 8,926; tiny-imagenet **344,897** / 31,106 / 3,388. food101 and superb still to re-bench on the official R2 opt-root.
 
 See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
