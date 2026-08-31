@@ -150,7 +150,12 @@ def subsample_streaming_dataset(
     if fnmatch_pattern is not None:
         from fnmatch import fnmatch
 
-        original_chunks = [chunk for chunk in original_chunks if fnmatch(chunk["filename"], fnmatch_pattern)]
+        original_chunks = [
+            chunk
+            for chunk in original_chunks
+            if fnmatch(chunk["filename"], fnmatch_pattern)
+            or fnmatch(os.path.basename(chunk["filename"]), fnmatch_pattern)
+        ]
 
     assert len(original_chunks) > 0, f"No chunks found in the `{input_dir}/index.json` file"
 
@@ -230,11 +235,14 @@ def _read_updated_at(
     index_json_content = None
     assert isinstance(input_dir, Dir)
 
-    # Try to read index.json locally
+    # Try to read index.json locally. A FUSE mount can expose a truncated
+    # leftover from a killed optimize; fall back to the object-store copy.
     if input_dir.path is not None and os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
-        index_json_content = load_index_file(input_dir.path)
-    # Try to read index.json remotely
-    elif input_dir.url is not None:
+        try:
+            index_json_content = load_index_file(input_dir.path)
+        except (json.JSONDecodeError, OSError):
+            index_json_content = None
+    if index_json_content is None and input_dir.url is not None:
         assert input_dir.url is not None
         # download index.json file and read last_updation_timestamp
         with tempfile.TemporaryDirectory() as tmp_directory:
@@ -242,7 +250,12 @@ def _read_updated_at(
             if index_path is not None:
                 copy_index_to_cache_index_filepath(index_path, temp_index_filepath)
             else:
-                downloader = get_downloader(input_dir.url, tmp_directory, [], storage_options, session_options)
+                # Same merge as subsample_streaming_dataset: R2 needs data_connection_id
+                # even when the caller passed empty storage_options.
+                merged = dict(storage_options or {})
+                if input_dir.data_connection_id:
+                    merged["data_connection_id"] = input_dir.data_connection_id
+                downloader = get_downloader(input_dir.url, tmp_directory, [], merged, session_options)
                 downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), temp_index_filepath)
             index_json_content = load_index_file(tmp_directory)
 

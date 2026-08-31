@@ -898,9 +898,8 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 ```python
 import litdata as ld
 
-hf_dataset_uri = "hf://datasets/leonardPKU/clevr_cogen_a_train/data"
-
-dataset = ld.StreamingDataset(hf_dataset_uri)  # indexes on first use; caches index.json locally
+# Indexes on first open, persists index.json, reuses it next time.
+dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
 print("Sample", dataset[0])  # dict of columns
 
 # With workers on Linux, use spawn (same as other ParquetLoader usage)
@@ -911,30 +910,77 @@ for sample in dataloader:
     pass
 ```
 
-Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes (if needed) and selects `ParquetLoader`.
+Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes on first open, persists `index.json` under `{cache_dir}/hf-index/<url_hash>/`, and reuses it on later opens (no footer re-scan). You do not need to call an indexer.
 
-### Indexing the HF dataset (optional, faster cold start)
+Optional extras: `cache_dir=` pins where the index (and parquet cache) live; `ld.index_hf_dataset(uri)` pre-builds the same file; `index_path=` points at an `index.json` you already have.
 
-```python
-import litdata as ld
-
-# Returns the local cache directory that contains index.json
-cache_dir = ld.index_hf_dataset("hf://datasets/leonardPKU/clevr_cogen_a_train/data")
-```
-
-Or control the index path explicitly:
+**Convert to LitData chunks** (optional — faster training I/O after a one-time pass):
 
 ```python
 import litdata as ld
-from litdata.streaming.item_loader import ParquetLoader
 
-uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
-ld.index_parquet_dataset(uri, "hf-index-dir")  # writes index under hf-index-dir
-
-dataset = ld.StreamingDataset(uri, item_loader=ParquetLoader(), index_path="hf-index-dir")
-for batch in ld.StreamingDataLoader(dataset, batch_size=4, multiprocessing_context="spawn"):
-    pass
+ld.optimize_hf("stanfordnlp/imdb", output_dir="imdb-opt", split="train")
+dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
 ```
+
+`optimize_hf` indexes first (`hf-index/<hash>/index.json`), persists each parquet under `hf-parquet/<hash>/` next to the chunk cache (not inside `/cache/chunks`, which `optimize` wipes), then writes **64MB** chunks from `hf://` URLs. Nested list columns (conversations, answers) stay one JSON leaf so variable-length rows do not break convert; those chunks also store an Arrow table so nested read uses the same `to_pylist()` path as parquet. `optimize` / `optimize_hf` fuse a JSON type schema into `index.json` (`config.types`); fields that appear on only some rows are `optional`. Later calls reuse `output_dir` if `index.json` is already there. Stream the result from object storage (e.g. `/teamspace/lightning_storage/...`) rather than a local scratch disk. Pass `revision=`, `config=`, `chunk_size=`, or `fn=` when you need them. `StreamingDataset(..., batch_decode="auto")` sizes the decode window from the format (256 for text; 1 for multi-MB images).
+
+Default I/O **prefetches** whole parquet files in the background, then reads locally (`to_pylist()`).
+
+### LitData vs Hugging Face `datasets` streaming
+
+Same Hub split, sequential, **8k rows after a 200-row warmup**. LitData `StreamingDataset("hf://...")` vs `load_dataset(..., streaming=True)`. LitData was faster on **all 48** parquet datasets that resolved (2 skipped: too many shards / no parquet). Median **18×**, minimum **7.6×**.
+
+| Dataset | Split | LitData rows/s | HF streaming rows/s | Speedup |
+|---|---|---:|---:|---:|
+| `abisee/cnn_dailymail/3.0.0` | train | 76,938 | 4,452 | 17.3× |
+| `abisee/cnn_dailymail/3.0.0` | validation | 73,256 | 4,735 | 15.5× |
+| `allenai/openbookqa/main` | train | 144,225 | 9,255 | 15.6× |
+| `allenai/qasc` | train | 166,333 | 15,915 | 10.5× |
+| `allenai/sciq` | train | 167,374 | 14,941 | 11.2× |
+| `allenai/winogrande/winogrande_xl` | train | 219,521 | 14,708 | 14.9× |
+| `Anthropic/hh-rlhf` | train | 136,496 | 17,873 | 7.6× |
+| `cardiffnlp/tweet_eval/sentiment` | train | 224,836 | 1,556 | 144.4× |
+| `dair-ai/emotion` | train | 226,311 | 14,499 | 15.6× |
+| `databricks/databricks-dolly-15k` | train | 179,386 | 16,178 | 11.1× |
+| `EdinburghNLP/xsum` | train | 92,970 | 4,304 | 21.6× |
+| `facebook/anli` | train_r3 | 174,544 | 8,122 | 21.5× |
+| `facebook/xnli/en` | train | 181,365 | 2,976 | 60.9× |
+| `fancyzhx/amazon_polarity` | train | 100,803 | 581 | 173.5× |
+| `fancyzhx/dbpedia_14` | train | 142,468 | 1,611 | 88.4× |
+| `garage-bAInd/Open-Platypus` | train | 153,152 | 5,796 | 26.4× |
+| `google-research-datasets/nq_open` | train | 211,815 | 11,889 | 17.8× |
+| `google-research-datasets/paws/labeled_final` | train | 201,272 | 7,588 | 26.5× |
+| `google/boolq` | train | 171,206 | 10,187 | 16.8× |
+| `Helsinki-NLP/opus_books/en-fr` | train | 172,167 | 5,662 | 30.4× |
+| `HuggingFaceH4/no_robots` | train | 115,877 | 12,580 | 9.2× |
+| `HuggingFaceH4/ultrachat_200k` | test_sft | 57,392 | 2,745 | 20.9× |
+| `HuggingFaceH4/ultrachat_200k` | train_sft | 51,470 | 6,332 | 8.1× |
+| `HuggingFaceH4/ultrafeedback_binarized` | train_sft | 72,110 | 1,524 | 47.3× |
+| `Intel/orca_dpo_pairs` | train | 116,607 | 4,817 | 24.2× |
+| `knkarthick/samsum` | train | 174,268 | 14,233 | 12.2× |
+| `nyu-mll/glue/qnli` | train | 195,710 | 7,637 | 25.6× |
+| `nyu-mll/glue/rte` | train | 183,868 | 5,679 | 32.4× |
+| `nyu-mll/glue/sst2` | train | 213,172 | 7,654 | 27.9× |
+| `nyu-mll/glue/stsb` | validation | 180,179 | 4,246 | 42.4× |
+| `open-thoughts/OpenThoughts-114k` | train | 14,859 | 1,907 | 7.8× |
+| `openai/gsm8k/main` | train | 187,161 | 14,240 | 13.1× |
+| `OpenAssistant/oasst1` | train | 42,846 | 3,005 | 14.3× |
+| `rajpurkar/squad` | train | 171,509 | 9,269 | 18.5× |
+| `rajpurkar/squad_v2` | train | 167,137 | 9,473 | 17.6× |
+| `roneneldan/TinyStories` | train | 107,208 | 1,025 | 104.6× |
+| `Rowan/hellaswag` | train | 168,438 | 943 | 178.6× |
+| `Salesforce/wikitext/wikitext-2-raw-v1` | train | 192,937 | 11,505 | 16.8× |
+| `SetFit/ag_news` | train | 191,327 | 10,317 | 18.5× |
+| `SetFit/emotion` | train | 220,503 | 23,074 | 9.6× |
+| `SetFit/sst2` | train | 218,613 | 19,903 | 11.0× |
+| `stanfordnlp/imdb` | train | 130,689 | 9,625 | 13.6× |
+| `stanfordnlp/snli` | train | 157,889 | 8,888 | 17.8× |
+| `tatsu-lab/alpaca` | train | 170,815 | 7,899 | 21.6× |
+| `tau/commonsense_qa` | train | 185,288 | 14,689 | 12.6× |
+| `teknium/OpenHermes-2.5` | train | 67,159 | 204 | 329.4× |
+| `yahma/alpaca-cleaned` | train | 157,510 | 3,503 | 45.0× |
+| `Yelp/yelp_review_full` | train | 119,513 | 1,896 | 63.0× |
 
 See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
 
@@ -993,9 +1039,9 @@ Shuffling is **deterministic** and designed for distributed training:
 
 The permutation depends on `seed`, the epoch, and chunk metadata — the same settings always yield the same order (required for resumable `state_dict`).
 
-**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
+**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache. Items *inside* a chunk are shuffled as aligned ``batch_decode`` windows. Pass ``item_shuffle_window=256`` (default / ``"auto"``) so blocks are shuffled, then the items inside each block — training still reuses the decode cache. ``item_shuffle_window=0`` (or ``"full"``) restores a full in-chunk permutation. ``LITDATA_ITEM_SHUFFLE_WINDOW`` applies only when the argument is omitted.
 
-**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`) for both chunk order and in-chunk items. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
+**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles chunk order inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). In-chunk items still use ``item_shuffle_window``. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
@@ -1005,6 +1051,7 @@ train = StreamingDataset(
     shuffle=True,
     drop_last=True,  # keep every rank/worker at the same length (default True under DDP)
     seed=42,         # default is 42; keep stable when resuming
+    item_shuffle_window=256,  # 0 / "full" = permute every item in the chunk
 )
 loader = StreamingDataLoader(train, batch_size=64, num_workers=8)
 
@@ -2189,6 +2236,7 @@ export LITDATA_ASYNC_DOWNLOAD_CONCURRENCY=4
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LITDATA_CACHE_DIR` | `~/.lightning/chunks` | Default chunk cache directory |
+| `LITDATA_ITEM_SHUFFLE_WINDOW` | `256` | In-chunk shuffle block size when `item_shuffle_window` is omitted (`0` = full permute) |
 | `LITDATA_ASYNC_CHUNK_PREFETCH` | on for remote | `0`/`1` force async chunk download overlap |
 | `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` | `4` | Floor for `max_pre_download` when async is on (`0` = no floor) |
 | `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` | `8` | Max in-flight chunk GETs per gather |

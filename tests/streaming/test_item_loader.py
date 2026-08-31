@@ -1,5 +1,6 @@
 import os
 import pickle
+import struct
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -15,10 +16,73 @@ from litdata.constants import (
 )
 from litdata.streaming import Cache, item_loader
 from litdata.streaming.dataset import StreamingDataset
-from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader, TokensLoader
+from litdata.streaming.item_loader import (
+    ParquetLoader,
+    PyTreeLoader,
+    TokensLoader,
+    _auto_batch_rows,
+    _batch_rows_for_format,
+    _parse_batch_decode,
+)
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
+
+
+def test_batch_rows_for_format(monkeypatch):
+    monkeypatch.delenv("LITDATA_BATCH_DECODE", raising=False)
+    monkeypatch.delenv("LITDATA_BATCH_ROWS", raising=False)
+    assert _parse_batch_decode("auto") is None
+    assert _parse_batch_decode("all") == -1
+    assert _parse_batch_decode(32) == 32
+    assert _batch_rows_for_format(["str", "int"]) == 256
+    assert _batch_rows_for_format(["str", "str", "json", "json"]) == 256
+    assert _batch_rows_for_format(["pickle"]) == 256
+    assert _auto_batch_rows(["jpeg", "int"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}]) == 1
+    assert _auto_batch_rows(["jpeg"], [{"chunk_bytes": 512 << 10, "chunk_size": 8}]) == 16
+    assert _batch_rows_for_format(["jpeg"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}]) == 1
+    assert _batch_rows_for_format(["str"], batch_decode=32) == 32
+    assert _batch_rows_for_format(["jpeg"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}], batch_decode=8) == 8
+    monkeypatch.setenv("LITDATA_BATCH_DECODE", "0")
+    assert _batch_rows_for_format(["json"]) == 0
+    assert _batch_rows_for_format(["json"], batch_decode=64) == 64
+    monkeypatch.setenv("LITDATA_BATCH_DECODE", "all")
+    assert _batch_rows_for_format(["str"]) == -1
+    monkeypatch.setenv("LITDATA_BATCH_DECODE", "1")
+    assert _batch_rows_for_format(["json"]) == 1
+    monkeypatch.delenv("LITDATA_BATCH_DECODE")
+    monkeypatch.setenv("LITDATA_BATCH_ROWS", "256")
+    assert _batch_rows_for_format(["json"]) == 256
+
+
+def test_decode_window_is_aligned():
+    loader = PyTreeLoader()
+    assert loader._window_bounds(0, 1000, 256) == (0, 256)
+    assert loader._window_bounds(255, 1000, 256) == (0, 256)
+    assert loader._window_bounds(256, 1000, 256) == (256, 512)
+    assert loader._window_bounds(900, 1000, 256) == (768, 1000)
+    assert loader._window_bounds(3, 10, -1) == (0, 10)
+    assert loader._window_bounds(3, 10, 1) == (3, 4)
+
+
+def test_streaming_dataset_exposes_batch_decode(tmp_path):
+    from litdata import optimize
+
+    optimize(
+        fn=_flat_arrow_sample,
+        inputs=list(range(8)),
+        output_dir=str(tmp_path / "ds"),
+        chunk_size=8,
+        num_workers=1,
+    )
+    ds = StreamingDataset(str(tmp_path / "ds"))
+    assert ds.batch_decode == "auto"
+    pinned = StreamingDataset(str(tmp_path / "ds"), batch_decode=4)
+    assert pinned.batch_decode == 4
+    loader = PyTreeLoader(batch_decode=4)
+    assert (
+        _batch_rows_for_format(["str", "int"], [{"chunk_bytes": 100, "chunk_size": 8}], loader._batch_decode) == 4
+    )
 
 
 def test_encode_data_size_header_is_little_endian_uint32():
@@ -505,3 +569,264 @@ def test_wait_until_chunk_ready_times_out_as_chunk_wait_timeout(tmpdir, monkeypa
         loader._wait_until_chunk_ready(0, path, filesize_bytes=16)
     assert isinstance(exc_info.value, FileNotFoundError)
     assert exc_info.value.path == path
+
+
+def _nested_arrow_sample(i: int):
+    from litdata.streaming.serializers import JsonLeaf
+
+    return {
+        "id": f"q{i}",
+        "choices": JsonLeaf({"text": ["A", "B"], "label": ["1", "2"]}),
+        "answers": JsonLeaf(["span"] * (i % 3)),
+    }
+
+
+def _flat_arrow_sample(i: int):
+    return {"text": f"row {i}", "label": i % 2}
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_nested_chunk_uses_arrow_footer(tmp_path):
+    from litdata import optimize
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC, load_arrow_row_footer
+
+    out = tmp_path / "nested"
+    optimize(fn=_nested_arrow_sample, inputs=list(range(32)), output_dir=str(out), chunk_size=32, num_workers=1)
+    chunk = next(out.glob("*.bin"))
+    raw = chunk.read_bytes()
+    assert raw[-8:] == _ARROW_FOOTER_MAGIC
+    rows = load_arrow_row_footer(raw)
+    assert rows is not None
+    assert len(rows) == 32
+    assert rows[0]["choices"] == {"text": ["A", "B"], "label": ["1", "2"]}
+    assert rows[0]["answers"] == []
+    assert rows[2]["answers"] == ["span", "span"]
+
+    n = struct.unpack_from("<I", raw, 0)[0]
+    offsets = struct.unpack_from("<" + "I" * (n + 1), raw, 4)
+    assert offsets[0] == offsets[-1], "nested chunks must not duplicate pytree item bytes"
+
+    ds = StreamingDataset(str(out))
+    assert ds[10]["id"] == "q10"
+    assert ds[0]["choices"] == {"text": ["A", "B"], "label": ["1", "2"]}
+    assert ds[2]["answers"] == ["span", "span"]
+    assert ds[31]["id"] == "q31"
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_nested_chunk_skips_file_zstd(tmp_path):
+    """Nested chunks use Arrow IPC zstd, not LitData whole-file Python inflate."""
+    from litdata import optimize
+    from litdata.constants import _ZSTD_AVAILABLE
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC, load_arrow_row_footer
+
+    if not _ZSTD_AVAILABLE:
+        pytest.skip("Requires zstd")
+
+    out = tmp_path / "nested-zstd"
+    optimize(
+        fn=_nested_arrow_sample,
+        inputs=list(range(32)),
+        output_dir=str(out),
+        chunk_size=32,
+        num_workers=1,
+        compression="zstd",
+    )
+    bins = list(out.glob("*.bin"))
+    assert bins, "expected a chunk"
+    assert not any(".zstd.bin" in p.name for p in bins)
+    import json
+
+    index = json.loads((out / "index.json").read_text())
+    assert index["config"]["compression"] is None
+    assert index["config"]["ipc_compression"] == "zstd"
+
+    raw = bins[0].read_bytes()
+    assert raw[-8:] == _ARROW_FOOTER_MAGIC
+    rows = load_arrow_row_footer(raw)
+    assert rows is not None and len(rows) == 32
+
+    ds = StreamingDataset(str(out))
+    assert ds[10]["id"] == "q10"
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+@pytest.mark.parametrize("compression", [None, "zstd"])
+def test_nested_ipc_file_has_multiple_record_batches(tmp_path, compression):
+    """Chunks with more than 256 nested rows write an IPC file with several batches."""
+    import pyarrow as pa
+
+    from litdata import optimize
+    from litdata.constants import _ZSTD_AVAILABLE
+    from litdata.streaming.item_loader import (
+        _ARROW_FOOTER_MAGIC,
+        _ARROW_IPC_FILE_MAGIC,
+        _DEFAULT_BATCH_ROWS,
+        _arrow_footer_span,
+        load_arrow_row_footer,
+    )
+
+    if compression == "zstd" and not _ZSTD_AVAILABLE:
+        pytest.skip("Requires zstd")
+
+    n = _DEFAULT_BATCH_ROWS + 40
+    out = tmp_path / f"nested-multi-{compression or 'none'}"
+    optimize(
+        fn=_nested_arrow_sample,
+        inputs=list(range(n)),
+        output_dir=str(out),
+        chunk_size=n,
+        num_workers=1,
+        compression=compression,
+    )
+    bins = list(out.glob("*.bin"))
+    assert bins, "expected a chunk"
+    assert not any(".zstd.bin" in p.name for p in bins)
+    chunk = bins[0]
+    raw = chunk.read_bytes()
+    assert raw[-8:] == _ARROW_FOOTER_MAGIC
+    span = _arrow_footer_span(raw)
+    assert span is not None
+    start, ipc_len = span
+    ipc = raw[start : start + ipc_len]
+    assert ipc[:6] == _ARROW_IPC_FILE_MAGIC
+    reader = pa.ipc.open_file(ipc)
+    assert reader.num_record_batches > 1
+    rows = load_arrow_row_footer(raw)
+    assert rows is not None and len(rows) == n
+
+    ds = StreamingDataset(str(out))
+    assert ds[0]["id"] == "q0"
+    assert ds[_DEFAULT_BATCH_ROWS]["id"] == f"q{_DEFAULT_BATCH_ROWS}"
+    assert ds[n - 1]["id"] == f"q{n - 1}"
+
+    loader = PyTreeLoader()
+    loader._batch_rows = _DEFAULT_BATCH_ROWS
+    loader._config = {}
+    assert loader._try_arrow_footer_rows(raw, 0, _DEFAULT_BATCH_ROWS)["id"] == f"q{_DEFAULT_BATCH_ROWS}"
+    assert loader._arrow_reader_is_file is True
+    assert loader._arrow_table is None
+    assert loader._arrow_reader.num_record_batches > 1
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_legacy_ipc_stream_footer_still_reads():
+    """Old ``new_stream`` footers keep ``open_stream`` + ``read_all``."""
+    import pyarrow as pa
+
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC, load_arrow_row_footer
+
+    table = pa.Table.from_pylist([{"id": f"q{i}", "answers": ["span"] * (i % 3)} for i in range(8)])
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    ipc = sink.getvalue().to_pybytes()
+    assert ipc[:6] != b"ARROW1"
+    n = 8
+    header_len = 4 + 4 * (n + 1)
+    blob = bytearray(header_len + len(ipc) + 12)
+    struct.pack_into("<I", blob, 0, n)
+    for i in range(n + 1):
+        struct.pack_into("<I", blob, 4 + 4 * i, header_len)
+    blob[header_len : header_len + len(ipc)] = ipc
+    struct.pack_into("<I", blob, header_len + len(ipc), len(ipc))
+    blob[-8:] = _ARROW_FOOTER_MAGIC
+    rows = load_arrow_row_footer(bytes(blob))
+    assert rows is not None and len(rows) == 8
+    assert rows[0]["id"] == "q0"
+    assert rows[2]["answers"] == ["span", "span"]
+
+    loader = PyTreeLoader()
+    loader._batch_rows = 256
+    loader._config = {}
+    assert loader._try_arrow_footer_rows(bytes(blob), 0, 2)["id"] == "q2"
+    assert loader._arrow_reader_is_file is False
+    assert loader._arrow_table is not None
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+@pytest.mark.parametrize("compression", [None, "zstd"])
+def test_nested_chunk_bytes_matches_on_disk(tmp_path, compression):
+    """``chunk_bytes`` is the written file size, not discarded pytree JSON."""
+    from litdata.constants import _ZSTD_AVAILABLE
+    from litdata.streaming.cache import Cache
+
+    if compression == "zstd" and not _ZSTD_AVAILABLE:
+        pytest.skip("Requires zstd")
+
+    target = 64 * 1024
+    cache = Cache(str(tmp_path / "ds"), chunk_bytes=target, compression=compression)
+    for i in range(2000):
+        cache[i] = {
+            "id": f"q{i}",
+            "text": os.urandom(128).hex(),
+            "choices": {"text": ["A", "B"], "label": ["1", "2"]},
+            "answers": ["span"] * (i % 5),
+        }
+    cache.done()
+    cache.merge()
+    import json
+
+    index = json.loads((tmp_path / "ds" / "index.json").read_text())
+    chunks = index["chunks"]
+    assert len(chunks) >= 2
+    bins = sorted(p for p in (tmp_path / "ds").glob("*.bin") if ".zstd.bin" not in p.name)
+    assert bins
+    full = [int(c["chunk_bytes"]) for c in chunks[:-1]]
+    for size in full:
+        assert 0.45 * target <= size <= 1.6 * target, (size, target, full)
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_flat_chunk_uses_arrow_footer(tmp_path):
+    """Tabular HF rows (cnn_dailymail-style str dicts) use the IPC footer, not pytree-only."""
+    from litdata import optimize
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC, load_arrow_row_footer
+
+    out = tmp_path / "flat"
+    optimize(fn=_flat_arrow_sample, inputs=list(range(16)), output_dir=str(out), chunk_size=16, num_workers=1)
+    chunk = next(out.glob("*.bin"))
+    raw = chunk.read_bytes()
+    assert raw[-8:] == _ARROW_FOOTER_MAGIC
+    rows = load_arrow_row_footer(raw)
+    assert rows is not None and len(rows) == 16
+    assert rows[0]["text"] == "row 0"
+    assert rows[0]["label"] == 0
+    ds = StreamingDataset(str(out))
+    assert ds[0] == {"text": "row 0", "label": 0}
+    assert ds[15] == {"text": "row 15", "label": 1}
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_flat_chunk_skips_file_zstd(tmp_path):
+    """Flat str dicts use Arrow IPC zstd, not LitData whole-file Python inflate."""
+    from litdata import optimize
+    from litdata.constants import _ZSTD_AVAILABLE
+    from litdata.streaming.item_loader import _ARROW_FOOTER_MAGIC, load_arrow_row_footer
+
+    if not _ZSTD_AVAILABLE:
+        pytest.skip("Requires zstd")
+
+    out = tmp_path / "flat-zstd"
+    optimize(
+        fn=_flat_arrow_sample,
+        inputs=list(range(32)),
+        output_dir=str(out),
+        chunk_size=32,
+        num_workers=1,
+        compression="zstd",
+    )
+    bins = list(out.glob("*.bin"))
+    assert bins, "expected a chunk"
+    assert not any(".zstd.bin" in p.name for p in bins)
+    import json
+
+    index = json.loads((out / "index.json").read_text())
+    assert index["config"]["compression"] is None
+    assert index["config"]["ipc_compression"] == "zstd"
+    raw = bins[0].read_bytes()
+    assert raw[-8:] == _ARROW_FOOTER_MAGIC
+    rows = load_arrow_row_footer(raw)
+    assert rows is not None and len(rows) == 32
+    ds = StreamingDataset(str(out))
+    assert ds[10] == {"text": "row 10", "label": 0}

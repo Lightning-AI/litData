@@ -267,7 +267,12 @@ def _get_cache_dir(name: str | None = None) -> str:
 
 
 def _is_local_write_through(output_dir: Dir | None) -> bool:
-    """True when chunks can be written directly into a local output directory."""
+    """True when chunks can be written directly into a local output directory.
+
+    A Dir with both a FUSE ``path`` and a remote ``url`` (lightning_storage) is
+    remote: chunks go to the optimizer cache and are uploaded via R2/S3, not
+    written through the mount.
+    """
     return bool(output_dir is not None and output_dir.url is None and output_dir.path)
 
 
@@ -1518,8 +1523,15 @@ class DataChunkRecipe(DataRecipe):
         cache_dir = _chunks_dir(output_dir)
 
         chunks = [file for file in os.listdir(cache_dir) if file.endswith(".bin")] if os.path.isdir(cache_dir) else []
-        if chunks and delete_cached_files and output_dir.path is not None and not _is_local_write_through(output_dir):
-            raise RuntimeError(f"All the chunks should have been deleted. Found {chunks} in cache: {cache_dir}")
+        # Remote dests (url set), including lightning_storage (FUSE path + R2 url), write
+        # chunks to a shared cache then upload. Leftover ``.bin`` from another job must
+        # not abort merge — that skipped ``index.json`` entirely.
+        if chunks and delete_cached_files and output_dir.url is not None:
+            logger.warning(
+                "Leftover chunk files in cache %s after remote upload: %s. Continuing index merge.",
+                cache_dir,
+                chunks[:8],
+            )
 
         merge_cache = Cache(cache_dir, chunk_bytes=1)
         node_rank = _get_node_rank()
@@ -1863,7 +1875,7 @@ class DataProcessor:
         self.checkpoint_next_index: list[int] | None = None
         self.checkpoint_next_chunk_index: list[int | None] | None = None
         self.item_loader = item_loader
-        self.storage_options = storage_options
+        self.storage_options = construct_storage_options(storage_options, self.output_dir)
         self.keep_data_ordered = resolve_keep_data_ordered(
             keep_data_ordered, use_checkpoint=use_checkpoint, align_chunking=align_chunking
         )
@@ -2232,7 +2244,10 @@ class DataProcessor:
         cache_data_dir = _get_cache_data_dir()
         cache_chunks_dir = _chunks_dir(self.output_dir)
 
-        if self.delete_cached_files and (self.input_dir.path or self.input_dir.url):
+        if self.delete_cached_files:
+            # Always drain uploaded chunk files, even when input_dir is empty
+            # (``hf://`` optimize has no local/remote input Dir). Missing removers
+            # left ``.bin`` in the cache and used to abort lightning_storage merge.
             self.shared_remove_queue = Queue()
             self.node_removers.append(
                 self._start_io_thread(_remove_target, self.input_dir, cache_data_dir, self.shared_remove_queue)

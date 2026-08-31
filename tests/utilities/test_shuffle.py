@@ -551,6 +551,43 @@ class _FakeShuffleCache:
         return self._intervals
 
 
+def test_full_shuffle_items_stay_in_decode_window(monkeypatch):
+    from litdata.streaming.shuffle import FullShuffle, item_shuffle_window
+    from litdata.utilities.shuffle import _block_shuffle
+
+    monkeypatch.delenv("LITDATA_ITEM_SHUFFLE_WINDOW", raising=False)
+    assert item_shuffle_window() == 256
+    items = list(range(1024))
+    blocked = _block_shuffle(items, 256, np.random.RandomState(0))
+    assert sorted(blocked) == items
+    starts = [(min(blocked[i : i + 256]) // 256) * 256 for i in range(0, 1024, 256)]
+    assert sorted(starts) == [0, 256, 512, 768]
+    assert starts != [0, 256, 512, 768]
+    for offset, start in zip(range(0, 1024, 256), starts):
+        block = blocked[offset : offset + 256]
+        assert sorted(block) == list(range(start, start + 256))
+        assert block != list(range(start, start + 256))
+
+    shuffler = FullShuffle(cache=object(), seed=42, drop_last=False)  # type: ignore[arg-type]
+    order = shuffler(np.arange(1024), num_chunks=1, current_epoch=1, chunk_index=0)
+    assert sorted(order) == items
+    order_starts = [(min(order[i : i + 256]) // 256) * 256 for i in range(0, 1024, 256)]
+    assert sorted(order_starts) == [0, 256, 512, 768]
+    assert order_starts != [0, 256, 512, 768]
+
+    monkeypatch.setenv("LITDATA_ITEM_SHUFFLE_WINDOW", "0")
+    assert item_shuffle_window() == 0
+    env_full = FullShuffle(cache=object(), seed=42, drop_last=False)  # type: ignore[arg-type]
+    scattered = env_full(np.arange(1024), num_chunks=1, current_epoch=1, chunk_index=0)
+    assert sorted(scattered[:256]) != list(range(256))
+
+    pinned = FullShuffle(cache=object(), seed=42, drop_last=False, item_window=64)  # type: ignore[arg-type]
+    assert pinned.item_window == 64
+    order64 = pinned(np.arange(256), num_chunks=1, current_epoch=1, chunk_index=0)
+    starts = [(min(order64[i : i + 64]) // 64) * 64 for i in range(0, 256, 64)]
+    assert sorted(starts) == [0, 64, 128, 192]
+
+
 def test_full_shuffle_keeps_node_shard_when_it_fits():
     from litdata.streaming.shuffle import FullShuffle
 

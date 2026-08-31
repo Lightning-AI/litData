@@ -230,8 +230,8 @@ class R2FsProvider(S3FsProvider):
     def __init__(self, storage_options: dict[str, Any] | None = None):
         super().__init__(storage_options=storage_options)
 
-        # Create R2Client with refreshable credentials
-        self.client = R2Client(storage_options=self.storage_options)
+        # Create R2Client with refreshable credentials (copy: do not share the dict)
+        self.client = R2Client(storage_options=dict(self.storage_options))
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
         bucket_name, blob_path = get_bucket_and_path(remote_path, "r2")

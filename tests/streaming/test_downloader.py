@@ -60,7 +60,8 @@ def _write_download_target(*args, **kwargs):
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_fast(r2_client_mock, tmpdir):
+def test_r2_downloader_fast(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     # Mock the R2Client
     r2_client_instance = MagicMock()
     r2_client_mock.return_value = r2_client_instance
@@ -79,7 +80,8 @@ def test_r2_downloader_fast(r2_client_mock, tmpdir):
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
+def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     storage_options = {"data_connection_id": "test_connection_id"}
 
     # Mock the R2Client
@@ -105,7 +107,8 @@ def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_error_handling(r2_client_mock, tmpdir):
+def test_r2_downloader_error_handling(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     # Mock the R2Client to raise an exception
     r2_client_instance = MagicMock()
     r2_client_mock.return_value = r2_client_instance
@@ -304,6 +307,26 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 
     # Verify that hf_hub_download was not called
     mock_hf_hub_download.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
+def test_hf_downloader_revision(tmpdir, huggingface_hub_mock):
+    mock_hf_hub_download = MagicMock(return_value=os.path.join(tmpdir, "0000.parquet"))
+    huggingface_hub_mock.hf_hub_download = mock_hf_hub_download
+    downloader = HFDownloader(
+        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet", tmpdir, [], {}
+    )
+    local_filepath = os.path.join(tmpdir, "default", "train", "0000.parquet")
+    downloader.download_file(
+        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet",
+        local_filepath,
+    )
+    kwargs = huggingface_hub_mock.hf_hub_download.call_args.kwargs
+    args = huggingface_hub_mock.hf_hub_download.call_args.args
+    assert args[0] == "yahma/alpaca-cleaned"
+    assert args[1] == "default/train/0000.parquet"
+    assert kwargs["revision"] == "refs/convert/parquet"
+    assert kwargs["repo_type"] == "dataset"
 
 
 # Test cases for download_fileobj method
@@ -691,3 +714,104 @@ def test_s3_downloader_pickle_drops_obstore_store(tmpdir):
     restored = pickle.loads(pickle.dumps(downloader))  # noqa: S301
     assert not hasattr(restored, "_store")
     assert not hasattr(restored, "_store_pid")
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_index_download_does_not_start_obstore(r2_client_mock, monkeypatch, tmpdir):
+    """Parent index fetch must not start tokio, so forked workers can lazy-init obstore."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("index.json must not start obstore"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = R2Downloader("r2://bucket/data", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "index.json")
+    downloader.download_file("r2://bucket/data/index.json", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+    assert downloader_mod._OBSTORE_INIT_PID is None
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_download_file_falls_back_to_boto3_after_fork(r2_client_mock, monkeypatch, tmpdir):
+    """Parent already initialized obstore; forked workers must use boto3 or GETs hang."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("obstore must not run after fork"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = R2Downloader("r2://bucket", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "chunk.bin")
+    downloader.download_file("r2://bucket/chunk.bin", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_chunk_download_uses_obstore(r2_client_mock, monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    resp = MagicMock()
+    resp.stream = MagicMock(return_value=iter([b"chunk-bytes"]))
+    obs = MagicMock()
+    obs.get.return_value = resp
+    monkeypatch.setitem(__import__("sys").modules, "obstore", obs)
+    monkeypatch.setattr(R2Downloader, "_get_store", MagicMock(return_value="store"))
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+
+    dest = os.path.join(tmpdir, "chunk.bin")
+    R2Downloader("r2://bucket", str(tmpdir), []).download_file("r2://bucket/chunk.bin", dest)
+
+    assert os.path.exists(dest)
+    with open(dest, "rb") as handle:
+        assert handle.read() == b"chunk-bytes"
+    obs.get.assert_called_once()
+    client.client.download_file.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_tiny_chunk_uses_get_object(r2_client_mock, monkeypatch, tmpdir):
+    """Sub-8MB indexed chunks skip TransferManager/obstore (sst2-sized TTFB)."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    get_store = mock.MagicMock(side_effect=AssertionError("tiny chunk must not start obstore"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.get_object.return_value = {"Body": io.BytesIO(b"tiny-bytes")}
+
+    dest = os.path.join(tmpdir, "chunk-0-0.zstd.bin")
+    chunks = [{"filename": "chunk-0-0.zstd.bin", "chunk_bytes": 940000, "chunk_size": 6920}]
+    R2Downloader("r2://bucket", str(tmpdir), chunks).download_file("r2://bucket/chunk-0-0.zstd.bin", dest)
+
+    assert os.path.exists(dest)
+    with open(dest, "rb") as handle:
+        assert handle.read() == b"tiny-bytes"
+    client.client.get_object.assert_called_once_with(Bucket="bucket", Key="chunk-0-0.zstd.bin")
+    client.client.download_file.assert_not_called()
+    get_store.assert_not_called()

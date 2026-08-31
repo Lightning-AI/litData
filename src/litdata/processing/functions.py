@@ -36,6 +36,7 @@ from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, Ma
 from litdata.processing.readers import BaseReader
 from litdata.processing.utilities import (
     _get_work_dir,
+    construct_storage_options,
     extract_rank_and_index_from_filename,
     optimize_dns_context,
     read_index_file_content,
@@ -591,6 +592,7 @@ def optimize(
             _output_dir = _resolve_dir(output_dir)
 
         _assert_supported_write_url(_output_dir)
+        storage_options = construct_storage_options(storage_options, _output_dir)
 
         if _output_dir.url is not None and "cloudspaces" in _output_dir.url:
             raise ValueError(

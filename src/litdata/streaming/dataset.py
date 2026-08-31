@@ -42,7 +42,7 @@ from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, po
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle
+from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle, resolve_item_shuffle_window
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _should_replace_path_filestores,
@@ -80,6 +80,8 @@ class StreamingDataset(IterableDataset):
         force_override_state_dict: bool = False,
         transform: Callable | list[Callable] | None = None,
         num_canonical_nodes: int | None = None,
+        batch_decode: int | str | bool = "auto",
+        item_shuffle_window: int | str | None = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -113,6 +115,17 @@ class StreamingDataset(IterableDataset):
             num_canonical_nodes: Frozen first-run node count recorded in checkpoints
                 (default: first-run ``world_size``). Elastic resume rebuilds remaining
                 IDs from that first-run shuffler assignment, not a different bucket layout.
+            batch_decode: How many items to deserialize together after a chunk is local.
+                ``"auto"`` (default) picks from the data format and mean sample size
+                (256 for text/nested, down to 1 for multi-MB images/video).
+                ``0`` is per item, ``N`` is an aligned window, ``"all"`` is the whole chunk.
+                Shuffle permutes items inside the same window so training still hits the
+                cache. ``LITDATA_BATCH_DECODE`` / ``LITDATA_BATCH_ROWS`` apply only when
+                this is ``"auto"``.
+            item_shuffle_window: In-chunk shuffle block size (pairs with ``batch_decode``).
+                ``None`` / ``"auto"`` (default) is 256, or ``LITDATA_ITEM_SHUFFLE_WINDOW``.
+                ``0`` / ``"full"`` is a full in-chunk permutation. Blocks are shuffled,
+                then items inside each block.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -131,9 +144,14 @@ class StreamingDataset(IterableDataset):
         cache_dir = _resolve_dir(cache_dir)
 
         if input_dir.url is not None and input_dir.url.startswith("hf://"):
+            if index_path is None and cache_dir.path:
+                cached_index = os.path.join(cache_dir.path, _INDEX_FILENAME)
+                if os.path.isfile(cached_index):
+                    # ``index_parquet_dataset(uri, cache_dir)`` layout — no extra index_path.
+                    index_path = cache_dir.path
             if index_path is None:
                 # No index_path was provided. Attempt to load it from cache or generate it dynamically on the fly.
-                index_path = index_hf_dataset(input_dir.url, cache_dir.path)
+                index_path = index_hf_dataset(input_dir.url, cache_dir.path, storage_options)
             if item_loader is not None and not isinstance(item_loader, ParquetLoader):
                 raise ValueError(
                     "Invalid item_loader for hf://datasets. "
@@ -160,7 +178,14 @@ class StreamingDataset(IterableDataset):
             fnmatch_pattern,
         )
 
+        self.batch_decode = batch_decode
+        self.item_shuffle_window = item_shuffle_window
+        self._item_shuffle_window = resolve_item_shuffle_window(item_shuffle_window)
         self.item_loader = item_loader
+        if self.item_loader is not None:
+            set_batch = getattr(self.item_loader, "set_batch_decode", None)
+            if callable(set_batch):
+                set_batch(batch_decode)
         self.shuffle: bool = shuffle
         self.distributed_env = _DistributedEnv.detect()
 
@@ -321,7 +346,7 @@ class StreamingDataset(IterableDataset):
                 self.input_dir.path or "",
                 _get_serializers(self.serializers),
                 None,
-                self.item_loader or PyTreeLoader(),
+                self.item_loader or PyTreeLoader(batch_decode=self.batch_decode),
                 self.subsampled_files,
                 self.region_of_interest,
                 self.storage_options,
@@ -340,6 +365,13 @@ class StreamingDataset(IterableDataset):
                 if cache_path is not None:
                     self.input_dir.url = self.input_dir.path
                     self.input_dir.path = cache_path
+
+        if self.item_loader is None:
+            self.item_loader = PyTreeLoader(batch_decode=self.batch_decode)
+        else:
+            set_batch = getattr(self.item_loader, "set_batch_decode", None)
+            if callable(set_batch):
+                set_batch(self.batch_decode)
 
         cache = Cache(
             input_dir=self.input_dir,
@@ -377,15 +409,18 @@ class StreamingDataset(IterableDataset):
     def _create_shuffler(self, cache: Cache) -> Shuffle:
         seed = self.seed
         drop_last = self.drop_last
+        item_window = self._item_shuffle_window
         if self._state_dict is not None:
             state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
+            if "item_shuffle_window" in state:
+                item_window = resolve_item_shuffle_window(state["item_shuffle_window"])
         if not self.shuffle:
             return NoShuffle(cache, seed, drop_last)
         if self.posix_fast is not None and self.posix_fast.window_shuffle:
-            return WindowShuffle(cache, seed, drop_last)
-        return FullShuffle(cache, seed, drop_last)
+            return WindowShuffle(cache, seed, drop_last, item_window=item_window)
+        return FullShuffle(cache, seed, drop_last, item_window=item_window)
 
     def __len__(self) -> int:
         return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
@@ -905,6 +940,7 @@ class StreamingDataset(IterableDataset):
             "item_loader": self.item_loader.state_dict() if self.item_loader else None,
             "drop_last": self.drop_last,
             "seed": self.seed,
+            "item_shuffle_window": self._item_shuffle_window,
             "world_size": world_size,
             "shuffle": self.shuffle,
             "subsampled_files": self.subsampled_files,
@@ -1030,6 +1066,21 @@ class StreamingDataset(IterableDataset):
                 )
             logger.warning(f"Overriding state item_loader {state['item_loader']} to {self.item_loader.state_dict()}.")
             state["item_loader"] = self.item_loader.state_dict()
+
+        saved_item_window = (
+            resolve_item_shuffle_window(state["item_shuffle_window"]) if "item_shuffle_window" in state else None
+        )
+        if saved_item_window is not None and saved_item_window != self._item_shuffle_window:
+            if not self._force_override_state_dict:
+                raise ValueError(
+                    "The provided `item_shuffle_window` state doesn't match the current one. "
+                    f"Found `{self._item_shuffle_window}` instead of `{state['item_shuffle_window']}`."
+                )
+            state["item_shuffle_window"] = self._item_shuffle_window
+            logger.warning(
+                f"Overriding state item_shuffle_window {state['item_shuffle_window']} to {self._item_shuffle_window}, "
+                "this may lead to repeated or skipped datapoints within an episode."
+            )
 
         if state["drop_last"] != self.drop_last:
             if not self._force_override_state_dict:

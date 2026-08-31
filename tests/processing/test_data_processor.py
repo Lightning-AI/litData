@@ -1028,12 +1028,20 @@ def test_data_processor_default_is_unordered():
 def test_is_local_write_through_and_chunks_dir(tmp_path):
     local = Dir(path=str(tmp_path / "out"), url=None)
     remote = Dir(path=str(tmp_path / "out"), url="s3://bucket/out")
+    lightning = Dir(
+        path="/teamspace/lightning_storage/testing/out",
+        url="r2://bucket/out",
+        data_connection_id="conn-1",
+    )
     empty = Dir(path=None, url=None)
     assert _is_local_write_through(local) is True
     assert _is_local_write_through(remote) is False
+    assert _is_local_write_through(lightning) is False
     assert _is_local_write_through(empty) is False
     assert _is_local_write_through(None) is False
     assert _chunks_dir(local) == local.path
+    assert _chunks_dir(remote) != remote.path
+    assert _chunks_dir(lightning) != lightning.path
     assert os.path.isdir(local.path)
 
 
@@ -1080,6 +1088,50 @@ def test_n_chunk_writers_and_upload_threads_write_through(tmp_path, monkeypatch)
     remote = Dir(path=str(tmp_path / "out"), url="s3://bucket/out")
     processor = DataProcessor(input_dir=Dir(), output_dir=remote, num_workers=8, verbose=False)
     assert processor._n_upload_threads() >= 2
+    r2 = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    processor = DataProcessor(input_dir=Dir(), output_dir=r2, num_workers=8, verbose=False)
+    assert processor._n_upload_threads() >= 2
+    assert processor.storage_options["data_connection_id"] == "conn-1"
+
+
+def test_node_removers_start_when_input_dir_empty(tmp_path, monkeypatch):
+    """HF optimize has no input Dir; removers must still delete uploaded cache chunks."""
+    remote = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    processor = DataProcessor(
+        input_dir=Dir(), output_dir=remote, num_workers=1, verbose=False, delete_cached_files=True
+    )
+    started: list = []
+
+    def _fake_start(fn, *args):
+        started.append(fn)
+        return mock.Mock(is_alive=lambda: False)
+
+    monkeypatch.setattr(processor, "_start_io_thread", _fake_start)
+    monkeypatch.setattr(processor, "_n_upload_threads", lambda: 0)
+    processor._start_node_io_pools()
+    assert data_processor_module._remove_target in started
+    assert processor.shared_remove_queue is not None
+
+
+def test_done_merges_index_despite_leftover_cache_bins_for_lightning_storage(tmp_path, monkeypatch):
+    """Dir with FUSE path + R2 url must not abort merge on leftover ``.bin`` in the shared cache."""
+    cache_dir = tmp_path / "chunks"
+    cache_dir.mkdir()
+    (cache_dir / "stale-from-other-job.bin").write_bytes(b"stale")
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda name=None: str(cache_dir))
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 1)
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+    monkeypatch.setattr(data_processor_module, "_put_files_remote", lambda *a, **k: (None, None))
+
+    _write_worker_index(str(cache_dir), "C.bin")
+    recipe = _AppendChunkRecipe()
+    dest = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    result = recipe._done(size=None, delete_cached_files=True, output_dir=dest)
+
+    index_path = os.path.join(str(cache_dir), _INDEX_FILENAME)
+    assert os.path.isfile(index_path)
+    assert _chunk_names(index_path) == ["C.bin"]
+    assert result.num_chunks == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")

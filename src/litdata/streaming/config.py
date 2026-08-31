@@ -89,6 +89,9 @@ class ChunksConfig:
 
         assert self._chunks is not None
         self._item_loader.setup(self._config, self._chunks, serializers, region_of_interest)
+        set_remote = getattr(self._item_loader, "set_remote_source", None)
+        if callable(set_remote):
+            set_remote(self._remote_dir, self._storage_options)
         self._intervals = self._item_loader.generate_intervals()
         self._length = self._intervals[-1][-1] if len(self._intervals) > 0 else 0
         self._downloader = None
@@ -207,6 +210,10 @@ class ChunksConfig:
         self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
+        # ``hf://`` parquet is opened with fsspec range reads; do not GET the whole file.
+        if getattr(self._item_loader, "uses_direct_remote", False):
+            return
+
         assert self._chunks is not None
         chunk_filename = self._chunks[chunk_index]["filename"]
 

@@ -42,13 +42,262 @@ from litdata.constants import (
 from litdata.debugger import CAT_DELETE, trace_span
 from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.posix_fast import advise_willneed, madvise_mmap, posix_page_bytes
-from litdata.streaming.serializers import Serializer
+from litdata.streaming.serializers import JsonLeaf, Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 
 Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx", "chunk_end"])
 
 logger = logging.getLogger("litdata.streaming.item_loader")
+
+_BATCH_SKIP = object()
+# Cap for cheap leaves (text / nested JSON). Images/video scale down from avg bytes.
+_DEFAULT_BATCH_ROWS = 256
+_AUTO_WINDOW_BYTES = 16 << 20  # ~16MB of on-disk samples per decode window
+_HEAVY_LEAF = frozenset(
+    {
+        "jpeg",
+        "pil",
+        "image",
+        "video",
+        "audio",
+        "file",
+        "mesh",
+        "pdf",
+        "nifti",
+        "tiff",
+        "jpeg_array",
+        "tensor",
+        "no_header_tensor",
+        "graph",
+    }
+)
+# Trailing Arrow IPC of the original rows. Nested Python decode is ~5–15× slower than
+# Arrow ``to_pylist``; old readers ignore bytes past the last item offset.
+_ARROW_FOOTER_MAGIC = b"LDARW01\0"
+# Arrow IPC *file* magic (uncompressed directory + per-batch bodies). Stream
+# footers from older writers start with a continuation / schema message instead.
+_ARROW_IPC_FILE_MAGIC = b"ARROW1"
+
+
+def _parse_batch_decode(value: Any) -> int | None:
+    """``None`` means ``auto``. ``0`` = per item, ``-1`` = whole chunk, ``N`` = window."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return -1 if value else 0
+    if isinstance(value, int):
+        return -1 if value < 0 else value
+    key = str(value).strip().lower()
+    if key in {"auto", ""}:
+        return None
+    if key in {"0", "false", "no", "off", "item"}:
+        return 0
+    if key in {"all", "chunk", "true", "yes", "on"}:
+        return -1
+    try:
+        parsed = int(key)
+    except ValueError:
+        return None
+    return -1 if parsed < 0 else parsed
+
+
+def _avg_sample_bytes(chunks: list | None) -> int:
+    if not chunks:
+        return 0
+    total_b = 0
+    total_n = 0
+    for chunk in chunks[:16]:
+        nbytes = int(chunk.get("chunk_bytes") or 0)
+        n_items = int(chunk.get("chunk_size") or 0)
+        if nbytes > 0 and n_items > 0:
+            total_b += nbytes
+            total_n += n_items
+    return total_b // total_n if total_n else 0
+
+
+def _leaf_key(name: str) -> str:
+    return name.split(":", 1)[0].lower()
+
+
+def _auto_batch_rows(data_format: list[str] | None, chunks: list | None = None) -> int:
+    """Pick a window from leaf types and mean on-disk sample size.
+
+    Text/nested stay at 256 (measured winner). A 2MB JPEG would turn 256 into
+    a multi-GB Python spike, so heavy leaves scale toward 1.
+    """
+    avg = _avg_sample_bytes(chunks)
+    keys = [_leaf_key(name) for name in (data_format or [])]
+    heavy = any(key in _HEAVY_LEAF for key in keys)
+    if avg >= 1 << 20:
+        return 1
+    if heavy:
+        if avg >= 256 << 10:
+            return 8
+        if avg >= 64 << 10:
+            return 16
+        return 32
+    if avg >= 64 << 10:
+        return max(1, min(_DEFAULT_BATCH_ROWS, _AUTO_WINDOW_BYTES // avg))
+    return _DEFAULT_BATCH_ROWS
+
+
+def _batch_rows_for_format(
+    data_format: list[str] | None,
+    chunks: list | None = None,
+    batch_decode: Any = "auto",
+) -> int:
+    """How many items to deserialize together. ``0`` = per item, ``-1`` = whole chunk.
+
+    Default is ``auto`` (format + sample size). ``StreamingDataset(batch_decode=...)``
+    wins; ``LITDATA_BATCH_DECODE`` / ``LITDATA_BATCH_ROWS`` apply only when the
+    dataset is still ``auto``.
+    """
+    parsed = _parse_batch_decode(batch_decode)
+    if parsed is None:
+        raw = os.getenv("LITDATA_BATCH_DECODE")
+        if raw is not None and raw.strip():
+            env_parsed = _parse_batch_decode(raw)
+            if env_parsed is not None:
+                return env_parsed
+        raw_n = os.getenv("LITDATA_BATCH_ROWS")
+        if raw_n is not None and raw_n.strip():
+            with contextlib.suppress(ValueError):
+                return max(0, int(raw_n))
+        return _auto_batch_rows(data_format, chunks)
+    return parsed
+
+
+def _unwrap_arrow_sample(value: Any) -> Any:
+    """Drop :class:`JsonLeaf` wrappers so Arrow sees plain Python values."""
+    if isinstance(value, JsonLeaf):
+        return _unwrap_arrow_sample(value.value)
+    if isinstance(value, dict):
+        return {key: _unwrap_arrow_sample(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_arrow_sample(item) for item in value]
+    return value
+
+
+def _arrow_ipc_write_options(compression: str | None = "zstd") -> Any:
+    """Arrow IPC compression (C++ inflate on ``get_batch`` / ``open_file``), or ``None``."""
+    if not compression or not _PYARROW_AVAILABLE:
+        return None
+    import pyarrow as pa
+
+    try:
+        return pa.ipc.IpcWriteOptions(compression=compression)
+    except (TypeError, ValueError, pa.ArrowInvalid, pa.ArrowNotImplementedError):
+        return None
+
+
+def append_arrow_row_footer(data: bytes, samples: list[Any], ipc_compression: str | None = None) -> bytes:
+    """Append a trailing Arrow IPC *file* when every sample is a dict (nested HF rows).
+
+    Record batches are ``_DEFAULT_BATCH_ROWS`` (256) so the reader can
+    ``open_file`` + ``get_batch(i)`` without inflating the whole chunk.
+    ``ipc_compression`` (e.g. ``"zstd"``) is Arrow ``IpcWriteOptions`` — C++ inflate
+    per batch. It is off unless the writer asked for compression. LitData whole-file
+    ``compression="zstd"`` is a different wrap and is skipped for nested chunks.
+    """
+    if not samples or not _PYARROW_AVAILABLE:
+        return data
+    if any(sample is None or not isinstance(sample, dict) for sample in samples):
+        return data
+    import pyarrow as pa
+
+    try:
+        rows = [_unwrap_arrow_sample(sample) for sample in samples]
+        keys: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                return data
+            for key in row:
+                if key not in seen:
+                    seen.add(key)
+                    keys.append(key)
+        unified = [{key: row.get(key) for key in keys} for row in rows]
+        table = pa.Table.from_pylist(unified)
+    except (TypeError, pa.ArrowInvalid, pa.ArrowTypeError, ValueError):
+        return data
+    sink = pa.BufferOutputStream()
+    options = _arrow_ipc_write_options(ipc_compression)
+    write_kw: dict[str, Any] = {"options": options} if options is not None else {}
+    n_rows = table.num_rows
+    batch_rows = _DEFAULT_BATCH_ROWS
+    with pa.ipc.new_file(sink, table.schema, **write_kw) as writer:
+        for start in range(0, n_rows, batch_rows):
+            writer.write_table(table.slice(start, min(batch_rows, n_rows - start)))
+    ipc = sink.getvalue().to_pybytes()
+    return data + ipc + struct.pack("<I", len(ipc)) + _ARROW_FOOTER_MAGIC
+
+
+def _arrow_footer_span(view: bytes | bytearray | memoryview) -> tuple[int, int] | None:
+    """Return ``(start, ipc_len)`` for a trailing Arrow IPC blob, or ``None``."""
+    raw = view if isinstance(view, (bytes, bytearray, memoryview)) else memoryview(view)
+    if len(raw) < 12:
+        return None
+    if bytes(raw[-8:]) != _ARROW_FOOTER_MAGIC:
+        return None
+    ipc_len = struct.unpack_from("<I", raw, len(raw) - 12)[0]
+    start = len(raw) - 12 - ipc_len
+    if start < 0 or ipc_len <= 0:
+        return None
+    return start, ipc_len
+
+
+def _ipc_is_file(ipc: bytes | bytearray | memoryview) -> bool:
+    """True when the blob is Arrow IPC file format (``ARROW1``), not a stream."""
+    if len(ipc) < 6:
+        return False
+    return bytes(ipc[:6]) == _ARROW_IPC_FILE_MAGIC
+
+
+def open_arrow_footer_reader(view: bytes | bytearray | memoryview) -> tuple[Any, bool] | None:
+    """Return ``(reader, is_file)`` for a trailing Arrow IPC blob, or ``None``.
+
+    New chunks are IPC *files* (``open_file``). Older stream footers keep
+    ``open_stream``.
+    """
+    if not _PYARROW_AVAILABLE:
+        return None
+    span = _arrow_footer_span(view)
+    if span is None:
+        return None
+    start, ipc_len = span
+    import pyarrow as pa
+
+    ipc = memoryview(view)[start : start + ipc_len]
+    try:
+        is_file = _ipc_is_file(ipc)
+        source = pa.py_buffer(ipc)
+        reader = pa.ipc.open_file(source) if is_file else pa.ipc.open_stream(source)
+        return reader, is_file
+    except (pa.ArrowInvalid, pa.ArrowTypeError, OSError, ValueError, TypeError):
+        return None
+
+
+def load_arrow_footer_table(view: bytes | bytearray | memoryview) -> Any | None:
+    """Return the trailing Arrow ``Table``, or ``None`` if the chunk has no footer."""
+    opened = open_arrow_footer_reader(view)
+    if opened is None:
+        return None
+    reader, _is_file = opened
+    import pyarrow as pa
+
+    try:
+        return reader.read_all()
+    except (pa.ArrowInvalid, pa.ArrowTypeError, OSError, ValueError):
+        return None
+
+
+def load_arrow_row_footer(view: bytes | bytearray | memoryview) -> list[Any] | None:
+    """Return rows from a trailing Arrow IPC table, or ``None`` if the chunk has no footer."""
+    table = load_arrow_footer_table(view)
+    if table is None:
+        return None
+    return table.to_pylist()
 
 
 def _as_chunk_index(chunk_index: int) -> int:
@@ -215,6 +464,15 @@ class BaseItemLoader(ABC):
         # Keep a format string (pickle-friendly) rather than a ``struct.Struct`` instance.
         self._sizes_fmt = "<" + "I" * len(self._data_format) if self._data_format else None
         self._sizes_struct = struct.Struct(self._sizes_fmt) if self._sizes_fmt else None
+        self._batch_rows = _batch_rows_for_format(
+            list(self._data_format) if self._data_format else None,
+            chunks,
+            getattr(self, "_batch_decode", "auto"),
+        )
+
+    def set_batch_decode(self, batch_decode: Any) -> None:
+        """``auto`` / ``0`` / ``N`` / ``all``. Default loaders ignore this."""
+        del batch_decode
 
     def force_download(self, chunk_index: int) -> None:
         force_download_queue = getattr(self, "_force_download_queue", None)
@@ -386,8 +644,9 @@ class BaseItemLoader(ABC):
 class PyTreeLoader(BaseItemLoader):
     """The Pytree Loader is the default loader of the Cache object."""
 
-    def __init__(self) -> None:
+    def __init__(self, batch_decode: Any = "auto") -> None:
         super().__init__()
+        self._batch_decode: Any = batch_decode
         self._chunk_filepath: str | None = None
         self._decrypted_chunks: dict[int, bytes] = {}
         self._open_handle: FileIO | None = None
@@ -410,6 +669,24 @@ class PyTreeLoader(BaseItemLoader):
         self._page_bytes = 0
         self._mmap_view: memoryview | None = None
         self._posix_willneed = True
+        # Optional decode window (parquet row-group style). Sized from data_format.
+        self._mmap_chunk_index: int | None = None
+        self._chunk_rows: list[Any] | None = None
+        self._chunk_rows_index: int | None = None
+        self._batch_rows: int | None = None
+        self._win_start = 0
+        self._arrow_table: Any | None = None
+        self._arrow_table_index: int | None = None
+        self._arrow_reader: Any | None = None
+        self._arrow_reader_index: int | None = None
+        self._arrow_reader_is_file = False
+
+    def set_batch_decode(self, batch_decode: Any) -> None:
+        self._batch_decode = batch_decode
+        data_format = getattr(self, "_data_format", None)
+        chunks = getattr(self, "_chunks", None)
+        if data_format is not None:
+            self._batch_rows = _batch_rows_for_format(list(data_format), chunks, batch_decode)
 
     def set_posix_fast(self, enabled: bool, keep: int = 4, *, willneed: bool = True) -> None:
         self._posix_fast = enabled
@@ -529,27 +806,190 @@ class PyTreeLoader(BaseItemLoader):
                 else:
                     self._ensure_chunk_mmap(chunk_filepath, chunk_index, make_current=True)
 
+        table_idx = offset // 4 - 1
         if self._config.get("encryption"):
             data = self._load_encrypted_data(chunk_filepath, chunk_index, offset, encryption)
-        elif self._mmap is not None:
-            # `offset` points at the item's start entry in the offset table (byte (i+1)*4 holds
-            # entry i), so this item's table index is `offset // 4 - 1`.
-            # `mmap[start:end]` returns a fresh `bytes` object directly — no memoryview hop.
-            assert self._offsets is not None
-            table_idx = offset // 4 - 1
-            data = self._slice_item_bytes(table_idx, chunk_index)
         else:
-            assert self._open_handle
-            # load the data from raw bytes using the offset for the item we want to load
-            data = self._load_data(self._open_handle, offset)
+            batched = self._load_batched_item(chunk_index, chunk_filepath, table_idx)
+            if batched is not _BATCH_SKIP:
+                return batched
+            if self._mmap is not None:
+                data = self._slice_item_bytes(table_idx, chunk_index)
+            else:
+                assert self._open_handle
+                data = self._load_data(self._open_handle, offset)
 
-        # check for mosaic mds format
         if "format" in self._config and self._config["format"] == "mds":
-            item_data = self.mds_deserialize(data, chunk_index)
-        else:
-            item_data = self.deserialize(data)
+            return self.mds_deserialize(data, chunk_index)
+        return self.deserialize(data)
 
-        return item_data
+    def _load_batched_item(self, chunk_index: int, chunk_filepath: str, table_idx: int) -> Any:
+        """Return a cached/windowed row, or ``_BATCH_SKIP`` to decode this item alone."""
+        batch_rows = self._batch_rows
+        if batch_rows is None:
+            batch_rows = _batch_rows_for_format(
+                list(self._data_format) if self._data_format else None,
+                getattr(self, "_chunks", None),
+                getattr(self, "_batch_decode", "auto"),
+            )
+            self._batch_rows = batch_rows
+        rows = self._chunk_rows
+        if (
+            rows is not None
+            and self._chunk_rows_index == chunk_index
+            and self._win_start <= table_idx < self._win_start + len(rows)
+        ):
+            return rows[table_idx - self._win_start]
+        if self._mmap is not None:
+            view = self._mmap_view
+            if view is None:
+                assert self._mmap is not None
+                view = memoryview(self._mmap)
+                self._mmap_view = view
+            arrow = self._try_arrow_footer_rows(view, chunk_index, table_idx)
+            if arrow is not _BATCH_SKIP:
+                return arrow
+            if not batch_rows:
+                return _BATCH_SKIP
+            return self._fill_decode_window_mmap(chunk_index, table_idx, batch_rows)
+        if not batch_rows:
+            return _BATCH_SKIP
+        return self._fill_decode_window_path(chunk_index, chunk_filepath, table_idx, batch_rows)
+
+    def _clear_arrow_footer(self) -> None:
+        self._arrow_table = None
+        self._arrow_table_index = None
+        self._arrow_reader = None
+        self._arrow_reader_index = None
+        self._arrow_reader_is_file = False
+
+    def _try_arrow_footer_rows(self, view: bytes | memoryview, chunk_index: int, table_idx: int) -> Any:
+        """Serve one IPC record batch (file) or a sliced stream table (legacy)."""
+        reader = self._arrow_reader
+        is_file = self._arrow_reader_is_file
+        if reader is None or self._arrow_reader_index != chunk_index:
+            opened = open_arrow_footer_reader(view)
+            if opened is None:
+                return _BATCH_SKIP
+            reader, is_file = opened
+            self._arrow_reader = reader
+            self._arrow_reader_is_file = is_file
+            self._arrow_reader_index = chunk_index
+            self._arrow_table = None
+            self._arrow_table_index = None
+        if is_file:
+            n_batches = int(reader.num_record_batches)
+            if n_batches <= 0:
+                return _BATCH_SKIP
+            batch_i = table_idx // _DEFAULT_BATCH_ROWS
+            if batch_i < 0 or batch_i >= n_batches:
+                return _BATCH_SKIP
+            rows = reader.get_batch(batch_i).to_pylist()
+            start = batch_i * _DEFAULT_BATCH_ROWS
+            if table_idx < start or table_idx >= start + len(rows):
+                return _BATCH_SKIP
+            return self._store_decode_window(chunk_index, start, rows, table_idx)
+        if self._arrow_table is None or self._arrow_table_index != chunk_index:
+            self._arrow_table = reader.read_all()
+            self._arrow_table_index = chunk_index
+        table = self._arrow_table
+        n = table.num_rows
+        if table_idx < 0 or table_idx >= n:
+            return _BATCH_SKIP
+        batch_rows = self._batch_rows
+        if not batch_rows:
+            start, end = 0, n
+        else:
+            start, end = self._window_bounds(table_idx, n, batch_rows)
+        rows = table.slice(start, end - start).to_pylist()
+        return self._store_decode_window(chunk_index, start, rows, table_idx)
+
+    def _batch_deserialize_payload(
+        self,
+        view: bytes | memoryview,
+        offsets: list[int],
+        chunk_index: int,
+        start: int,
+        end: int,
+    ) -> list[Any]:
+        """Decode ``offsets[start:end]`` from a local chunk buffer."""
+        n = end - start
+        rows: list[Any] = [None] * n
+        if self._config.get("format") == "mds":
+            for i in range(n):
+                idx = start + i
+                rows[i] = self.mds_deserialize(view[offsets[idx] : offsets[idx + 1]], chunk_index)
+            return rows
+        shift = self._shift_idx
+        sizes_struct = self._sizes_struct
+        serializers = self._serializers_list
+        unflatten = self._unflatten
+        n_leaves = len(serializers)
+        if sizes_struct is not None and unflatten is not None:
+            for i in range(n):
+                idx = start + i
+                raw = view[offsets[idx] : offsets[idx + 1]]
+                sizes = sizes_struct.unpack_from(raw, 0)
+                leaves: list[Any] = [None] * n_leaves
+                cursor = shift
+                for j, (size, serializer) in enumerate(zip(sizes, serializers)):
+                    leaves[j] = serializer.deserialize(raw[cursor : cursor + size])
+                    cursor += size
+                rows[i] = unflatten(leaves)
+            return rows
+        deserialize = self.deserialize
+        for i in range(n):
+            idx = start + i
+            rows[i] = deserialize(view[offsets[idx] : offsets[idx + 1]])
+        return rows
+
+    def _store_decode_window(self, chunk_index: int, start: int, rows: list[Any], table_idx: int | None = None) -> Any:
+        self._chunk_rows = rows
+        self._chunk_rows_index = chunk_index
+        self._win_start = start
+        idx = 0 if table_idx is None else table_idx - start
+        return rows[idx]
+
+    def _window_bounds(self, table_idx: int, n_items: int, batch_rows: int) -> tuple[int, int]:
+        """Aligned window so random hits in the same block share one decode.
+
+        Sequential ``0..n`` already reused a forward window. A full in-chunk
+        shuffle does not: starting at the requested index re-decoded overlapping
+        ranges. Fixed blocks ``[kW, (k+1)W)`` decode each item once per visit.
+        """
+        if batch_rows < 0:
+            return 0, n_items
+        if batch_rows <= 1:
+            end = min(n_items, table_idx + max(batch_rows, 1))
+            return table_idx, end
+        start = (table_idx // batch_rows) * batch_rows
+        return start, min(n_items, start + batch_rows)
+
+    def _fill_decode_window_mmap(self, chunk_index: int, table_idx: int, batch_rows: int) -> Any:
+        offsets = self._offsets
+        view = self._mmap_view
+        assert offsets is not None
+        if view is None:
+            assert self._mmap is not None
+            view = memoryview(self._mmap)
+            self._mmap_view = view
+        start, end = self._window_bounds(table_idx, len(offsets) - 1, batch_rows)
+        rows = self._batch_deserialize_payload(view, offsets, chunk_index, start, end)
+        return self._store_decode_window(chunk_index, start, rows, table_idx)
+
+    def _fill_decode_window_path(
+        self, chunk_index: int, chunk_filepath: str, table_idx: int, batch_rows: int
+    ) -> Any:
+        with open(chunk_filepath, "rb") as handle:
+            blob = handle.read()
+        n = struct.unpack_from("<I", blob, 0)[0]
+        offsets = list(struct.unpack_from("<" + "I" * (n + 1), blob, 4))
+        start, end = self._window_bounds(table_idx, n, batch_rows)
+        arrow = self._try_arrow_footer_rows(blob, chunk_index, table_idx)
+        if arrow is not _BATCH_SKIP:
+            return arrow
+        rows = self._batch_deserialize_payload(blob, offsets, chunk_index, start, end)
+        return self._store_decode_window(chunk_index, start, rows, table_idx)
 
     def _load_encrypted_data(
         self, chunk_filepath: str, chunk_index: int, offset: int, encryption: Encryption | None
@@ -711,11 +1151,17 @@ class PyTreeLoader(BaseItemLoader):
 
     def _apply_mapped_chunk(self, chunk_index: int, cached: tuple[mmap.mmap, list[int], str]) -> None:
         self._clear_item_page()
+        if self._mmap_chunk_index != chunk_index:
+            self._chunk_rows = None
+            self._chunk_rows_index = None
+            self._win_start = 0
+            self._clear_arrow_footer()
         chunk_mmap, offsets, chunk_filepath = cached
         self._mmap = chunk_mmap
         self._open_handle = None
         self._offsets = offsets
         self._chunk_filepath = chunk_filepath
+        self._mmap_chunk_index = chunk_index
         self._mmap_view = memoryview(chunk_mmap)
         self._mapped.move_to_end(chunk_index)
 
@@ -726,6 +1172,13 @@ class PyTreeLoader(BaseItemLoader):
             self._mmap_view = None
             self._offsets = None
             self._open_handle = None
+            self._mmap_chunk_index = None
+            if self._chunk_rows_index == chunk_index:
+                self._chunk_rows = None
+                self._chunk_rows_index = None
+                self._win_start = 0
+            if self._arrow_table_index == chunk_index or self._arrow_reader_index == chunk_index:
+                self._clear_arrow_footer()
         if self._page_chunk == chunk_index:
             self._clear_item_page()
         handle = self._mmap_handles.pop(chunk_index, None)
@@ -754,6 +1207,11 @@ class PyTreeLoader(BaseItemLoader):
         self._offsets = None
         self._mmap = None
         self._open_handle = None
+        self._mmap_chunk_index = None
+        self._chunk_rows = None
+        self._chunk_rows_index = None
+        self._win_start = 0
+        self._clear_arrow_footer()
         for idx in list(self._mapped):
             cached = self._mapped.pop(idx, None)
             if cached is not None:
@@ -840,6 +1298,16 @@ class PyTreeLoader(BaseItemLoader):
         state["_page"] = None
         state["_page_chunk"] = None
         state["_mmap_view"] = None
+        state["_mmap_chunk_index"] = None
+        state["_chunk_rows"] = None
+        state["_chunk_rows_index"] = None
+        state["_win_start"] = 0
+        state["_batch_rows"] = None
+        state["_arrow_table"] = None
+        state["_arrow_table_index"] = None
+        state["_arrow_reader"] = None
+        state["_arrow_reader_index"] = None
+        state["_arrow_reader_is_file"] = False
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
         state["_sizes_struct"] = None
@@ -858,6 +1326,19 @@ class PyTreeLoader(BaseItemLoader):
             self._mmap_view = None
         if not hasattr(self, "_posix_willneed"):
             self._posix_willneed = True
+        if not hasattr(self, "_chunk_rows"):
+            self._chunk_rows = None
+            self._chunk_rows_index = None
+            self._mmap_chunk_index = None
+            self._win_start = 0
+            self._batch_rows = None
+        if not hasattr(self, "_arrow_table"):
+            self._arrow_table = None
+            self._arrow_table_index = None
+        if not hasattr(self, "_arrow_reader"):
+            self._arrow_reader = None
+            self._arrow_reader_index = None
+            self._arrow_reader_is_file = False
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)
@@ -1141,6 +1622,9 @@ class ParquetLoader(BaseItemLoader):
                 "Consider setting low_memory=True to reduce memory consumption."
             )
 
+        self._remote_dir: str | None = None
+        self._storage_options: dict | None = {}
+
     def setup(
         self,
         config: dict,
@@ -1162,6 +1646,16 @@ class ParquetLoader(BaseItemLoader):
         self._chunk_row_groups: dict[int, Any] = {}
         self._chunk_row_group_item_read_count: dict[int, Any] = {}
         self._chunk_row_group_offsets: dict[int, list[int]] = {}
+
+    def set_remote_source(self, remote_dir: str | None, storage_options: dict | None = None) -> None:
+        self._remote_dir = remote_dir
+        self._storage_options = storage_options or {}
+
+    def _open_parquet_file(self, chunk_index: int, chunk_filepath: str) -> Any:
+        del chunk_index
+        import pyarrow.parquet as pq
+
+        return pq.ParquetFile(chunk_filepath)
 
     def generate_intervals(self) -> list[Interval]:
         intervals = []
@@ -1219,7 +1713,8 @@ class ParquetLoader(BaseItemLoader):
     def _get_item_with_low_memory(self, chunk_index: int, chunk_filepath: str, row_index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk in low memory mode.
 
-        This method reads only the necessary row group from the parquet file using PyArrow.
+        This method reads only the necessary row group from the parquet file using PyArrow
+        and materializes it once with ``to_pylist()`` (Hugging Face / Arrow batch conversion).
 
         Args:
             chunk_index (int): The index of the chunk to be accessed.
@@ -1231,11 +1726,9 @@ class ParquetLoader(BaseItemLoader):
         """
         import bisect
 
-        import pyarrow.parquet as pq
-
         # Load the Parquet file metadata if not already loaded
         if chunk_index not in self._df:
-            parquet_file = pq.ParquetFile(chunk_filepath)
+            parquet_file = self._open_parquet_file(chunk_index, chunk_filepath)
             self._df[chunk_index] = parquet_file
             # Precompute cumulative row offsets as a prefix-sum so lookup works for row groups of any size.
             offsets = [0]
@@ -1251,19 +1744,19 @@ class ParquetLoader(BaseItemLoader):
         row_index_within_group = row_index - offsets[row_group_index]
         row_group_size = offsets[row_group_index + 1] - offsets[row_group_index]
 
-        # Check if the row group is already loaded
+        # Cache the row group as a Python list of dicts. Hugging Face datasets / PyArrow
+        # convert a whole RecordBatch at once (``to_pylist``); per-cell ``as_py()`` is ~2× slower.
         if chunk_index in self._chunk_row_groups and row_group_index in self._chunk_row_groups[chunk_index]:
-            # Use the cached row group
-            row_group_df = self._chunk_row_groups[chunk_index][row_group_index]
-            # update read count
+            rows = self._chunk_row_groups[chunk_index][row_group_index]
             self._chunk_row_group_item_read_count[chunk_index][row_group_index] += 1
         else:
-            row_group_df = self._df[chunk_index].read_row_group(row_group_index, columns=self._columns)
+            table = self._df[chunk_index].read_row_group(row_group_index, columns=self._columns)
+            rows = table.to_pylist()
             if chunk_index not in self._chunk_row_groups:
                 self._chunk_row_groups[chunk_index] = {}
                 self._chunk_row_group_item_read_count[chunk_index] = {}
 
-            self._chunk_row_groups[chunk_index][row_group_index] = row_group_df
+            self._chunk_row_groups[chunk_index][row_group_index] = rows
             self._chunk_row_group_item_read_count[chunk_index][row_group_index] = 1
 
         read_count = self._chunk_row_group_item_read_count[chunk_index][row_group_index]
@@ -1271,7 +1764,7 @@ class ParquetLoader(BaseItemLoader):
             del self._chunk_row_groups[chunk_index][row_group_index]
             del self._chunk_row_group_item_read_count[chunk_index][row_group_index]
 
-        return {name: row_group_df.column(name)[row_index_within_group].as_py() for name in row_group_df.column_names}
+        return rows[row_index_within_group]
 
     def _get_item(self, chunk_index: int, chunk_filepath: str, index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk by loading the entire chunk into memory.
@@ -1303,15 +1796,7 @@ class ParquetLoader(BaseItemLoader):
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
         """Delete a chunk from the local filesystem."""
         with trace_span("delete", CAT_DELETE, chunk=chunk_index):
-            if chunk_index in self._df:
-                del self._df[chunk_index]
-            if chunk_index in self._chunk_row_groups:
-                del self._chunk_row_groups[chunk_index]
-
-            if chunk_index in self._chunk_row_group_item_read_count:
-                del self._chunk_row_group_item_read_count[chunk_index]
-            if chunk_index in self._chunk_row_group_offsets:
-                del self._chunk_row_group_offsets[chunk_index]
+            self.close(chunk_index)
             if os.path.exists(chunk_filepath):
                 os.remove(chunk_filepath)
 
@@ -1328,6 +1813,14 @@ class ParquetLoader(BaseItemLoader):
 
         if chunk_index in self._chunk_row_group_offsets:
             del self._chunk_row_group_offsets[chunk_index]
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = super().__getstate__()
+        state["_df"] = {}
+        state["_chunk_row_groups"] = {}
+        state["_chunk_row_group_item_read_count"] = {}
+        state["_chunk_row_group_offsets"] = {}
+        return state
 
     def encode_data(self, data: list[bytes], sizes: list[int], flattened: list[Any]) -> Any:
         pass

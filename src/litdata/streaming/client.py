@@ -98,14 +98,95 @@ class _CustomRetryAdapter(HTTPAdapter):
         return super().send(request, **kwargs)
 
 
-def _login_and_get_temp_bucket_credentials(data_connection_id: str) -> dict[str, Any]:
+# Process-level cache of control-plane temp-bucket credentials. Each StreamingDataset
+# builds a new R2Client, and the first GET used to login again (~1s). Warmup then a
+# timed pass in the same process should reuse creds. Keyed by data_connection_id;
+# TTL matches the client refetch interval so we do not serve credentials past the
+# window a live client would already have refreshed.
+_temp_creds_lock = threading.Lock()
+_temp_creds_pid = os.getpid()
+_temp_creds_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+# boto3 clients are thread-safe for requests; building one is ~50ms and is not
+# fork-safe. Cache them with the credentials, drop on fork / explicit clear.
+_temp_creds_boto_clients: dict[str, tuple[float, Any]] = {}
+
+
+def _temp_creds_lock_for_pid() -> threading.Lock:
+    """Recreate the cache lock after fork; an inherited held lock is unsafe."""
+    global _temp_creds_lock, _temp_creds_pid
+    pid = os.getpid()
+    if _temp_creds_pid != pid:
+        _temp_creds_lock = threading.Lock()
+        _temp_creds_pid = pid
+        _temp_creds_boto_clients.clear()
+    return _temp_creds_lock
+
+
+def _r2_botocore_config() -> Any:
+    """R2 client config: adaptive retries, no extra checksum round-trips on tiny GETs."""
+    # Adaptive retry mode adds ~30ms to tiny R2 GETs vs standard.
+    retries = {"max_attempts": 1000, "mode": "standard"}
+    try:
+        return botocore.config.Config(
+            retries=retries,
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
+    except TypeError:
+        return botocore.config.Config(retries=retries)
+
+
+def clear_temp_bucket_credentials_cache() -> None:
+    """Drop cached Lightning Cloud temp-bucket credentials.
+
+    Tests must call this (or use the autouse fixture in ``test_client.py``) so a
+    previous case cannot satisfy a later HTTP mock via a warm cache.
+    """
+    with _temp_creds_lock_for_pid():
+        _temp_creds_cache.clear()
+        _temp_creds_boto_clients.clear()
+
+
+def _cached_temp_bucket_credentials(
+    data_connection_id: str, *, force_refresh: bool = False
+) -> tuple[float, dict[str, Any]]:
+    """Return ``(fetched_at, creds)``, reusing a process-level cache until refetch.
+
+    ``force_refresh`` bypasses the cache so a client that has reached its deadline
+    mints new credentials rather than inheriting ones that are about to expire.
+    """
+    lock = _temp_creds_lock_for_pid()
+    with lock:
+        if not force_refresh:
+            cached = _temp_creds_cache.get(data_connection_id)
+            if cached is not None:
+                fetched_at, creds = cached
+                if time() - fetched_at < _DEFAULT_REFETCH_INTERVAL:
+                    return fetched_at, dict(creds)
+        creds = _fetch_temp_bucket_credentials(data_connection_id)
+        fetched_at = time()
+        _temp_creds_cache[data_connection_id] = (fetched_at, creds)
+        return fetched_at, dict(creds)
+
+
+def _login_and_get_temp_bucket_credentials(
+    data_connection_id: str, *, force_refresh: bool = False
+) -> dict[str, Any]:
     """Mint temporary bucket credentials for a data connection via the Lightning Cloud API.
 
     Shared by R2 (lightning storage) connections and by S3 connections marked
     ``available_in_non_aws_providers``: both bypass the FUSE mount and need short-lived creds
     from the same control-plane ``temp-bucket-credentials`` endpoint. Returns the raw response
     (accessKeyId/secretAccessKey/sessionToken, plus accountId for R2).
+
+    Results are cached per process (see ``_cached_temp_bucket_credentials``).
     """
+    _, creds = _cached_temp_bucket_credentials(data_connection_id, force_refresh=force_refresh)
+    return creds
+
+
+def _fetch_temp_bucket_credentials(data_connection_id: str) -> dict[str, Any]:
+    """Hit the Lightning Cloud API for temp-bucket credentials (no cache)."""
     retry_strategy = Retry(
         total=_CONNECTION_RETRY_TOTAL,
         backoff_factor=_CONNECTION_RETRY_BACKOFF_FACTOR,
@@ -201,6 +282,8 @@ class S3Client:
         self._owner_pid = os.getpid()
         self._refetch_deadline = self._jittered_refetch_interval()
         self._refresh_retry_time: float | None = None
+        self._force_refresh_credentials = False
+        self._creds_fetched_at: float | None = None
 
     def _jittered_refetch_interval(self) -> float:
         # Only ever early, never late: callers set the interval as an upper bound on how long
@@ -263,7 +346,12 @@ class S3Client:
         Used for S3 connections available on non-AWS providers. Unlike R2 there is no custom
         endpoint — this is real AWS S3, so botocore resolves the bucket region on first use.
         """
-        temp_credentials = _login_and_get_temp_bucket_credentials(data_connection_id)
+        temp_credentials = _login_and_get_temp_bucket_credentials(
+            data_connection_id, force_refresh=self._force_refresh_credentials
+        )
+        with _temp_creds_lock_for_pid():
+            cached = _temp_creds_cache.get(data_connection_id)
+        self._creds_fetched_at = cached[0] if cached is not None else None
 
         # data_connection_id is our own metadata; drop it before handing options to boto3.
         storage_options = {k: v for k, v in self._storage_options.items() if k != "data_connection_id"}
@@ -281,7 +369,10 @@ class S3Client:
         )
 
     def _mark_refreshed(self) -> None:
-        self._last_time = time()
+        # Prefer the mint time from the process cache so a new client that reused
+        # credentials still refreshes before the 1 hour S3/R2 TTL, not 2700s from now.
+        fetched_at = getattr(self, "_creds_fetched_at", None)
+        self._last_time = fetched_at if fetched_at is not None else time()
         self._refetch_deadline = self._jittered_refetch_interval()
         self._refresh_retry_time = None
 
@@ -330,7 +421,11 @@ class S3Client:
             return
 
         try:
-            self._create_client()
+            self._force_refresh_credentials = True
+            try:
+                self._create_client()
+            finally:
+                self._force_refresh_credentials = False
         # Both kinds get the grace period here, unlike initial creation. The credentials in hand
         # still work, so there is nothing to gain by failing fast on a 403 that might be a proxy
         # misbehaving mid-deploy — and if it is a real revocation, the deadline still catches it.
@@ -375,23 +470,29 @@ class R2Client(S3Client):
     def __init__(
         self,
         refetch_interval: int = _DEFAULT_REFETCH_INTERVAL,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
     ) -> None:
-        # Store R2-specific options before calling super()
-        self._base_storage_options: dict = storage_options or {}
+        # Copy so a later pop of data_connection_id on a shared dict cannot
+        # starve _create_client (R2Downloader / R2FsProvider pass their dict).
+        self._base_storage_options: dict = dict(storage_options or {})
 
         # Call parent constructor with R2-specific refetch interval
         super().__init__(
             refetch_interval=refetch_interval,
-            storage_options={},  # storage options handled in _create_client
+            storage_options=None,  # storage options handled in _create_client
             session_options=session_options,
         )
 
-    def get_r2_bucket_credentials(self, data_connection_id: str) -> dict[str, str]:
+    def get_r2_bucket_credentials(self, data_connection_id: str, *, force_refresh: bool = False) -> dict[str, str]:
         """Fetch temporary R2 credentials for the current lightning storage connection."""
         try:
-            temp_credentials = _login_and_get_temp_bucket_credentials(data_connection_id)
+            temp_credentials = _login_and_get_temp_bucket_credentials(
+                data_connection_id, force_refresh=force_refresh
+            )
+            with _temp_creds_lock_for_pid():
+                cached = _temp_creds_cache.get(data_connection_id)
+            self._creds_fetched_at = cached[0] if cached is not None else None
 
             endpoint_url = f"https://{temp_credentials['accountId']}.r2.cloudflarestorage.com"
 
@@ -415,8 +516,20 @@ class R2Client(S3Client):
         if not data_connection_id:
             raise _CredentialsConfigurationError("data_connection_id is required in storage_options for R2 client")
 
-        # Get fresh R2 credentials
-        r2_credentials = self.get_r2_bucket_credentials(data_connection_id)
+        if not self._force_refresh_credentials:
+            with _temp_creds_lock_for_pid():
+                cached_client = _temp_creds_boto_clients.get(data_connection_id)
+            if cached_client is not None:
+                fetched_at, boto_client = cached_client
+                if time() - fetched_at < _DEFAULT_REFETCH_INTERVAL:
+                    self._client = boto_client
+                    self._creds_fetched_at = fetched_at
+                    return
+
+        # Get R2 credentials (process cache on first use; mint on scheduled refresh).
+        r2_credentials = self.get_r2_bucket_credentials(
+            data_connection_id, force_refresh=self._force_refresh_credentials
+        )
 
         # Filter out metadata keys that shouldn't be passed to boto3
         filtered_storage_options = {
@@ -429,12 +542,14 @@ class R2Client(S3Client):
         # Update the inherited storage options with R2 credentials
         self._storage_options = combined_storage_options
 
-        # Create session and client
+        # Create session and client. Default SDK checksums add ~100ms per tiny R2 GET.
         session = boto3.Session(**self._session_options)
         self._client = session.client(
             "s3",
             **{
-                "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+                "config": _r2_botocore_config(),
                 **combined_storage_options,
             },
         )
+        with _temp_creds_lock_for_pid():
+            _temp_creds_boto_clients[data_connection_id] = (self._creds_fetched_at or time(), self._client)

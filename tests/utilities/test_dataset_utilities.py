@@ -7,7 +7,9 @@ import litdata.constants
 import litdata.utilities
 import litdata.utilities.dataset_utilities
 from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
+from litdata.streaming.resolver import Dir
 from litdata.utilities.dataset_utilities import (
+    _read_updated_at,
     _should_replace_path,
     _try_create_cache_dir,
     adapt_mds_shards_to_chunks,
@@ -110,3 +112,22 @@ def test_get_default_cache_dir():
         importlib.reload(litdata.constants)
         importlib.reload(litdata.utilities.dataset_utilities)
         assert litdata.utilities.dataset_utilities.get_default_cache_dir() == "/custom/cache/dir"
+
+
+def test_read_updated_at_falls_back_on_truncated_local_index(tmp_path, monkeypatch):
+    """FUSE can serve a leftover truncated index.json; use the object-store copy."""
+    local = tmp_path / "fuse"
+    local.mkdir()
+    (local / _INDEX_FILENAME).write_text('{"chunks":[{"filename":"chunk-0-0.bin"')
+
+    class FakeDownloader:
+        def download_file(self, remote, dest):
+            with open(dest, "w") as fh:
+                json.dump({"chunks": [], "config": {}, "updated_at": "42"}, fh)
+
+    monkeypatch.setattr(
+        "litdata.utilities.dataset_utilities.get_downloader",
+        lambda *args, **kwargs: FakeDownloader(),
+    )
+    d = Dir(path=str(local), url="r2://bucket/ds", data_connection_id="cid")
+    assert _read_updated_at(d, {"data_connection_id": "cid"}) == "42"

@@ -60,7 +60,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | **Tracing**      | `from litdata.debugger import enable_tracer` then `enable_tracer(level="chunk")` (or `categories=["download","read","delete"]`). Convert with [Lightning-AI/litracer](https://github.com/Lightning-AI/litracer): `litracer --quiet --validate -o trace.json.gz litdata_debug.log`. One line per event; crashes go to stderr + `ph: I`. Full spec: `reference/debugging.md`. |
 | **S3 workers**   | `index.json` is boto3 (no parent tokio). Workers lazy-init obstore; boto3 fallback if parent already started it. Do **not** pass `data_connection_id` / `endpoint_url` into `boto3.Session` — build obstore from `S3Client`/`R2Client`. `FileNotFoundError` after 120s with `num_workers>0` only → [debugging.md](reference/debugging.md) failure modes.                    |
 | **Keyed lookup** | `optimize(..., key_fn=...)` writes `keys/`. Read `ds["id"]` / `get_by_key`. Patch locally with `dataset_update`. Needs `polars`. [keyed-lookup.md](reference/keyed-lookup.md).                                                                                                                                                                                              |
-| Parquet / HF     | Index + `ParquetLoader` (HF auto); `spawn` with workers; `using-litdata.md` §10                                                                                                                                                                                                                                                                                             |
+| Parquet / HF     | One-liner: `StreamingDataset("hf://datasets/org/name/data")` (auto-index + `ParquetLoader`). Index persists at `{cache}/hf-index/<hash>/index.json` (no re-scan). Default **prefetches** whole parquet then local `to_pylist()`. Do **not** default `range_read=True` (lost to HF on Hub). `spawn` with workers. Token: `HF_TOKEN`. `using-litdata.md` §10. |
 
 ## Reference map
 
@@ -98,7 +98,7 @@ Before writing examples or answering how-tos, read the cookbook. Highlights:
 | `litdata_collate`                                                                                           | Loader default; PyG `Batch` only for graphs |
 | `dataset_update` / `build_keys_index`                                                                       | Keyed in-place patch / backfill sidecar     |
 | `train_test_split`                                                                                          | Split by chunk ROIs                         |
-| `index_parquet_dataset` / `index_hf_dataset`                                                                | Index for streaming                         |
+| `index_parquet_dataset` / `index_hf_dataset` / `optimize_hf`                                                 | Index parquet / convert Hub parquet → chunks |
 | `breakpoint`                                                                                                | Multiprocessing-safe pdb                    |
 | `enable_tracer` (`litdata.debugger`)                                                                        | Pipeline log → Litracer / Perfetto          |
 

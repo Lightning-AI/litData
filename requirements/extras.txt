@@ -1,5 +1,6 @@
 pillow
 viztracer
+orjson  # optional Rust JSON for nested / legacy json leaves
 pyarrow <25.0.0  # TODO: unpin once pyarrow 25 parquet segfault is resolved
 tqdm
 lightning-sdk==2026.2.6 # Must be pinned to ensure compatibility

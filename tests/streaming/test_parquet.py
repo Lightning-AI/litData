@@ -12,11 +12,20 @@ from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, 
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 from litdata.streaming.writer import index_parquet_dataset
-from litdata.utilities.hf_dataset import index_hf_dataset
+from litdata.utilities.hf_dataset import (
+    _hf_cache_root,
+    _stabilize_hf_row,
+    hf_parquet_cache_path,
+    index_hf_dataset,
+    optimize_hf,
+    resolve_hf_dataset_url,
+    _persist_hf_parquet_files,
+)
 from litdata.utilities.parquet import (
     CloudParquetDir,
     HFParquetDir,
     LocalParquetDir,
+    _hf_relative_name,
     get_parquet_indexer_cls,
 )
 
@@ -92,8 +101,168 @@ def test_index_hf_dataset(monkeypatch, tmp_path, huggingface_hub_fs_mock):
     hf_url = "hf://datasets/some_org/some_repo/some_path"
     cache_dir = index_hf_dataset(hf_url)
     assert os.path.exists(cache_dir)
-    assert len(os.listdir(cache_dir)) == 1
     assert os.path.exists(os.path.join(cache_dir, _INDEX_FILENAME))
+    # Stable path: a second call must reuse the same directory (no re-index).
+    assert index_hf_dataset(hf_url) == cache_dir
+
+
+def test_resolve_hf_dataset_url(monkeypatch):
+    def fake_list(url, storage_options=None):
+        if url.startswith("hf://") and ("plain_text/train" in url or url.endswith("default/train")):
+            return [f"{url}/0000.parquet"]
+        return []
+
+    monkeypatch.setattr("litdata.utilities.hf_dataset._list_hf_parquet_urls", fake_list)
+    assert resolve_hf_dataset_url("hf://datasets/org/name/data") == "hf://datasets/org/name/data"
+    assert resolve_hf_dataset_url("org/name", split="train") == (
+        "hf://datasets/org/name@refs/convert/parquet/default/train"
+    )
+    assert resolve_hf_dataset_url("org/name", revision="v1", split="train", config="plain_text") == (
+        "hf://datasets/org/name@v1/plain_text/train"
+    )
+
+
+@pytest.mark.usefixtures("clean_pq_index_cache")
+def test_optimize_hf(tmp_path, write_pq_data, monkeypatch):
+    pq_dir = tmp_path / "pq-dataset"
+    files = [str(pq_dir / name) for name in sorted(os.listdir(pq_dir)) if name.endswith(".parquet")]
+    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/name")
+    monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: files)
+    out = tmp_path / "imdb-opt"
+    returned = optimize_hf("org/name", output_dir=str(out), chunk_size=10, num_workers=1)
+    assert returned == str(out)
+    ds = StreamingDataset(str(out))
+    assert len(ds) == 25
+    assert isinstance(ds[0], dict)
+    assert optimize_hf("org/name", output_dir=str(out), chunk_size=10) == str(out)
+
+
+def test_hf_parquet_cache_is_outside_chunk_dir(monkeypatch):
+    monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
+    monkeypatch.setattr("litdata.utilities.hf_dataset.get_default_cache_dir", lambda: "/cache/chunks")
+    assert _hf_cache_root() == "/cache"
+    dest = hf_parquet_cache_path("hf://datasets/org/name")
+    assert dest.startswith("/cache/hf-parquet/")
+    assert "/chunks/" not in dest
+
+
+def test_stabilize_hf_row_wraps_variable_lists():
+    from litdata.streaming.serializers import JsonLeaf
+
+    row = {
+        "id": "a",
+        "answers": ["x", "y"],
+        "choices": {"text": ["A", "B"], "label": ["1", "2"]},
+        "n": None,
+    }
+    out = _stabilize_hf_row(row, {"id": "", "answers": [], "choices": {}, "n": 0})
+    assert out["id"] == "a"
+    assert out["n"] == 0
+    assert isinstance(out["answers"], JsonLeaf)
+    assert out["answers"].value == ["x", "y"]
+    assert isinstance(out["choices"], JsonLeaf)
+    assert out["choices"].value == {"text": ["A", "B"], "label": ["1", "2"]}
+
+    flat = _stabilize_hf_row({"id": "a", "n": 1}, {"id": "", "n": 0})
+    assert flat == {"id": "a", "n": 1}
+
+
+def test_wrap_hf_media_features_uses_pytree_not_arrow_footer():
+    from litdata.types import Audio, Image, infer_type, is_arrow_footer_type
+    from litdata.utilities.hf_dataset import _wrap_hf_media_features
+
+    text = _wrap_hf_media_features({"text": "hi", "n": 3})
+    assert text == {"text": "hi", "n": 3}
+    assert is_arrow_footer_type(infer_type(text))
+
+    img = _wrap_hf_media_features({"img": {"bytes": b"\xff\xd8xx", "path": "a.jpg"}, "label": 1})
+    assert isinstance(img["img"], Image)
+    assert not is_arrow_footer_type(infer_type(img))
+
+    aud = _wrap_hf_media_features({"audio": {"bytes": b"RIFF....", "path": "a.wav"}})
+    assert isinstance(aud["audio"], Audio)
+    assert not is_arrow_footer_type(infer_type(aud))
+
+
+def test_optimize_hf_variable_length_lists(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.table(
+        {
+            "id": ["a", "b", "c"],
+            "answers": [["one"], [], ["two", "three"]],
+            "choices": [
+                {"text": ["A", "B"], "label": ["1", "2"]},
+                {"text": ["C", "D"], "label": ["3", "4"]},
+                {"text": ["E", "F"], "label": ["5", "6"]},
+            ],
+            "n": [1, None, 3],
+        }
+    )
+    pq_path = tmp_path / "nested.parquet"
+    pq.write_table(table, pq_path)
+    monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/qa")
+    monkeypatch.setattr(
+        "litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)]
+    )
+    out = tmp_path / "qa-opt"
+    optimize_hf("org/qa", output_dir=str(out), chunk_size=10, num_workers=1)
+    ds = StreamingDataset(str(out))
+    assert len(ds) == 3
+    assert ds[0]["answers"] == ["one"]
+    assert ds[1]["answers"] == []
+    assert ds[2]["answers"] == ["two", "three"]
+    assert ds[0]["choices"] == {"text": ["A", "B"], "label": ["1", "2"]}
+    assert ds[1]["n"] == 0
+    types = json.loads((out / "index.json").read_text())["config"]["types"]
+    assert types["answers"]["type"] == "list"
+    assert types["choices"]["type"] == "struct"
+    assert types["n"] == "int"  # nulls are filled before write; optionality is for missing keys
+
+
+def test_materialize_uses_persist_then_falls_back(tmp_path, monkeypatch):
+    from litdata.utilities.hf_dataset import _materialize_hf_parquet
+
+    persist = tmp_path / "hf-parquet"
+    persist.mkdir()
+    local = persist / "0000.parquet"
+    local.write_bytes(b"parquet")
+    path = _materialize_hf_parquet(
+        "hf://datasets/org/name/0000.parquet",
+        persist_dir=str(persist),
+        index_url="hf://datasets/org/name",
+    )
+    assert path == str(local)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("should not download when persist exists")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", boom)
+    again = _materialize_hf_parquet(
+        "hf://datasets/org/name/0000.parquet",
+        persist_dir=str(persist),
+        index_url="hf://datasets/org/name",
+    )
+    assert again == str(local)
+
+
+def test_persist_hf_parquet_skips_complete_file(tmp_path, monkeypatch):
+    url = "hf://datasets/org/name"
+    dest = hf_parquet_cache_path(url, str(tmp_path))
+    os.makedirs(dest, exist_ok=True)
+    local = os.path.join(dest, "a.parquet")
+    with open(local, "wb") as f:
+        f.write(b"0123456789")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("should not download a complete file")
+
+    monkeypatch.setattr("litdata.streaming.downloader.get_downloader", boom)
+    paths = _persist_hf_parquet_files(
+        url, [{"filename": "a.parquet", "chunk_bytes": 10}], str(tmp_path), {}
+    )
+    assert paths == [local]
 
 
 #! TODO: Fix test failing on windows
@@ -212,11 +381,10 @@ def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
         # check index file is sole file in chunk cache dir
         assert len(os.listdir(ds.input_dir.path)) == 1
         assert os.path.exists(os.path.join(ds.input_dir.path, _INDEX_FILENAME))
-        # iterate over dataset to fill cache
+        # iterate over dataset — default path downloads parquet into the cache
         for _ in ds:
             pass
-        # check chunk cache dir was filled
-        assert len([f for f in os.listdir(ds.input_dir.path) if f.endswith(".parquet")]) == 5  # 5 chunks
+        assert len([f for f in os.listdir(ds.input_dir.path) if f.endswith(".parquet")]) == 5
 
 
 @pytest.mark.parametrize(
@@ -238,3 +406,24 @@ def test_no_parquet_files(pq_url, tmpdir, huggingface_hub_fs_mock, fsspec_pq_moc
 
     with pytest.raises(RuntimeError, match="No Parquet files were found"):
         index_parquet_dataset(pq_url, cache_dir=tmpdir)
+
+
+def test_hf_relative_name():
+    url = "hf://datasets/org/name"
+    assert _hf_relative_name(url, "datasets/org/name/data/train-00000.parquet") == "data/train-00000.parquet"
+    assert _hf_relative_name(url, "hf://datasets/org/name/train.parquet") == "train.parquet"
+    assert _hf_relative_name(url, "train.parquet") == "train.parquet"
+
+
+def test_parse_hf_url():
+    from litdata.utilities.hf_fs import parse_hf_url
+
+    assert parse_hf_url("hf://datasets/org/name/data/train.parquet") == ("org/name", None, "data/train.parquet")
+    assert parse_hf_url(
+        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet"
+    ) == ("yahma/alpaca-cleaned", "refs/convert/parquet", "default/train/0000.parquet")
+    assert parse_hf_url("hf://datasets/org/name@main/split/file.parquet") == (
+        "org/name",
+        "main",
+        "split/file.parquet",
+    )

@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import io
+import json
 import os
 import pickle
 import struct
@@ -717,6 +718,285 @@ class PickleSerializer(Serializer):
 
     def can_serialize(self, _: Any) -> bool:
         return True
+
+
+class JsonLeaf:
+    """Marker so ``tree_flatten`` treats a list/dict as one leaf instead of walking it.
+
+    ``optimize`` locks ``data_format`` from the first sample. Variable-length lists
+    (HF conversations, SQuAD answers, …) would otherwise change leaf count / types
+    across files and fail the index merge — or mis-decode ints as ``unpack`` errors.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
+# Compact nested tags. Legacy JSON payloads start with ``[`` / ``{`` (0x5B / 0x7B).
+_NEST_JSON = 0
+_NEST_STRS = 1
+_NEST_I64S = 2
+_NEST_F64S = 3
+_NEST_BOOLS = 4
+_NEST_DICT = 5
+_NEST_RECS = 6
+_NEST_STR = 7
+_NEST_I64 = 8
+_NEST_F64 = 9
+_NEST_BOOL = 10
+_NEST_NONE = 11
+_I64_MIN = -9223372036854775808
+_I64_MAX = 9223372036854775807
+_U32 = struct.Struct("<I")
+_HDR = struct.Struct("<BI")
+_I64 = struct.Struct("<q")
+_F64 = struct.Struct("<d")
+_REC_NONE = 0x10
+_REC_STR = 0x11
+_REC_I64 = 0x12
+_REC_F64 = 0x13
+_REC_BOOL = 0x14
+
+
+try:
+    import orjson as _orjson
+
+    def _json_dumps(value: Any) -> bytes:
+        return _orjson.dumps(value)
+
+    def _json_loads(data: bytes | bytearray | memoryview) -> Any:
+        return _orjson.loads(data)
+
+except ImportError:
+
+    def _json_dumps(value: Any) -> bytes:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    def _json_loads(data: bytes | bytearray | memoryview) -> Any:
+        return json.loads(data)
+
+
+def _enc_json(value: Any) -> bytes:
+    payload = _json_dumps(value)
+    return bytes([_NEST_JSON]) + _U32.pack(len(payload)) + payload
+
+
+def _enc_strs(items: list[str]) -> bytes:
+    encoded = [item.encode("utf-8") for item in items]
+    out = bytearray(5 + 4 * len(encoded) + sum(len(item) for item in encoded))
+    _HDR.pack_into(out, 0, _NEST_STRS, len(encoded))
+    offset = 5
+    for item in encoded:
+        _U32.pack_into(out, offset, len(item))
+        offset += 4
+        end = offset + len(item)
+        out[offset:end] = item
+        offset = end
+    return bytes(out)
+
+
+def _enc_i64s(items: list[int]) -> bytes:
+    arr = np.ascontiguousarray(np.asarray(items, dtype="<i8"))
+    return bytes([_NEST_I64S]) + _U32.pack(len(items)) + arr.tobytes()
+
+
+def _enc_f64s(items: list[float]) -> bytes:
+    arr = np.ascontiguousarray(np.asarray(items, dtype="<f8"))
+    return bytes([_NEST_F64S]) + _U32.pack(len(items)) + arr.tobytes()
+
+
+def _enc_bools(items: list[bool]) -> bytes:
+    return bytes([_NEST_BOOLS]) + _U32.pack(len(items)) + bytes(1 if item else 0 for item in items)
+
+
+def _enc_utf8(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _U32.pack(len(raw)) + raw
+
+
+def _nested_dumps(value: Any) -> bytes:
+    """Encode a list/dict. Homogeneous str/int/float lists and records avoid JSON."""
+    if value is None:
+        return bytes([_NEST_NONE])
+    if isinstance(value, bool):
+        return bytes([_NEST_BOOL, 1 if value else 0])
+    if isinstance(value, str):
+        return bytes([_NEST_STR]) + _enc_utf8(value)
+    if isinstance(value, int) and not isinstance(value, bool) and _I64_MIN <= value <= _I64_MAX:
+        return bytes([_NEST_I64]) + _I64.pack(value)
+    if isinstance(value, float):
+        return bytes([_NEST_F64]) + _F64.pack(value)
+    if isinstance(value, dict):
+        parts = [_HDR.pack(_NEST_DICT, len(value))]
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return _enc_json(value)
+            parts.append(_enc_utf8(key))
+            parts.append(_nested_dumps(item))
+        return b"".join(parts)
+    if not isinstance(value, list):
+        return _enc_json(value)
+    if not value:
+        return _HDR.pack(_NEST_STRS, 0)
+    first = value[0]
+    if isinstance(first, str) and all(isinstance(item, str) for item in value):
+        return _enc_strs(value)
+    if isinstance(first, bool) and all(isinstance(item, bool) for item in value):
+        return _enc_bools(value)
+    if (
+        isinstance(first, int)
+        and not isinstance(first, bool)
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        and all(_I64_MIN <= item <= _I64_MAX for item in value)
+    ):
+        return _enc_i64s(value)
+    if isinstance(first, float) and all(isinstance(item, float) for item in value):
+        return _enc_f64s(value)
+    if isinstance(first, dict) and all(isinstance(item, dict) for item in value):
+        encoded = _enc_recs(value)
+        if encoded is not None:
+            return encoded
+    return _enc_json(value)
+
+
+def _enc_recs(rows: list[dict[str, Any]]) -> bytes | None:
+    keys = list(rows[0].keys())
+    if not keys or not all(isinstance(key, str) for key in keys):
+        return None
+    keyset = set(keys)
+    parts = [_HDR.pack(_NEST_RECS, len(rows)), _U32.pack(len(keys))]
+    parts.extend(_enc_utf8(key) for key in keys)
+    for row in rows:
+        if set(row.keys()) != keyset:
+            return None
+        for key in keys:
+            item = row[key]
+            if item is None:
+                parts.append(bytes([_REC_NONE]))
+            elif isinstance(item, bool):
+                parts.append(bytes([_REC_BOOL, 1 if item else 0]))
+            elif isinstance(item, str):
+                parts.append(bytes([_REC_STR]) + _enc_utf8(item))
+            elif isinstance(item, int) and not isinstance(item, bool) and _I64_MIN <= item <= _I64_MAX:
+                parts.append(bytes([_REC_I64]) + _I64.pack(item))
+            elif isinstance(item, float):
+                parts.append(bytes([_REC_F64]) + _F64.pack(item))
+            else:
+                return None
+    return b"".join(parts)
+
+
+def _read_utf8(raw: bytes, offset: int) -> tuple[str, int]:
+    length = _U32.unpack_from(raw, offset)[0]
+    offset += 4
+    return raw[offset : offset + length].decode("utf-8"), offset + length
+
+
+def _nested_loads(data: bytes | bytearray | memoryview) -> Any:
+    raw = data if isinstance(data, (bytes, bytearray)) else _as_bytes(data)
+    if not raw:
+        return _json_loads(raw)
+    tag = raw[0]
+    if tag > 0x20:
+        return _json_loads(raw)
+    value, _ = _nested_loads_at(raw, 0)
+    return value
+
+
+def _nested_loads_at(raw: bytes, offset: int) -> tuple[Any, int]:
+    tag = raw[offset]
+    if tag == _NEST_JSON:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        return _json_loads(raw[start : start + n]), start + n
+    if tag == _NEST_STRS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        offset += 5
+        out = [""] * n
+        for i in range(n):
+            length = _U32.unpack_from(raw, offset)[0]
+            offset += 4
+            out[i] = raw[offset : offset + length].decode("utf-8")
+            offset += length
+        return out, offset
+    if tag == _NEST_I64S:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        payload = raw[start : start + 8 * n]
+        return np.frombuffer(payload, dtype="<i8").tolist(), start + 8 * n
+    if tag == _NEST_F64S:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        payload = raw[start : start + 8 * n]
+        return np.frombuffer(payload, dtype="<f8").tolist(), start + 8 * n
+    if tag == _NEST_BOOLS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        return [bool(b) for b in raw[start : start + n]], start + n
+    if tag == _NEST_STR:
+        text, end = _read_utf8(raw, offset + 1)
+        return text, end
+    if tag == _NEST_I64:
+        return _I64.unpack_from(raw, offset + 1)[0], offset + 9
+    if tag == _NEST_F64:
+        return _F64.unpack_from(raw, offset + 1)[0], offset + 9
+    if tag == _NEST_BOOL:
+        return bool(raw[offset + 1]), offset + 2
+    if tag == _NEST_NONE:
+        return None, offset + 1
+    if tag == _NEST_DICT:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        offset += 5
+        out: dict[str, Any] = {}
+        for _ in range(n):
+            key, offset = _read_utf8(raw, offset)
+            out[key], offset = _nested_loads_at(raw, offset)
+        return out, offset
+    if tag == _NEST_RECS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        n_keys = _U32.unpack_from(raw, offset + 5)[0]
+        offset += 9
+        keys = [""] * n_keys
+        for i in range(n_keys):
+            keys[i], offset = _read_utf8(raw, offset)
+        rows: list[dict[str, Any]] = [{} for _ in range(n)]
+        for row in rows:
+            for key in keys:
+                kind = raw[offset]
+                offset += 1
+                if kind == _REC_NONE:
+                    row[key] = None
+                elif kind == _REC_STR:
+                    row[key], offset = _read_utf8(raw, offset)
+                elif kind == _REC_I64:
+                    row[key] = _I64.unpack_from(raw, offset)[0]
+                    offset += 8
+                elif kind == _REC_F64:
+                    row[key] = _F64.unpack_from(raw, offset)[0]
+                    offset += 8
+                elif kind == _REC_BOOL:
+                    row[key] = bool(raw[offset])
+                    offset += 1
+                else:
+                    raise ValueError(f"Unknown nested record tag {kind}")
+        return rows, offset
+    return _json_loads(raw), len(raw)
+
+
+class JsonSerializer(Serializer):
+    """Store a :class:`JsonLeaf` list/dict as compact binary (legacy JSON still reads)."""
+
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
+        value = item.value if isinstance(item, JsonLeaf) else item
+        return _nested_dumps(value), "json"
+
+    def deserialize(self, data: bytes) -> Any:
+        return _nested_loads(data)
+
+    def can_serialize(self, data: Any) -> bool:
+        return isinstance(data, JsonLeaf)
 
 
 class FileSerializer(Serializer):
@@ -1651,6 +1931,7 @@ _SERIALIZERS = OrderedDict(
         "numpy": NumpySerializer(),
         "no_header_tensor": NoHeaderTensorSerializer(),
         "tensor": TensorSerializer(),
+        "json": JsonSerializer(),
         "pickle": PickleSerializer(),
     }
 )

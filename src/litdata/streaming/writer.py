@@ -27,8 +27,23 @@ import numpy as np
 from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABLE
 from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
-from litdata.streaming.serializers import Serializer, _get_serializers
+from litdata.streaming.item_loader import (
+    BaseItemLoader,
+    ParquetLoader,
+    PyTreeLoader,
+    _ARROW_FOOTER_MAGIC,
+    append_arrow_row_footer,
+)
+from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
+from litdata.types import (
+    fuse_schema_json,
+    fuse_type,
+    infer_type,
+    is_arrow_footer_type,
+    is_json_row,
+    schema_to_json,
+    wrap_for_pytree,
+)
 from litdata.utilities._pytree import PyTree, tree_flatten, tree_leaves, treespec_dumps
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
@@ -47,12 +62,18 @@ def _is_node_index_file(filename: str) -> bool:
     return bool(re.fullmatch(rf"\d+-{re.escape(_INDEX_FILENAME)}", filename))
 
 
+def _config_body(config: dict[str, Any]) -> dict[str, Any]:
+    """Config equality for merge, ignoring fused ``types`` (workers see different rows)."""
+    return {key: value for key, value in config.items() if key != "types"}
+
+
 @dataclass
 class Item:
     index: int
     data: bytes
     bytes: int
     dim: int | None = None
+    sample: Any = None
 
     def __len__(self) -> int:
         return self.bytes
@@ -112,6 +133,8 @@ class BinaryWriter:
 
         self._data_format: list[str] | None = None
         self._data_spec: PyTree | None = None
+        self._types = None
+        self._pytree_keys: list[str] | None = None
 
         if self._compression:
             if len(_COMPRESSORS) == 0:
@@ -128,6 +151,15 @@ class BinaryWriter:
         self._min_index: int | None = None
         self._max_index: int | None = None
         self._chunks_info: list[dict[str, Any]] = []
+        # True once a chunk was wrapped with LitData file-level compression.
+        # Nested Arrow chunks skip that wrap (IPC zstd instead) so index.json
+        # must not advertise ``compression="zstd"`` or the reader will inflate
+        # already-readable ``.bin`` files through Python.
+        self._file_compression_used = False
+        self._ipc_compression_used = False
+        # On-disk bytes per nested row from the last flushed Arrow chunk. ``_should_write``
+        # used discarded pytree JSON lengths, so a 64MB target became ~23MB zstd IPC files.
+        self._nested_on_disk_bpi: float | None = None
         self._worker_env: _WorkerEnv | None = None
         self._rank: int | None = None
         self._is_done = False
@@ -167,11 +199,13 @@ class BinaryWriter:
     def get_config(self) -> dict[str, Any]:
         """Returns the config of the writer."""
         return {
-            "compression": self._compression,
+            "compression": self._compression if (self._file_compression_used or not self._chunks_info) else None,
+            "ipc_compression": self._ipc_codec() if self._ipc_compression_used else None,
             "chunk_size": self._chunk_size,
             "chunk_bytes": self._chunk_bytes,
             "data_format": self._data_format,
             "data_spec": treespec_dumps(self._data_spec) if self._data_spec else None,
+            "types": schema_to_json(self._types),
             "encryption": self._encryption.state_dict() if self._encryption else None,
             "item_loader": self._item_loader.__class__.__name__,
         }
@@ -273,8 +307,12 @@ class BinaryWriter:
             data.append(serialized_item)
             sizes.append(fixed if fixed is not None else len(serialized_item))
 
-    def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
-        """Creates a binary chunk file from serialized items."""
+    def _create_chunk(self, on_done: bool = False) -> tuple[bytes, bool, dict[str, Any]]:
+        """Build chunk bytes. Returns ``(data, nested_arrow_only, chunk_meta)``.
+
+        ``nested_arrow_only`` chunks already carry Arrow IPC zstd and must not
+        be wrapped again with LitData file-level compression.
+        """
         # The chunk's binary format is structured as follows:
 
         # +------------+---------------+-------------+
@@ -325,22 +363,40 @@ class BinaryWriter:
         n = len(items)
         num_items = np.uint32(n)
         header = 4 + 4 * (n + 1)
-        offsets = np.empty(n + 1, dtype=np.uint32)
-        offsets[0] = header
-        cursor = header
-        for i, item in enumerate(items):
-            cursor += item.bytes
-            offsets[i + 1] = cursor
+        samples = [item.sample for item in items]
+        arrow_rows = is_arrow_footer_type(self._types) and all(sample is not None for sample in samples)
+        nested_arrow_only = False
+        if arrow_rows:
+            # Header + Arrow footer only. The pytree body duplicated every JSON
+            # row (leaves + IPC) and the reader never used it once the footer existed.
+            offsets = np.full(n + 1, header, dtype=np.uint32)
+            slim = bytearray(header)
+            slim[0:4] = num_items.tobytes()
+            slim[4:header] = offsets.tobytes()
+            data = append_arrow_row_footer(bytes(slim), samples, ipc_compression=self._ipc_codec())
+            if data[-8:] != _ARROW_FOOTER_MAGIC:
+                arrow_rows = False
+            else:
+                nested_arrow_only = True
+        if not arrow_rows:
+            offsets = np.empty(n + 1, dtype=np.uint32)
+            offsets[0] = header
+            cursor = header
+            for i, item in enumerate(items):
+                cursor += item.bytes
+                offsets[i + 1] = cursor
 
-        data = bytearray(cursor)
-        data[0:4] = num_items.tobytes()
-        data[4:header] = offsets.tobytes()
-        pos = header
-        for item in items:
-            end = pos + item.bytes
-            data[pos:end] = item.data
-            pos = end
-        data = bytes(data)
+            data = bytearray(cursor)
+            data[0:4] = num_items.tobytes()
+            data[4:header] = offsets.tobytes()
+            pos = header
+            for item in items:
+                end = pos + item.bytes
+                data[pos:end] = item.data
+                pos = end
+            data = bytes(data)
+            if is_arrow_footer_type(self._types):
+                data = append_arrow_row_footer(data, samples, ipc_compression=self._ipc_codec())
 
         # Whether to encrypt the data at the chunk level
         if self._encryption and self._encryption.level == EncryptionLevel.CHUNK:
@@ -365,23 +421,49 @@ class BinaryWriter:
         chunk_info = {
             "chunk_bytes": current_chunk_bytes,
             "chunk_size": num_items.item(),
-            "filename": filename,
             "dim": dim,
         }
 
-        self._chunks_info.append(chunk_info)
+        return data, nested_arrow_only, chunk_info
 
-        return data
+    def _ipc_codec(self) -> str | None:
+        """Arrow IPC codec when the user asked for compression; nested skips file-level zstd."""
+        if not self._compression:
+            return None
+        codec = self._compression.split(":")[0]
+        return codec if codec in {"zstd", "lz4"} else None
 
-    def get_chunk_filename(self) -> str:
-        if self._compression:
+    def _item_account_bytes(self, item: Item) -> int:
+        """Bytes that count toward ``chunk_bytes``. Arrow JSON is discarded; use on-disk size."""
+        if item.sample is None or not is_arrow_footer_type(self._types):
+            return item.bytes
+        if self._nested_on_disk_bpi is not None:
+            return max(1, int(round(self._nested_on_disk_bpi)))
+        raw = max(1, item.bytes)
+        if self._ipc_codec() is not None:
+            return max(1, raw // 3)
+        return raw
+
+    def get_chunk_filename(self, file_compression: bool | None = None) -> str:
+        if file_compression is None:
+            file_compression = bool(self._compression)
+        if file_compression and self._compression:
             return f"chunk-{self.rank}-{self._chunk_index}.{self._compression}.bin"
         return f"chunk-{self.rank}-{self._chunk_index}.bin"
 
     def write_chunk(self, on_done: bool = False) -> str:
         """Write a chunk to the filesystem."""
-        filename = self.get_chunk_filename()
-        self.write_chunk_to_file(self._create_chunk(filename, on_done=on_done), filename)
+        data, nested_arrow_only, chunk_info = self._create_chunk(on_done=on_done)
+        use_file_compression = bool(self._compression) and not nested_arrow_only
+        if nested_arrow_only:
+            self._ipc_compression_used = self._ipc_codec() is not None
+            n_rows = int(chunk_info["chunk_size"])
+            if n_rows:
+                self._nested_on_disk_bpi = int(chunk_info["chunk_bytes"]) / n_rows
+        filename = self.get_chunk_filename(file_compression=use_file_compression)
+        chunk_info["filename"] = filename
+        self._chunks_info.append(chunk_info)
+        self.write_chunk_to_file(data, filename, compress=use_file_compression)
         self._chunk_index += 1
         return os.path.join(self._cache_dir, filename)
 
@@ -402,17 +484,29 @@ class BinaryWriter:
         if index in self._serialized_items:
             raise ValueError(f"The provided index {index} already exists in the cache.")
 
+        original = items
+        inferred = infer_type(items)
+        self._types = inferred if self._types is None else fuse_type(self._types, inferred)
+        if isinstance(items, dict) and self._types is not None:
+            items = wrap_for_pytree(items, self._types, keys=self._pytree_keys, wrap_leaf=JsonLeaf)
+
         data, dim = self.serialize(items)
+        if self._pytree_keys is None and isinstance(items, dict):
+            self._pytree_keys = list(items.keys())
 
         # Whether to encrypt the data at the sample level
         if self._encryption and self._encryption.level == EncryptionLevel.SAMPLE:
             data = self._encryption.encrypt(data)
 
+        keep_sample = isinstance(original, dict) and (
+            is_arrow_footer_type(self._types) or is_json_row(original)
+        )
         self._serialized_items[index] = Item(
             index=index,
             data=data,
             bytes=len(data),
             dim=dim,
+            sample=original if keep_sample else None,
         )
         if self._min_index is None:
             # When processing the first item for the current chunk
@@ -433,9 +527,7 @@ class BinaryWriter:
         else:
             return None
 
-        filepath = os.path.join(self._cache_dir, self.get_chunk_filename())
-
-        self.write_chunk()
+        filepath = self.write_chunk()
 
         # now to reset
         self._min_index = None
@@ -461,7 +553,7 @@ class BinaryWriter:
         while True:
             item = self._serialized_items.get(index, None)
             if item:
-                num_bytes += item.bytes
+                num_bytes += self._item_account_bytes(item)
                 num_items += item.dim if item.dim else 1
                 index += 1
                 if (self._chunk_bytes and self._chunk_bytes < num_bytes) or (
@@ -479,11 +571,14 @@ class BinaryWriter:
         self,
         raw_data: bytes,
         filename: str,
+        compress: bool | None = None,
     ) -> None:
         """Write chunk bytes to a file."""
-        # Whether to compress the raw bytes
-        if self._compression:
+        if compress is None:
+            compress = bool(self._compression)
+        if compress:
             raw_data = self._compressor.compress(raw_data)
+            self._file_compression_used = True
 
         # Write the binary chunk file
         with open(os.path.join(self._cache_dir, filename), "wb") as out:
@@ -581,20 +676,24 @@ class BinaryWriter:
                 if config is None:
                     config = data["config"]
 
-                elif config != data["config"]:
+                elif _config_body(config) != _config_body(data["config"]):
                     raise Exception(
                         "The config isn't consistent between chunks. This shouldn't have happened."
                         f"Found {config}; {data['config']}."
                     )
+                else:
+                    config["types"] = fuse_schema_json(config.get("types"), data["config"].get("types"))
 
                 chunks_info.extend(data["chunks"])
 
             os.remove(chunk_path)
 
         if node_rank is None:
-            with open(os.path.join(self._cache_dir, _INDEX_FILENAME), "w") as f:
-                data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
-                json.dump(data, f, sort_keys=True)
+            dest = os.path.join(self._cache_dir, _INDEX_FILENAME)
+            tmp = dest + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"chunks": chunks_info, "config": config, "updated_at": str(time())}, f, sort_keys=True)
+            os.replace(tmp, dest)
         else:
             with open(os.path.join(self._cache_dir, f"{node_rank}-{_INDEX_FILENAME}"), "w") as f:
                 json.dump({"chunks": chunks_info, "config": config}, f, sort_keys=True)
@@ -694,6 +793,7 @@ def index_parquet_dataset(
             "chunk_bytes": None,
             "data_format": [],
             "data_spec": None,
+            "types": None,
             "encryption": None,
             "item_loader": ParquetLoader.__name__,
         }

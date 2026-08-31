@@ -58,6 +58,35 @@ def seed_everything(random_seed):
     torch.manual_seed(random_seed)
 
 
+def test_item_shuffle_window_on_dataset(tmpdir, monkeypatch):
+    monkeypatch.delenv("LITDATA_ITEM_SHUFFLE_WINDOW", raising=False)
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    cache = Cache(str(tmpdir), chunk_size=1024)
+    for i in range(1024):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    default = StreamingDataset(str(tmpdir), shuffle=True, seed=42)
+    assert default.item_shuffle_window is None
+    assert default._item_shuffle_window == 256
+    _ = next(iter(default))
+    assert default.shuffler.item_window == 256
+
+    pinned = StreamingDataset(str(tmpdir), shuffle=True, seed=42, item_shuffle_window=64)
+    assert pinned.item_shuffle_window == 64
+    assert pinned._item_shuffle_window == 64
+    _ = next(iter(pinned))
+    assert pinned.shuffler.item_window == 64
+
+    full = StreamingDataset(str(tmpdir), shuffle=True, seed=42, item_shuffle_window=0)
+    assert full._item_shuffle_window == 0
+    _ = next(iter(full))
+    assert full.shuffler.item_window == 0
+    named = StreamingDataset(str(tmpdir), shuffle=True, seed=42, item_shuffle_window="full")
+    assert named._item_shuffle_window == 0
+
+
 @pytest.mark.parametrize(
     "compression",
     [
@@ -328,7 +357,9 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     cache.done()
     cache.merge()
 
-    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     assert dataset.shuffle
     _ = dataset[0]
     assert isinstance(dataset.shuffler, FullShuffle)
@@ -344,7 +375,9 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     assert process_1_1[:10] == [536, 530, 531, 532, 534, 537, 535, 533, 538, 539]
     assert len(process_1_1) == 548
 
-    dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset_2 = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     iter(dataset_2)
     assert isinstance(dataset_2.shuffler, FullShuffle)
     dataset_2.distributed_env = _DistributedEnv(2, 1, 1)
@@ -382,7 +415,9 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     cache.done()
     cache.merge()
 
-    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     assert dataset.shuffle
     _ = dataset[0]
     assert isinstance(dataset.shuffler, FullShuffle)
@@ -398,7 +433,9 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     assert process_1_1[:10] == [1144, 1030, 1092, 1095, 1171, 1192, 1085, 1161, 1134, 1165]
     assert len(process_1_1) == 611
 
-    dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset_2 = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     iter(dataset_2)
     assert isinstance(dataset_2.shuffler, FullShuffle)
     dataset_2.distributed_env = _DistributedEnv(2, 1, 1)
@@ -431,7 +468,9 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     cache.done()
     cache.merge()
 
-    dataset = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     assert dataset.shuffle
     _ = dataset[0]
     assert isinstance(dataset.shuffler, FullShuffle)
@@ -447,7 +486,9 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     assert process_1_1[:10] == [275, 277, 273, 272, 270, 276, 271, 278, 279, 274]
     assert len(process_1_1) == 305
 
-    dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset_2 = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     iter(dataset_2)
     assert isinstance(dataset_2.shuffler, FullShuffle)
     dataset_2.distributed_env = _DistributedEnv(4, 1, 2)
@@ -459,7 +500,9 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     assert len(process_2_1) == 305
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 
-    dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
+    dataset_2 = StreamingDataset(
+        input_dir=str(tmpdir), shuffle=True, drop_last=drop_last, item_shuffle_window=0
+    )
     iter(dataset_2)
     assert isinstance(dataset_2.shuffler, FullShuffle)
     dataset_2.distributed_env = _DistributedEnv(4, 1, 2)

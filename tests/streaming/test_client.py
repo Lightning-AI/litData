@@ -10,6 +10,14 @@ import requests
 from litdata.streaming import client
 
 
+@pytest.fixture(autouse=True)
+def _clear_temp_bucket_credentials_cache():
+    """Isolate HTTP mocks: a warm process cache must not satisfy a later test."""
+    client.clear_temp_bucket_credentials_cache()
+    yield
+    client.clear_temp_bucket_credentials_cache()
+
+
 def test_s3_client_with_storage_options(monkeypatch):
     boto3_session = mock.MagicMock()
     boto3 = mock.MagicMock(Session=boto3_session)
@@ -156,6 +164,7 @@ def test_r2_client_initialization():
     r2_client = client.R2Client(refetch_interval=1800, storage_options=storage_options, session_options=session_options)
     assert r2_client._refetch_interval == 1800
     assert r2_client._base_storage_options == storage_options
+    assert r2_client._base_storage_options is not storage_options
     assert r2_client._session_options == session_options
 
 
@@ -342,7 +351,7 @@ def test_r2_client_create_client_success(monkeypatch):
     boto3_session.assert_called_once()
     boto3_session().client.assert_called_once_with(
         "s3",
-        config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+        config=client._r2_botocore_config(),
         aws_access_key_id="test-access-key",
         aws_secret_access_key="test-secret-key",
         aws_session_token="test-session-token",
@@ -411,7 +420,7 @@ def test_r2_client_filters_metadata_from_storage_options(monkeypatch):
 
     # Verify that data_connection_id was filtered out but other options were preserved
     expected_call_kwargs = {
-        "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+        "config": client._r2_botocore_config(),
         "timeout": 30,
         "region_name": "auto",
         "aws_access_key_id": "test-access-key",
@@ -421,6 +430,15 @@ def test_r2_client_filters_metadata_from_storage_options(monkeypatch):
     }
 
     boto3_session().client.assert_called_once_with("s3", **expected_call_kwargs)
+
+
+def test_r2_client_keeps_data_connection_id_when_caller_pops_shared_dict():
+    """R2Client must copy storage_options so a later pop cannot starve _create_client."""
+    storage_options = {"data_connection_id": "conn-shared", "timeout": 30}
+    r2_client = client.R2Client(storage_options=storage_options)
+    storage_options.pop("data_connection_id")
+    assert r2_client._base_storage_options["data_connection_id"] == "conn-shared"
+    assert "data_connection_id" not in storage_options
 
 
 def test_r2_client_property_creates_client_on_first_access(monkeypatch):
@@ -869,3 +887,146 @@ def test_adapter_applies_its_default_timeout(monkeypatch):
         session.post("http://127.0.0.1:1/x", data="{}")
 
     assert captured["timeout"] == client._DEFAULT_REQUEST_TIMEOUT
+
+
+def test_temp_bucket_credentials_are_cached_per_connection(monkeypatch):
+    """A second login for the same data_connection_id must not hit the control plane."""
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+
+    first = client._login_and_get_temp_bucket_credentials("conn-a")
+    second = client._login_and_get_temp_bucket_credentials("conn-a")
+    other = client._login_and_get_temp_bucket_credentials("conn-b")
+
+    assert first == second
+    assert first["accessKeyId"] == "test-access-key"
+    assert other["accessKeyId"] == "test-access-key"
+    assert requests_mock.post.call_count == 2
+    assert requests_mock.get.call_count == 2
+
+
+def test_temp_bucket_credentials_cache_clear_forces_refetch(monkeypatch):
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+
+    client._login_and_get_temp_bucket_credentials("conn-a")
+    client.clear_temp_bucket_credentials_cache()
+    client._login_and_get_temp_bucket_credentials("conn-a")
+
+    assert requests_mock.post.call_count == 2
+
+
+def test_temp_bucket_credentials_force_refresh_bypasses_cache(monkeypatch):
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+
+    client._login_and_get_temp_bucket_credentials("conn-a")
+    client._login_and_get_temp_bucket_credentials("conn-a", force_refresh=True)
+
+    assert requests_mock.post.call_count == 2
+
+
+def test_temp_bucket_credentials_ttl_expiry_refetches(monkeypatch):
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+    monkeypatch.setattr(client, "_DEFAULT_REFETCH_INTERVAL", 10)
+
+    now = {"t": 1000.0}
+    monkeypatch.setattr(client, "time", lambda: now["t"])
+
+    client._login_and_get_temp_bucket_credentials("conn-a")
+    now["t"] = 1009.0
+    client._login_and_get_temp_bucket_credentials("conn-a")
+    assert requests_mock.post.call_count == 1
+
+    now["t"] = 1010.0
+    client._login_and_get_temp_bucket_credentials("conn-a")
+    assert requests_mock.post.call_count == 2
+
+
+def test_temp_bucket_credentials_failed_fetch_is_not_cached(monkeypatch):
+    _mock_login_env(monkeypatch)
+    login_response = mock.MagicMock()
+    login_response.status_code = 503
+    requests_mock = mock.MagicMock()
+    requests_mock.post = mock.MagicMock(return_value=login_response)
+    monkeypatch.setattr("requests.Session", mock.MagicMock(return_value=requests_mock))
+
+    with pytest.raises(client._CredentialsUnavailableError, match="Failed to log in"):
+        client._login_and_get_temp_bucket_credentials("conn-a")
+    assert client._temp_creds_cache == {}
+
+
+def test_two_r2_clients_share_cached_credentials(monkeypatch):
+    """A new R2Client in the same process must not login again (bench warmup vs timed pass)."""
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+    boto3_session = mock.MagicMock()
+    monkeypatch.setattr(client, "boto3", mock.MagicMock(Session=boto3_session))
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    first = client.R2Client(storage_options={"data_connection_id": "conn-shared"})
+    second = client.R2Client(storage_options={"data_connection_id": "conn-shared"})
+    assert first.client is not None
+    assert second.client is not None
+    assert requests_mock.post.call_count == 1
+    assert boto3_session().client.call_count == 1
+    assert second.client is first.client
+
+
+def test_r2_client_refresh_mints_new_credentials(monkeypatch):
+    """Scheduled refresh must bypass the process cache so creds are not held past TTL."""
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+    boto3_session = mock.MagicMock()
+    monkeypatch.setattr(client, "boto3", mock.MagicMock(Session=boto3_session))
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    r2 = client.R2Client(refetch_interval=1, storage_options={"data_connection_id": "conn-refresh"})
+    _ = r2.client
+    assert requests_mock.post.call_count == 1
+    r2._last_time -= 2
+    _ = r2.client
+    assert requests_mock.post.call_count == 2
+
+
+def test_cached_credentials_reuse_original_fetched_at(monkeypatch):
+    """A new client that hits the cache must age credentials from mint time, not now."""
+    _mock_login_env(monkeypatch)
+    _successful_login_session(monkeypatch)
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    first = client.R2Client(storage_options={"data_connection_id": "conn-age"})
+    _ = first.client
+    minted = first._creds_fetched_at
+    assert minted is not None
+
+    second = client.R2Client(storage_options={"data_connection_id": "conn-age"})
+    _ = second.client
+    assert second._creds_fetched_at == minted
+    assert second._last_time == minted
+
+
+def test_temp_bucket_credentials_concurrent_first_access_fetches_once(monkeypatch):
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+    barrier = threading.Barrier(8)
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            barrier.wait(timeout=5)
+            client._login_and_get_temp_bucket_credentials("conn-race")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors
+    assert requests_mock.post.call_count == 1
+

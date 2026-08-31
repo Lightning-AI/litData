@@ -142,7 +142,10 @@ addopts = [
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-markers = [ "cloud: Run the cloud tests for example" ]
+markers = [
+  "cloud: Run the cloud tests for example",
+  "xdist_group: Pin tests that share ~/.lightning/chunks onto one xdist worker",
+]
 filterwarnings = [ "error::FutureWarning" ]
 xfail_strict = true
 junit_duration_report = "call"

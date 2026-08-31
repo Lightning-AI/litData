@@ -37,6 +37,32 @@ def _window_shuffle(items: list[Any], window: int, rng: np.random.RandomState) -
     return out
 
 
+def _block_shuffle(items: list[Any], window: int, rng: np.random.RandomState) -> list[Any]:
+    """Shuffle aligned ``[kW, (k+1)W)`` blocks, then shuffle items inside each.
+
+    Block order is random (not 0, 1, 2, …). Inside a block the items are
+    shuffled too. Sequential consume of one block still hits one
+    ``batch_decode`` window. ``window <= 1`` is a full permutation.
+    """
+    n = len(items)
+    out = list(items)
+    if n < 2:
+        return out
+    if window <= 1:
+        return rng.permutation(out).tolist()
+    blocks: list[list[Any]] = []
+    for start in range(0, n, window):
+        block = out[start : start + window]
+        rng.shuffle(block)
+        blocks.append(block)
+    if len(blocks) > 1:
+        rng.shuffle(blocks)
+    flat: list[Any] = []
+    for block in blocks:
+        flat.extend(block)
+    return flat
+
+
 def _window_shuffle_chunks_and_intervals(
     workers_chunks: list[list[int]],
     workers_intervals: list[Any],

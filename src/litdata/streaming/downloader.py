@@ -43,6 +43,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger("litdata.streaming.downloader")
 
 
+# Tiny R2 objects pay boto3 TransferManager / obstore startup more than transfer.
+# Prefer a single get_object when index.json says the chunk is under this size.
+_TINY_R2_GET_BYTES = 8 * 1024 * 1024
+
+
+def _tiny_r2_chunk(chunks: list[dict[str, Any]] | None, object_path: str) -> bool:
+    """True when ``object_path`` is an indexed chunk smaller than ``_TINY_R2_GET_BYTES``."""
+    name = os.path.basename(object_path)
+    for chunk in chunks or []:
+        filename = os.path.basename(chunk.get("filename") or "")
+        if filename == name:
+            return int(chunk.get("chunk_bytes") or 0) < _TINY_R2_GET_BYTES
+    return False
+
+
 # Obstore stream yield size. Default matches boto3 multipart chunksize (8MB).
 # Override with LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB (integer MiB) for benches.
 def _obstore_stream_min_chunk_size() -> int:
@@ -264,7 +279,7 @@ class Downloader(ABC):
         self._remote_dir = remote_dir
         self._cache_dir = cache_dir
         self._chunks = chunks
-        self._storage_options = storage_options or {}
+        self._storage_options = dict(storage_options or {})
         # Set by ChunksConfig: called after an atomic publish so waiters can Event.wait
         # instead of polling the filesystem.
         self._on_file_published: Callable[[str], None] | None = None
@@ -525,7 +540,7 @@ class R2Downloader(Downloader):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
         # check if kwargs contains session_options
         self.session_options = kwargs.get("session_options", {})
-        self._client = R2Client(storage_options=self._storage_options, session_options=self.session_options)
+        self._client = R2Client(storage_options=dict(self._storage_options), session_options=self.session_options)
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -540,29 +555,45 @@ class R2Downloader(Downloader):
             suppress(Timeout, FileNotFoundError),
             FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
-            from boto3.s3.transfer import TransferConfig
+            if os.path.exists(local_filepath):
+                return
+            # Same as S3Downloader: obstore for chunk GETs (Studio: faster than
+            # boto3 serial on ~64MB objects). Index stays on boto3 so the
+            # DataLoader parent does not start tokio before fork.
+            t0 = time()
+            tmp_path = self._temp_download_path(local_filepath)
+            try:
+                os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+                key = obj.path.lstrip("/")
+                if _tiny_r2_chunk(self._chunks, obj.path):
+                    resp = self._client.client.get_object(Bucket=obj.netloc, Key=key)
+                    with open(tmp_path, "wb") as handle:
+                        shutil.copyfileobj(resp["Body"], handle, length=1024 * 1024)
+                elif _use_obstore_for_s3_key(obj.path):
+                    import obstore as obs
 
-            extra_args: dict[str, Any] = {}
+                    store = self._get_store(obj.netloc)
+                    resp = obs.get(store, key)
+                    _obstore_stream_resp_to_tmp(tmp_path, resp)
+                else:
+                    from boto3.s3.transfer import TransferConfig
 
-            if not os.path.exists(local_filepath):
-                # Issue: https://github.com/boto/boto3/issues/3113
-                t0 = time()
-                tmp_path = self._temp_download_path(local_filepath)
-                try:
+                    extra_args: dict[str, Any] = {}
+                    # Issue: https://github.com/boto/boto3/issues/3113
                     self._client.client.download_file(
                         obj.netloc,
-                        obj.path.lstrip("/"),
+                        key,
                         tmp_path,
                         ExtraArgs=extra_args,
                         Config=TransferConfig(use_threads=False),
                     )
-                    self._publish_file(tmp_path, local_filepath)
-                except Exception:
-                    with suppress(FileNotFoundError, PermissionError):
-                        os.remove(tmp_path)
-                    raise
-                if _DEBUG:
-                    print("DOWNLOAD TIME", time() - t0)
+                self._publish_file(tmp_path, local_filepath)
+            except Exception:
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(tmp_path)
+                raise
+            if _DEBUG:
+                print("DOWNLOAD TIME", time() - t0)
 
     def download_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         obj = parse.urlparse(remote_filepath)
@@ -615,6 +646,11 @@ class R2Downloader(Downloader):
         if obj.scheme != "r2":
             raise ValueError(f"Expected obj.scheme to be `r2`, instead, got {obj.scheme} for remote={remote_filepath}")
 
+        if _tiny_r2_chunk(self._chunks, obj.path):
+            import asyncio
+
+            await asyncio.to_thread(self.download_file, remote_filepath, local_filepath)
+            return
         await _obstore_adownload_file(self, self._get_store(obj.netloc), obj.path.lstrip("/"), local_filepath)
 
     async def aupload_file(self, local_filepath: str, remote_filepath: str) -> None:
@@ -928,6 +964,8 @@ class HFDownloader(Downloader):
         """
         from huggingface_hub import hf_hub_download
 
+        from litdata.utilities.hf_fs import parse_hf_url
+
         obj = parse.urlparse(remote_filepath)
 
         if obj.scheme != "hf":
@@ -936,18 +974,20 @@ class HFDownloader(Downloader):
         if os.path.exists(local_filepath):
             return
 
+        os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
+
         with (
             suppress(Timeout, FileNotFoundError),
             FileLock(local_filepath + ".lock", timeout=0),
             tempfile.TemporaryDirectory() as tmpdir,
         ):
-            _, _, _, repo_org, repo_name, path = remote_filepath.split("/", 5)
-            repo_id = f"{repo_org}/{repo_name}"
+            repo_id, revision, path = parse_hf_url(remote_filepath)
             downloaded_path = hf_hub_download(
                 repo_id,
                 path,
                 cache_dir=tmpdir,
                 repo_type="dataset",
+                revision=revision,
                 **self._storage_options,
             )
             if downloaded_path != local_filepath and os.path.exists(downloaded_path):

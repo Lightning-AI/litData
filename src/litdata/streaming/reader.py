@@ -134,7 +134,13 @@ class PrepareChunksThread(Thread):
 
     def _async_prefetch(self) -> bool:
         """True when this prepare thread should batch-download via asyncio."""
-        return async_chunk_prefetch_enabled(self._config._remote_dir)
+        if not async_chunk_prefetch_enabled(self._config._remote_dir):
+            return False
+        # One tiny chunk: asyncio/obstore startup is larger than the GET (sst2-sized).
+        chunks = self._config._chunks or []
+        if len(chunks) == 1 and int(chunks[0].get("chunk_bytes") or 0) < 8 * 1024 * 1024:
+            return False
+        return True
 
     def _async_gather_width(self) -> int:
         """How many queued chunk indexes to download together."""
@@ -539,6 +545,8 @@ class PrepareChunksThread(Thread):
         self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
     def _force_download(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        if getattr(self._item_loader, "uses_direct_remote", False):
+            return
         chunk_index = _get_from_queue(self._force_download_queue, timeout=timeout)
         if chunk_index is None:
             return
@@ -600,6 +608,11 @@ class PrepareChunksThread(Thread):
     def _download_chunk_indexes(self, chunk_indexes: list[int]) -> None:
         """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
         if not chunk_indexes:
+            return
+        if getattr(self._item_loader, "uses_direct_remote", False):
+            for chunk_index in dict.fromkeys(int(idx) for idx in chunk_indexes):
+                self._pre_load_chunk(chunk_index)
+                self._pre_download_counter += 1
             return
         # Shuffle / queue can repeat an index; one GET per chunk per batch.
         chunk_indexes = list(dict.fromkeys(int(idx) for idx in chunk_indexes))
