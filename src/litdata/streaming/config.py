@@ -14,11 +14,17 @@
 import contextlib
 import logging
 import os
+import threading
 from collections import defaultdict
-from time import sleep, time
+from contextlib import suppress
+from time import time
 from typing import Any, Optional
 
+from filelock import FileLock, Timeout
+
 from litdata.constants import _INDEX_FILENAME, _MAX_WAIT_TIME
+from litdata.debugger import CAT_LOCK, emit_trace
+from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
@@ -87,10 +93,15 @@ class ChunksConfig:
         self._length = self._intervals[-1][-1] if len(self._intervals) > 0 else 0
         self._downloader = None
 
+        # In-process "file is visible" Events, set after atomic publish (download or decompress).
+        self._file_published: dict[str, threading.Event] = {}
+        self._file_published_lock = threading.Lock()
+
         if remote_dir:
             self._downloader = get_downloader(
                 remote_dir, cache_dir, self._chunks, self._storage_options, self._session_options
             )
+            self._downloader._on_file_published = self.notify_file_published
 
         self._compressor_name = self._config["compression"]
         self._compressor: Compressor | None = None
@@ -107,7 +118,14 @@ class ChunksConfig:
             self._compressor = _COMPRESSORS[self._compressor_name]
 
         self._skip_chunk_indexes_deletion: list[int] | None = None
+        # Chunk indexes that are shared across workers on this node. Shared chunks are
+        # reference-counted *eagerly* (incremented at iteration start by the reader), so their
+        # lazy download-time increment is skipped to keep the count balanced. See reader.py.
+        self._shared_chunk_indexes: set[int] = set()
         self.zero_based_roi: list[tuple[int, int]] | None = None
+        # Memoizes ``__getitem__`` results per chunk_index (invariant once the config is loaded);
+        # avoids rebuilding the chunk path on every item read.
+        self._chunk_meta_cache: dict[int, tuple[str, int, int]] = {}
         self.filename_to_size_map: dict[str, int] = {}
         for cnk in _original_chunks:
             # since files downloaded while reading will be decompressed, we need to store the name without compression
@@ -118,6 +136,67 @@ class ChunksConfig:
         if self._skip_chunk_indexes_deletion is None:
             return True
         return chunk_index not in self._skip_chunk_indexes_deletion
+
+    def _chunk_lock_filepath(self, chunk_index: int) -> str:
+        """The (decompressed) local chunk path whose ``.cnt``/``.lock`` files hold the refcount."""
+        chunk_filepath, _, _ = self[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        return chunk_filepath
+
+    def remaining_locks(self, chunk_index: int) -> int:
+        """Return the current reference count held on a chunk (0 if none)."""
+        countpath = self._chunk_lock_filepath(chunk_index) + ".cnt"
+        if not os.path.exists(countpath):
+            return 0
+        with suppress(FileNotFoundError), open(countpath) as count_f:
+            try:
+                return int(count_f.read().strip())
+            except Exception:
+                return 1
+        return 0
+
+    def increment_local_lock(self, chunk_index: int) -> None:
+        """Add one reference to a chunk's local lock (a co-reader intends to use it)."""
+        if self._downloader is None:
+            return
+        self._downloader._increment_local_lock(self._chunk_lock_filepath(chunk_index), chunk_index)
+
+    def decrement_local_lock(self, chunk_index: int) -> int:
+        """Remove one reference from a chunk's local lock; return the remaining count.
+
+        Moved here (from ``PrepareChunksThread``) so the reader can release eagerly-acquired locks
+        during teardown without depending on the prefetch thread still being alive.
+        """
+        countpath = self._chunk_lock_filepath(chunk_index) + ".cnt"
+        lock_path = countpath + ".lock"
+        curr_count = 0
+        remove_lock = False
+        with suppress(Timeout, FileNotFoundError), FileLock(lock_path, timeout=3):
+            if os.path.exists(countpath):
+                with open(countpath) as count_f:
+                    try:
+                        curr_count = int(count_f.read().strip())
+                    except Exception:
+                        curr_count = 1
+                curr_count -= 1
+                if curr_count <= 0:
+                    with suppress(FileNotFoundError, PermissionError):
+                        os.remove(countpath)
+                    remove_lock = True
+                else:
+                    with open(countpath, "w+") as count_f:
+                        emit_trace("lock", "B", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
+                        count_f.write(str(curr_count))
+                        emit_trace("lock", "E", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
+            else:
+                remove_lock = True
+        # FileLock doesn't delete its lock file on release — we clean it up manually.
+        # This must happen after release (Windows can't delete open files) and after the
+        # work is done (on Linux, deleting an in-use lock file lets other processes lock
+        # on a new inode, bypassing mutual exclusion).
+        if remove_lock:
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(lock_path)
+        return curr_count
 
     @property
     def skip_chunk_indexes_deletion(self) -> list[int] | None:
@@ -133,22 +212,26 @@ class ChunksConfig:
 
         local_chunkpath = os.path.join(self._cache_dir, chunk_filename)
 
+        # Shared chunks are reference-counted eagerly by the reader (before any reading), so their
+        # download-time increment is skipped here to avoid double-counting. Non-shared chunks keep
+        # the original pay-as-you-download refcounting.
+        lazily_ref_counted = chunk_index not in self._shared_chunk_indexes
+
         if os.path.exists(local_chunkpath):
             self.try_decompress(local_chunkpath)
 
-            if self._downloader is not None and not skip_lock:
+            if self._downloader is not None and not skip_lock and lazily_ref_counted:
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
                 self._downloader._increment_local_lock(
                     local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
                 )
-                pass
             return
 
         if self._downloader is None:
             return
 
-        if not skip_lock:
+        if not skip_lock and lazily_ref_counted:
             self._downloader._increment_local_lock(
                 local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
             )
@@ -179,6 +262,35 @@ class ChunksConfig:
 
         return self._downloader.download_chunk_bytes_from_index(chunk_index, offset, length)
 
+    def notify_file_published(self, local_filepath: str) -> None:
+        """Mark ``local_filepath`` as atomically published and, if it is a readable chunk, signal ready."""
+        path = os.path.abspath(local_filepath)
+        with self._file_published_lock:
+            event = self._file_published.get(path)
+            if event is None:
+                event = threading.Event()
+                self._file_published[path] = event
+            event.set()
+
+    def wait_file_published(self, local_filepath: str, timeout: float) -> bool:
+        """Wait for an in-process publish Event; fall back to ``exists`` for other workers."""
+        path = os.path.abspath(local_filepath)
+        with self._file_published_lock:
+            event = self._file_published.get(path)
+            if event is None:
+                event = threading.Event()
+                self._file_published[path] = event
+        if event.wait(timeout=timeout):
+            return True
+        return os.path.exists(path)
+
+    def _remove_compressed_source(self, local_chunkpath: str, target_local_chunkpath: str) -> None:
+        """Drop the compressed download once the decompressed chunk is on disk."""
+        if local_chunkpath == target_local_chunkpath:
+            return
+        with contextlib.suppress(FileNotFoundError, PermissionError):
+            os.remove(local_chunkpath)
+
     def try_decompress(self, local_chunkpath: str) -> None:
         if self._compressor is None:
             return
@@ -186,39 +298,52 @@ class ChunksConfig:
         target_local_chunkpath = local_chunkpath.replace(f".{self._compressor_name}", "")
 
         if os.path.exists(target_local_chunkpath):
+            self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
             return
 
-        # Ensure that the compressed file exists and is fully downloaded
+        # Wait until the downloader publishes the compressed file, or another worker
+        # publishes the decompressed target. Cross-process downloads still fall back to exists.
         start_time = time()
-        assert self._chunks is not None
-
-        filename = os.path.basename(local_chunkpath)
-        chunk_index = self._get_chunk_index_from_filename(filename)
-        chunk_bytes = self._chunks[chunk_index]["chunk_size"]
-        exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
-        while not exists:
-            sleep(0.1)
-            # Return if the actual file exists
-            if os.path.exists(target_local_chunkpath):
-                return
-            # find the local compressed file
-            exists = os.path.exists(local_chunkpath) and os.stat(local_chunkpath).st_size >= chunk_bytes
-
+        while not os.path.exists(target_local_chunkpath) and not os.path.exists(local_chunkpath):
+            self.wait_file_published(local_chunkpath, 0.05)
+            self.wait_file_published(target_local_chunkpath, 0.0)
             if (time() - start_time) > _MAX_WAIT_TIME:
-                raise FileNotFoundError(f"The {local_chunkpath} hasn't been found.")
+                raise ChunkWaitTimeoutError(local_chunkpath, time() - start_time)
 
-        with open(local_chunkpath, "rb") as f:
-            data = f.read()
+        if os.path.exists(target_local_chunkpath):
+            self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
+            return
 
-        # delete the files only if they were downloaded
-        if self._downloader is not None:
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(local_chunkpath)
+        decompress_lock = target_local_chunkpath + ".decompress.lock"
+        try:
+            with FileLock(decompress_lock, timeout=_MAX_WAIT_TIME):
+                if os.path.exists(target_local_chunkpath):
+                    self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
+                    return
 
-        data = self._compressor.decompress(data)
-
-        with open(target_local_chunkpath, "wb") as f:
-            f.write(data)
+                assert self._chunks is not None
+                filename = os.path.basename(local_chunkpath)
+                chunk_index = self._get_chunk_index_from_filename(filename)
+                expected_bytes = int(self._chunks[chunk_index]["chunk_bytes"])
+                tmp_path = f"{target_local_chunkpath}.tmp.{os.getpid()}"
+                try:
+                    self._compressor.decompress_file(local_chunkpath, tmp_path)
+                    if os.stat(tmp_path).st_size < expected_bytes:
+                        raise OSError(
+                            f"Decompressed chunk {target_local_chunkpath} is smaller than expected "
+                            f"({os.stat(tmp_path).st_size} < {expected_bytes})."
+                        )
+                    os.replace(tmp_path, target_local_chunkpath)
+                    self.notify_file_published(target_local_chunkpath)
+                except Exception:
+                    with contextlib.suppress(FileNotFoundError, PermissionError):
+                        os.remove(tmp_path)
+                    raise
+                self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
+        finally:
+            # FileLock leaves its lock file behind; remove after release.
+            with contextlib.suppress(Exception):
+                os.remove(decompress_lock)
 
     @property
     def intervals(self) -> list[Interval]:
@@ -287,7 +412,17 @@ class ChunksConfig:
         )
 
     def __getitem__(self, index: ChunkedIndex) -> tuple[str, int, int]:
-        """Find the associated chunk metadata."""
+        """Find the associated chunk metadata.
+
+        This is called once per item on the read hot path, but its result depends only on
+        ``index.chunk_index`` (the local path, the chunk's begin offset and its byte size are all
+        fixed once the config is loaded). The per-chunk tuple is therefore memoized to avoid
+        rebuilding the path (``os.path.join`` + decompression-suffix stripping) on every item.
+        """
+        cached = self._chunk_meta_cache.get(index.chunk_index)
+        if cached is not None:
+            return cached
+
         assert self._chunks is not None
         chunk = self._chunks[index.chunk_index]
 
@@ -300,7 +435,14 @@ class ChunksConfig:
 
         filesize_bytes = chunk["chunk_bytes"]
 
-        return local_chunkpath, begin, filesize_bytes
+        meta = (local_chunkpath, begin, filesize_bytes)
+        self._chunk_meta_cache[index.chunk_index] = meta
+        return meta
+
+    def download_filepath(self, chunk_index: int) -> str:
+        """The raw on-disk path that the chunk is downloaded to before any decompression."""
+        assert self._chunks is not None
+        return os.path.join(self._cache_dir, self._chunks[chunk_index]["filename"])
 
     def _get_chunk_index_from_filename(self, chunk_filename: str) -> int:
         """Retrieves the associated chunk_index for a given chunk filename."""
@@ -349,6 +491,20 @@ class ChunksConfig:
             storage_options,
             session_options,
         )
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        # threading.Lock / Event are not picklable (DataLoader spawn / deepcopy).
+        state["_file_published"] = {}
+        state["_file_published_lock"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._file_published = {}
+        self._file_published_lock = threading.Lock()
+        if self._downloader is not None:
+            self._downloader._on_file_published = self.notify_file_published
 
     def __len__(self) -> int:
         return self._length

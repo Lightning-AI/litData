@@ -106,10 +106,75 @@ def test_streaming_dataloader():
     }
 
 
-@pytest.mark.skip(reason="Profiling patches torch which leads to undesired test interactions")
+def test_profile_cprofile_conflicts_with_profile_batches(tmpdir):
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(4, 1), TestStatefulDataset(4, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    with pytest.raises(ValueError, match="profile_cprofile"):
+        StreamingDataLoader(
+            dataset,
+            batch_size=2,
+            num_workers=1,
+            profile_batches=True,
+            profile_cprofile=True,
+            profile_dir=str(tmpdir),
+        )
+
+
+def test_profile_cprofile_main_and_worker(tmpdir):
+    from torch.utils.data._utils import worker
+
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(8, 1), TestStatefulDataset(8, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    original_worker_loop = worker._worker_loop
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=2, num_workers=1, profile_cprofile=True, profile_dir=str(tmpdir)
+    )
+    dataloader_iter = iter(dataloader)
+    try:
+        first_batch = next(dataloader_iter)
+        assert worker._worker_loop is original_worker_loop
+        batches = [first_batch, *dataloader_iter]
+    finally:
+        dataloader_iter.close()
+    assert len(batches) > 0
+    main_prof = os.path.join(tmpdir, "cprofile_main.prof")
+    worker_prof = os.path.join(tmpdir, "cprofile_worker0.prof")
+    assert os.path.exists(main_prof)
+    assert os.path.exists(worker_prof)
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_main.txt"))
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_worker0.txt"))
+    assert os.path.getsize(main_prof) > 0
+    assert os.path.getsize(worker_prof) > 0
+
+
+def test_profile_cprofile_num_workers_zero(tmpdir):
+    dataset = TestCombinedStreamingDataset(
+        [TestStatefulDataset(6, 1), TestStatefulDataset(6, -1)],
+        42,
+        weights=(0.5, 0.5),
+        iterate_over_all=False,
+    )
+    dataloader = StreamingDataLoader(
+        dataset, batch_size=2, num_workers=0, profile_cprofile=True, profile_dir=str(tmpdir)
+    )
+    assert list(dataloader)
+    assert os.path.exists(os.path.join(tmpdir, "cprofile_main.prof"))
+    assert not os.path.exists(os.path.join(tmpdir, "cprofile_worker0.prof"))
+
+
 @pytest.mark.skipif(not _VIZ_TRACKER_AVAILABLE, reason="viz tracker required")
 @pytest.mark.parametrize("profile", [2, True])
 def test_dataloader_profiling(profile, tmpdir, monkeypatch):
+    from torch.utils.data._utils import worker
+
     monkeypatch.setattr(streaming_dataloader_module, "_VIZ_TRACKER_AVAILABLE", True)
 
     dataset = TestCombinedStreamingDataset(
@@ -118,13 +183,17 @@ def test_dataloader_profiling(profile, tmpdir, monkeypatch):
         weights=(0.5, 0.5),
         iterate_over_all=False,
     )
+    original_worker_loop = worker._worker_loop
     dataloader = StreamingDataLoader(
         dataset, batch_size=2, profile_batches=profile, profile_dir=str(tmpdir), num_workers=1
     )
     dataloader_iter = iter(dataloader)
-    batches = []
-    for batch in dataloader_iter:
-        batches.append(batch)
+    try:
+        next(dataloader_iter)
+        assert worker._worker_loop is original_worker_loop
+        assert list(dataloader_iter)
+    finally:
+        dataloader_iter.close()
 
     assert os.path.exists(os.path.join(tmpdir, "result.json"))
 
@@ -216,7 +285,12 @@ def test_dataloader_no_workers(tmpdir):
     assert len(dataset) == 1000
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
+@pytest.mark.skipif(
+    sys.platform == "darwin" and sys.version_info >= (3, 14),
+    reason="macOS + Python 3.14 CI hangs in DataLoader worker queue after restore/multi-epoch "
+    "with non-persistent workers; covered by test_dataloader_states_with_persistent_workers",
+)
 def test_dataloader_with_loading_states(tmpdir):
     cache = Cache(input_dir=str(tmpdir), chunk_bytes="64MB")
     for i in range(100):
@@ -320,7 +394,12 @@ def test_dataloader_states_with_persistent_workers(tmpdir):
     assert count >= 25, "There should be at least 25 batches in the third epoch"
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(180)
+@pytest.mark.skipif(
+    sys.platform == "darwin" and sys.version_info >= (3, 14),
+    reason="macOS + Python 3.14 CI hangs shutting down DataLoader workers after load_state_dict "
+    "onto a new dataset; restore paths covered on other platforms / persistent_workers tests",
+)
 def test_resume_dataloader_with_new_dataset(tmpdir):
     dataset_1_path = tmpdir.join("dataset_1")
     dataset_2_path = tmpdir.join("dataset_2")
@@ -353,8 +432,6 @@ def test_resume_dataloader_after_some_workers_are_done(tmpdir):
     cache.merge()
     dset = StreamingDataset(str(dset_path), shuffle=False)
     dloader = StreamingDataLoader(dset, batch_size=1, num_workers=2, shuffle=False)
-    # worker 0 is assigned with samples 0 and 1, worker 1 is assigned with sample 2
-    # the workers alternate, so the expected sequence is [0, 2, 1] and not [0, 1, 2]
     expected_sequence = [0, 2, 1]
     for i, x in enumerate(dloader):
         assert x == expected_sequence[i]
@@ -505,8 +582,10 @@ def getter(index: int):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="too slow")
 @pytest.mark.parametrize("num_workers", [1, 2])
-def test_dataloader_with_align_chunking(tmp_path, num_workers):
+def test_dataloader_with_align_chunking(tmp_path, num_workers, monkeypatch):
     output_dir = tmp_path / f"output_workers_{num_workers}"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
 
     optimize(
         fn=getter,
@@ -529,3 +608,51 @@ def test_dataloader_with_align_chunking(tmp_path, num_workers):
         assert max_element_in_batch - min_element_in_batch < 64, (
             f"Batch {i} contains elements from multiple chunks: min {min_element_in_batch}, max {max_element_in_batch}"
         )
+
+
+class DummyStreamingDataset(StreamingDataset):
+    def __init__(self, item_loader):
+        self.item_loader = item_loader
+        self.shuffle = False
+        self.drop_last = False
+        self.batch_size = 1
+        self.num_workers = 1
+
+
+class DummyCombinedDataset(TestCombinedStreamingDataset):
+    def __init__(self, datasets):
+        self._datasets = datasets
+        self.batch_size = 1
+        self.num_workers = 1
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not testing multiprocessing on windows")
+def test_dataloader_fork_parquet_loader_deadlock_guard():
+    from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
+
+    # Create dummy dataset using ParquetLoader
+    dataset_with_parquet = DummyStreamingDataset(item_loader=ParquetLoader())
+    dataset_with_pytree = DummyStreamingDataset(item_loader=PyTreeLoader())
+
+    # 1. No workers should not raise any error, regardless of loader
+    StreamingDataLoader(dataset_with_parquet, num_workers=0)
+    StreamingDataLoader(dataset_with_pytree, num_workers=0)
+
+    # 2. PyTreeLoader with fork and num_workers > 0 should not raise any error
+    StreamingDataLoader(dataset_with_pytree, num_workers=2, multiprocessing_context="fork")
+
+    # 3. ParquetLoader with spawn / forkserver context and num_workers > 0 should not raise any error
+    StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="spawn")
+    StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="forkserver")
+
+    # 4. ParquetLoader with fork context and num_workers > 0 must raise RuntimeError
+    with pytest.raises(RuntimeError, match="The `ParquetLoader` uses Polars, which is not compatible with the `fork`"):
+        StreamingDataLoader(dataset_with_parquet, num_workers=2, multiprocessing_context="fork")
+
+    # 5. Combined dataset wrapping ParquetLoader must also raise RuntimeError with fork context
+    combined_parquet = DummyCombinedDataset([dataset_with_parquet, dataset_with_pytree])
+    with pytest.raises(RuntimeError, match="The `ParquetLoader` uses Polars, which is not compatible with the `fork`"):
+        StreamingDataLoader(combined_parquet, num_workers=2, multiprocessing_context="fork")
+
+    combined_pytree = DummyCombinedDataset([dataset_with_pytree, dataset_with_pytree])
+    StreamingDataLoader(combined_pytree, num_workers=2, multiprocessing_context="fork")

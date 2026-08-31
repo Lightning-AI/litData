@@ -62,3 +62,41 @@ def test_parquet_reader(tmpdir):
     )
 
     assert sorted(os.listdir(os.path.join(tmpdir, "output_dir"))) == ["0_5", "10_5", "15_5", "20_5", "25_5", "5_5"]
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow is required")
+def test_parquet_reader_row_group_shard_and_columns(tmpdir):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = os.path.join(tmpdir, "wide.parquet")
+    table = pa.table({"keep": list(range(12)), "drop": list(range(12, 24))})
+    pq.write_table(table, path, row_group_size=4)
+
+    reader = ParquetReader(os.path.join(tmpdir, "cache"), num_rows=5, to_pandas=False, columns=["keep"])
+    shards = reader.remap_items([path], 1)
+    assert len(shards) == 3
+
+    first = reader.read(shards[0])
+    assert first.column_names == ["keep"]
+    assert first.num_rows == 5
+    assert first.column("keep").to_pylist() == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow is required")
+def test_parquet_reader_filters(tmpdir):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = os.path.join(tmpdir, "vals.parquet")
+    pq.write_table(pa.table({"value": list(range(10))}), path, row_group_size=10)
+
+    reader = ParquetReader(
+        os.path.join(tmpdir, "cache"),
+        num_rows=10,
+        to_pandas=True,
+        filters=[("value", ">=", 7)],
+    )
+    shards = reader.remap_items([path], 1)
+    frame = reader.read(shards[0])
+    assert list(frame["value"]) == [7, 8, 9]

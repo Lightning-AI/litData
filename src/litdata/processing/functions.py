@@ -32,7 +32,7 @@ import torch
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
 from litdata.helpers import _check_version_and_prompt_upgrade
-from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, MapRecipe
+from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, MapRecipe, _is_studio_fuse_path
 from litdata.processing.readers import BaseReader
 from litdata.processing.utilities import (
     _get_work_dir,
@@ -48,6 +48,7 @@ from litdata.streaming.resolver import (
     _assert_dir_has_index_file,
     _assert_dir_is_empty,
     _execute,
+    _has_time_template,
     _resolve_dir,
 )
 from litdata.utilities._pytree import tree_flatten
@@ -63,13 +64,27 @@ def _is_remote_file(path: str) -> bool:
     return obj.scheme in _SUPPORTED_PROVIDERS
 
 
+def _assert_supported_write_url(output_dir: Dir) -> None:
+    """optimize/map can upload only s3/gs/r2. azure:// and hf:// are read-side."""
+    if output_dir.url is None:
+        return
+    scheme = parse.urlparse(output_dir.url).scheme
+    if scheme and scheme not in _SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"Cannot write optimized data to `{scheme}://` ({output_dir.url}). "
+            f"Supported upload schemes: {', '.join(_SUPPORTED_PROVIDERS)}. "
+            "Stream from azure:// or hf:// with StreamingDataset after uploading via s3/gs/r2 or a local copy."
+        )
+
+
 def _get_indexed_paths(data: Any) -> dict[int, str]:
     flattened_item, _ = tree_flatten(data)
 
     return {
         index: element
         for index, element in enumerate(flattened_item)
-        if isinstance(element, str) and (os.path.exists(element) or _is_remote_file(element))
+        if isinstance(element, str)
+        and (_is_remote_file(element) or _is_studio_fuse_path(element) or os.path.exists(element))
     }
 
 
@@ -90,13 +105,21 @@ def _get_input_dir(inputs: Sequence[Any]) -> str | None:
     path = list(indexed_paths.values())[0]
     if _is_remote_file(path):
         return os.path.dirname(path)
+    if _is_studio_fuse_path(path) or path.startswith("/teamspace") or path.startswith("\\teamspace"):
+        return _teamspace_prefix(path)
     absolute_path = str(Path(path).resolve())
 
-    if _IS_IN_STUDIO or absolute_path.startswith("/teamspace"):
-        if "/.project" in absolute_path:
-            return "/" + os.path.join(*str(list(indexed_paths.values())[0]).split("/")[:4])
-        return "/" + os.path.join(*str(absolute_path).split("/")[:4])
+    if _IS_IN_STUDIO or absolute_path.startswith("/teamspace") or absolute_path.startswith("\\teamspace"):
+        if "/.project" in absolute_path.replace("\\", "/"):
+            return _teamspace_prefix(str(list(indexed_paths.values())[0]))
+        return _teamspace_prefix(absolute_path)
     return None
+
+
+def _teamspace_prefix(path: str) -> str:
+    """First three ``/teamspace/...`` components, always with POSIX separators."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return "/" + "/".join(parts[:3])
 
 
 def _get_default_num_workers() -> int:
@@ -123,6 +146,17 @@ class LambdaMapRecipe(MapRecipe):
         params = inspect.signature(_fn).parameters
         self._contains_device = "device" in params
         self._contains_is_last = "is_last" in params
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop the full input sequence when pickling into spawn workers.
+
+        The parent already shards items onto per-worker queues. Workers only need
+        ``prepare_item``; keeping ``_inputs`` in the pickle would duplicate the list
+        once per process.
+        """
+        state = self.__dict__.copy()
+        state["_inputs"] = None
+        return state
 
     def prepare_structure(self, _: str | None) -> Any:
         return self._inputs
@@ -168,6 +202,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
+        key_fn: Callable[[Any], Any] | None = None,
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -175,6 +210,7 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
             compression=compression,
             encryption=encryption,
             storage_options=storage_options,
+            key_fn=key_fn,
         )
         self._fn = fn
         self._inputs = inputs
@@ -184,6 +220,17 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         self.check_fn()
 
         self.prepare_item = self._prepare_item_generator if self.is_generator else self._prepare_item  # type: ignore
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop the full input sequence when pickling into spawn workers.
+
+        The parent already shards items onto per-worker queues. Workers only need
+        ``prepare_item``; keeping ``_inputs`` in the pickle would duplicate the list
+        once per process.
+        """
+        state = self.__dict__.copy()
+        state["_inputs"] = None
+        return state
 
     def check_fn(self) -> None:
         if (
@@ -219,6 +266,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
+        key_fn: Callable[[Any], Any] | None = None,
     ):
         super().__init__(
             chunk_size=chunk_size,
@@ -226,6 +274,7 @@ class QueueDataChunkRecipe(DataChunkRecipe):
             compression=compression,
             encryption=encryption,
             storage_options=storage_options,
+            key_fn=key_fn,
         )
         self._fn = fn
         self._queue = queue
@@ -258,7 +307,8 @@ def map(
     start_method: str | None = None,
     optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
-    keep_data_ordered: bool = True,
+    keep_data_ordered: bool | None = None,
+    broadcast_paths: bool = False,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -284,11 +334,11 @@ def map(
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
-        keep_data_ordered (bool): Whether to use a shared queue for item distribution among workers.
-            If False, all workers will fetch items dynamically from a shared queue, which helps balance
-            workload and reduce idle time when some workers finish early. This may lead to unordered
-            processing of items. If True, each worker processes a statically assigned subset of items
-            in order.
+        keep_data_ordered: If False (default), shard items per node then share one work queue among
+            that node's workers. Faster when workers finish at different times; item order is not
+            preserved. If True, each worker processes a static slice in order. ``None`` uses False.
+        broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
+            Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -319,7 +369,10 @@ def map(
         )
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
+        # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
+        should_broadcast_paths = broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
         _output_dir: Dir = _resolve_dir(output_dir)
+        _assert_supported_write_url(_output_dir)
 
         if _output_dir.url and "cloudspaces" in _output_dir.url:
             raise ValueError(
@@ -332,6 +385,7 @@ def map(
 
         if not isinstance(inputs, StreamingDataLoader):
             input_dir = input_dir or _get_input_dir(inputs)
+            should_broadcast_paths = should_broadcast_paths or _has_time_template(input_dir)
             resolved_dir = _resolve_dir(input_dir)
 
             if isinstance(batch_size, int) and batch_size > 1:
@@ -355,6 +409,7 @@ def map(
             start_method=start_method,
             storage_options=storage_options,
             keep_data_ordered=keep_data_ordered,
+            broadcast_paths=should_broadcast_paths,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
@@ -411,8 +466,10 @@ def optimize(
     start_method: str | None = None,
     optimize_dns: bool | None = None,
     storage_options: dict[str, Any] = {},
-    keep_data_ordered: bool = True,
+    keep_data_ordered: bool | None = None,
     verbose: bool = True,
+    broadcast_paths: bool = False,
+    key_fn: Callable[[Any], Any] | None = None,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -446,21 +503,29 @@ def optimize(
             Set this to ``False`` if the order in which samples are processed should be preserved.
         batch_size: Group the inputs into batches of batch_size length.
         mode: The mode to use when writing the data. Accepts either ``append`` or ``overwrite`` or None.
-            Defaults to None.
+            Defaults to None. ``append`` continues **chunk indices** from an existing dataset; it does not
+            resume an interrupted job (use ``use_checkpoint`` for that).
         use_checkpoint: Whether to create checkpoints while processing the data, which can be used to resume the
-            processing from the last checkpoint if the process is interrupted. (`Default: False`)
+            processing from the last checkpoint if the process is interrupted. (`Default: False`).
+            This is **not** the same as ``mode="append"`` (which continues chunk numbering from an existing
+            ``index.json``). Do not combine them. Checkpoint resume is unsupported for generators and Queue inputs.
         item_loader: The item loader that will be used during loading in StreamingDataset. Determines
                 the format in which the data is stored and optimized for loading.
         start_method: The start method used by python multiprocessing package. Default to spawn unless running
             inside an interactive shell like Ipython.
         optimize_dns: Whether the optimized dns should be used.
         storage_options: Storage options for the cloud provider.
-        keep_data_ordered (bool): Whether to use a shared queue for item distribution among workers.
-            If False, all workers will fetch items dynamically from a shared queue, which helps balance
-            workload and reduce idle time when some workers finish early. This may lead to unordered
-            processing of items. If True, each worker processes a statically assigned subset of items
-            in order.
+        keep_data_ordered: If False (default), shard items per node then share one work queue among
+            that node's workers. Faster when workers finish at different times; item order is not
+            preserved. If True, each worker processes a static slice in order. ``None`` uses False
+            unless ``use_checkpoint`` or ``align_chunking`` is set (those require order).
         verbose: Whether to print the progress of the optimization. Defaults to True.
+        broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
+            Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template so ranks
+            share one expanded path. When off, each rank uses its locally resolved path.
+        key_fn: Optional callable ``sample -> key`` (str or int). When set, writes a ``keys/``
+            sidecar mapping each key to its sample ``index`` (and chunk location) for
+            ``dataset[key]`` / ``dataset_update``.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -510,6 +575,8 @@ def optimize(
 
     if num_nodes is None or int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0)) > 0:
         DATA_OPTIMIZER_NUM_NODES = int(os.getenv("DATA_OPTIMIZER_NUM_NODES", 0))
+        # Detect before `_resolve_dir` expands `{%strftime}` (Dir objects lose the template).
+        should_broadcast_paths = broadcast_paths or _has_time_template(output_dir) or _has_time_template(input_dir)
         _output_dir: Dir = _resolve_dir(output_dir)
 
         if (
@@ -523,6 +590,8 @@ def optimize(
             output_dir = _get_work_dir().lstrip("/").rstrip("/") + "/" + output_dir.lstrip("/").rstrip("/")
             _output_dir = _resolve_dir(output_dir)
 
+        _assert_supported_write_url(_output_dir)
+
         if _output_dir.url is not None and "cloudspaces" in _output_dir.url:
             raise ValueError(
                 f"The provided `output_dir` isn't valid. Found {_output_dir.path}."
@@ -535,7 +604,9 @@ def optimize(
 
         if not isinstance(inputs, StreamingDataLoader) and queue is None:
             assert inputs is not None
-            resolved_dir = _resolve_dir(input_dir or _get_input_dir(inputs))
+            input_dir_resolved = input_dir or _get_input_dir(inputs)
+            should_broadcast_paths = should_broadcast_paths or _has_time_template(input_dir_resolved)
+            resolved_dir = _resolve_dir(input_dir_resolved)
 
             if isinstance(batch_size, int) and batch_size > 1:
                 inputs = [inputs[pos : pos + batch_size] for pos in range(0, len(inputs), batch_size)]
@@ -576,6 +647,7 @@ def optimize(
             storage_options=storage_options,
             keep_data_ordered=keep_data_ordered,
             verbose=verbose,
+            broadcast_paths=should_broadcast_paths,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
@@ -591,6 +663,7 @@ def optimize(
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
+                    key_fn=key_fn,
                 )
             else:
                 assert queue is not None
@@ -603,6 +676,7 @@ def optimize(
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
+                    key_fn=key_fn,
                 )
             assert recipe is not None, "Recipe should be defined at this point."
             data_processor.run(recipe)
@@ -619,10 +693,11 @@ def _listdir(folder: str) -> tuple[str, list[str]]:
 
 
 class walk:
-    """This class is an optimized version of os.walk for listing files and folders from cloud filesystem.
+    """Threaded directory listing via ``os.listdir`` (Studio-oriented).
 
-    .. note:: The order of files and folders yielded aren't depth-first anymore due to the asynchronous listing call.
-
+    This is **not** a cloud-aware ``os.walk``. It lists local / FUSE paths with a
+    thread pool. Yield order is not depth-first. Outside Lightning Studio a
+    warning is printed — prefer ``os.walk`` or bucket listing APIs locally.
     """
 
     def __init__(self, folder: str, max_workers: int | None = os.cpu_count()) -> None:

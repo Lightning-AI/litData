@@ -34,6 +34,18 @@ class _DistributedEnv:
         self.global_rank = global_rank
         self.num_nodes = num_nodes
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _DistributedEnv):
+            return NotImplemented
+        return (self.world_size, self.global_rank, self.num_nodes) == (
+            other.world_size,
+            other.global_rank,
+            other.num_nodes,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.world_size, self.global_rank, self.num_nodes))
+
     @classmethod
     def detect(cls) -> "_DistributedEnv":
         """Tries to automatically detect the distributed environment parameters.

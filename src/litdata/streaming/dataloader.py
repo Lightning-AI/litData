@@ -12,9 +12,11 @@
 # limitations under the License.
 
 import asyncio
+import cProfile
 import inspect
 import logging
 import os
+import pstats
 from collections.abc import Callable
 from copy import deepcopy
 from importlib import reload
@@ -35,12 +37,16 @@ from torch.utils.data.dataloader import (
 from torch.utils.data.sampler import BatchSampler, Sampler
 
 from litdata.constants import _DEFAULT_CHUNK_BYTES, _VIZ_TRACKER_AVAILABLE
-from litdata.debugger import _get_log_msg
+from litdata.debugger import CAT_BATCH, CAT_EPOCH, emit_trace
 from litdata.streaming import Cache
+from litdata.streaming.collate import litdata_collate
 from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
+from litdata.streaming.elastic import _round_down_drop_first, sample_in_epoch_from_state, topology_changed
 from litdata.streaming.parallel import ParallelStreamingDataset
+from litdata.streaming.posix_fast import posix_max_data_workers, raise_nofile_limit
 from litdata.streaming.sampler import CacheBatchSampler
+from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities._pytree import tree_flatten
 from litdata.utilities.base import (
     __NUM_CYCLES_KEY__,
@@ -51,6 +57,38 @@ from litdata.utilities.base import (
 from litdata.utilities.env import _DistributedEnv
 
 logger = logging.getLogger("litdata.streaming.dataloader")
+
+_CPROFILE_MAIN_STEM = "cprofile_main"
+_CPROFILE_WORKER_STEM = "cprofile_worker0"
+
+
+def _cprofile_output_dir(profile_dir: str | None) -> str:
+    path = os.path.abspath(profile_dir or os.getcwd())
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _dump_cprofile(profiler: cProfile.Profile, stem: str) -> None:
+    """Write ``{stem}.prof`` and a short ``{stem}.txt`` tottime/cumtime dump."""
+    profiler.disable()
+    prof_path = f"{stem}.prof"
+    txt_path = f"{stem}.txt"
+    profiler.dump_stats(prof_path)
+    with open(txt_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "Prefer tottime (self time). cumtime mixes threads in the same process "
+            "(worker 0 includes fetch + prefetch + collate) and over-counts waits.\n"
+            "C extensions (JPEG decode, upsample, S3/obstore) appear on the Python caller.\n\n"
+        )
+        stats = pstats.Stats(profiler, stream=handle)
+        stats.strip_dirs()
+        handle.write("--- tottime ---\n")
+        stats.sort_stats("tottime").print_stats(40)
+        handle.write("\n--- cumtime ---\n")
+        stats.sort_stats("cumtime").print_stats(40)
+        handle.write("\n--- litdata ---\n")
+        stats.sort_stats("tottime").print_stats("litdata", 40)
+    print(f"[litdata] cProfile wrote {prof_path} and {txt_path}", flush=True)
 
 
 def _equal_items(data_1: Any, data_2: Any) -> bool:
@@ -459,6 +497,57 @@ class _ProfileWorkerLoop:
             tracer.save()
 
 
+class _CProfileWorkerLoop:
+    """cProfile worker 0's DataLoader loop (stdlib; no viztracer)."""
+
+    def __init__(self, profile_dir: str) -> None:
+        self._profile_dir = profile_dir
+
+    def __call__(
+        self,
+        dataset_kind: Any,
+        dataset: Any,
+        index_queue: Any,
+        data_queue: Any,
+        done_event: Any,
+        auto_collation: Any,
+        collate_fn: Any,
+        drop_last: Any,
+        base_seed: Any,
+        init_fn: Any,
+        worker_id: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        from torch.utils.data._utils import worker
+
+        profiler: cProfile.Profile | None = None
+        if worker_id == 0:
+            profiler = cProfile.Profile()
+            profiler.enable()
+
+        reloaded_worker = reload(worker)
+        try:
+            reloaded_worker._worker_loop(
+                dataset_kind,
+                dataset,
+                index_queue,
+                data_queue,
+                done_event,
+                auto_collation,
+                collate_fn,
+                drop_last,
+                base_seed,
+                init_fn,
+                worker_id,
+                *args,
+                **kwargs,
+            )
+        finally:
+            if profiler is not None:
+                _dump_cprofile(profiler, os.path.join(self._profile_dir, _CPROFILE_WORKER_STEM))
+
+
 class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
     def __init__(self, loader: DataLoader) -> None:
         self._loader = loader
@@ -468,17 +557,42 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
             else []
         )
         self._num_workers = loader.num_workers
+        self._cprofile: cProfile.Profile | None = None
 
         distributed_env = _DistributedEnv.detect()
+        profile_cprofile = bool(getattr(self._loader, "_profile_cprofile", False))
+        from torch.utils.data._utils import worker
 
-        if self._loader._profile_batches and distributed_env.global_rank == 0 and _VIZ_TRACKER_AVAILABLE:
-            from torch.utils.data._utils import worker
+        original_worker_loop: Any = None
 
-            worker._worker_loop = _ProfileWorkerLoop(
-                self._loader._profile_batches, self._loader._profile_skip_batches, self._loader._profile_dir
-            )
+        if distributed_env.global_rank == 0:
+            if self._loader._profile_batches and _VIZ_TRACKER_AVAILABLE:
+                original_worker_loop = worker._worker_loop
+                worker._worker_loop = _ProfileWorkerLoop(
+                    self._loader._profile_batches, self._loader._profile_skip_batches, self._loader._profile_dir
+                )
+            elif profile_cprofile:
+                original_worker_loop = worker._worker_loop
+                worker._worker_loop = _CProfileWorkerLoop(_cprofile_output_dir(self._loader._profile_dir))
 
-        super().__init__(loader)
+        # Workers fork/spawn here. Enable the parent profiler only after that so
+        # the child does not inherit an active cProfile (one profiler per process).
+        try:
+            super().__init__(loader)
+        finally:
+            if original_worker_loop is not None:
+                worker._worker_loop = original_worker_loop
+
+        if profile_cprofile and distributed_env.global_rank == 0:
+            self._cprofile = cProfile.Profile()
+            self._cprofile.enable()
+
+    def _shutdown_workers(self) -> None:
+        if self._cprofile is not None:
+            stem = os.path.join(_cprofile_output_dir(self._loader._profile_dir), _CPROFILE_MAIN_STEM)
+            _dump_cprofile(self._cprofile, stem)
+            self._cprofile = None
+        super()._shutdown_workers()
 
     def _try_put_index(self) -> None:
         # Used to restart on the right DataLoader worker
@@ -517,6 +631,43 @@ class StreamingDataLoaderCollateFn:
             }
 
         return self.collate_fn(items)
+
+
+def _is_fork_context(multiprocessing_context: Any) -> bool:
+    import multiprocessing as mp
+
+    if multiprocessing_context is None:
+        try:
+            return mp.get_start_method(allow_none=False) == "fork"
+        except Exception:
+            return False
+
+    if isinstance(multiprocessing_context, str):
+        return multiprocessing_context == "fork"
+
+    if hasattr(multiprocessing_context, "get_start_method"):
+        try:
+            return multiprocessing_context.get_start_method() == "fork"
+        except Exception:
+            return False
+
+    if hasattr(multiprocessing_context, "start_method"):
+        return multiprocessing_context.start_method == "fork"
+
+    return False
+
+
+def _has_parquet_loader(dataset: Any) -> bool:
+    from litdata.streaming.dataset import StreamingDataset
+    from litdata.streaming.item_loader import ParquetLoader
+
+    if isinstance(dataset, StreamingDataset):
+        return isinstance(dataset.item_loader, ParquetLoader)
+
+    if hasattr(dataset, "_datasets") and isinstance(dataset._datasets, (list, tuple)):
+        return any(_has_parquet_loader(d) for d in dataset._datasets)
+
+    return False
 
 
 class StreamingDataLoader(DataLoader):
@@ -569,6 +720,9 @@ class StreamingDataLoader(DataLoader):
         profile_skip_batches (int): How many batches to skip before recording
         profile_batches (int, bool, optional): Whether to record data loading profile and generate a result.json file.
         profile_dir (int, bool,  optional): Where to store the recorded trace when profile_batches is enabled.
+        profile_cprofile (bool, optional): Write stdlib cProfile stats for the main process and
+            worker 0 (``cprofile_main.prof`` / ``cprofile_worker0.prof``). Cannot be combined
+            with ``profile_batches`` (both use ``sys.setprofile``).
 
     """
 
@@ -583,12 +737,21 @@ class StreamingDataLoader(DataLoader):
         profile_batches: bool | int = False,
         profile_skip_batches: int = 0,
         profile_dir: str | None = None,
+        profile_cprofile: bool = False,
         prefetch_factor: int | None = None,
         shuffle: bool | None = None,
         drop_last: bool | None = None,
         collate_fn: Callable | None = None,
         **kwargs: Any,
     ) -> None:  # pyright: ignore
+        if num_workers > 0 and _is_fork_context(kwargs.get("multiprocessing_context")) and _has_parquet_loader(dataset):
+            raise RuntimeError(
+                "The `ParquetLoader` uses Polars, which is not compatible with the `fork` multiprocessing context "
+                "used by PyTorch's DataLoader on Linux. Using `fork` will cause deadlocks due to Polars' "
+                "internal thread pool. Please pass `multiprocessing_context='spawn'` (or 'forkserver') to "
+                "`StreamingDataLoader`. Check thread: https://github.com/Lightning-AI/litData/issues/823"
+            )
+
         if not isinstance(dataset, (StreamingDataset, _BaseStreamingDatasetWrapper)):
             raise RuntimeError(
                 "The provided dataset should be either an instance of StreamingDataset, CombinedStreamingDataset or "
@@ -601,10 +764,28 @@ class StreamingDataLoader(DataLoader):
         if drop_last is not None:
             dataset.set_drop_last(drop_last)
 
+        posix = getattr(dataset, "posix_fast", None)
+        if posix is not None and num_workers > 0:
+            capped = posix_max_data_workers(requested=num_workers)
+            if capped < num_workers:
+                logger.warning(
+                    "POSIX-fast: reducing num_workers %s → %s so worker RSS fits MemAvailable "
+                    "(set LITDATA_POSIX_MAX_WORKERS=0 to disable).",
+                    num_workers,
+                    capped,
+                )
+                num_workers = capped
+            raise_nofile_limit()
+
         dataset.set_batch_size(batch_size)
         dataset.set_num_workers(num_workers)
 
         shuffle = None
+
+        if profile_batches and profile_cprofile:
+            raise ValueError(
+                "`profile_batches` (viztracer) and `profile_cprofile` both install a profiler; enable only one of them."
+            )
 
         if profile_batches and not _VIZ_TRACKER_AVAILABLE:
             raise ModuleNotFoundError("To use profile_batches, viztracer is required. Run `pip install viztracer`")
@@ -612,8 +793,9 @@ class StreamingDataLoader(DataLoader):
         if profile_batches and num_workers == 0:
             raise ValueError("Profiling is supported only with num_workers >= 1.")
 
-        if collate_fn:
-            collate_fn = StreamingDataLoaderCollateFn(collate_fn)
+        if collate_fn is None:
+            collate_fn = litdata_collate
+        collate_fn = StreamingDataLoaderCollateFn(collate_fn)
 
         self.current_epoch = 0
         self.batch_size = batch_size
@@ -621,6 +803,8 @@ class StreamingDataLoader(DataLoader):
         self._profile_batches = profile_batches
         self._profile_skip_batches = profile_skip_batches
         self._profile_dir = profile_dir
+        self._profile_cprofile = profile_cprofile
+        self._cprofile_main: cProfile.Profile | None = None
         self._num_samples_yielded_streaming = 0
         self._num_samples_yielded_wrapper: dict[int, list[int]] = {}
         self._num_cycles: dict[int, list[int]] = {}
@@ -629,12 +813,13 @@ class StreamingDataLoader(DataLoader):
         self._worker_idx_iter: Any | None = None
         self._latest_worker_idx = 0
         self.restore = False
+        self._prefetch_factor = (2 if num_workers > 0 else None) if prefetch_factor is None else prefetch_factor
         super().__init__(
             dataset,
             *args,
             batch_size=batch_size,
             num_workers=num_workers,
-            prefetch_factor=(2 if num_workers > 0 else None) if prefetch_factor is None else prefetch_factor,
+            prefetch_factor=self._prefetch_factor,
             collate_fn=collate_fn,
             **kwargs,
         )  # type: ignore
@@ -668,39 +853,70 @@ class StreamingDataLoader(DataLoader):
             self.current_epoch += 1
 
         self.dataset.set_epoch(self.current_epoch)
-        logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "B"}))
+        emit_trace("dataloader", "B", CAT_EPOCH, epoch=self.current_epoch)
+        batch_idx = 0
+        if self._profile_cprofile and self.num_workers == 0:
+            self._cprofile_main = cProfile.Profile()
+            self._cprofile_main.enable()
 
-        if isinstance(self.dataset, StreamingDataset):
-            assert self.batch_size
-            for batch in super().__iter__():
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                self._num_samples_yielded_streaming += self.batch_size
-                yield batch
-        else:
-            self.dataset._set_use_streaming_dataloader(True)
-            assert self.batch_size
-            # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
-            for batch in super().__iter__():
-                self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
-                if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
-                    self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
-                        sample[-1].item() if self.batch_size > 1 else sample.item()
-                        for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
-                    ]
-
-                    if __NUM_CYCLES_KEY__ in batch:
-                        self._num_cycles[self._latest_worker_idx] = [
-                            cycle[-1].item() if self.batch_size > 1 else cycle.item()
-                            for cycle in batch[__NUM_CYCLES_KEY__]
-                        ]
-                        self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
-
-                    yield batch[__SAMPLES_KEY__]
-                else:
+        try:
+            if isinstance(self.dataset, StreamingDataset):
+                assert self.batch_size
+                timing = StreamingTimingStats.instance()
+                for batch in super().__iter__():
+                    emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    t0 = timing.start()
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    self._num_samples_yielded_streaming += self.batch_size
+                    timing.record("dataloader_yield_s", t0)
                     yield batch
+                    emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    batch_idx += 1
+            else:
+                self.dataset._set_use_streaming_dataloader(True)
+                assert self.batch_size
+                # TODO: Inject a custom collate function to avoid collating the __NUM_SAMPLES_YIELDED__ key
+                for batch in super().__iter__():
+                    emit_trace("batch", "B", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
+                    if isinstance(batch, dict) and __NUM_SAMPLES_YIELDED_KEY__ in batch:
+                        self._num_samples_yielded_wrapper[self._latest_worker_idx] = [
+                            sample[-1].item() if self.batch_size > 1 else sample.item()
+                            for sample in batch[__NUM_SAMPLES_YIELDED_KEY__]
+                        ]
 
-        logger.debug(_get_log_msg({"name": "iterating_dataloader", "ph": "E"}))
-        self.restore = False
+                        if __NUM_CYCLES_KEY__ in batch:
+                            self._num_cycles[self._latest_worker_idx] = [
+                                cycle[-1].item() if self.batch_size > 1 else cycle.item()
+                                for cycle in batch[__NUM_CYCLES_KEY__]
+                            ]
+                            self.dataset.update_epoch_counters(self._num_cycles[self._latest_worker_idx])
+
+                        yield batch[__SAMPLES_KEY__]
+                    else:
+                        yield batch
+                    emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
+                    batch_idx += 1
+
+            # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
+            # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
+            # the last `yield`) must leave `restore` untouched: callers that explicitly resumed from a
+            # checkpoint (`load_state_dict`) rely on `restore` staying `True` across such early exits so
+            # that the *next* `__iter__` call keeps skipping `reset_state_dict()` and replays from the
+            # loaded state (see `_StreamingMultiProcessingDataLoaderIter._try_put_index`). `restore` is
+            # only toggled back to `False` here, once the loop above completes a full epoch normally.
+            emit_trace("dataloader", "E", CAT_EPOCH, epoch=self.current_epoch)
+            self.restore = False
+        finally:
+            self._dump_cprofile_main()
+
+    def _dump_cprofile_main(self) -> None:
+        """Flush the in-process cProfile started for ``num_workers == 0``."""
+        profiler = self._cprofile_main
+        if profiler is None:
+            return
+        self._cprofile_main = None
+        _dump_cprofile(profiler, os.path.join(_cprofile_output_dir(self._profile_dir), _CPROFILE_MAIN_STEM))
 
     def __len__(self) -> int:
         if self._dataset_kind == _DatasetKind.Iterable:
@@ -765,8 +981,45 @@ class StreamingDataLoader(DataLoader):
         """
         self.current_epoch = obj["current_epoch"]
 
+        world_size = _DistributedEnv.detect().world_size
+        num_workers = self.num_workers or 1
+        batch_size = int(self.batch_size or 1)
+        if isinstance(self.dataset, (CombinedStreamingDataset, ParallelStreamingDataset)):
+            children = obj.get("dataset")
+            if isinstance(children, dict):
+                for child in children.values():
+                    if (
+                        isinstance(child, dict)
+                        and "input_dir_path" in child
+                        and topology_changed(
+                            child, world_size=world_size, num_workers=num_workers, batch_size=batch_size
+                        )
+                    ):
+                        raise ValueError(
+                            "CombinedStreamingDataset and ParallelStreamingDataset support resume only "
+                            "when world_size, num_workers, and batch_size match the checkpoint. "
+                            "Elastic restripe is implemented for StreamingDataset."
+                        )
+
+        elastic = False
         if isinstance(self.dataset, StreamingDataset):
-            self._num_samples_yielded_streaming = obj["num_samples_yielded"]
+            ds_state = obj["dataset"]
+            elastic = ds_state.get("resume_mode") == "elastic" or topology_changed(
+                ds_state,
+                world_size=world_size,
+                num_workers=num_workers,
+                batch_size=batch_size,
+            )
+            if elastic:
+                # Local yielded count is for the new grid; the canonical cursor lives on the dataset.
+                self._num_samples_yielded_streaming = 0
+                drop_first = sample_in_epoch_from_state(ds_state)
+                posix = getattr(self.dataset, "posix_fast", None)
+                if posix is None or not posix.window_shuffle:
+                    drop_first = _round_down_drop_first(drop_first, world_size, batch_size)
+                self.dataset._elastic_drop_first = drop_first
+            else:
+                self._num_samples_yielded_streaming = obj["num_samples_yielded"]
         else:
             self._num_samples_yielded_wrapper = obj["num_samples_yielded"]
 
@@ -774,7 +1027,10 @@ class StreamingDataLoader(DataLoader):
             self._num_cycles = obj["num_cycles"]
 
         # Used to restart on the next DataLoader worker from the previous run.
-        self._latest_worker_idx = obj["latest_worker_idx"] + 1
+        if elastic:
+            self._latest_worker_idx = 0
+        else:
+            self._latest_worker_idx = obj["latest_worker_idx"] + 1
         # Initialize _worker_idx if not already set (e.g., when loading state before first iteration)
         if self._worker_idx is None:
             self._worker_idx = cycle(list(range(self.num_workers if self.num_workers > 0 else 1)))
@@ -832,7 +1088,9 @@ class StreamingDataLoader(DataLoader):
             self.dataset.load_state_dict(obj["dataset"])
 
             # Inform that the dataloader is resuming.
-            if self._num_samples_yielded_streaming > 0 and self._num_samples_yielded_streaming < len(self.dataset):
+            if elastic or (
+                self._num_samples_yielded_streaming > 0 and self._num_samples_yielded_streaming < len(self.dataset)
+            ):
                 self.restore = True
         else:
             raise RuntimeError(

@@ -410,6 +410,13 @@ def test_combined_dataset_with_dataloader_2_epochs(tmpdir):
                 "shuffle": True,
                 "subsampled_files": ANY,
                 "region_of_interest": ANY,
+                "state_version": ANY,
+                "sample_in_epoch": ANY,
+                "num_canonical_nodes": ANY,
+                "initial_world_size": ANY,
+                "initial_num_workers": ANY,
+                "initial_batch_size": ANY,
+                "initial_num_nodes": ANY,
             },
             "1": {
                 "num_samples_yielded": 0,
@@ -426,6 +433,13 @@ def test_combined_dataset_with_dataloader_2_epochs(tmpdir):
                 "shuffle": True,
                 "subsampled_files": ANY,
                 "region_of_interest": ANY,
+                "state_version": ANY,
+                "sample_in_epoch": ANY,
+                "num_canonical_nodes": ANY,
+                "initial_world_size": ANY,
+                "initial_num_workers": ANY,
+                "initial_batch_size": ANY,
+                "initial_num_nodes": ANY,
             },
         },
         "current_epoch": 1,
@@ -656,3 +670,34 @@ def test_combined_dataset_per_dataset_batch_size(batch_sizes):
     # Final run check at loop end
     if current_ds is not None:
         assert run_length <= batch_sizes[current_ds]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="too slow in CI")
+def test_combined_rejects_topology_change_on_resume(tmpdir):
+    data_dir_1 = os.path.join(tmpdir, "data_1")
+    data_dir_2 = os.path.join(tmpdir, "data_2")
+    os.makedirs(data_dir_1)
+    os.makedirs(data_dir_2)
+    for path, offset in ((data_dir_1, 0), (data_dir_2, 10)):
+        cache = Cache(input_dir=path, chunk_size=2)
+        for i in range(8):
+            cache[i] = i + offset
+        cache.done()
+        cache.merge()
+
+    dataset = CombinedStreamingDataset(
+        datasets=[StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)],
+        seed=12345,
+        iterate_over_all=True,
+    )
+    loader = StreamingDataLoader(dataset, num_workers=1, batch_size=2)
+    next(iter(loader))
+    state = loader.state_dict()
+    dataset_b = CombinedStreamingDataset(
+        datasets=[StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)],
+        seed=12345,
+        iterate_over_all=True,
+    )
+    loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=2)
+    with pytest.raises(ValueError, match="support resume only"):
+        loader_b.load_state_dict(state)

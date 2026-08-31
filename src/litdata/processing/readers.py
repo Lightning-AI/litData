@@ -58,11 +58,20 @@ class BaseReader(ABC):
 
 
 class ParquetReader(BaseReader):
-    def __init__(self, cache_folder: str, num_rows: int = 65536, to_pandas: bool = True) -> None:
+    def __init__(
+        self,
+        cache_folder: str,
+        num_rows: int = 65536,
+        to_pandas: bool = True,
+        columns: list[str] | None = None,
+        filters: Any | None = None,
+    ) -> None:
         super().__init__()
         self.cache_folder = cache_folder
         self.num_rows = num_rows
         self.to_pandas = to_pandas
+        self.columns = columns
+        self.filters = filters
 
         if not _PYARROW_AVAILABLE:
             raise ModuleNotFoundError("Please, run: `pip install pyarrow`")
@@ -70,34 +79,73 @@ class ParquetReader(BaseReader):
         self.parquet_file = None
 
     def _get_num_rows(self, path: str) -> int:
-        import pyarrow.dataset as ds
+        import pyarrow.parquet as pq
 
-        df = ds.dataset(path).scanner()
-        return df.count_rows()
+        with pq.ParquetFile(path, memory_map=True) as parquet_file:
+            return int(parquet_file.metadata.num_rows)
+
+    def _filter_expression(self) -> Any | None:
+        if self.filters is None:
+            return None
+        import pyarrow.parquet as pq
+
+        if isinstance(self.filters, list):
+            return pq.filters_to_expression(self.filters)
+        return self.filters
+
+    def _write_shard(self, parquet_file: Any, start: int, end: int, dest: str) -> None:
+        """Write ``[start, end)`` using only the overlapping row groups."""
+        import pyarrow.parquet as pq
+
+        metadata = parquet_file.metadata
+        offset = 0
+        row_group_ids: list[int] = []
+        first_group_start = 0
+        for group_idx in range(metadata.num_row_groups):
+            group_rows = int(metadata.row_group(group_idx).num_rows)
+            group_end = offset + group_rows
+            if group_end > start and offset < end:
+                if not row_group_ids:
+                    first_group_start = offset
+                row_group_ids.append(group_idx)
+            offset = group_end
+            if offset >= end:
+                break
+
+        table = parquet_file.read_row_groups(row_group_ids, columns=self.columns, use_threads=True)
+        local_start = start - first_group_start
+        table = table.slice(local_start, end - start)
+        filter_expr = self._filter_expression()
+        if filter_expr is not None:
+            table = table.filter(filter_expr)
+        pq.write_table(table, dest)
 
     def read(self, filepath: str) -> Any:
-        """Read the parquet file and return a parquet file object."""
+        """Read a parquet shard. Returns ``ParquetFile`` unless ``to_pandas``, ``columns``, or ``filters`` is set."""
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        # Try to force dellocation to avoid memory leak
         with contextlib.suppress(Exception):
             pa.jemalloc_set_decay_ms(0)
 
-        # close the previous parquet file to release the memory
         if self.parquet_file is not None:
             self.parquet_file.close()
             self.parquet_file = None
+
+        if self.to_pandas or self.columns is not None or self.filters is not None:
+            table = pq.read_table(
+                filepath,
+                columns=self.columns,
+                filters=self.filters,
+                memory_map=True,
+            )
+            return table.to_pandas() if self.to_pandas else table
 
         self.parquet_file = pq.ParquetFile(filepath, memory_map=True)
         return self.parquet_file
 
     def remap_items(self, filepaths: list[str], _: int) -> list[str]:
-        """Reshard the parquet files for optimized processing.
-
-        If a parquet file contains more number of rows than a specified `num_rows`,
-        it will be split into multiple files for faster processing.
-        """
+        """Reshard parquet files by ``num_rows`` without loading each file into memory."""
         import pyarrow.parquet as pq
 
         print("Starting resharding the parquet files for optimized processing.")
@@ -110,23 +158,16 @@ class ParquetReader(BaseReader):
         _tqdm = _get_tqdm_iterator_if_available()
 
         for filepath in filepaths:
-            num_rows = self._get_num_rows(filepath)
-
-            table = None
             parquet_filename = os.path.basename(filepath)
-
-            for start in _tqdm(range(0, num_rows, self.num_rows)):
-                end = min(start + self.num_rows, num_rows)
-                chunk_filepath = os.path.join(cache_folder, f"{start}_{end}_{parquet_filename}")
-                new_items.append(chunk_filepath)
-
-                if os.path.exists(chunk_filepath):
-                    continue
-
-                if table is None:
-                    table = pq.read_table(filepath, memory_map=True)
-
-                pq.write_table(table[start:end], chunk_filepath)
+            with pq.ParquetFile(filepath, memory_map=True) as parquet_file:
+                num_rows = int(parquet_file.metadata.num_rows)
+                for start in _tqdm(range(0, num_rows, self.num_rows)):
+                    end = min(start + self.num_rows, num_rows)
+                    chunk_filepath = os.path.join(cache_folder, f"{start}_{end}_{parquet_filename}")
+                    new_items.append(chunk_filepath)
+                    if os.path.exists(chunk_filepath):
+                        continue
+                    self._write_shard(parquet_file, start, end, chunk_filepath)
 
         print("Finished resharding the parquet files for optimized processing.")
 

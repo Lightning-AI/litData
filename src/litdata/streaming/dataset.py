@@ -13,7 +13,8 @@
 
 import logging
 import os
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Sequence
 from time import time
 from typing import Any
 
@@ -22,14 +23,26 @@ from torch.utils.data import IterableDataset
 
 from litdata import __version__
 from litdata.constants import _INDEX_FILENAME
+from litdata.debugger import CAT_SAMPLE, emit_trace, is_tracing
 from litdata.helpers import _check_version_and_prompt_upgrade
 from litdata.streaming import Cache
 from litdata.streaming.config import ChunksConfig
+from litdata.streaming.elastic import (
+    Granularity,
+    _round_down_drop_first,
+    canonical_item_stream,
+    lockstep_stream_from_worker_seqs,
+    restripe_items,
+    sample_in_epoch_from_state,
+    topology_changed,
+    worker_plan_to_chunks,
+)
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
+from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, posix_fast_supports_config
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle
+from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _should_replace_path_filestores,
@@ -38,12 +51,9 @@ from litdata.utilities.dataset_utilities import (
 )
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int
+from litdata.utilities.format import _convert_bytes_to_int, _is_absolute_cache_size, _parse_max_cache_size
 from litdata.utilities.hf_dataset import index_hf_dataset
-from litdata.utilities.shuffle import (
-    _find_chunks_per_workers_on_which_to_skip_deletion,
-    _map_node_worker_rank_to_chunk_indexes_to_not_delete,
-)
+from litdata.utilities.shuffle import _get_shared_chunks
 
 logger = logging.getLogger("litdata.streaming.dataset")
 
@@ -60,7 +70,7 @@ class StreamingDataset(IterableDataset):
         drop_last: bool | None = None,
         seed: int = 42,
         serializers: dict[str, Serializer] | None = None,
-        max_cache_size: int | str = "100GB",
+        max_cache_size: int | float | str | None = None,
         subsample: float = 1.0,
         encryption: Encryption | None = None,
         storage_options: dict | None = {},
@@ -69,6 +79,7 @@ class StreamingDataset(IterableDataset):
         index_path: str | None = None,
         force_override_state_dict: bool = False,
         transform: Callable | list[Callable] | None = None,
+        num_canonical_nodes: int | None = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -85,7 +96,10 @@ class StreamingDataset(IterableDataset):
                 and `False` otherwise.
             seed: Random seed for shuffling.
             serializers: The serializers used to serialize and deserialize the chunks.
-            max_cache_size: The maximum cache size used by the StreamingDataset.
+            max_cache_size: Cache budget. ``None`` (default) uses 75% of currently
+                free disk and leaves at least 50GB free when possible. Pass a size
+                (``"100G"`` / ``"50GB"``), a fraction of free disk (``0.90``), or
+                set ``MAX_CACHE_SIZE``.
             subsample: Float representing fraction of the dataset to be randomly sampled (e.g., 0.1 => 10% of dataset).
             encryption: The encryption object to use for decrypting the data.
             storage_options: Additional connection options for accessing storage services.
@@ -96,6 +110,9 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
+            num_canonical_nodes: Frozen first-run node count recorded in checkpoints
+                (default: first-run ``world_size``). Elastic resume rebuilds remaining
+                IDs from that first-run shuffler assignment, not a different bucket layout.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -162,27 +179,34 @@ class StreamingDataset(IterableDataset):
         self.seed = seed
         self.max_cache_size = max_cache_size
 
-        max_cache_size_in_bytes = int(
-            _convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
-        )
-        min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
-        if max_cache_size_in_bytes < min_cache_size_in_bytes:
-            logger.warning(
-                "The provided `max_cache_size` is less than 25GB. "
-                "This may lead to performance issues during the training process. "
-                "Consider increasing the `max_cache_size` to at least 25GB to avoid potential performance degradation."
-            )
+        if max_cache_size is not None and _is_absolute_cache_size(max_cache_size):
+            max_cache_size_in_bytes = _parse_max_cache_size(max_cache_size)
+            # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
+            min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
+            if max_cache_size_in_bytes < min_cache_size_in_bytes:
+                logger.warning(
+                    "The provided `max_cache_size` is less than 25GB. "
+                    "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
+                    "`num_workers * max_pre_download * chunk_size` (often 5–12GB). "
+                    "Consider increasing `max_cache_size` to at least 25GB to avoid eviction thrash."
+                )
 
         self.cache: Cache | None = None
         self.worker_env: _WorkerEnv | None = None
         self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
         self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
-        self.upcoming_indexes: list[int] = []  # contains list of upcoming indexes to be processed
+        # Upcoming in-chunk sample indexes for this worker. ``deque`` keeps ``popleft`` O(1);
+        # a list ``pop(0)`` would be O(n) per sample for large chunks.
+        self.upcoming_indexes: deque[int] = deque()
+        # Lazy parquet key index (``keys/shard-*.parquet``) for ``dataset[key]`` lookups.
+        self._key_index: Any | None = None
 
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
 
         self.num_chunks: int | None = None  # total number of chunks that the current worker will work on
+        # Dataset-wide chunk count for in-chunk shuffle RNG (not the worker's stripe length).
+        self._shuffle_num_chunks: int = 0
         self.global_index = 0  # total number of samples processed by the current worker up until now
 
         # number of samples processed by the current worker in the current chunk
@@ -195,6 +219,9 @@ class StreamingDataset(IterableDataset):
         self.serializers = serializers
         self._state_dict: dict[str, Any] | None = None
         self._force_override_state_dict = force_override_state_dict
+        self.num_canonical_nodes = num_canonical_nodes
+        self._elastic_item_lists: list[list[int]] | None = None
+        self._elastic_drop_first: int | None = None
         # Has slightly different meaning in the context of the dataset
         # We consider `num_workers = 0` from `torch.utils.DataLoader` still as 1 worker (the main process)
         self.num_workers: int = 1
@@ -207,6 +234,16 @@ class StreamingDataset(IterableDataset):
         elif input_dir.data_connection_id and storage_options is None:
             storage_options = {"data_connection_id": input_dir.data_connection_id}
         self.storage_options = storage_options
+        self.posix_fast: PosixFastProfile | None = detect_posix_fast(
+            input_dir.path,
+            storage_options,
+            remote_url=input_dir.url,
+        )
+        if self.posix_fast is not None:
+            logger.info(
+                "StreamingDataset POSIX-fast %s: mmap chunks in place (no cache copy, no source delete).",
+                self.posix_fast.kind,
+            )
         self.session_options = session_options
         self.max_pre_download = max_pre_download
         if transform is not None:
@@ -269,7 +306,8 @@ class StreamingDataset(IterableDataset):
             self.current_epoch = current_epoch
 
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
-        if _should_replace_path(self.input_dir.path):
+        skip_copy = self.posix_fast is not None and self.posix_fast.skip_cache_copy
+        if not skip_copy and _should_replace_path(self.input_dir.path):
             cache_path = _try_create_cache_dir(
                 input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
                 cache_dir=self.cache_dir.path,
@@ -325,6 +363,15 @@ class StreamingDataset(IterableDataset):
                 "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
             )
 
+        if self.posix_fast is not None and not posix_fast_supports_config(cache._reader._config):
+            self.posix_fast = None
+
+        if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
+            chunks = cache._reader._config._chunks or []
+            cache._reader.enable_posix_fast(
+                list(range(len(chunks))), keep=max(4, self.max_pre_download), prefetch=False
+            )
+
         return cache
 
     def _create_shuffler(self, cache: Cache) -> Shuffle:
@@ -334,7 +381,11 @@ class StreamingDataset(IterableDataset):
             state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
-        return FullShuffle(cache, seed, drop_last) if self.shuffle else NoShuffle(cache, seed, drop_last)
+        if not self.shuffle:
+            return NoShuffle(cache, seed, drop_last)
+        if self.posix_fast is not None and self.posix_fast.window_shuffle:
+            return WindowShuffle(cache, seed, drop_last)
+        return FullShuffle(cache, seed, drop_last)
 
     def __len__(self) -> int:
         return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
@@ -354,65 +405,163 @@ class StreamingDataset(IterableDataset):
             self.shuffler = self._create_shuffler(cache)
         return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
 
+    def _canonical_plans(
+        self,
+        *,
+        drop_first: int,
+        num_workers: int,
+        batch_size: int,
+    ) -> list[list[tuple[int, list[int]]]]:
+        assert self.cache is not None
+        assert self.shuffler is not None
+        state = self._state_dict or {}
+        init_world = int(state.get("initial_world_size", state.get("world_size", self.distributed_env.world_size)))
+        init_nw = int(state.get("initial_num_workers", state.get("num_workers", num_workers)))
+        init_bs = int(state.get("initial_batch_size", state.get("batch_size", batch_size)))
+        init_world = max(1, init_world)
+        init_nw = max(1, init_nw)
+        init_bs = max(1, init_bs)
+        init_nodes = int(state.get("initial_num_nodes", getattr(self.distributed_env, "num_nodes", 1)))
+        init_nodes = max(1, init_nodes)
+        ncn = state.get("num_canonical_nodes")
+        if ncn is None:
+            ncn = self.num_canonical_nodes if self.num_canonical_nodes is not None else init_world
+        ncn = max(1, int(ncn))
+        window = self.shuffler.window if isinstance(self.shuffler, WindowShuffle) else None
+        granularity: Granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
+        if granularity == "item":
+            drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, batch_size)
+        seed = int(state.get("seed", self.seed))
+        init_env = _DistributedEnv(init_world, 0, init_nodes)
+        workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
+            init_env, init_nw, init_bs, self.current_epoch
+        )
+        seqs: list[list[tuple[int, int]]] = []
+        n_chunks = self._shuffle_num_chunks or len(self.cache.get_chunk_intervals())
+        for wchunks, wintervals in zip(workers_chunks, workers_intervals):
+            seq: list[tuple[int, int]] = []
+            for chunk_i, interval in enumerate(wintervals):
+                chunk_index = int(wchunks[chunk_i])
+                items = self.shuffler(np.arange(interval[1], interval[2]), n_chunks, self.current_epoch, chunk_index)
+                seq.extend((chunk_index, int(item)) for item in items)
+            seqs.append(seq)
+        if seqs:
+            stream = lockstep_stream_from_worker_seqs(
+                seqs, world_size=init_world, num_workers=init_nw, batch_size=init_bs
+            )
+        else:
+            stream = canonical_item_stream(
+                self.cache.get_chunk_intervals(),
+                seed=seed,
+                epoch=self.current_epoch,
+                shuffle=self.shuffle,
+                num_canonical_nodes=ncn,
+                window=window,
+            )
+        return restripe_items(
+            stream,
+            world_size=self.distributed_env.world_size,
+            num_workers=num_workers,
+            batch_size=batch_size,
+            drop_first=drop_first,
+            drop_last=self.drop_last,
+            granularity=granularity,
+        )
+
     def __iter__(self) -> "StreamingDataset":
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
             self.distributed_env = _DistributedEnv.detect()
 
-        self.worker_env = _WorkerEnv.detect()
+        # Threaded StreamingDataLoader sets ``_forced_worker_env`` so each loader thread
+        # gets a distinct rank without relying on torch's process-worker ``get_worker_info``.
+        forced_worker_env = getattr(self, "_forced_worker_env", None)
+        self.worker_env = forced_worker_env if forced_worker_env is not None else _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
+        self._shuffle_num_chunks = len(self.cache.get_chunk_intervals())
         self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
 
-        # Handle restart
+        # Handle restart. Fresh epochs and same-topology resume keep today's shuffler order.
+        use_canonical = False
+        same_topology = True
         if self._state_dict:
             self._validate_state_dict()
             state: dict[str, Any] = self._state_dict
             self.current_epoch = state["current_epoch"]
+            same_topology = not topology_changed(
+                state,
+                world_size=self.distributed_env.world_size,
+                num_workers=self.worker_env.world_size,
+                batch_size=self.batch_size,
+            )
+            if (not same_topology) or state.get("resume_mode") == "elastic":
+                use_canonical = True
 
-        workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
-            self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
-        )
+        self._elastic_item_lists = None
+        if not use_canonical:
+            self._elastic_drop_first = None
 
-        worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
-        self.worker_chunks = workers_chunks[worker_rank]
-        self.worker_intervals = workers_intervals[worker_rank]
+        workers_intervals: list[Any] | None = None
+        if use_canonical:
+            workers_chunks = self._setup_elastic_resume(replay_workers=bool(self._state_dict) and same_topology)
+        else:
+            workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
+                self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
+            )
 
-        # The max number of samples to return from `__next__` (in worker)
-        self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
+            worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
+            self.worker_chunks = workers_chunks[worker_rank]
+            self.worker_intervals = workers_intervals[worker_rank]
 
-        # Handle restart
-        if self._state_dict:
+            # The max number of samples to return from `__next__` (in worker)
+            self.stop_length = sum(interval[2] - interval[1] for interval in self.worker_intervals)
+
+        keep_shard = getattr(self.shuffler, "node_shard_fits", None)
+        if keep_shard is not None:
+            self.cache._reader.set_keep_node_shard(bool(keep_shard))
+
+        # Eagerly reference-count the chunks this worker shares with other workers on the node.
+        # A chunk can straddle worker boundaries and therefore be read by several workers; if a
+        # worker deletes it after finishing its own slice while a co-worker still needs it, the
+        # co-worker hits `FileNotFoundError`. Incrementing the shared chunks' reference counts now —
+        # before any item is read — guarantees every co-reader has claimed a shared chunk before any
+        # worker can finish and delete it (the reader releases them as it goes; see
+        # BinaryReader.acquire_shared_locks). This runs for BOTH fresh and resumed epochs.
+        node_size = self.distributed_env.world_size // self.distributed_env.num_nodes
+        first_rank_this_node = (self.distributed_env.global_rank // node_size) * node_size
+        workers_per_rank = self.worker_env.world_size
+        num_workers_per_node = node_size * workers_per_rank
+        # `workers_chunks` is a flat list indexed by `rank * num_workers + worker`, so the workers
+        # belonging to this node begin at `first_rank_this_node * workers_per_rank`.
+        worker_start = first_rank_this_node * workers_per_rank
+        worker_end = worker_start + num_workers_per_node
+
+        shared_chunks = _get_shared_chunks(workers_chunks[worker_start:worker_end])
+        my_shared_chunks = {chunk_index for chunk_index in self.worker_chunks if chunk_index in shared_chunks}
+
+        posix = self.posix_fast is not None and self.posix_fast.in_place
+        if posix:
+            # Source chunks are never deleted, so shared mmap is safe (FFCV OS-cache model).
+            # Skip .cnt lock files — they are extra metadata IOPS on Vast/NFS.
+            self.cache._reader.enable_posix_fast(
+                list(dict.fromkeys(self.worker_chunks)),
+                keep=max(4, self.max_pre_download),
+            )
+        else:
+            self.cache._reader.acquire_shared_locks(my_shared_chunks)
+            my_nonshared_chunks = {
+                chunk_index for chunk_index in self.worker_chunks if chunk_index not in shared_chunks
+            }
+            self.cache._reader.enable_mmap_for_chunks(my_nonshared_chunks)
+
+        # Handle restart (strict replay). Elastic already applied drop_first in _setup_elastic_resume.
+        if self._state_dict and not use_canonical:
+            assert workers_intervals is not None
             self._resume(workers_chunks, workers_intervals)
         else:
-            # Find the chunks shared across all workers of the current node.
-            # For each shared chunk, find the rank and worker to use the chunk last and prevent
-            # premature deletion for the other workers.
-            node_size = self.distributed_env.world_size // self.distributed_env.num_nodes
-            first_rank_this_node = (self.distributed_env.global_rank // node_size) * node_size
-            num_workers_per_node = node_size * self.num_workers
-            worker_start = first_rank_this_node * num_workers_per_node
-            worker_end = worker_start + num_workers_per_node
-            local_rank = self.distributed_env.global_rank % node_size
-
-            chunks_indexes_skip_deletion = _find_chunks_per_workers_on_which_to_skip_deletion(
-                self.num_workers,
-                self.batch_size,
-                workers_chunks[worker_start:worker_end],
-                workers_intervals[worker_start:worker_end],
-            )
-            worker_node_rank_to_chunk_indexes = _map_node_worker_rank_to_chunk_indexes_to_not_delete(
-                chunks_indexes_skip_deletion
-            )
-
-            worker_rank_local_node = local_rank * self.num_workers + self.worker_env.rank
-            if worker_rank_local_node in worker_node_rank_to_chunk_indexes:
-                self.cache._reader.config.skip_chunk_indexes_deletion = worker_node_rank_to_chunk_indexes[
-                    worker_rank_local_node
-                ]
-
             self.num_chunks = len(self.worker_chunks)
-            self.upcoming_indexes = []
+            self.upcoming_indexes = deque()
             self.worker_next_chunk_index = 0
             self.global_index = 0
             self.consumed_sample_count_in_curr_chunk = 0
@@ -432,7 +581,6 @@ class StreamingDataset(IterableDataset):
         num_workers = state["num_workers"]
         batch_size = state["batch_size"]
 
-        # TODO: Implement elastic sampling where the number of workers, ranks can change.
         num_samples_yielded = self._state_dict["num_samples_yielded"]
 
         worker_start = self.distributed_env.global_rank * num_workers
@@ -460,29 +608,132 @@ class StreamingDataset(IterableDataset):
             # To prevent this we exit early and let the worker raise a StopIteration in __next__.
             return
 
+        assert self.cache is not None
         # replay the indexes for the current chunks
         interval = self.worker_intervals[self.worker_next_chunk_index]
         current_indexes = np.arange(interval[1], interval[2])
 
-        # re-shuffle the indexes
+        # re-shuffle the indexes (seed from global chunk id, not the worker-local position)
         current_indexes = self.shuffler(
-            current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index
+            current_indexes,
+            self._shuffle_num_chunks,
+            self.current_epoch,
+            int(self.worker_chunks[self.worker_next_chunk_index]),
         )
 
         # skip any indexes already consumed
         current_indexes = current_indexes[indexes[worker_local_rank] :]
-        self.upcoming_indexes = current_indexes
+        self.upcoming_indexes = deque(current_indexes)
 
         self.global_index = indexes[worker_local_rank]
 
         # bump the chunk_index
         self.worker_next_chunk_index += 1
+        if self.posix_fast is not None and self.posix_fast.in_place and self.cache is not None:
+            keep = max(4, self.max_pre_download)
+            start = max(self.worker_next_chunk_index - 1, 0)
+            self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
 
-    def __getitem__(self, index: ChunkedIndex | int | slice) -> Any:
+    def _skip_elastic_worker_prefix(self, skip: int) -> None:
+        """Drop already-yielded items from this worker's canonical plan (same-topology resume)."""
+        skip = max(0, int(skip))
+        if skip == 0 or not self._elastic_item_lists:
+            return
+        lists = self._elastic_item_lists
+        idx = 0
+        remaining = skip
+        while remaining and idx < len(lists):
+            n = len(lists[idx])
+            if remaining >= n:
+                remaining -= n
+                idx += 1
+            else:
+                lists[idx] = lists[idx][remaining:]
+                remaining = 0
+                break
+        self._elastic_item_lists = lists[idx:]
+        self.worker_chunks = self.worker_chunks[idx:]
+        self.worker_intervals = self.worker_intervals[idx:]
+        self.num_chunks = len(self.worker_chunks)
+        self.stop_length = sum(len(items) for items in self._elastic_item_lists)
+
+    def _setup_elastic_resume(self, replay_workers: bool = False) -> list[list[int]]:
+        """Build this worker's plan from the frozen canonical stream (fresh epoch or resume)."""
+        assert self.cache is not None
+        assert self.worker_env is not None
+        assert self.shuffler is not None
+
+        state = self._state_dict or {}
+        world_size = self.distributed_env.world_size
+        local_yielded = int(state.get("num_samples_yielded", 0)) if state else 0
+        if replay_workers and state:
+            # Keep the worker grid from the last restripe; skip per-worker from this checkpoint.
+            drop_first = max(0, sample_in_epoch_from_state(state) - local_yielded * world_size)
+        elif state:
+            drop_first = sample_in_epoch_from_state(state)
+        else:
+            drop_first = int(self._elastic_drop_first or 0)
+        plans = self._canonical_plans(
+            drop_first=drop_first,
+            num_workers=self.worker_env.world_size,
+            batch_size=self.batch_size,
+        )
+        granularity: Granularity = "chunk" if isinstance(self.shuffler, WindowShuffle) else "item"
+        if granularity == "item":
+            drop_first = _round_down_drop_first(drop_first, self.distributed_env.world_size, self.batch_size)
+        self._elastic_drop_first = drop_first
+        if state:
+            ncn = state.get("num_canonical_nodes")
+            if ncn is None:
+                ncn = (
+                    self.num_canonical_nodes
+                    if self.num_canonical_nodes is not None
+                    else state.get("initial_world_size", self.distributed_env.world_size)
+                )
+            if topology_changed(
+                state,
+                world_size=self.distributed_env.world_size,
+                num_workers=self.worker_env.world_size,
+                batch_size=self.batch_size,
+            ):
+                state["resume_mode"] = "elastic"
+            state["num_canonical_nodes"] = max(1, int(ncn))
+
+        workers_chunks: list[list[int]] = []
+        for visits in plans:
+            chunks, _, _ = worker_plan_to_chunks(visits)
+            workers_chunks.append(chunks)
+
+        worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
+        self.worker_chunks, self.worker_intervals, self._elastic_item_lists = worker_plan_to_chunks(plans[worker_rank])
+        self.stop_length = sum(len(items) for items in self._elastic_item_lists)
+        self.num_chunks = len(self.worker_chunks)
+        if replay_workers and state:
+            indexes = _replay_sampling(
+                local_yielded, int(state.get("batch_size", self.batch_size)), self.worker_env.world_size
+            )
+            self._skip_elastic_worker_prefix(indexes.get(self.worker_env.rank, 0))
+        if drop_first:
+            logger.info(
+                "Elastic resume: dropped %s samples from the canonical stream; "
+                "this worker has %s remaining (world_size=%s, num_workers=%s, granularity=%s).",
+                drop_first,
+                self.stop_length,
+                self.distributed_env.world_size,
+                self.worker_env.world_size,
+                granularity,
+            )
+        return workers_chunks
+
+    def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
             self.shuffler = self._create_shuffler(self.cache)
+        # String keys go through the keys/ store. Int remains a global sample index;
+        # use ``get_by_key`` for int entity keys.
+        if isinstance(index, str):
+            return self.get_by_key(index)
         if isinstance(index, int):
             index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
         elif isinstance(index, slice):
@@ -491,6 +742,15 @@ class StreamingDataset(IterableDataset):
             _my_indices = list(range(start, stop, step))
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
             return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
+        tracing_sample = is_tracing(CAT_SAMPLE)
+        if tracing_sample:
+            emit_trace(
+                "sample",
+                "B",
+                CAT_SAMPLE,
+                chunk=getattr(index, "chunk_index", ""),
+                index=getattr(index, "index", index),
+            )
         item = self.cache[index]
         if hasattr(self, "transform"):
             if isinstance(self.transform, list):
@@ -498,8 +758,49 @@ class StreamingDataset(IterableDataset):
                     item = transform_fn(item)
             else:
                 item = self.transform(item)
+        if tracing_sample:
+            emit_trace(
+                "sample",
+                "E",
+                CAT_SAMPLE,
+                chunk=getattr(index, "chunk_index", ""),
+                index=getattr(index, "index", index),
+            )
 
         return item
+
+    def get_by_key(self, key: Any) -> Any:
+        """Load a sample by entity key from the ``keys/`` store (str or int keys).
+
+        The key store is read from the dataset root (local cache if present, else
+        the remote URL). Remote lookups use Polars ``scan_parquet`` with predicate
+        pushdown so shards stay in object storage.
+        """
+        from litdata.utilities.keys_index import KeyIndex, has_keys_index
+
+        if self.cache is None:
+            self.worker_env = _WorkerEnv.detect()
+            self.cache = self._create_cache(worker_env=self.worker_env)
+            self.shuffler = self._create_shuffler(self.cache)
+
+        if self._key_index is None:
+            local_root = self.input_dir.path
+            remote_root = self.input_dir.url
+            root: str | None = None
+            if local_root and has_keys_index(local_root):
+                root = local_root
+            elif remote_root and has_keys_index(remote_root, self.storage_options):
+                root = remote_root
+            if root is None:
+                raise KeyError(f"Keyed access requires a keys/ index next to the dataset. Missing for key={key!r}.")
+            self._key_index = KeyIndex(root, storage_options=self.storage_options)
+
+        global_index, chunk_index, chunk_offset = self._key_index.resolve(key)
+        if chunk_index >= 0:
+            chunked = ChunkedIndex(index=chunk_offset, chunk_index=chunk_index)
+        else:
+            chunked = ChunkedIndex(*self.cache._get_chunk_index_from_index(global_index))
+        return self[chunked]
 
     def __next__(self) -> Any:
         # check if we have reached the end of the dataset (i.e., all the chunks have been processed)
@@ -530,19 +831,30 @@ class StreamingDataset(IterableDataset):
             self.consumed_sample_count_in_curr_chunk = 0
 
             # `next_worker_chunks_index` is the index of the chunk that we will be working on now
-            interval = self.worker_intervals[self.worker_next_chunk_index]
-            current_indexes = np.arange(interval[1], interval[2])
-
-            assert self.shuffler is not None
             assert self.num_chunks is not None
-            self.upcoming_indexes = self.shuffler(
-                current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index
-            )
+            if self._elastic_item_lists is not None:
+                self.upcoming_indexes = deque(self._elastic_item_lists[self.worker_next_chunk_index])
+            else:
+                interval = self.worker_intervals[self.worker_next_chunk_index]
+                current_indexes = np.arange(interval[1], interval[2])
+                assert self.shuffler is not None
+                self.upcoming_indexes = deque(
+                    self.shuffler(
+                        current_indexes,
+                        self._shuffle_num_chunks,
+                        self.current_epoch,
+                        int(self.worker_chunks[self.worker_next_chunk_index]),
+                    )
+                )
 
             self.worker_next_chunk_index += 1  # bump the chunk_index
+            if self.posix_fast is not None and self.posix_fast.in_place and self.cache is not None:
+                keep = max(4, self.max_pre_download)
+                start = self.worker_next_chunk_index - 1
+                self.cache._reader.prefetch_posix_window(self.worker_chunks[start : start + keep])
 
-        # Get the first index
-        index = self.upcoming_indexes.pop(0)
+        # Get the first index (O(1) with deque)
+        index = self.upcoming_indexes.popleft()
 
         chunk_indexes = None if self.has_triggered_download else self.worker_chunks[self.worker_next_chunk_index - 1 :]
         is_last_index = (self.worker_next_chunk_index) == self.num_chunks and len(self.upcoming_indexes) == 0
@@ -574,12 +886,15 @@ class StreamingDataset(IterableDataset):
         if _is_in_dataloader_worker():
             raise RuntimeError("The method `state_dict` should only be called in the main process.")
 
-        if self._state_dict is not None:
-            self._state_dict["num_samples_yielded"] = num_samples_yielded
-            self._state_dict["current_epoch"] = self.current_epoch
-            return self._state_dict
+        world_size = self.distributed_env.world_size
+        ncn = self.num_canonical_nodes
+        if ncn is None:
+            ncn = (self._state_dict or {}).get("num_canonical_nodes") or (self._state_dict or {}).get(
+                "initial_world_size", world_size
+            )
+        sample_in_epoch = (self._elastic_drop_first or 0) + num_samples_yielded * world_size
 
-        return {
+        payload = {
             "num_samples_yielded": num_samples_yielded,
             "num_workers": num_workers or 1,
             "batch_size": batch_size,
@@ -590,11 +905,27 @@ class StreamingDataset(IterableDataset):
             "item_loader": self.item_loader.state_dict() if self.item_loader else None,
             "drop_last": self.drop_last,
             "seed": self.seed,
-            "world_size": self.distributed_env.world_size,
+            "world_size": world_size,
             "shuffle": self.shuffle,
             "subsampled_files": self.subsampled_files,
             "region_of_interest": self.region_of_interest,
+            "state_version": 2,
+            "sample_in_epoch": sample_in_epoch,
+            "num_canonical_nodes": int(ncn),
+            "initial_world_size": (self._state_dict or {}).get("initial_world_size", world_size),
+            "initial_num_workers": (self._state_dict or {}).get("initial_num_workers", num_workers or 1),
+            "initial_batch_size": (self._state_dict or {}).get("initial_batch_size", batch_size),
+            "initial_num_nodes": (self._state_dict or {}).get(
+                "initial_num_nodes", max(1, int(self.distributed_env.num_nodes))
+            ),
         }
+        if self._elastic_item_lists is not None or (self._state_dict or {}).get("resume_mode") == "elastic":
+            payload["resume_mode"] = "elastic"
+
+        if self._state_dict is not None:
+            self._state_dict.update(payload)
+            return self._state_dict
+        return payload
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if state_dict:
@@ -603,6 +934,8 @@ class StreamingDataset(IterableDataset):
 
     def reset_state_dict(self) -> None:
         self._state_dict = None
+        self._elastic_item_lists = None
+        self._elastic_drop_first = None
 
     def _validate_state_dict(self) -> None:
         if self._force_override_state_dict:
@@ -628,15 +961,10 @@ class StreamingDataset(IterableDataset):
             )
 
         if state["num_workers"] != self.worker_env.world_size:
-            if not self._force_override_state_dict:
-                raise ValueError(
-                    "The provided `num_workers` state doesn't match the current one. "
-                    f"Found `{self.worker_env.world_size}` instead of `{state['num_workers']}`."
-                )
-            state["num_workers"] = self.worker_env.world_size
-            logger.warning(
-                f"Overriding num workers {state['num_workers']} to {self.worker_env.world_size}. "
-                "This may lead to repeated or skipped datapoints within an episode due to different shuffles."
+            logger.info(
+                "num_workers changed from %s to %s; using elastic resume (no duplicates).",
+                state["num_workers"],
+                self.worker_env.world_size,
             )
 
         # Note: We need to check whether the path has been resolved to its associated cache.
@@ -717,6 +1045,12 @@ class StreamingDataset(IterableDataset):
                 "The provided `num_samples_yielded` state is greater than the dataset length. "
                 f"Found `{state['num_samples_yielded']}` instead of `{len(self)}`."
             )
+
+    def subset(self, indices: "Sequence[int] | slice") -> "StreamingDataset":
+        """Return a copy restricted to the given global indices (or a ``slice``)."""
+        from litdata.utilities.train_test_split import subset_dataset
+
+        return subset_dataset(self, indices)
 
     def reset(self) -> None:
         # undo all the properties associated with original dataset

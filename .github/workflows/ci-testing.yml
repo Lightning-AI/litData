@@ -32,6 +32,8 @@ jobs:
     timeout-minutes: 60
     env:
       UV_TORCH_BACKEND: "cpu"
+      # Supply-chain guard: skip PyPI releases newer than this. See https://docs.astral.sh/uv/reference/settings/#exclude-newer
+      UV_EXCLUDE_NEWER: "2 days"
 
     steps:
       # FFmpeg is required for Video Deserializer tests
@@ -43,9 +45,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ffmpeg
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv and setup python ${{ matrix.python-version }}
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           activate-environment: true
           python-version: ${{ matrix.python-version }}
@@ -62,7 +64,7 @@ jobs:
           pytest tests \
               --ignore=tests/processing \
               --ignore=tests/raw \
-              -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+              -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Run processing tests sequentially
         run: |
@@ -78,7 +80,7 @@ jobs:
           coverage xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml

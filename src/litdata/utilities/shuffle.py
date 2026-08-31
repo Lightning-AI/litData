@@ -20,6 +20,183 @@ from litdata.streaming.item_loader import Interval
 from litdata.utilities.env import _DistributedEnv
 
 
+def _window_shuffle(items: list[Any], window: int, rng: np.random.RandomState) -> list[Any]:
+    """Permute ``items`` so each swap stays inside a sliding window (FFCV-style locality).
+
+    Windowed Fisher–Yates: at index ``i`` the partner is drawn from ``[i, min(i + window, n))``.
+    ``window <= 1`` is the identity. A large window approaches a full permutation of this list.
+    """
+    n = len(items)
+    if n < 2 or window <= 1:
+        return list(items)
+    out = list(items)
+    for i in range(n - 1):
+        high = min(i + window, n)
+        j = int(rng.randint(i, high))
+        out[i], out[j] = out[j], out[i]
+    return out
+
+
+def _window_shuffle_chunks_and_intervals(
+    workers_chunks: list[list[int]],
+    workers_intervals: list[Any],
+    seed: int,
+    current_epoch: int,
+    window: int,
+) -> tuple[list[list[int]], list[Any]]:
+    """Shuffle each worker's chunk list in place-local order; keep intervals aligned."""
+    shuffled_chunks: list[list[int]] = []
+    shuffled_intervals: list[Any] = []
+    for worker_idx, (chunks, intervals) in enumerate(zip(workers_chunks, workers_intervals)):
+        rng = np.random.RandomState([seed, current_epoch, worker_idx])
+        paired = _window_shuffle(list(zip(chunks, intervals)), window, rng)
+        if paired:
+            new_chunks, new_intervals = zip(*paired)
+            shuffled_chunks.append(list(new_chunks))
+            shuffled_intervals.append(list(new_intervals))
+        else:
+            shuffled_chunks.append([])
+            shuffled_intervals.append([])
+    return shuffled_chunks, shuffled_intervals
+
+
+def _trim_worker_to_item_count(
+    chunks: list[int],
+    intervals: list[Any],
+    cap: int,
+) -> tuple[list[int], list[Any]]:
+    """Keep a prefix of ``intervals`` totaling ``cap`` items (shorten the last interval, never share)."""
+    if cap <= 0:
+        return [], []
+    out_chunks: list[int] = []
+    out_intervals: list[Any] = []
+    remaining = cap
+    for chunk_index, interval in zip(chunks, intervals):
+        start, roi_start, roi_end, end = interval
+        size = roi_end - roi_start
+        if size <= 0:
+            continue
+        take = min(size, remaining)
+        out_chunks.append(int(chunk_index))
+        out_intervals.append([start, roi_start, roi_start + take, end])
+        remaining -= take
+        if remaining <= 0:
+            break
+    return out_chunks, out_intervals
+
+
+def _associate_whole_chunks_to_workers(
+    distributed_env: _DistributedEnv,
+    indexes: Any,
+    chunk_intervals: list[Interval],
+    drop_last: bool = False,
+    num_workers: int = 1,
+    batch_size: int = 1,
+) -> tuple[list[list[int]], list[Any]]:
+    """Assign each chunk to exactly one worker as contiguous stripes (no shared mmap)."""
+    indexes = [int(i) for i in indexes]
+    global_n = distributed_env.world_size * num_workers
+    chunks_per_workers: list[list[int]] = [[] for _ in range(global_n)]
+    intervals_per_workers: list[list[Any]] = [[] for _ in range(global_n)]
+    if not indexes or global_n == 0:
+        return chunks_per_workers, intervals_per_workers
+
+    sizes = [int(interval[2] - interval[1]) for interval in chunk_intervals]
+    total = sum(sizes)
+    worker = 0
+    prefix = 0
+    for chunk_index, interval, size in zip(indexes, chunk_intervals, sizes):
+        while (
+            worker < global_n - 1
+            and chunks_per_workers[worker]
+            and prefix + size / 2.0 > (worker + 1) * total / global_n
+        ):
+            worker += 1
+        chunks_per_workers[worker].append(chunk_index)
+        intervals_per_workers[worker].append(list(interval))
+        prefix += size
+
+    if drop_last:
+        lengths = [sum(iv[2] - iv[1] for iv in ivs) for ivs in intervals_per_workers]
+        positive = [length for length in lengths if length > 0]
+        if positive:
+            cap = min(positive)
+            if batch_size > 1:
+                cap = (cap // batch_size) * batch_size
+            trimmed_chunks: list[list[int]] = []
+            trimmed_intervals: list[list[Any]] = []
+            for chunks, intervals in zip(chunks_per_workers, intervals_per_workers):
+                new_chunks, new_intervals = _trim_worker_to_item_count(chunks, intervals, cap)
+                trimmed_chunks.append(new_chunks)
+                trimmed_intervals.append(new_intervals)
+            return trimmed_chunks, trimmed_intervals
+
+    return chunks_per_workers, intervals_per_workers
+
+
+def node_shard_fits_in_cache(shard_bytes: int, max_cache_size: int | None) -> bool:
+    """True when a node's unique chunk files can stay resident under ``max_cache_size``."""
+    if not max_cache_size:
+        return True
+    return shard_bytes <= max_cache_size
+
+
+def _unique_chunk_indexes_per_node(
+    chunks_per_workers: list[list[int]],
+    distributed_env: _DistributedEnv,
+    num_workers: int,
+) -> list[list[int]]:
+    grouped = _group_chunks_by_nodes(
+        chunks_per_workers=chunks_per_workers,
+        world_size=distributed_env.world_size,
+        num_nodes=distributed_env.num_nodes,
+        num_workers_per_process=num_workers,
+    )
+    return [list(dict.fromkeys(chunk_indexes)) for chunk_indexes in grouped]
+
+
+def _permute_node_chunk_indexes(
+    chunk_indexes_per_nodes: list[list[int]],
+    seed: int,
+    current_epoch: int,
+) -> list[list[int]]:
+    permuted: list[list[int]] = []
+    for node_idx, chunk_indexes in enumerate(chunk_indexes_per_nodes):
+        if not chunk_indexes:
+            permuted.append([])
+            continue
+        rng = np.random.RandomState([seed, current_epoch, node_idx])
+        permuted.append([int(i) for i in rng.permutation(chunk_indexes)])
+    return permuted
+
+
+def _associate_within_nodes(
+    distributed_env: _DistributedEnv,
+    chunk_indexes_per_nodes: list[list[int]],
+    chunk_intervals: list[Interval],
+    drop_last: bool,
+    num_workers: int,
+    batch_size: int,
+) -> tuple[list[list[int]], list[Any]]:
+    """Associate each node's chunk ids only among that node's ranks (no cross-node move)."""
+    num_nodes = max(1, distributed_env.num_nodes)
+    ranks_per_node = distributed_env.world_size // num_nodes
+    global_n = distributed_env.world_size * num_workers
+    workers_chunks: list[list[int]] = [[] for _ in range(global_n)]
+    workers_intervals: list[Any] = [[] for _ in range(global_n)]
+    local_env = _DistributedEnv(ranks_per_node, 0, 1)
+    for node_idx, node_chunk_ids in enumerate(chunk_indexes_per_nodes):
+        node_intervals = [chunk_intervals[int(i)] for i in node_chunk_ids]
+        local_chunks, local_intervals = _associate_chunks_and_intervals_to_workers(
+            local_env, node_chunk_ids, node_intervals, drop_last, num_workers, batch_size
+        )
+        base = node_idx * ranks_per_node * num_workers
+        for local_w, (chunks, intervals) in enumerate(zip(local_chunks, local_intervals)):
+            workers_chunks[base + local_w] = list(chunks)
+            workers_intervals[base + local_w] = list(intervals)
+    return workers_chunks, workers_intervals
+
+
 def _intra_node_chunk_shuffle(
     distributed_env: _DistributedEnv,
     num_workers: int,
@@ -27,21 +204,10 @@ def _intra_node_chunk_shuffle(
     seed: int,
     current_epoch: int,
 ) -> list[int]:
-    chunk_indexes_per_nodes = _group_chunks_by_nodes(
-        chunks_per_workers=chunks_per_workers,
-        world_size=distributed_env.world_size,
-        num_nodes=distributed_env.num_nodes,
-        num_workers_per_process=num_workers,
-    )
-
-    # shuffle the chunks associated to the node
-    for i in range(len(chunk_indexes_per_nodes)):
-        # permute the indexes within the node
-        chunk_indexes_per_nodes[i] = list(
-            np.random.RandomState([seed, current_epoch]).permutation(chunk_indexes_per_nodes[i])
-        )
-
-    return [index for chunks in chunk_indexes_per_nodes for index in chunks]
+    unique_per_node = _unique_chunk_indexes_per_node(chunks_per_workers, distributed_env, num_workers)
+    permuted = _permute_node_chunk_indexes(unique_per_node, seed, current_epoch)
+    shuffled = [index for chunks in permuted for index in chunks]
+    return list(dict.fromkeys(shuffled))
 
 
 def _group_chunks_by_nodes(

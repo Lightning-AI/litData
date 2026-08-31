@@ -1,15 +1,21 @@
 import itertools
 
+import numpy as np
+
 from litdata.streaming.item_loader import Interval
 from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _aggregate_shared_chunks_per_rank,
     _associate_chunks_and_intervals_to_workers,
+    _associate_whole_chunks_to_workers,
+    _associate_within_nodes,
     _find_chunks_per_workers_on_which_to_skip_deletion,
     _get_shared_chunks,
     _group_chunks_by_nodes,
     _intra_node_chunk_shuffle,
     _map_node_worker_rank_to_chunk_indexes_to_not_delete,
+    _window_shuffle,
+    _window_shuffle_chunks_and_intervals,
 )
 
 
@@ -36,8 +42,10 @@ def test_intra_node_chunk_shuffle():
         )
         for rank in range(4)
     ]
-    expected = [4, 3, 7, 6, 0, 1, 5, 2, 12, 11, 15, 14, 8, 9, 13, 10]
-    assert shuffled_per_rank[0] == shuffled_per_rank[1] == shuffled_per_rank[2] == shuffled_per_rank[3] == expected
+    assert shuffled_per_rank[0] == shuffled_per_rank[1] == shuffled_per_rank[2] == shuffled_per_rank[3]
+    assert sorted(shuffled_per_rank[0]) == list(range(16))
+    assert set(shuffled_per_rank[0][:8]) == set(range(8))
+    assert set(shuffled_per_rank[0][8:]) == set(range(8, 16))
 
     # shuffles are different each epoch
     shuffled_per_rank = [
@@ -55,6 +63,31 @@ def test_intra_node_chunk_shuffle():
         if i <= j:
             continue
         assert shuffled_per_rank[i] != shuffled_per_rank[j]
+
+
+def test_intra_node_chunk_shuffle_dedupes_shared_chunks():
+    """Shared slices must not re-enter associate() as two full copies of the same chunk."""
+    chunks_per_workers = [
+        [0, 1],  # rank 0, node 0, worker 0 — chunk 1 split with worker 1
+        [1, 2],  # rank 0, node 0, worker 1
+        [3, 4],  # rank 1, node 0
+        [4, 5],  # rank 1, node 0 — chunk 4 split
+        [6, 7],  # rank 2, node 1
+        [7, 8],  # rank 2, node 1
+        [9, 10],  # rank 3, node 1
+        [10, 11],  # rank 3, node 1
+    ]
+    shuffled = _intra_node_chunk_shuffle(
+        distributed_env=_DistributedEnv(4, 0, 2),
+        num_workers=2,
+        chunks_per_workers=chunks_per_workers,
+        seed=42,
+        current_epoch=2,
+    )
+    assert len(shuffled) == len(set(shuffled))
+    assert set(shuffled) == set(range(12))
+    assert set(shuffled[:6]) == set(range(6))
+    assert set(shuffled[6:]) == set(range(6, 12))
 
 
 def test_group_chunks_by_nodes():
@@ -404,3 +437,141 @@ def test_map_node_worker_rank_to_chunk_indexes_to_not_delete():
     chunks_to_workers = {10: [2, 3, 4], 20: [1, 2, 3], 30: [3, 4], 40: [4, 5, 6]}
     workers_to_chunks = _map_node_worker_rank_to_chunk_indexes_to_not_delete(chunks_to_workers)
     assert workers_to_chunks == {1: [20], 2: [10, 20], 3: [10, 20, 30], 4: [10, 30, 40], 5: [40], 6: [40]}
+
+
+def test_window_shuffle_identity_and_locality():
+    rng = np.random.RandomState(0)
+    items = list(range(64))
+    assert _window_shuffle(items, window=1, rng=rng) == items
+    shuffled = _window_shuffle(items, window=8, rng=np.random.RandomState(0))
+    assert sorted(shuffled) == items
+    assert shuffled != items
+    jumps = [abs(shuffled[i] - shuffled[i - 1]) for i in range(1, len(shuffled))]
+    full = list(np.random.RandomState(0).permutation(items))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_window_shuffle_chunks_keeps_worker_sets():
+    chunks = [list(range(0, 20)), list(range(20, 40))]
+    intervals = [[[0, 0, 1, 1]] * 20, [[0, 0, 1, 1]] * 20]
+    new_chunks, new_intervals = _window_shuffle_chunks_and_intervals(
+        chunks, intervals, seed=42, current_epoch=1, window=8
+    )
+    assert set(new_chunks[0]) == set(chunks[0])
+    assert set(new_chunks[1]) == set(chunks[1])
+    assert new_chunks[0] != chunks[0]
+    epoch2, _ = _window_shuffle_chunks_and_intervals(chunks, intervals, seed=42, current_epoch=2, window=8)
+    assert epoch2[0] != new_chunks[0]
+    for worker_chunks, worker_intervals in zip(new_chunks, new_intervals):
+        assert len(worker_chunks) == len(worker_intervals)
+
+
+def test_window_shuffle_item_order_is_local():
+    from litdata.streaming.shuffle import WindowShuffle
+
+    shuffler = WindowShuffle(cache=object(), seed=42, drop_last=False, window=8)  # type: ignore[arg-type]
+    order = shuffler(np.arange(64), num_chunks=1, current_epoch=1, chunk_index=0)
+    assert sorted(order) == list(range(64))
+    assert order != list(range(64))
+    jumps = [abs(order[i] - order[i - 1]) for i in range(1, len(order))]
+    full = list(np.random.RandomState(42).permutation(64))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_associate_whole_chunks_never_shares():
+    indexes = list(range(8))
+    chunk_intervals = [Interval(0, 0, 50, 50) for _ in range(8)]
+    workers_chunks, workers_intervals = _associate_whole_chunks_to_workers(
+        _DistributedEnv(4, 0, 1),
+        indexes,
+        chunk_intervals,
+        drop_last=True,
+        num_workers=1,
+        batch_size=1,
+    )
+    assert workers_chunks == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    seen: list[int] = []
+    for chunks in workers_chunks:
+        seen.extend(chunks)
+        assert len(chunks) == len(set(chunks))
+    assert sorted(seen) == indexes
+    lengths = [sum(iv[2] - iv[1] for iv in ivs) for ivs in workers_intervals]
+    assert lengths == [100, 100, 100, 100]
+
+
+def test_associate_whole_chunks_large_tail_goes_to_next_worker():
+    indexes = [0, 1, 2, 3]
+    chunk_intervals = [
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 100, 100),
+    ]
+    workers_chunks, _ = _associate_whole_chunks_to_workers(
+        _DistributedEnv(2, 0, 1), indexes, chunk_intervals, drop_last=False
+    )
+    assert set(workers_chunks[0]).isdisjoint(workers_chunks[1])
+    assert set(workers_chunks[0]) | set(workers_chunks[1]) == set(indexes)
+    assert 3 in workers_chunks[1]
+
+
+def test_associate_within_nodes_keeps_chunks_on_the_node():
+    env = _DistributedEnv(4, 0, 2)
+    intervals = [Interval(0, 0, 10, 10) for _ in range(8)]
+    per_node = [[0, 1, 2, 3], [4, 5, 6, 7]]
+    workers_chunks, _ = _associate_within_nodes(env, per_node, intervals, drop_last=True, num_workers=1, batch_size=1)
+    assert set(workers_chunks[0] + workers_chunks[1]) == {0, 1, 2, 3}
+    assert set(workers_chunks[2] + workers_chunks[3]) == {4, 5, 6, 7}
+
+
+def test_node_shard_fits_in_cache():
+    from litdata.utilities.shuffle import node_shard_fits_in_cache
+
+    assert node_shard_fits_in_cache(10, None)
+    assert node_shard_fits_in_cache(10, 0)
+    assert node_shard_fits_in_cache(10, 10)
+    assert not node_shard_fits_in_cache(11, 10)
+
+
+class _FakeShuffleCache:
+    def __init__(self, n: int = 16, items: int = 10, chunk_bytes: int = 100, max_cache: int = 10**12):
+        self._intervals = [Interval(0, 0, items, items) for _ in range(n)]
+        self._reader = type(
+            "R",
+            (),
+            {
+                "_config": type("C", (), {"_chunks": [{"chunk_bytes": chunk_bytes} for _ in range(n)]})(),
+                "_max_cache_size": max_cache,
+            },
+        )()
+
+    def get_chunk_intervals(self):
+        return self._intervals
+
+
+def test_full_shuffle_keeps_node_shard_when_it_fits():
+    from litdata.streaming.shuffle import FullShuffle
+
+    cache = _FakeShuffleCache(max_cache=10**12)
+    shuffler = FullShuffle(cache, seed=42, drop_last=True)  # type: ignore[arg-type]
+    env = _DistributedEnv(4, 0, 2)
+    e1, _ = shuffler.get_chunks_and_intervals_per_workers(env, 1, 1, 1)
+    e2, _ = shuffler.get_chunks_and_intervals_per_workers(env, 1, 1, 2)
+    assert shuffler.node_shard_fits
+    assert set(e1[0] + e1[1]) == set(e2[0] + e2[1])
+    assert set(e1[2] + e1[3]) == set(e2[2] + e2[3])
+    assert set(e2[0] + e2[1]).isdisjoint(set(e2[2] + e2[3]))
+
+
+def test_full_shuffle_reschedules_globally_when_shard_does_not_fit():
+    from litdata.streaming.shuffle import FullShuffle
+
+    cache = _FakeShuffleCache(max_cache=1)
+    shuffler = FullShuffle(cache, seed=42, drop_last=True)  # type: ignore[arg-type]
+    env = _DistributedEnv(4, 0, 2)
+    e1, _ = shuffler.get_chunks_and_intervals_per_workers(env, 1, 1, 1)
+    e2, _ = shuffler.get_chunks_and_intervals_per_workers(env, 1, 1, 2)
+    assert not shuffler.node_shard_fits
+    assert set(e1[0] + e1[1]) != set(e2[0] + e2[1])

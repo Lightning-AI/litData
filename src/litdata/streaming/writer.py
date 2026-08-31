@@ -11,9 +11,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import os
-import uuid
+import re
+import struct
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
@@ -27,12 +29,22 @@ from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.utilities._pytree import PyTree, tree_flatten, treespec_dumps
+from litdata.utilities._pytree import PyTree, tree_flatten, tree_leaves, treespec_dumps
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
 from litdata.utilities.parquet import get_parquet_indexer_cls
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
+
+
+def _is_worker_index_file(filename: str) -> bool:
+    """True for ``{rank}.index.json`` (dot), not ``index.json`` or ``{node}-index.json``."""
+    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+
+
+def _is_node_index_file(filename: str) -> bool:
+    """True for ``{node}-index.json`` (hyphen), the per-node merge output."""
+    return bool(re.fullmatch(rf"\d+-{re.escape(_INDEX_FILENAME)}", filename))
 
 
 @dataclass
@@ -87,6 +99,10 @@ class BinaryWriter:
 
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._serializers_extra: dict[str, Serializer] = {}
+        self._format_serializers: list[Serializer] | None = None
+        self._format_fixed_sizes: list[int | None] | None = None
+        self._fixed_header: bytes | None = None
+        self._fixed_body_len: int = 0
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
@@ -124,17 +140,16 @@ class BinaryWriter:
 
     @property
     def filled(self) -> bool:
-        """Returns whether the caching phase is done."""
+        """True once the merged ``index.json`` exists for a standalone Cache.
+
+        Optimizer workers must keep writing during ``mode='append'`` even when
+        a previous ``index.json`` is already in the write-through output dir.
+        """
+        if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK") is not None:
+            return False
         if self._is_done:
             return True
-        files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
-        worker_env = _WorkerEnv.detect()
-        data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
-        if data_optimiser_num_workers is not None:
-            self._is_done = len(index_files) == int(data_optimiser_num_workers)
-        else:
-            self._is_done = len(index_files) == self._distributed_env.world_size * worker_env.world_size
+        self._is_done = os.path.exists(os.path.join(self._cache_dir, _INDEX_FILENAME))
         return self._is_done
 
     @property
@@ -163,14 +178,13 @@ class BinaryWriter:
 
     def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
-        # Flatten the items provided by the users
-        flattened, data_spec = tree_flatten(items)
-
-        # Collect the sizes and associated bytes for each item
+        # Flatten the items provided by the users. After the first sample the treespec is cached,
+        # so later writes only walk leaves (same order as ``tree_flatten``).
         sizes: list[int] = []
         data: list[bytes] = []
 
         if self._data_format is None:
+            flattened, data_spec = tree_flatten(items)
             data_format: list[str] = []
             for item in flattened:
                 data_format.append(self._serialize(item, sizes, data))
@@ -184,11 +198,46 @@ class BinaryWriter:
                     print(msg, flush=True)
             self._data_format = data_format
             self._data_spec = data_spec
+            self._format_serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in self._format_serializers]
+            self._cache_fixed_item_layout()
+        elif self._fixed_header is not None:
+            return self._serialize_fixed_leaves(items)
         else:
-            # tiny optimization to avoid looping over all the data format
+            flattened = tree_leaves(items)
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
 
         return self._item_loader.encode_data(data, sizes, flattened)
+
+    def _cache_fixed_item_layout(self) -> None:
+        """If every leaf has a constant byte size, cache the size header for every later sample."""
+        sizes = self._format_fixed_sizes
+        if not sizes or any(size is None for size in sizes):
+            self._fixed_header = None
+            self._fixed_body_len = 0
+            return
+        typed = [int(size) for size in sizes if size is not None]
+        self._fixed_header = struct.pack("<" + "I" * len(typed), *typed)
+        self._fixed_body_len = sum(typed)
+
+    def _serialize_fixed_leaves(self, items: Any) -> tuple[bytes, int | None]:
+        flattened = tree_leaves(items)
+        header = self._fixed_header
+        serializers = self._format_serializers
+        sizes = self._format_fixed_sizes
+        assert header is not None
+        assert serializers is not None
+        assert sizes is not None
+        out = bytearray(len(header) + self._fixed_body_len)
+        out[0 : len(header)] = header
+        cursor = len(header)
+        for element, serializer, size in zip(flattened, serializers, sizes):
+            blob, _ = serializer.serialize(element)
+            assert size is not None
+            end = cursor + size
+            out[cursor:end] = blob
+            cursor = end
+        return bytes(out), None
 
     def _serialize(self, item: Any, sizes: list[int], data: list[bytes]) -> str:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
@@ -196,7 +245,8 @@ class BinaryWriter:
             if serializer.can_serialize(item):
                 serialized_item, name = serializer.serialize(item)
                 data.append(serialized_item)
-                sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+                size = getattr(serializer, "size", None)
+                sizes.append(size if size is not None else len(serialized_item))
                 name = name or serializer_name
                 if name and name not in self._serializers_extra:
                     self._serializers_extra[name] = serializer
@@ -207,12 +257,21 @@ class BinaryWriter:
         self, item: Any, sizes: list[int], data: list[bytes], data_format: list[str]
     ) -> None:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
-        assert data_format
-        for element, item_format in zip(item, data_format):
-            serializer = self._serializers_extra[item_format]
+        serializers = self._format_serializers
+        if serializers is None:
+            serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_serializers = serializers
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._cache_fixed_item_layout()
+        fixed_sizes = self._format_fixed_sizes
+        if fixed_sizes is None:
+            fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._format_fixed_sizes = fixed_sizes
+            self._cache_fixed_item_layout()
+        for element, serializer, fixed in zip(item, serializers, fixed_sizes):
             serialized_item, _ = serializer.serialize(element)
             data.append(serialized_item)
-            sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+            sizes.append(fixed if fixed is not None else len(serialized_item))
 
     def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
         """Creates a binary chunk file from serialized items."""
@@ -263,16 +322,25 @@ class BinaryWriter:
                 f" Found {self._pretty_serialized_items()} with boundaries: {self._min_index}, {self._max_index}."
             )
 
-        num_items = np.uint32(len(items))  # total number of items in the chunk
-        sizes = list(map(len, items))  # list of sizes (length of bytes) of each item
-        offsets = np.array([0] + sizes).cumsum().astype(np.uint32)  # let's say: [0, 10, 30, 45]
+        n = len(items)
+        num_items = np.uint32(n)
+        header = 4 + 4 * (n + 1)
+        offsets = np.empty(n + 1, dtype=np.uint32)
+        offsets[0] = header
+        cursor = header
+        for i, item in enumerate(items):
+            cursor += item.bytes
+            offsets[i + 1] = cursor
 
-        # add the number of bytes taken to store (num_items and offsets). Let's say 60: offsets -> [60, 70, 90, 105]
-        offsets += len(num_items.tobytes()) + len(offsets.tobytes())
-        sample_data = b"".join([item.data for item in items])
-
-        # combine all bytes data which will be written to the chunk file
-        data = num_items.tobytes() + offsets.tobytes() + sample_data
+        data = bytearray(cursor)
+        data[0:4] = num_items.tobytes()
+        data[4:header] = offsets.tobytes()
+        pos = header
+        for item in items:
+            end = pos + item.bytes
+            data[pos:end] = item.data
+            pos = end
+        data = bytes(data)
 
         # Whether to encrypt the data at the chunk level
         if self._encryption and self._encryption.level == EncryptionLevel.CHUNK:
@@ -472,7 +540,7 @@ class BinaryWriter:
             if _INDEX_FILENAME in files:
                 return
 
-            index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
             # When using the Data Optimizer, we don't use multi processes.
             is_done = len(index_files) == self._distributed_env.world_size * num_workers
@@ -490,7 +558,10 @@ class BinaryWriter:
 
         """
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+        if node_rank is None:
+            index_files = [f for f in files if _is_worker_index_file(f) or _is_node_index_file(f)]
+        else:
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
         chunks_info = []
         config = None
@@ -499,7 +570,10 @@ class BinaryWriter:
             chunks_info.extend(existing_index["chunks"])
             config = existing_index["config"]
 
-        for index_filename in sorted(index_files):
+        def _natural_key(s: str) -> list:
+            return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+
+        for index_filename in sorted(index_files, key=_natural_key):
             chunk_path = os.path.join(self._cache_dir, index_filename)
             with open(chunk_path) as f:
                 data = json.load(f)
@@ -548,26 +622,39 @@ class BinaryWriter:
             )
         return out
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
-        """Save the current state of the writer to a checkpoint."""
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints", inputs_done: int | None = None) -> str | None:
+        """Save the current writer state to ``checkpoint-{rank}.json``.
+
+        ``inputs_done`` is how many *input items* this worker has processed (used to slice
+        the work list on resume). ``samples_written`` is the sum of chunk sizes.
+        ``next_chunk_index`` is the next chunk file index — not the sample count.
+        """
         checkpoint_dir = os.path.join(self._cache_dir, checkpoint_dir)
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
         if self._chunks_info == self.last_checkpoint_chunk_info:
-            # to avoid saving the same checkpoint twice
             return None
 
-        unique_id = uuid.uuid4().hex
-        done_till_index = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        samples_written = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        resolved_inputs = samples_written if inputs_done is None else inputs_done
+        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}.json")
+        tmp_filepath = checkpoint_filepath + f".tmp.{os.getpid()}"
 
-        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}-{unique_id}.json")
+        payload = {
+            "chunks": self._chunks_info,
+            "config": self.get_config(),
+            "inputs_done": resolved_inputs,
+            "samples_written": samples_written,
+            "next_chunk_index": self._chunk_index,
+            # Backward compatible alias used by older loaders.
+            "done_till_index": resolved_inputs,
+        }
 
-        checkPoint = {"chunks": self._chunks_info, "config": self.get_config(), "done_till_index": done_till_index}
-
-        with open(checkpoint_filepath, "w") as f:
-            json.dump(checkPoint, f)
-
+        with open(tmp_filepath, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp_filepath, checkpoint_filepath)
+        self.last_checkpoint_chunk_info = copy.deepcopy(self._chunks_info)
         return checkpoint_filepath
 
 

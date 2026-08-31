@@ -17,6 +17,18 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
 
 
+def _looks_like_parquet_dir(path: str | None, fnmatch_pattern: str | None) -> bool:
+    if fnmatch_pattern and fnmatch_pattern.endswith(".parquet"):
+        return True
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    return any(name.endswith(".parquet") for name in names)
+
+
 def wait_for_predicate(
     predicate: Callable[[], bool],
     timeout: float,
@@ -104,10 +116,36 @@ def subsample_streaming_dataset(
         data = load_index_file(input_dir.path)
         original_chunks = data["chunks"]
     else:
-        raise ValueError(
-            f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
-            "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
-        )
+        from litdata.processing.complete import complete_dataset, is_complete_dataset
+
+        try:
+            complete_dataset(input_dir.path)
+        except FileNotFoundError:
+            parquet_root = input_dir.url or input_dir.path
+            if parquet_root and _looks_like_parquet_dir(input_dir.path, fnmatch_pattern):
+                from litdata.streaming.writer import index_parquet_dataset
+
+                index_parquet_dataset(
+                    parquet_root,
+                    cache_dir=input_dir.path,
+                    storage_options=storage_options,
+                )
+            else:
+                raise ValueError(
+                    f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
+                    "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
+                    " If workers wrote {rank}.index.json shards, call litdata.complete_dataset(dir)."
+                    " For a Parquet folder, StreamingDataset now builds the index automatically."
+                ) from None
+        if not is_complete_dataset(input_dir.path) and not os.path.exists(
+            os.path.join(input_dir.path, _INDEX_FILENAME)
+        ):
+            raise ValueError(
+                f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
+                "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
+            )
+        data = load_index_file(input_dir.path)
+        original_chunks = data["chunks"]
 
     if fnmatch_pattern is not None:
         from fnmatch import fnmatch

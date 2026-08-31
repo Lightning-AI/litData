@@ -149,7 +149,11 @@ def test_binary_writer_with_jpeg_and_int(tmpdir):
     reader = BinaryReader(cache_dir, max_cache_size=10 ^ 9)
     for i in range(100):
         data = reader.read(ChunkedIndex(i, chunk_index=i // 4))
-        np.testing.assert_array_equal(np.asarray(data["x"]).squeeze(0), imgs[i])
+        # JPEG deserialize uses ImageReadMode.RGB (CHW), including grayscale sources.
+        got = np.asarray(data["x"])
+        assert got.shape == (3, 28, 28)
+        expected = np.asarray(imgs[i].convert("RGB")).transpose(2, 0, 1)
+        np.testing.assert_array_equal(got, expected)
         assert data["y"] == i
 
 
@@ -189,9 +193,11 @@ def test_binary_writer_with_jpeg_filepath_and_int(tmpdir):
     reader = BinaryReader(cache_dir, max_cache_size=10 ^ 9)
     for i in range(100):
         data = reader.read(ChunkedIndex(i, chunk_index=i // 7))
-        img_read = Image.open(data["x"])
-        print(f"{img_read.size=}")
-        np.testing.assert_array_equal(img_read, imgs[i])
+        # Filepath → image bytes → RGB CHW tensor (torchvision). No PIL on read.
+        got = np.asarray(data["x"])
+        assert got.shape == (3, 28, 28)
+        expected = np.asarray(imgs[i].convert("RGB")).transpose(2, 0, 1)
+        np.testing.assert_array_equal(got, expected)
         assert data["y"] == i
 
 
@@ -287,6 +293,75 @@ def test_writer_save_checkpoint(tmpdir):
     binary_writer.merge()
     binary_writer.save_checkpoint()
 
-    for file in os.listdir(os.path.join(cache_dir, ".checkpoints")):
-        assert file.__contains__("checkpoint-0")
-        assert file.endswith(".json")
+    checkpoint_dir = os.path.join(cache_dir, ".checkpoints")
+    files = os.listdir(checkpoint_dir)
+    assert files == ["checkpoint-0.json"]
+    with open(os.path.join(checkpoint_dir, "checkpoint-0.json")) as f:
+        payload = json.load(f)
+    assert payload["inputs_done"] == payload["samples_written"] == 12
+    assert payload["next_chunk_index"] == binary_writer._chunk_index
+    assert "chunks" in payload
+
+    binary_writer.save_checkpoint()  # no-op when unchanged
+    assert os.listdir(checkpoint_dir) == ["checkpoint-0.json"]
+
+
+def test_merge_natural_sort_order_with_many_workers(tmpdir):
+    # With 11+ workers, index files are named 0.index.json ... 10.index.json.
+    # sorted() puts "10.index.json" before "2.index.json" alphabetically, making
+    # chunk-10-0.bin appear before chunk-2-0.bin in the merged index. Fixes #826.
+    config = {
+        "chunk_bytes": None,
+        "chunk_size": 1,
+        "compression": None,
+        "data_format": ["scalar"],
+        "data_spec": None,
+        "encryption": None,
+        "item_loader": "PyTreeLoader",
+    }
+    from litdata.constants import _INDEX_FILENAME
+
+    n_workers = 11
+    for rank in range(n_workers):
+        chunk = {"chunk_size": 1, "column_sizes": [4], "dim": None, "filename": f"chunk-{rank}-0.bin"}
+        with open(os.path.join(str(tmpdir), f"{rank}.{_INDEX_FILENAME}"), "w") as f:
+            json.dump({"chunks": [chunk], "config": config}, f, sort_keys=True)
+
+    writer = BinaryWriter(str(tmpdir), chunk_size=1)
+    writer._is_done = True
+    writer._rank = 0
+    writer._merge_no_wait()
+
+    with open(os.path.join(str(tmpdir), _INDEX_FILENAME)) as f:
+        data = json.load(f)
+
+    filenames = [c["filename"] for c in data["chunks"]]
+    assert filenames == [f"chunk-{i}-0.bin" for i in range(n_workers)]
+
+
+@pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires zstd")
+def test_zstd_decompress_file_roundtrip(tmpdir):
+    from litdata.streaming.compression import ZSTDCompressor
+
+    compressor = ZSTDCompressor(4)
+    payload = os.urandom(80_000)
+    src = os.path.join(tmpdir, "chunk.bin.zstd")
+    dst = os.path.join(tmpdir, "chunk.bin")
+    with open(src, "wb") as f:
+        f.write(compressor.compress(payload))
+    compressor.decompress_file(src, dst)
+    with open(dst, "rb") as f:
+        assert f.read() == payload
+
+
+def test_writer_filled_false_during_optimize_append(tmpdir, monkeypatch):
+    from litdata.constants import _INDEX_FILENAME
+
+    with open(os.path.join(tmpdir, _INDEX_FILENAME), "w") as f:
+        json.dump({"chunks": [], "config": {}}, f)
+    monkeypatch.setenv("DATA_OPTIMIZER_GLOBAL_RANK", "0")
+    writer = BinaryWriter(str(tmpdir), chunk_bytes=90)
+    assert writer.filled is False
+    writer[0] = 1
+    assert writer.done()
+    assert os.path.isfile(os.path.join(tmpdir, "0.index.json"))

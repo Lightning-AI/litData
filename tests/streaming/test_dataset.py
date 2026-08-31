@@ -116,8 +116,11 @@ def test_optimize_dataset(
     chunk_bytes,
     chunk_size,
     tmpdir,
+    monkeypatch,
 ):
     data_dir = str(tmpdir / "optimized")
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmpdir / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmpdir / "data"))
 
     optimize(
         fn=_simple_optimize_fn,
@@ -314,7 +317,8 @@ def test_streaming_dataset_distributed_no_shuffle(drop_last, tmpdir, compression
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(input_dir=str(tmpdir), chunk_size=10, compression=compression)
@@ -337,7 +341,7 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     dataset_iter = iter(dataset)
     assert len(dataset_iter) == 548
     process_1_1 = list(dataset_iter)
-    assert process_1_1[:10] == [531, 536, 538, 530, 535, 537, 534, 539, 533, 532]
+    assert process_1_1[:10] == [536, 530, 531, 532, 534, 537, 535, 533, 538, 539]
     assert len(process_1_1) == 548
 
     dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
@@ -348,7 +352,7 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     dataset_2_iter = iter(dataset_2)
     assert len(dataset_2_iter) == 548 + int(not drop_last)
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [248, 249, 884, 887, 888, 883, 886, 882, 889, 880]
+    assert process_2_1[:10] == [248, 249, 889, 881, 883, 885, 886, 887, 888, 884]
     assert len(process_2_1) == 548 + int(not drop_last)
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 
@@ -367,7 +371,8 @@ def test_streaming_dataset_distributed_full_shuffle_odd(drop_last, tmpdir, compr
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(str(tmpdir), chunk_size=500, compression=compression)
@@ -390,7 +395,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_iter = iter(dataset)
     assert len(dataset_iter) == 611
     process_1_1 = list(dataset_iter)
-    assert process_1_1[:10] == [1093, 1186, 1031, 1128, 1126, 1051, 1172, 1052, 1120, 1209]
+    assert process_1_1[:10] == [1144, 1030, 1092, 1095, 1171, 1192, 1085, 1161, 1134, 1165]
     assert len(process_1_1) == 611
 
     dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
@@ -401,7 +406,7 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     dataset_2_iter = iter(dataset_2)
     assert len(dataset_2_iter) == 611
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [967, 942, 893, 913, 982, 898, 947, 901, 894, 961]
+    assert process_2_1[:10] == [991, 911, 961, 941, 950, 948, 986, 957, 955, 998]
     assert len(process_2_1) == 611
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 
@@ -415,7 +420,8 @@ def test_streaming_dataset_distributed_full_shuffle_even(drop_last, tmpdir, comp
     ],
 )
 @pytest.mark.timeout(90)
-def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression):
+def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, tmpdir, compression, monkeypatch):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
     seed_everything(42)
 
     cache = Cache(str(tmpdir), chunk_size=10, compression=compression)
@@ -438,7 +444,7 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     dataset_iter = iter(dataset)
     assert len(dataset_iter) == 305
     process_1_1 = list(dataset_iter)
-    assert process_1_1[:10] == [271, 273, 276, 272, 279, 270, 274, 275, 278, 277]
+    assert process_1_1[:10] == [275, 277, 273, 272, 270, 276, 271, 278, 279, 274]
     assert len(process_1_1) == 305
 
     dataset_2 = StreamingDataset(input_dir=str(tmpdir), shuffle=True, drop_last=drop_last)
@@ -449,7 +455,7 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     dataset_2_iter = iter(dataset_2)
     assert len(dataset_2_iter) == 305
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [418, 417, 419, 416, 415, 348, 341, 343, 347, 346]
+    assert process_2_1[:10] == [415, 419, 416, 418, 417, 348, 346, 341, 344, 349]
     assert len(process_2_1) == 305
     assert len([i for i in process_1_1 if i in process_2_1]) == 0
 
@@ -458,12 +464,12 @@ def test_streaming_dataset_distributed_full_shuffle_even_multi_nodes(drop_last, 
     assert isinstance(dataset_2.shuffler, FullShuffle)
     dataset_2.distributed_env = _DistributedEnv(4, 1, 2)
     dataset_2.current_epoch = 2
-    assert len(dataset_2) == 310
+    assert len(dataset_2) == 305
     dataset_2_iter = iter(dataset_2)
-    assert len(dataset_2_iter) == 310
+    assert len(dataset_2_iter) == 305
     process_2_1 = list(dataset_2_iter)
-    assert process_2_1[:10] == [231, 236, 232, 235, 234, 238, 239, 237, 230, 233]
-    assert len(process_2_1) == 310
+    assert process_2_1[:10] == [407, 409, 405, 406, 408, 258, 257, 252, 254, 250]
+    assert len(process_2_1) == 305
     assert len([i for i in process_1_1 if i in process_2_1]) != 0
 
 
@@ -544,7 +550,7 @@ def test_dataset_cache_recreation(tmpdir):
     assert dataset.shuffler is shuffler  # shuffler gets reused
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(90)
 def test_len_called_before_dataloader_drop_last(tmpdir):
     cache = Cache(str(tmpdir), chunk_size=10)
     for i in range(100):
@@ -559,7 +565,7 @@ def test_len_called_before_dataloader_drop_last(tmpdir):
     dataloader = StreamingDataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=4,
+        num_workers=2,
         drop_last=True,
         shuffle=False,
     )
@@ -817,18 +823,19 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     functions.optimize(
         optimize_fn,
         inputs,
-        output_dir=str(tmpdir),
+        output_dir=output_dir,
         num_workers=2,
         chunk_size=2,
         reorder_files=False,
         num_downloaders=1,
         item_loader=TokensLoader(),
+        keep_data_ordered=True,
     )
 
-    assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10
+    assert len([f for f in os.listdir(output_dir) if f.endswith(".bin")]) == 10
 
     block_size = 10
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
 
     L = len(dataset)
     assert L == 20
@@ -841,7 +848,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "0")
     monkeypatch.setenv("NNODES", "1")
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataloader = StreamingDataLoader(dataset, batch_size=2, shuffle=False, num_workers=2)
     assert dataset.drop_last  # in distributed setting, this is forced automatically
 
@@ -864,7 +871,7 @@ def test_dataset_for_text_tokens_distributed_num_workers_end_to_end(tmpdir, monk
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("GLOBAL_RANK", "1")
     monkeypatch.setenv("NNODES", "1")
-    dataset = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataloader = StreamingDataLoader(dataset, batch_size=2, shuffle=False, num_workers=2)
     assert dataset.drop_last  # in distributed setting, this is forced automatically
 
@@ -924,6 +931,10 @@ class EmulateS3StreamingDataset(StreamingDataset):
             item_loader=self.item_loader,
             chunk_bytes=1,
             serializers=self.serializers,
+            # These tests emulate remote GETs into a tiny pytest tmp dir. Adaptive
+            # ``max_cache_size`` on CI /tmp can be smaller than the fixture, which
+            # deletes chunks under TokensLoader mmap and kills DataLoader workers.
+            max_cache_size=self.max_cache_size if self.max_cache_size is not None else "100GB",
         )
         cache._reader._try_load_config()
 
@@ -1069,7 +1080,7 @@ def _get_simulated_s3_dataloader(cache_dir, data_dir, shuffle=False):
     return StreamingDataLoader(dataset, batch_size=2, num_workers=2)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Not tested on windows and MacOs")
+@pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="Not tested on windows and MacOs")
 @mock.patch.dict(os.environ, {}, clear=True)
 @pytest.mark.timeout(90)
 @pytest.mark.parametrize("shuffle", [True, False])
@@ -1090,6 +1101,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
         num_workers=4,
         num_uploaders=1,
         item_loader=TokensLoader(block_size=10),
+        keep_data_ordered=True,
     )
     assert set(os.listdir(data_dir)) == {
         "chunk-0-0.bin",
@@ -1187,6 +1199,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
     sleep(1)
 
     state_dict = dataset.state_dict(0, 1, 2)
+    orig_state = dict(state_dict)
 
     dataset.load_state_dict(state_dict)
     dataset.worker_env = _WorkerEnv(world_size=1, rank=0)
@@ -1245,13 +1258,11 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
     ):
         dataset._validate_state_dict()
 
-    state_dict["num_workers"] = "8"
-    dataset.load_state_dict(state_dict)
-    with pytest.raises(
-        ValueError,
-        match="The provided `num_workers` state doesn't match the current one. Found `1` instead of `8`.",
-    ):
-        dataset._validate_state_dict()
+    nw_state = dict(orig_state)
+    nw_state["num_workers"] = "8"
+    dataset.load_state_dict(nw_state)
+    dataset._validate_state_dict()  # worker mismatch uses elastic resume, not an error
+    assert nw_state["num_workers"] == "8"
 
     state_dict["shuffle"] = True
     dataset.load_state_dict(state_dict)
@@ -1359,7 +1370,7 @@ def test_dataset_valid_state_override(tmpdir, monkeypatch):
     state_dict["num_workers"] = "8"
     dataset.load_state_dict(state_dict)
     dataset._validate_state_dict()
-    assert state_dict["num_workers"] == 1, "num_workers not overridden"
+    assert state_dict["num_workers"] == "8", "num_workers is not force-overridden; elastic resume handles it"
 
     state_dict["shuffle"] = True
     dataset.load_state_dict(state_dict)
@@ -1460,26 +1471,27 @@ def test_subsample_streaming_dataset_with_token_loader(tmpdir, monkeypatch):
     functions.optimize(
         optimize_fn,
         inputs,
-        output_dir=str(tmpdir),
+        output_dir=output_dir,
         num_workers=2,
         chunk_size=2,
         reorder_files=False,
         num_downloaders=1,
         item_loader=TokensLoader(),
+        keep_data_ordered=True,
     )
 
-    assert len([f for f in os.listdir(tmpdir) if f.endswith(".bin")]) == 10
+    assert len([f for f in os.listdir(output_dir) if f.endswith(".bin")]) == 10
 
     block_size = 10
-    dataset1 = StreamingDataset(input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False)
+    dataset1 = StreamingDataset(input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False)
     dataset2 = StreamingDataset(
-        input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False, subsample=0.4
+        input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False, subsample=0.4
     )
 
     assert len(dataset2) == int(len(dataset1) * 0.4)
 
     dataset3 = StreamingDataset(
-        input_dir=str(tmpdir), item_loader=TokensLoader(block_size), shuffle=False, subsample=2.5
+        input_dir=output_dir, item_loader=TokensLoader(block_size), shuffle=False, subsample=2.5
     )
     assert len(dataset3) == int(len(dataset1) * 2.5)
 

@@ -1,0 +1,4 @@
+litsim.yaml
+*.html
+!web/static/
+!web/static/**

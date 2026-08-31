@@ -11,13 +11,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import random
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from typing import Any, Literal
 
-from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.debugger import CAT_EPOCH, emit_trace
 from litdata.streaming.dataset import StreamingDataset
 from litdata.utilities.base import (
     __NUM_SAMPLES_YIELDED_KEY__,
@@ -25,8 +24,6 @@ from litdata.utilities.base import (
     _BaseStreamingDatasetWrapper,
 )
 from litdata.utilities.env import _WorkerEnv
-
-logger = logging.getLogger("litdata.streaming.combined")
 
 
 class BatchingMethod:
@@ -210,9 +207,7 @@ class _CombinedDatasetIterator(Iterator):
         self._samples_yielded_in_batch = 0
         self._cur_dataset_index = -1
 
-        logger.debug(
-            _get_log_msg({"name": "iterating_combined_dataset", "ph": "B", "cname": ChromeTraceColors.LIGHT_BLUE})
-        )
+        emit_trace("combined", "B", CAT_EPOCH)
 
     def __next__(self) -> Any:
         if self._iterate_over_all:
@@ -228,11 +223,7 @@ class _CombinedDatasetIterator(Iterator):
                     if len(indexes_left) == 1:
                         self._dataset_indexes = list(range(len(self._datasets)))
                         self._weights = deepcopy(self._original_weights)
-                        logger.debug(
-                            _get_log_msg(
-                                {"name": "iterating_combined_dataset", "ph": "E", "cname": ChromeTraceColors.LIGHT_BLUE}
-                            )
-                        )
+                        emit_trace("combined", "E", CAT_EPOCH)
                         raise e
 
                     self._dataset_indexes[dataset_index] = None
