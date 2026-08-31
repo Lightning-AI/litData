@@ -203,7 +203,8 @@ def test_optimize_hf_reuses_lightning_storage_index(monkeypatch):
     out = "/teamspace/lightning_storage/ds/imdb-opt"
     assert optimize_hf("org/name", output_dir=out, overwrite=False) == out
     assert optimize_calls == []
-    assert seen_storage_options and seen_storage_options[0].get("data_connection_id") == "dc-1"
+    assert seen_storage_options
+    assert seen_storage_options[0].get("data_connection_id") == "dc-1"
 
 
 def test_hf_parquet_cache_is_outside_chunk_dir(monkeypatch):
