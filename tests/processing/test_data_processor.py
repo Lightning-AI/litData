@@ -1349,17 +1349,22 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
     assert len(cache) == 5
 
 
-def test_lambda_data_chunk_recipe_pickle():
-    inputs = [bytearray(1024 * 1024)]
-    data_recipe = LambdaDataChunkRecipe(str, inputs, 1, None, None)
-    worker_recipe = pickle.loads(pickle.dumps(data_recipe))
+def _noop_map_item(item: Any, output_dir: str) -> None:
+    return None
 
-    # The original recipe instance (in the parent process) keeps the full input sequence.
-    assert data_recipe.prepare_structure(None) is inputs
-    # The deserialized worker copy drops `_inputs` to avoid duplicating large input lists.
-    assert worker_recipe.prepare_structure(None) is None
-    # Worker execution still uses the callable path and returns the expected transformed value.
-    assert worker_recipe.prepare_item(123) == "123"
+
+def test_lambda_recipe_pickle_drops_inputs():
+    inputs = [bytearray(1024)]
+    chunk_recipe = LambdaDataChunkRecipe(str, inputs, 1, None, None)
+    map_recipe = LambdaMapRecipe(_noop_map_item, inputs)
+    pickled_chunk = pickle.loads(pickle.dumps(chunk_recipe))  # noqa: S301
+    pickled_map = pickle.loads(pickle.dumps(map_recipe))  # noqa: S301
+
+    assert chunk_recipe.prepare_structure(None) is inputs
+    assert map_recipe.prepare_structure(None) is inputs
+    assert pickled_chunk.prepare_structure(None) is None
+    assert pickled_map.prepare_structure(None) is None
+    assert pickled_chunk.prepare_item(123) == "123"
 
 
 def test_lambda_transform_recipe(monkeypatch):
