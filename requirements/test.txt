@@ -10,7 +10,7 @@ pytest-rerunfailures ==16.1
 pytest-random-order ==1.2.0
 pytest-xdist >=3.8.0
 pandas
-pyarrow >=20.0.0,<25.0.0  # TODO: unpin once pyarrow 25 parquet segfault is resolved
+pyarrow >=25.0.1,<26.0.0  # TODO: unpin once pyarrow 25 parquet segfault is resolved
 polars >1.0.0
 lightning
 transformers >=4.51.0
