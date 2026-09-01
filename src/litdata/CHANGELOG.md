@@ -8,9 +8,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+## [0.2.75] - 2026-09-01
+
 ### Fixed
 
-- Auto ``batch_decode`` is 1 for JPEG / image / audio (and other per-item media). A 16-row window plus ``item_shuffle_window=256`` was re-decoding each ImageNet JPEG ~16×. Cheap leaves (text, ints, small tensors) still batch. ([#897](https://github.com/Lightning-AI/litData/pull/897) follow-up)
+- Shuffled JPEG (and other per-item media) streaming no longer re-decodes the same image ~16×. Auto-windowing stays on for cheap leaves (text, ints, small tensors); JPEG / image / audio / video use ``batch_decode=1`` so ImageNet-style epochs keep full decode speed. ([#899](https://github.com/Lightning-AI/litData/pull/899))
 
 ## [0.2.74] - 2026-09-01
 
