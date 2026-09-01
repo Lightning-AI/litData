@@ -985,6 +985,12 @@ def test_r2_streaming_dataset(monkeypatch, tmpdir):
 
 
 class EmulateS3StreamingDataset(StreamingDataset):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # ``Dir(cache, local_src)`` has no s3:// URL, so POSIX-fast would mmap the
+        # cache while the fake remote still copies and deletes those files.
+        self.posix_fast = None
+
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
         cache_dir = os.path.join(self.input_dir.path)
         os.makedirs(cache_dir, exist_ok=True)
