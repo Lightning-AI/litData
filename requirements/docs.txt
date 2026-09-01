@@ -9,7 +9,7 @@ sphinxcontrib-mockautodoc
 sphinx-autodoc-typehints >=1.0
 sphinx-paramlinks >=0.5.1
 sphinx-togglebutton >=0.2
-sphinx-copybutton >=0.3
+sphinx-copybutton >=0.5.2
 porter
 # jinja2 >=3.0.0,<3.2.0
 
