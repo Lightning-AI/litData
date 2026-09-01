@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Fixed
+
+- Auto ``batch_decode`` is 1 for JPEG / image / audio (and other per-item media). A 16-row window plus ``item_shuffle_window=256`` was re-decoding each ImageNet JPEG ~16×. Cheap leaves (text, ints, small tensors) still batch. ([#897](https://github.com/Lightning-AI/litData/pull/897) follow-up)
+
 ## [0.2.74] - 2026-09-01
 
 ### Added

@@ -23,6 +23,7 @@ from litdata.streaming.item_loader import (
     TokensLoader,
     _auto_batch_rows,
     _batch_rows_for_format,
+    _item_only_batch,
     _parse_batch_decode,
 )
 from litdata.streaming.sampler import ChunkedIndex
@@ -39,8 +40,20 @@ def test_batch_rows_for_format(monkeypatch):
     assert _batch_rows_for_format(["str", "int"]) == 256
     assert _batch_rows_for_format(["str", "str", "json", "json"]) == 256
     assert _batch_rows_for_format(["pickle"]) == 256
+    imagenet_chunks = [{"chunk_bytes": 63968405, "chunk_size": 556}]
+    jpeg_auto = _auto_batch_rows(["jpeg", "int"], imagenet_chunks)
+    assert jpeg_auto == 1
+    assert _item_only_batch(jpeg_auto)
+    jpeg_115k = _auto_batch_rows(["jpeg"], [{"chunk_bytes": 512 << 10, "chunk_size": 8}])
+    assert jpeg_115k == 1
+    assert _item_only_batch(jpeg_115k)
     assert _auto_batch_rows(["jpeg", "int"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}]) == 1
-    assert _auto_batch_rows(["jpeg"], [{"chunk_bytes": 512 << 10, "chunk_size": 8}]) == 16
+    assert _auto_batch_rows(["image"], None) == 1
+    assert _auto_batch_rows(["audio"], None) == 1
+    tensor_auto = _auto_batch_rows(["tensor"], [{"chunk_bytes": 512 << 10, "chunk_size": 8}])
+    assert tensor_auto == 16
+    assert not _item_only_batch(tensor_auto)
+    assert not _item_only_batch(_auto_batch_rows(["str", "int"]))
     assert _batch_rows_for_format(["jpeg"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}]) == 1
     assert _batch_rows_for_format(["str"], batch_decode=32) == 32
     assert _batch_rows_for_format(["jpeg"], [{"chunk_bytes": 8 << 20, "chunk_size": 4}], batch_decode=8) == 8
@@ -64,6 +77,49 @@ def test_decode_window_is_aligned():
     assert loader._window_bounds(900, 1000, 256) == (768, 1000)
     assert loader._window_bounds(3, 10, -1) == (0, 10)
     assert loader._window_bounds(3, 10, 1) == (3, 4)
+
+
+def test_decode_window_is_single_slot():
+    """JPEG must not keep extra decoded windows around for shuffle."""
+    loader = PyTreeLoader()
+    assert loader._store_decode_window(0, 0, list(range(16)), 3) == 3
+    assert loader._store_decode_window(0, 16, list(range(16, 32)), 20) == 20
+    assert loader._chunk_rows == list(range(16, 32))
+    assert loader._win_start == 16
+    assert loader._chunk_rows_index == 0
+
+
+def test_shuffled_jpeg_auto_batch_decodes_once(tmp_path, monkeypatch):
+    """Shuffle + auto JPEG must decode_jpeg once per item, not a 16-row window (~15×)."""
+    pytest.importorskip("PIL")
+
+    from litdata import optimize
+    from litdata.streaming import serializers as ser
+
+    n = 64
+    calls = {"n": 0}
+    orig = ser.JPEGSerializer.deserialize
+
+    def counting(self, data: bytes) -> torch.Tensor:
+        calls["n"] += 1
+        return orig(self, data)
+
+    monkeypatch.setattr(ser.JPEGSerializer, "deserialize", counting)
+
+    optimize(
+        fn=_jpeg_label_sample,
+        inputs=list(range(n)),
+        output_dir=str(tmp_path / "jpeg-ds"),
+        chunk_size=n,
+        num_workers=1,
+    )
+    ds = StreamingDataset(str(tmp_path / "jpeg-ds"), shuffle=True, seed=42, item_shuffle_window=256)
+    items = list(ds)
+    assert len(items) == n
+    assert calls["n"] == n
+    loader = ds.cache._reader._item_loader
+    assert loader._batch_rows == 1
+    assert _item_only_batch(loader._batch_rows)
 
 
 def test_streaming_dataset_exposes_batch_decode(tmp_path):
@@ -578,6 +634,19 @@ def _nested_arrow_sample(i: int):
         "choices": JsonLeaf({"text": ["A", "B"], "label": ["1", "2"]}),
         "answers": JsonLeaf(["span"] * (i % 3)),
     }
+
+
+def _jpeg_label_sample(i: int):
+    import io
+
+    from PIL import Image as PILImage
+
+    from litdata.types import Jpeg
+
+    buf = io.BytesIO()
+    array = np.full((16, 16, 3), i % 256, dtype=np.uint8)
+    PILImage.fromarray(array).save(buf, format="JPEG", quality=80)
+    return Jpeg(bytes=buf.getvalue()), int(i)
 
 
 def _flat_arrow_sample(i: int):

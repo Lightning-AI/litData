@@ -117,11 +117,11 @@ class StreamingDataset(IterableDataset):
                 IDs from that first-run shuffler assignment, not a different bucket layout.
             batch_decode: How many items to deserialize together after a chunk is local.
                 ``"auto"`` (default) picks from the data format and mean sample size
-                (256 for text/nested, down to 1 for multi-MB images/video).
-                ``0`` is per item, ``N`` is an aligned window, ``"all"`` is the whole chunk.
-                Shuffle permutes items inside the same window so training still hits the
-                cache. ``LITDATA_BATCH_DECODE`` / ``LITDATA_BATCH_ROWS`` apply only when
-                this is ``"auto"``.
+                (256 for text/nested; 1 for JPEG/image/audio so each row is decoded
+                once). ``0`` is per item, ``N`` is an aligned window, ``"all"`` is the
+                whole chunk. Shuffle permutes items inside the same window so cheap
+                leaves still hit the cache. ``LITDATA_BATCH_DECODE`` /
+                ``LITDATA_BATCH_ROWS`` apply only when this is ``"auto"``.
             item_shuffle_window: In-chunk shuffle block size (pairs with ``batch_decode``).
                 ``None`` / ``"auto"`` (default) is 256, or ``LITDATA_ITEM_SHUFFLE_WINDOW``.
                 ``0`` / ``"full"`` is a full in-chunk permutation. Blocks are shuffled,

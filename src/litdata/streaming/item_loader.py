@@ -63,7 +63,9 @@ _BATCH_SKIP = object()
 # Cap for cheap leaves (text / nested JSON). Images/video scale down from avg bytes.
 _DEFAULT_BATCH_ROWS = 256
 _AUTO_WINDOW_BYTES = 16 << 20  # ~16MB of on-disk samples per decode window
-_HEAVY_LEAF = frozenset(
+# C++ / per-row deserialize is not amortizable. A window smaller than
+# ``item_shuffle_window`` (default 256) re-decodes the same JPEG ~16×.
+_PER_ITEM_LEAF = frozenset(
     {
         "jpeg",
         "pil",
@@ -76,6 +78,11 @@ _HEAVY_LEAF = frozenset(
         "nifti",
         "tiff",
         "jpeg_array",
+    }
+)
+_HEAVY_LEAF = frozenset(
+    {
+        *_PER_ITEM_LEAF,
         "tensor",
         "no_header_tensor",
         "graph",
@@ -129,14 +136,22 @@ def _leaf_key(name: str) -> str:
     return name.split(":", 1)[0].lower()
 
 
+def _item_only_batch(batch_rows: int | None) -> bool:
+    """``0`` / ``1`` decode the requested row; ``-1`` / ``N>1`` keep a window."""
+    return batch_rows is not None and 0 <= batch_rows <= 1
+
+
 def _auto_batch_rows(data_format: list[str] | None, chunks: list | None = None) -> int:
     """Pick a window from leaf types and mean on-disk sample size.
 
-    Text/nested stay at 256 (measured winner). A 2MB JPEG would turn 256 into
-    a multi-GB Python spike, so heavy leaves scale toward 1.
+    Text/nested stay at 256 (measured winner). JPEG / image / audio always use
+    1 (decode only the requested row) so shuffle cannot re-decode a dropped
+    window. Large tensors still scale toward 1 from mean on-disk bytes.
     """
     avg = _avg_sample_bytes(chunks)
     keys = [_leaf_key(name) for name in (data_format or [])]
+    if any(key in _PER_ITEM_LEAF for key in keys):
+        return 1
     heavy = any(key in _HEAVY_LEAF for key in keys)
     if avg >= 1 << 20:
         return 1
@@ -695,6 +710,7 @@ class PyTreeLoader(BaseItemLoader):
         self._framed_meta: dict[int, FramedHeader] = {}
         self._framed_decompressor: Any | None = None
         self._framed_inflate_buf: bytes | memoryview | None = None
+        self._framed_inflate_key: tuple[int, int] | None = None
         self._compression_level = "chunk"
         self._sample_compression = False
 
@@ -891,10 +907,19 @@ class PyTreeLoader(BaseItemLoader):
             and len(rows) == n_items
         ):
             return rows[table_idx - first]
-        raw = inflate_frame(view, header, frame_i, self._framed_compressor())
-        self._framed_inflate_buf = raw
+        inflate_key = (chunk_index, frame_i)
+        if self._framed_inflate_key == inflate_key and self._framed_inflate_buf is not None:
+            raw = self._framed_inflate_buf
+        else:
+            raw = inflate_frame(view, header, frame_i, self._framed_compressor())
+            self._framed_inflate_buf = raw
+            self._framed_inflate_key = inflate_key
         base = header.offsets[first]
         local_offsets = [int(off) - base for off in header.offsets[first : first + n_items + 1]]
+        if _item_only_batch(self._batch_rows):
+            local_i = table_idx - first
+            decoded = self._batch_deserialize_payload(raw, local_offsets, chunk_index, local_i, local_i + 1)
+            return decoded[0]
         decoded = self._batch_deserialize_payload(raw, local_offsets, chunk_index, 0, n_items)
         return self._store_decode_window(chunk_index, first, decoded, table_idx)
 
@@ -927,10 +952,10 @@ class PyTreeLoader(BaseItemLoader):
             arrow = self._try_arrow_footer_rows(view, chunk_index, table_idx)
             if arrow is not _BATCH_SKIP:
                 return arrow
-            if not batch_rows:
+            if _item_only_batch(batch_rows):
                 return _BATCH_SKIP
             return self._fill_decode_window_mmap(chunk_index, table_idx, batch_rows)
-        if not batch_rows:
+        if _item_only_batch(batch_rows):
             with open(chunk_filepath, "rb") as handle:
                 blob = handle.read()
             header = self._resolve_framed_header(chunk_index, blob)
@@ -1418,6 +1443,7 @@ class PyTreeLoader(BaseItemLoader):
         state["_framed_meta"] = {}
         state["_framed_decompressor"] = None
         state["_framed_inflate_buf"] = None
+        state["_framed_inflate_key"] = None
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
         state["_sizes_struct"] = None
@@ -1453,6 +1479,8 @@ class PyTreeLoader(BaseItemLoader):
             self._framed_meta = {}
             self._framed_decompressor = None
             self._framed_inflate_buf = None
+        if not hasattr(self, "_framed_inflate_key"):
+            self._framed_inflate_key = None
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)
