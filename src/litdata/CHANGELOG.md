@@ -8,36 +8,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+## [0.2.74] - 2026-09-01
+
 ### Added
 
-- ``Jpeg`` / ``JpegArray`` default to ``max_quality=95`` with ``quality=None``. ``max_quality`` is a cap: existing JPEG bytes whose estimated quality (IJG luminance q-table) is already ≤ the cap are kept as-is (Hub tiny-imagenet q=75 stays q=75). Higher-quality JPEGs, PNG, or raw pixels encode at the cap. ``quality=`` still force-encodes at that JPEG quality. ``quality`` and ``max_quality`` are mutually exclusive. ``Image`` leaves both unset so path/bytes stay pass-through unless you set one.
-- Pytree ``optimize(..., compression="zstd")`` accepts ``compression_level="chunk"|"batch"|"sample"`` (omitted zstd defaults to ``batch``: framed ``.bin`` with ``compression_batch_size=256``, matching Arrow IPC / decode windows). ``chunk`` is whole-file ``.zstd.bin``. ``sample`` zstd-compresses each item payload between offsets. Numeric zstd levels stay ``compression="zstd:N"``. Nested Arrow IPC is unchanged.
-
-### Fixed
-
-- ``optimize_hf(..., overwrite=False)`` reuses a remote ``index.json`` (``r2://``, ``s3://``, lightning storage) the same way ``optimize`` does, not only a local file.
-- ``StreamingDataset.load_state_dict`` treats a missing ``item_shuffle_window`` as the pre-PR full in-chunk shuffle (``0``), not the new 256 default.
-- Nested Arrow ``chunk_bytes`` accounting no longer assumes 3× zstd before the first flush. First shards of Hub JPEG/WAV were 140–188MB on a 64MB target. The writer now counts sample payload bytes, then uses measured on-disk bytes/item.
-- Unordered ``optimize()`` workers load items from a unique temp pickle instead of a shared ``node-{rank}-items.pkl`` under the chunk cache, so overlapping runs (pytest-xdist) no longer ``IndexError`` or mix inputs.
-- Process-level cache of Lightning Cloud temp-bucket credentials **and** the boto3 R2 client, keyed by ``data_connection_id`` (TTL aligned to the 2700s refetch interval). A new ``StreamingDataset`` / ``R2Client`` in the same process no longer re-logins (~1s) or rebuilds boto3 (~50ms) on the first GET. Scheduled refresh still mints new credentials. R2 clients skip optional SDK checksums. Tiny indexed chunks (<8MB) use ``get_object`` instead of TransferManager/obstore. ``clear_temp_bucket_credentials_cache()`` isolates tests.
-- `optimize` to lightning_storage (FUSE path + R2 url) is treated as remote: leftover ``.bin`` in a shared chunk cache no longer abort index merge. Removers now run even when ``input_dir`` is empty (HF optimize). ``R2Client`` copies ``storage_options`` so ``data_connection_id`` cannot be popped off a shared dict before client create. ``optimize`` / ``DataProcessor`` / ``_read_updated_at`` merge ``data_connection_id`` from the resolved Dir into ``storage_options``. A truncated FUSE ``index.json`` falls back to the object-store copy instead of raising ``JSONDecodeError``.
-
-### Changed
-
-- `optimize_hf` default ``chunk_bytes`` is **256MB** (was 64MB) so remote scans issue fewer R2 GETs. Pass ``chunk_bytes="64MB"`` for the old layout.
-- Arrow IPC zstd is skipped when the row is already-compressed binary (Hub JPEG/WAV ``{bytes, path}``). Text/JSON still uses IPC zstd.
-- Remote prefetch raises toward unique chunk count within a ~3GB RAM budget (cap 32). Obstore reuses a 32-connection idle pool and issues parallel Range GETs for objects ≥16MB.
-- `optimize_hf` keeps Hub parquet ``image`` / ``img`` / ``audio`` / ``video`` ``{bytes, path}`` as Arrow binary/string structs (same as parquet ``to_pylist``). It no longer wraps them as ``Image`` / ``Audio`` / ``Video`` (that decoded to tensors). Explicit ``PIL.Image`` / ``litdata.Image`` still use pytree serializers.
-- `R2Downloader.download_file` prefers obstore for chunk GETs (same as S3); ``index.json`` stays on boto3 so the DataLoader parent does not start tokio before fork. Single-chunk lightning_storage streams no longer wait on serial boto3.
-- `ParquetLoader` (low-memory) converts each row group with Arrow ``to_pylist()`` instead of per-cell ``as_py()``. Sequential IMDB parquet matches Hugging Face `datasets` streaming dicts and is ~2× faster than the old cell path.
-- `StreamingDataset("hf://...")` still prefetches whole parquet files (PrepareChunksThread + ``hf_hub_download``), then converts row groups with ``to_pylist()``. Hub UltraChat: ~56k rows/s vs HF streaming ~7k once cached. Nested parquet trees are listed recursively; ``storage_options`` / ``HF_TOKEN`` are forwarded to indexing. Removed unused ``ParquetLoader(range_read=...)`` (Hub range-reads on getitem were slower than HF streaming).
-- ``index_hf_dataset`` persists ``index.json`` at ``{cache_dir}/hf-index/<url_hash>/`` (no timestamp folder) and reuses it on later calls. A ready ``{cache_dir}/index.json`` is also reused.
-- ``HFDownloader`` parses ``hf://datasets/org/name@refs/convert/parquet/...`` (revision + path) instead of treating ``name@refs`` as the repo id. Wildcard ``*.parquet`` paths also match nested chunk filenames.
-- ``optimize_hf(name, output_dir=..., revision=..., split=..., chunk_size=...)`` indexes first, persists parquet under ``hf-parquet/<hash>/`` **outside** the chunk cache (so ``optimize`` cannot delete it), then writes **256MB** chunks from ``hf://`` URLs (workers re-download if a persist file is missing). Variable-length nested lists/dicts are one compact binary leaf (list[str]/list[int]/records; legacy JSON still reads, via ``orjson`` when installed) so SQuAD / UltraChat / OASST no longer break the index merge. Nested chunks append an Arrow IPC **file** (256-row zstd batches when compressed; skipped for Hub JPEG/WAV); the reader ``get_batch`` + ``to_pylist()``s one batch (same C++ inflate as parquet row groups). Reuses ``output_dir`` when ``index.json`` already exists.
-- ``StreamingDataset(batch_decode="auto")`` (default) picks a decode window from the data format and mean sample size: 256 for text/nested, down to 1 for multi-MB images/video. Pass ``0`` / ``N`` / ``"all"`` to pin it. ``LITDATA_BATCH_DECODE`` / ``LITDATA_BATCH_ROWS`` apply only when ``batch_decode`` is ``"auto"``. Decode windows are **aligned** (``[kW, (k+1)W)``). ``StreamingDataset(item_shuffle_window=...)`` (default 256 / ``"auto"``) shuffles those blocks then the items inside each, so ``shuffle=True`` still reuses the cache. ``0`` / ``"full"`` restores a full in-chunk permutation. ``LITDATA_ITEM_SHUFFLE_WINDOW`` applies only when the argument is omitted.
-- Nested HF chunks write **only** the Arrow IPC **file** footer (no duplicate JSON pytree body): ``ARROW1`` + 256-row record batches (Arrow IPC zstd when ``optimize(compression="zstd")``) + slim LitData prefix + ``LDARW01`` trailer. The same path now covers **flat JSON structs** (cnn_dailymail ``article``/``highlights``/``id``, IMDB, sst2), not only nested lists/maps. ``chunk_bytes`` is that on-disk size. LitData whole-file ``.zstd.bin`` is skipped for these chunks. The reader ``open_file``s the footer, ``get_batch(i).to_pylist()``s one batch, and caches that window like parquet row groups. Legacy IPC **stream** footers still ``read_all()`` + slice.
-- Framed pytree zstd (``compression_level="batch"``) inflates each ``LDFZ01`` frame with PyArrow's C++ ``Codec`` (``decompressed_size``, mmap ``memoryview``, one reused codec per loader). Falls back to the ``zstd`` package if pyarrow is missing.
-- Omitted ``compression_level`` with ``compression="zstd"`` / ``"zstd:N"`` now defaults to ``"batch"`` (framed ``.bin``, ``compression_batch_size=256``) instead of whole-file ``.zstd.bin``. Pass ``compression_level="chunk"`` for the previous wrap. Nested Arrow IPC still skips pytree file compression.
+- Stream Hugging Face Hub datasets with ``StreamingDataset("hf://...")``. Indexes on first open and reuses the cache. ([#897](https://github.com/Lightning-AI/litData/pull/897))
+- ``optimize_hf`` converts a Hub dataset into LitData chunks for faster training. Later calls reuse ``output_dir`` if it is already optimized. ([#897](https://github.com/Lightning-AI/litData/pull/897))
 
 ## [0.2.73] - 2026-08-31
 
