@@ -94,17 +94,17 @@ def test_shuffled_jpeg_auto_batch_decodes_once(tmp_path, monkeypatch):
     pytest.importorskip("PIL")
 
     from litdata import optimize
-    from litdata.streaming import serializers as ser
+    from litdata.streaming import serializers
 
     n = 64
     calls = {"n": 0}
-    orig = ser.JPEGSerializer.deserialize
+    orig = serializers.JPEGSerializer.deserialize
 
     def counting(self, data: bytes) -> torch.Tensor:
         calls["n"] += 1
         return orig(self, data)
 
-    monkeypatch.setattr(ser.JPEGSerializer, "deserialize", counting)
+    monkeypatch.setattr(serializers.JPEGSerializer, "deserialize", counting)
 
     optimize(
         fn=_jpeg_label_sample,
