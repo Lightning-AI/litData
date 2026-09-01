@@ -371,7 +371,7 @@ def test_s3_client_uses_temp_credentials_with_data_connection_id(monkeypatch):
     botocore = mock.MagicMock()
     monkeypatch.setattr(client, "botocore", botocore)
 
-    # The S3 temp-credentials response has no accountId (real AWS S3, no custom endpoint).
+    # A control plane predating the endpoint/region fields — there is nothing to correct with.
     temp_credentials = {
         "accessKeyId": "test-access-key",
         "secretAccessKey": "test-secret-key",
@@ -390,6 +390,77 @@ def test_s3_client_uses_temp_credentials_with_data_connection_id(monkeypatch):
         aws_session_token="test-session-token",
         config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
         region_name="us-west-2",
+    )
+
+
+def test_s3_client_uses_endpoint_and_region_from_temp_credentials(monkeypatch):
+    """Both must reach boto3, or the request never arrives at AWS.
+
+    A Studio's AWS_CONFIG_FILE points the default profile at Lightning Storage, so a client
+    built without an explicit endpoint sends these AWS keys to Cloudflare, and one built
+    without an explicit region signs for `auto`.
+    """
+    boto3_session = mock.MagicMock()
+    boto3 = mock.MagicMock(Session=boto3_session)
+    monkeypatch.setattr(client, "boto3", boto3)
+
+    botocore = mock.MagicMock()
+    monkeypatch.setattr(client, "botocore", botocore)
+
+    temp_credentials = {
+        "accessKeyId": "test-access-key",
+        "secretAccessKey": "test-secret-key",
+        "sessionToken": "test-session-token",
+        "region": "us-west-2",
+        "endpoint": "https://s3.us-west-2.amazonaws.com",
+    }
+    monkeypatch.setattr(client, "_login_and_get_temp_bucket_credentials", mock.MagicMock(return_value=temp_credentials))
+
+    s3_client = client.S3Client(storage_options={"data_connection_id": "test-connection"})
+    assert s3_client.client
+
+    boto3_session().client.assert_called_with(
+        "s3",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+        endpoint_url="https://s3.us-west-2.amazonaws.com",
+        region_name="us-west-2",
+    )
+
+
+def test_s3_client_storage_options_win_over_temp_credentials(monkeypatch):
+    """A caller who names a region keeps it — the control plane's value is a default, not an override."""
+    boto3_session = mock.MagicMock()
+    boto3 = mock.MagicMock(Session=boto3_session)
+    monkeypatch.setattr(client, "boto3", boto3)
+
+    botocore = mock.MagicMock()
+    monkeypatch.setattr(client, "botocore", botocore)
+
+    temp_credentials = {
+        "accessKeyId": "test-access-key",
+        "secretAccessKey": "test-secret-key",
+        "sessionToken": "test-session-token",
+        "region": "us-west-2",
+        "endpoint": "https://s3.us-west-2.amazonaws.com",
+    }
+    monkeypatch.setattr(client, "_login_and_get_temp_bucket_credentials", mock.MagicMock(return_value=temp_credentials))
+
+    s3_client = client.S3Client(
+        storage_options={"data_connection_id": "test-connection", "region_name": "eu-west-1"},
+    )
+    assert s3_client.client
+
+    boto3_session().client.assert_called_with(
+        "s3",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        config=botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+        endpoint_url="https://s3.us-west-2.amazonaws.com",
+        region_name="eu-west-1",
     )
 
 

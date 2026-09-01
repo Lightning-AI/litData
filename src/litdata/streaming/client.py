@@ -341,8 +341,7 @@ class S3Client:
     def _create_client_from_temp_credentials(self, data_connection_id: str) -> None:
         """Create an S3 client backed by temporary project-role credentials for a data connection.
 
-        Used for S3 connections available on non-AWS providers. Unlike R2 there is no custom
-        endpoint — this is real AWS S3, so botocore resolves the bucket region on first use.
+        Used for S3 connections available on non-AWS providers.
         """
         temp_credentials = _login_and_get_temp_bucket_credentials(
             data_connection_id, force_refresh=self._force_refresh_credentials
@@ -354,6 +353,17 @@ class S3Client:
         # data_connection_id is our own metadata; drop it before handing options to boto3.
         storage_options = {k: v for k, v in self._storage_options.items() if k != "data_connection_id"}
 
+        # Inside a Studio, AWS_CONFIG_FILE points the default profile at Lightning Storage, and
+        # botocore applies that endpoint and region to any client built here — sending these AWS
+        # keys to Cloudflare, which rejects them as InvalidAccessKeyId. The control plane reports
+        # where the bucket actually lives, so set both rather than letting the SDK resolve them.
+        # Older control planes omit these fields; nothing to correct with, so leave them unset.
+        resolved: dict[str, Any] = {}
+        if temp_credentials.get("endpoint"):
+            resolved["endpoint_url"] = temp_credentials["endpoint"]
+        if temp_credentials.get("region"):
+            resolved["region_name"] = temp_credentials["region"]
+
         session = boto3.Session(**self._session_options)
         self._client = session.client(
             "s3",
@@ -362,6 +372,7 @@ class S3Client:
                 "aws_secret_access_key": temp_credentials["secretAccessKey"],
                 "aws_session_token": temp_credentials["sessionToken"],
                 "config": botocore.config.Config(retries={"max_attempts": 1000, "mode": "adaptive"}),
+                **resolved,
                 **storage_options,
             },
         )
