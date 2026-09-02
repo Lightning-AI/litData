@@ -8,6 +8,9 @@
     },
     {
       "pattern": "^https://codecov.io/gh/Lightning-AI/litData/graph/badge.svg"
+    },
+    {
+      "pattern": "^https://devblog.pytorchlightning.ai/"
     }
   ],
   "httpHeaders": [
