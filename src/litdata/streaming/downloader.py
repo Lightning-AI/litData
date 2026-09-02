@@ -266,8 +266,6 @@ def _obstore_credential_provider(s3_client: S3Client) -> Any:
     """
 
     def _provider() -> dict[str, Any]:
-        from datetime import datetime, timedelta, timezone
-
         boto_client = s3_client.client
         frozen = boto_client._get_credentials().get_frozen_credentials()
         if frozen.access_key is None or frozen.secret_key is None:
@@ -276,7 +274,10 @@ def _obstore_credential_provider(s3_client: S3Client) -> Any:
             "access_key_id": frozen.access_key,
             "secret_access_key": frozen.secret_key,
             "token": frozen.token,
-            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+            # obstore holds these until this moment and then asks again, so it has to be when
+            # the client rolls over. A fixed guess from now outlives credentials that were
+            # already most of the way through their life when we read them off a warm client.
+            "expires_at": s3_client.next_refresh_time(),
         }
 
     return _provider

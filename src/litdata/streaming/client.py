@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import random
+import re
 import threading
+from datetime import datetime, timezone
 from time import sleep, time
 from typing import Any
 
@@ -41,13 +43,17 @@ _CONNECTION_RETRY_BACKOFF_FACTOR = 0.5
 # Default timeout for each HTTP request in seconds
 _DEFAULT_REQUEST_TIMEOUT = 30  # seconds
 
-# The control plane mints credentials with a 1 hour TTL for S3 project-role data connections, and
-# the response carries no expiry for us to read, so refresh well inside it. The remaining time is
-# the window in which a failed refresh can be retried while the credentials in hand still work.
+# Fallback for a control plane that reports no expiry: assume the 1 hour TTL S3 project-role
+# connections have always had, and refresh well inside it. Also an upper bound on how long any
+# credentials are held, so a longer reported TTL does not stretch the window between refreshes.
 _DEFAULT_REFETCH_INTERVAL = 2700  # seconds
+# Fraction of a reported lifetime to hold credentials for. The remainder is the window in which
+# a failed refresh can be retried while the credentials in hand still work. 0.75 of the 1 hour
+# TTL is the 2700s above, so a control plane that reports its expiry changes nothing.
+_REFETCH_FRACTION = 0.75
 # How long past the refetch interval we keep serving existing credentials while refreshes fail.
-# Sized against the TTL, not comfort: 2700 + 600 leaves ~5 minutes before the 1 hour S3 expiry,
-# so we stop before reads start failing as unexplained S3 403s.
+# Sized against the TTL, not comfort: 2700 + 600 leaves ~5 minutes before a 1 hour expiry, so we
+# stop before reads start failing as unexplained S3 403s. A reported expiry bounds this directly.
 _REFRESH_GRACE_PERIOD = 600  # seconds
 # How long to wait for the control plane when there are no credentials yet. No TTL constrains
 # this one — nothing is being served — so it can be more patient than the refresh grace.
@@ -58,6 +64,48 @@ _REFRESH_RETRY_INTERVAL = 60  # seconds
 # Fraction of the interval by which each process refreshes early. DataLoader workers are forked
 # together, so without jitter they all reach the interval — and stampede — in the same instant.
 _REFETCH_JITTER_RATIO = 0.1
+
+
+def _parse_reported_expiry(value: Any) -> float | None:
+    """Parse the control plane's RFC 3339 ``expiresAt`` into a unix timestamp.
+
+    Anything unreadable is reported as absent rather than raised: a deadline we cannot
+    parse should fall back to the assumed TTL, not fail the read.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    # The proto3 JSON mapping emits Z-normalized RFC 3339 with 0, 3, 6 or 9 fractional digits.
+    # `fromisoformat` rejects the Z before 3.11, and the 9-digit form on every version we support.
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    text = re.sub(r"(\.\d{6})\d+", r"\1", text)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        logger.warning("Ignoring unparsable credential expiry %r from the control plane", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _credentials_expiry(creds: dict[str, Any] | None) -> float | None:
+    """Unix timestamp at which ``creds`` stop working, or ``None`` when none was reported."""
+    if not creds:
+        return None
+    return _parse_reported_expiry(creds.get("expiresAt"))
+
+
+def _refetch_interval_for(expires_at: float | None, fetched_at: float, upper_bound: float) -> float:
+    """How long after ``fetched_at`` credentials expiring at ``expires_at`` should be replaced.
+
+    ``upper_bound`` still applies once an expiry is known, because it is what the caller
+    asked for: a 12 hour R2 lifetime should not stretch the gap between refreshes to match.
+    """
+    if expires_at is None:
+        return upper_bound
+    return max(0.0, min(upper_bound, (expires_at - fetched_at) * _REFETCH_FRACTION))
 
 
 class _CredentialsError(RuntimeError):
@@ -161,7 +209,8 @@ def _cached_temp_bucket_credentials(
             cached = _temp_creds_cache.get(data_connection_id)
             if cached is not None:
                 fetched_at, creds = cached
-                if time() - fetched_at < _DEFAULT_REFETCH_INTERVAL:
+                reuse_for = _refetch_interval_for(_credentials_expiry(creds), fetched_at, _DEFAULT_REFETCH_INTERVAL)
+                if time() - fetched_at < reuse_for:
                     return fetched_at, dict(creds)
         creds = _fetch_temp_bucket_credentials(data_connection_id)
         fetched_at = time()
@@ -175,7 +224,8 @@ def _login_and_get_temp_bucket_credentials(data_connection_id: str, *, force_ref
     Shared by R2 (lightning storage) connections and by S3 connections marked
     ``available_in_non_aws_providers``: both bypass the FUSE mount and need short-lived creds
     from the same control-plane ``temp-bucket-credentials`` endpoint. Returns the raw response
-    (accessKeyId/secretAccessKey/sessionToken, plus accountId for R2).
+    (accessKeyId/secretAccessKey/sessionToken, plus accountId for R2, and expiresAt/region/
+    endpoint from control planes new enough to report them).
 
     Results are cached per process (see ``_cached_temp_bucket_credentials``).
     """
@@ -278,15 +328,29 @@ class S3Client:
         # Guards lazy create + credential refresh (range GETs hit .client from many threads).
         self._client_lock = threading.Lock()
         self._owner_pid = os.getpid()
+        # Set before the deadline below, which is derived from them once credentials exist.
+        self._creds_fetched_at: float | None = None
+        self._creds_expires_at: float | None = None
         self._refetch_deadline = self._jittered_refetch_interval()
         self._refresh_retry_time: float | None = None
         self._force_refresh_credentials = False
-        self._creds_fetched_at: float | None = None
 
     def _jittered_refetch_interval(self) -> float:
         # Only ever early, never late: callers set the interval as an upper bound on how long
         # a set of credentials is held, and the grace period below is measured against it.
-        return self._refetch_interval * (1.0 - random.uniform(0.0, _REFETCH_JITTER_RATIO))  # noqa: S311
+        interval = _refetch_interval_for(
+            self._creds_expires_at,
+            self._creds_fetched_at if self._creds_fetched_at is not None else time(),
+            self._refetch_interval,
+        )
+        return interval * (1.0 - random.uniform(0.0, _REFETCH_JITTER_RATIO))  # noqa: S311
+
+    def _record_credentials_window(self, data_connection_id: str, creds: dict[str, Any]) -> None:
+        """Note when these credentials were minted and when the control plane says they die."""
+        with _temp_creds_lock_for_pid():
+            cached = _temp_creds_cache.get(data_connection_id)
+        self._creds_fetched_at = cached[0] if cached is not None else None
+        self._creds_expires_at = _credentials_expiry(creds)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -346,9 +410,7 @@ class S3Client:
         temp_credentials = _login_and_get_temp_bucket_credentials(
             data_connection_id, force_refresh=self._force_refresh_credentials
         )
-        with _temp_creds_lock_for_pid():
-            cached = _temp_creds_cache.get(data_connection_id)
-        self._creds_fetched_at = cached[0] if cached is not None else None
+        self._record_credentials_window(data_connection_id, temp_credentials)
 
         # data_connection_id is our own metadata; drop it before handing options to boto3.
         storage_options = {k: v for k, v in self._storage_options.items() if k != "data_connection_id"}
@@ -378,12 +440,25 @@ class S3Client:
         )
 
     def _mark_refreshed(self) -> None:
-        # Prefer the mint time from the process cache so a new client that reused
-        # credentials still refreshes before the 1 hour S3/R2 TTL, not 2700s from now.
+        # Prefer the mint time from the process cache so a new client that reused credentials
+        # still refreshes before they expire, rather than a full interval from now.
         fetched_at = getattr(self, "_creds_fetched_at", None)
         self._last_time = fetched_at if fetched_at is not None else time()
         self._refetch_deadline = self._jittered_refetch_interval()
         self._refresh_retry_time = None
+
+    def next_refresh_time(self) -> datetime:
+        """When :attr:`client` will next mint credentials, as an aware UTC datetime.
+
+        Callers that cache credentials of their own need this rather than the expiry, so they
+        come back while the credentials they hold are still the ones this client is serving.
+        Bounded by the reported expiry so it can never name a time the credentials are dead by.
+        """
+        last = self._last_time if self._last_time is not None else time()
+        deadline = last + self._refetch_deadline
+        if self._creds_expires_at is not None:
+            deadline = min(deadline, self._creds_expires_at)
+        return datetime.fromtimestamp(deadline, tz=timezone.utc)
 
     def _create_initial_client(self) -> None:
         """Create the first client, waiting out a control plane that is briefly unavailable.
@@ -440,10 +515,12 @@ class S3Client:
         # misbehaving mid-deploy — and if it is a real revocation, the deadline still catches it.
         except _CredentialsError as e:
             held_for = 0.0 if self._last_time is None else now - self._last_time
-            if held_for > self._refetch_deadline + _REFRESH_GRACE_PERIOD:
-                raise RuntimeError(
-                    f"Failed to refresh credentials for {held_for:.0f}s, so they are assumed expired: {e}"
-                ) from e
+            # Once the control plane has told us when these die there is nothing left to serve
+            # past that point, and continuing only turns the failure into an opaque S3 403.
+            expired = self._creds_expires_at is not None and now >= self._creds_expires_at
+            if expired or held_for > self._refetch_deadline + _REFRESH_GRACE_PERIOD:
+                reason = "they have expired" if expired else "they are assumed expired"
+                raise RuntimeError(f"Failed to refresh credentials for {held_for:.0f}s, so {reason}: {e}") from e
             self._refresh_retry_time = now + _REFRESH_RETRY_INTERVAL
             logger.warning(
                 "Could not refresh credentials (%.0fs since the last successful refresh); reusing the current "
@@ -497,9 +574,7 @@ class R2Client(S3Client):
         """Fetch temporary R2 credentials for the current lightning storage connection."""
         try:
             temp_credentials = _login_and_get_temp_bucket_credentials(data_connection_id, force_refresh=force_refresh)
-            with _temp_creds_lock_for_pid():
-                cached = _temp_creds_cache.get(data_connection_id)
-            self._creds_fetched_at = cached[0] if cached is not None else None
+            self._record_credentials_window(data_connection_id, temp_credentials)
 
             endpoint_url = f"https://{temp_credentials['accountId']}.r2.cloudflarestorage.com"
 
@@ -528,9 +603,15 @@ class R2Client(S3Client):
                 cached_client = _temp_creds_boto_clients.get(data_connection_id)
             if cached_client is not None:
                 fetched_at, boto_client = cached_client
-                if time() - fetched_at < _DEFAULT_REFETCH_INTERVAL:
+                # The credentials behind this client are cached separately; their reported
+                # deadline is what says whether it is still safe to hand back.
+                with _temp_creds_lock_for_pid():
+                    cached_creds = _temp_creds_cache.get(data_connection_id)
+                expires_at = _credentials_expiry(cached_creds[1] if cached_creds is not None else None)
+                if time() - fetched_at < _refetch_interval_for(expires_at, fetched_at, _DEFAULT_REFETCH_INTERVAL):
                     self._client = boto_client
                     self._creds_fetched_at = fetched_at
+                    self._creds_expires_at = expires_at
                     return
 
         # Get R2 credentials (process cache on first use; mint on scheduled refresh).
