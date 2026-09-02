@@ -1,6 +1,7 @@
 import logging
 import sys
 import threading
+from datetime import datetime, timezone
 from time import sleep, time
 from unittest import mock
 
@@ -708,20 +709,28 @@ def test_r2_client_api_call_format(monkeypatch):
     )
 
 
-def _successful_login_session(monkeypatch):
-    """Wire requests.Session so a full credential fetch succeeds, and hand back the mock."""
+def _successful_login_session(monkeypatch, expires_at=None):
+    """Wire requests.Session so a full credential fetch succeeds, and hand back the mock.
+
+    ``expires_at`` is left out by default, which is what a control plane predating the field
+    returns — so every caller that does not ask for one covers the fallback path.
+    """
     login_response = mock.MagicMock()
     login_response.status_code = 200
     login_response.json.return_value = {"token": "test-token"}
 
-    credentials_response = mock.MagicMock()
-    credentials_response.status_code = 200
-    credentials_response.json.return_value = {
+    credentials = {
         "accessKeyId": "test-access-key",
         "secretAccessKey": "test-secret-key",
         "sessionToken": "test-session-token",
         "accountId": "test-account-id",
     }
+    if expires_at is not None:
+        credentials["expiresAt"] = expires_at
+
+    credentials_response = mock.MagicMock()
+    credentials_response.status_code = 200
+    credentials_response.json.return_value = credentials
 
     requests_mock = mock.MagicMock()
     requests_mock.post = mock.MagicMock(return_value=login_response)
@@ -1100,3 +1109,137 @@ def test_temp_bucket_credentials_concurrent_first_access_fetches_once(monkeypatc
 
     assert not errors
     assert requests_mock.post.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        "2026-09-02T17:30:00Z",
+        "2026-09-02T17:30:00.000Z",
+        "2026-09-02T17:30:00.000000Z",
+        "2026-09-02T17:30:00.000000000Z",
+        "2026-09-02T17:30:00+00:00",
+    ],
+)
+def test_reported_expiry_parses_every_form_the_control_plane_emits(reported):
+    """The proto3 JSON mapping emits whichever of these is shortest for the value.
+
+    An STS expiry lands on a whole second and arrives bare; R2's is derived from a wall
+    clock and arrives with nanoseconds, which `fromisoformat` will not take.
+    """
+    assert client._parse_reported_expiry(reported) == datetime(2026, 9, 2, 17, 30, tzinfo=timezone.utc).timestamp()
+
+
+@pytest.mark.parametrize("reported", [None, "", "   ", "whenever", 1788370200])
+def test_unreadable_expiry_is_reported_as_absent(reported):
+    """A deadline we cannot read falls back to the assumed TTL rather than failing the read."""
+    assert client._parse_reported_expiry(reported) is None
+
+
+def test_reported_expiry_shortens_the_refetch_interval():
+    """A credential that dies sooner than assumed has to be replaced sooner."""
+    minted = 1000.0
+    dies_in_20_minutes = minted + 1200
+
+    interval = client._refetch_interval_for(dies_in_20_minutes, minted, client._DEFAULT_REFETCH_INTERVAL)
+
+    assert interval == 900  # 0.75 of the 20 minutes it actually has
+    assert interval < client._DEFAULT_REFETCH_INTERVAL
+
+
+def test_reported_expiry_does_not_stretch_the_refetch_interval():
+    """R2 lifetimes run to 12 hours; holding one set of credentials that long is not the fix here."""
+    minted = 1000.0
+    dies_in_12_hours = minted + 12 * 3600
+
+    interval = client._refetch_interval_for(dies_in_12_hours, minted, client._DEFAULT_REFETCH_INTERVAL)
+
+    assert interval == client._DEFAULT_REFETCH_INTERVAL
+
+
+def test_missing_expiry_falls_back_to_the_assumed_ttl():
+    """Control planes predating the field must behave exactly as before."""
+    assert client._refetch_interval_for(None, 1000.0, client._DEFAULT_REFETCH_INTERVAL) == (
+        client._DEFAULT_REFETCH_INTERVAL
+    )
+
+
+def test_already_expired_credentials_are_never_reused():
+    assert client._refetch_interval_for(500.0, 1000.0, client._DEFAULT_REFETCH_INTERVAL) == 0.0
+
+
+def _rfc3339(timestamp):
+    """Format a unix timestamp the way the control plane reports ``expiresAt``."""
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_cached_credentials_are_refetched_on_the_reported_expiry(monkeypatch):
+    """The process cache holds a short-lived credential for its life, not the assumed 45 minutes."""
+    _mock_login_env(monkeypatch)
+    now = {"t": 1000.0}
+    monkeypatch.setattr(client, "time", lambda: now["t"])
+    # 20 minutes, so the cache should let go at 900s rather than the 2700s default.
+    requests_mock = _successful_login_session(monkeypatch, expires_at=_rfc3339(now["t"] + 1200))
+
+    client._login_and_get_temp_bucket_credentials("conn-short")
+    now["t"] = 1899.0
+    client._login_and_get_temp_bucket_credentials("conn-short")
+    assert requests_mock.post.call_count == 1
+
+    now["t"] = 1900.0
+    client._login_and_get_temp_bucket_credentials("conn-short")
+    assert requests_mock.post.call_count == 2
+
+
+def test_next_refresh_time_never_outlives_credentials_read_off_a_warm_client(monkeypatch):
+    """The regression this exists for.
+
+    A client built late in a cached credential's life used to promise obstore a flat 30 more
+    minutes, which ran past the point the credential stopped working — and the read then failed
+    as an unexplained InvalidAccessKeyId rather than triggering a refresh.
+    """
+    _mock_login_env(monkeypatch)
+    monkeypatch.setattr(client, "_REFETCH_JITTER_RATIO", 0.0)
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    minted = 1000.0
+    expires_at = minted + 3600
+    now = {"t": minted}
+    monkeypatch.setattr(client, "time", lambda: now["t"])
+    _successful_login_session(monkeypatch, expires_at=_rfc3339(expires_at))
+
+    first = client.R2Client(storage_options={"data_connection_id": "conn-warm"})
+    assert first.client is not None
+
+    # 40 minutes in: inside the cache window, so a new client inherits these credentials with
+    # only 20 minutes left on them.
+    now["t"] = minted + 2400
+    second = client.R2Client(storage_options={"data_connection_id": "conn-warm"})
+    assert second.client is not None
+
+    deadline = second.next_refresh_time().timestamp()
+    assert deadline <= expires_at
+    assert deadline < now["t"] + 30 * 60  # what the old fixed guess would have promised
+
+
+def test_next_refresh_time_falls_back_to_the_client_schedule(monkeypatch):
+    """Without a reported expiry there is still an honest answer: when this client rolls over."""
+    monkeypatch.setattr(client, "_REFETCH_JITTER_RATIO", 0.0)
+    monkeypatch.setattr(client, "boto3", mock.MagicMock())
+    monkeypatch.setattr(client, "botocore", mock.MagicMock())
+
+    s3 = client.S3Client(refetch_interval=600, storage_options={"region_name": "us-east-1"})
+    assert s3.client is not None
+
+    assert s3._creds_expires_at is None
+    assert s3.next_refresh_time().timestamp() == pytest.approx(s3._last_time + 600, abs=1)
+
+
+def test_refresh_gives_up_once_the_reported_expiry_passes(monkeypatch):
+    """Past a known expiry there is nothing left to serve, so say so instead of retrying."""
+    s3, _, _ = _client_with_failing_refresh(monkeypatch)
+    s3._creds_expires_at = time() - 1
+
+    with pytest.raises(RuntimeError, match="they have expired"):
+        _ = s3.client
