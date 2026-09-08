@@ -26,27 +26,40 @@ import time
 from collections import deque
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(os.environ.get("LITDATA_BENCH_SOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import numpy as np  # noqa: E402
 
+from litdata import Jpeg  # noqa: E402
 from litdata.processing.functions import optimize  # noqa: E402
 from litdata.streaming.dataloader import StreamingDataLoader  # noqa: E402
 from litdata.streaming.dataset import StreamingDataset  # noqa: E402
 
 DEFAULT_INPUT = "/teamspace/lightning_storage/litdata-r2"
 DEFAULT_CACHE = "/cache/chunks"
+DEFAULT_IMAGENET_INPUT = "/teamspace/lightning_storage/litdata-r2/synthetic-imagenet1m"
 # 64 MiB samples → one sample per 64MB chunk. ~2000 items ≈ 125GB, enough to
 # exceed 110GB host RAM if WILLNEED/page cache are uncapped.
 _DEFAULT_PAYLOAD = 64 * 1024 * 1024
 _DEFAULT_TARGET_GB = 125.0
+_DEFAULT_IMAGE_COUNT = 1_000_000
+_DEFAULT_IMAGE_SIZE = 224
+_DEFAULT_IMAGE_QUALITY = 90
 
 
 def _synthetic_sample(index: int) -> dict:
     """Deterministic 1-D blob so optimize fills 64MB chunks without RNG cost."""
     nbytes = int(os.environ.get("LITDATA_RAM_BENCH_PAYLOAD", str(_DEFAULT_PAYLOAD)))
     return {"x": np.full(nbytes, index % 256, dtype=np.uint8), "y": int(index % 1000)}
+
+
+def _synthetic_imagenet_sample(index: int) -> dict:
+    """Deterministic ImageNet-shaped RGB JPEG with an ImageNet-style class label."""
+    size = int(os.environ["LITDATA_IMAGENET_BENCH_IMAGE_SIZE"])
+    quality = int(os.environ["LITDATA_IMAGENET_BENCH_IMAGE_QUALITY"])
+    image = np.random.default_rng(index).integers(0, 256, (size, size, 3), dtype=np.uint8)
+    return {"image": Jpeg(array=image, quality=quality), "y": int(index % 1000)}
 
 
 def _git_sha() -> str:
@@ -123,6 +136,33 @@ def prepare_dataset(output_dir: str, target_gb: float, payload_bytes: int, num_w
     optimize(
         fn=_synthetic_sample,
         inputs=list(range(n_items)),
+        output_dir=output_dir,
+        chunk_bytes="64MB",
+        num_workers=num_workers,
+        mode="overwrite",
+        reorder_files=False,
+    )
+    print("[prepare] done", flush=True)
+
+
+def prepare_synthetic_imagenet(
+    output_dir: str,
+    num_images: int,
+    image_size: int,
+    image_quality: int,
+    num_workers: int,
+) -> None:
+    """Optimize deterministic ImageNet-shaped JPEG samples onto direct object storage."""
+    os.environ["LITDATA_IMAGENET_BENCH_IMAGE_SIZE"] = str(image_size)
+    os.environ["LITDATA_IMAGENET_BENCH_IMAGE_QUALITY"] = str(image_quality)
+    print(
+        f"[prepare] {num_images:,} synthetic {image_size}×{image_size} JPEG images "
+        f"(quality={image_quality}) → {output_dir} (workers={num_workers})",
+        flush=True,
+    )
+    optimize(
+        fn=_synthetic_imagenet_sample,
+        inputs=list(range(num_images)),
         output_dir=output_dir,
         chunk_bytes="64MB",
         num_workers=num_workers,
@@ -212,8 +252,10 @@ def run_stream(args: argparse.Namespace) -> dict:
             epoch_empty = False
             batches += 1
             samples += len(batch["y"]) if isinstance(batch, dict) else len(batch)
-            payload = batch["x"] if isinstance(batch, dict) else batch
-            held.append(np.array(payload, copy=True))
+            payload = batch.get("x", batch.get("image")) if isinstance(batch, dict) else batch
+            if payload is None:
+                raise RuntimeError("Expected benchmark samples to contain an 'x' or 'image' payload.")
+            held.append(payload.detach().clone() if hasattr(payload, "detach") else np.array(payload, copy=True))
             cpu_pct, cpu_state = _cpu_pct(cpu_state)
             mem = _meminfo()
             min_avail = min(min_avail, mem["mem_available_b"] or min_avail)
@@ -296,6 +338,14 @@ def main() -> None:
         help="Uncompressed payload to write (default 125GiB so uncapped streaming can exceed 110GiB RAM)",
     )
     parser.add_argument("--payload-bytes", type=int, default=_DEFAULT_PAYLOAD)
+    parser.add_argument(
+        "--synthetic-imagenet",
+        action="store_true",
+        help="Use synthetic 224×224 JPEG ImageNet samples; --prepare writes --num-images samples.",
+    )
+    parser.add_argument("--num-images", type=int, default=_DEFAULT_IMAGE_COUNT)
+    parser.add_argument("--image-size", type=int, default=_DEFAULT_IMAGE_SIZE)
+    parser.add_argument("--image-quality", type=int, default=_DEFAULT_IMAGE_QUALITY)
     parser.add_argument("--prepare-workers", type=int, default=16)
     parser.add_argument("--arm", choices=("aggressive", "tuned"), default="aggressive")
     parser.add_argument("--workers", type=int, default=None, help="default: cpu_count (aggressive) or 4 (tuned)")
@@ -324,8 +374,19 @@ def main() -> None:
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "scripts" / "bench" / "results"))
     args = parser.parse_args()
 
+    if args.synthetic_imagenet and args.input_dir == DEFAULT_INPUT:
+        args.input_dir = DEFAULT_IMAGENET_INPUT
     if args.prepare:
-        prepare_dataset(args.input_dir, args.target_gb, args.payload_bytes, args.prepare_workers)
+        if args.synthetic_imagenet:
+            prepare_synthetic_imagenet(
+                args.input_dir,
+                args.num_images,
+                args.image_size,
+                args.image_quality,
+                args.prepare_workers,
+            )
+        else:
+            prepare_dataset(args.input_dir, args.target_gb, args.payload_bytes, args.prepare_workers)
         return
 
     if args.arm == "tuned":
