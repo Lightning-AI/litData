@@ -285,6 +285,30 @@ def test_dataloader_no_workers(tmpdir):
     assert len(dataset) == 1000
 
 
+def test_streaming_dataloader_keeps_requested_workers(tmpdir, monkeypatch):
+    cache = Cache(input_dir=str(tmpdir), chunk_size=10)
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    dataset.posix_fast = None
+    loader = StreamingDataLoader(dataset, num_workers=8, batch_size=1)
+    assert loader.num_workers == 8
+
+
+def test_streaming_dataloader_caps_prefetch_factor(tmpdir, monkeypatch):
+    cache = Cache(input_dir=str(tmpdir), chunk_size=10)
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    monkeypatch.setattr("litdata.streaming.dataloader.ram_prefetch_factor", lambda requested, **_kw: 1)
+    loader = StreamingDataLoader(dataset, num_workers=4, batch_size=1, prefetch_factor=8)
+    assert loader._prefetch_factor == 1
+
+
 @pytest.mark.timeout(180)
 @pytest.mark.skipif(
     sys.platform == "darwin" and sys.version_info >= (3, 14),
