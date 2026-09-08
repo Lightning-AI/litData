@@ -255,10 +255,7 @@ def _effective_memory_bytes(
         available = min(host_available, cgroup_available)
     else:
         available = host_available if host_available is not None else cgroup_available
-    if host_total is not None and limit is not None:
-        total = min(host_total, limit)
-    else:
-        total = host_total or limit
+    total = min(host_total, limit) if host_total is not None and limit is not None else host_total or limit
     return available, total
 
 
@@ -762,10 +759,8 @@ def madvise_mmap_dontneed(mapping: Any) -> None:
     flag = getattr(__import__("mmap"), "MADV_DONTNEED", None)
     if flag is None:
         return
-    try:
+    with contextlib.suppress(OSError, OverflowError, ValueError):
         madvise(flag)
-    except (OSError, OverflowError, ValueError):
-        pass
 
 
 def posix_fast_supports_config(config: Any) -> bool:
