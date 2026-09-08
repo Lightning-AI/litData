@@ -1,4 +1,5 @@
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -10,12 +11,24 @@ from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.posix_fast import (
     advise_willneed,
     available_ram_bytes,
+    cgroup_memory_current_bytes,
+    cgroup_memory_limit_bytes,
     detect_posix_fast,
+    mean_sample_bytes,
+    mem_total_bytes,
     parse_proc_mounts,
     posix_max_data_workers,
     posix_page_bytes,
     posix_prefetch_fits_ram,
     posix_safe_keep,
+    ram_ceiling_fraction,
+    ram_in_flight_budget_bytes,
+    ram_pressure_fraction,
+    ram_prefetch_factor,
+    ram_prefetch_keep,
+    ram_throttle_sleep_s,
+    ram_wait_timeout_s,
+    wait_for_ram_budget,
 )
 from litdata.streaming.shuffle import FullShuffle, WindowShuffle, posix_shuffle_window
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
@@ -191,6 +204,29 @@ def test_available_ram_bytes_parses_meminfo():
     assert available_ram_bytes(text) == 500000 * 1024
 
 
+def test_cgroup_v2_memory_bounds_host_accounting(tmp_path):
+    (tmp_path / "memory.max").write_text(str(8 * 1024**3))
+    (tmp_path / "memory.current").write_text(str(3 * 1024**3))
+    meminfo = "MemTotal: 32000000 kB\nMemAvailable: 10000000 kB\n"
+
+    assert cgroup_memory_limit_bytes(str(tmp_path)) == 8 * 1024**3
+    assert cgroup_memory_current_bytes(str(tmp_path)) == 3 * 1024**3
+    assert mem_total_bytes(meminfo, cgroup_root=str(tmp_path)) == 8 * 1024**3
+    assert available_ram_bytes(meminfo, cgroup_root=str(tmp_path)) == 5 * 1024**3
+
+
+def test_cgroup_v1_and_unlimited_limits(tmp_path):
+    cgroup = tmp_path / "memory"
+    cgroup.mkdir()
+    (cgroup / "memory.limit_in_bytes").write_text(str(4 * 1024**3))
+    (cgroup / "memory.usage_in_bytes").write_text(str(1 * 1024**3))
+    assert cgroup_memory_limit_bytes(str(tmp_path)) == 4 * 1024**3
+    assert cgroup_memory_current_bytes(str(tmp_path)) == 1 * 1024**3
+
+    (cgroup / "memory.limit_in_bytes").write_text(str((1 << 63) - 1))
+    assert cgroup_memory_limit_bytes(str(tmp_path)) is None
+
+
 def test_posix_prefetch_fits_ram_skips_when_window_crowds_memory(monkeypatch):
     monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
     monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
@@ -221,6 +257,120 @@ def test_posix_safe_keep_drops_to_one_when_crowded(monkeypatch):
     monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
     keep = posix_safe_keep(keep=4, chunk_bytes=64 * 1024 * 1024, num_readers=208, ram_bytes=40 * 1024**3)
     assert keep == 1
+
+
+def test_ram_prefetch_keep_floors_at_two(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
+    monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
+    monkeypatch.delenv("LITDATA_RAM_CEILING", raising=False)
+    keep = ram_prefetch_keep(keep=32, chunk_bytes=64 * 1024 * 1024, num_readers=8, ram_bytes=1 * 1024**3)
+    assert keep == 2
+    keep = ram_prefetch_keep(keep=32, chunk_bytes=64 * 1024 * 1024, num_readers=1, ram_bytes=64 * 1024**3)
+    assert keep == 32
+
+
+def test_ram_ceiling_fraction_defaults_to_95_percent(monkeypatch):
+    monkeypatch.delenv("LITDATA_RAM_CEILING", raising=False)
+    assert ram_ceiling_fraction() == 0.95
+    monkeypatch.setenv("LITDATA_RAM_CEILING", "0.90")
+    assert ram_ceiling_fraction() == 0.90
+
+
+def test_mean_sample_bytes_uses_chunk_size():
+    class _Cfg:
+        _chunks = [{"chunk_bytes": 64 * 1024 * 1024, "chunk_size": 4}] * 2
+        num_bytes = 128 * 1024 * 1024
+
+    assert mean_sample_bytes(_Cfg()) == 16 * 1024 * 1024
+
+
+def test_ram_prefetch_factor_caps(monkeypatch):
+    monkeypatch.delenv("LITDATA_POSIX_MAX_WORKERS", raising=False)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_in_flight_budget_bytes", lambda **_kw: 1 << 60)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 4 * 1024**3)
+    assert ram_prefetch_factor(8, num_workers=8, batch_bytes=1024**3) == 1
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 64 * 1024**3)
+    assert ram_prefetch_factor(8, num_workers=8, batch_bytes=1024**3) == 8
+    monkeypatch.setenv("LITDATA_POSIX_MAX_WORKERS", "0")
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 1)
+    assert ram_prefetch_factor(8, num_workers=8, batch_bytes=1024**3) == 8
+    monkeypatch.delenv("LITDATA_POSIX_MAX_WORKERS", raising=False)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 64 * 1024**3)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_in_flight_budget_bytes", lambda **_kw: 8 * 1024**3)
+    assert ram_prefetch_factor(8, num_workers=8, batch_bytes=1024**3) == 1
+
+
+def test_ram_in_flight_budget_is_half_reserve(monkeypatch):
+    monkeypatch.delenv("LITDATA_RAM_CEILING", raising=False)
+    total = 100 * 1024**3
+    reserve = total - int(total * 0.95)
+    assert ram_in_flight_budget_bytes(mem_total=total) == reserve // 2
+
+
+def test_ram_pressure_ramps_in_the_soft_band(monkeypatch):
+    monkeypatch.delenv("LITDATA_RAM_CEILING", raising=False)
+    monkeypatch.delenv("LITDATA_RAM_SOFT_MARGIN", raising=False)
+    total = 100 * 1024**3
+    assert ram_pressure_fraction(ram_bytes=int(0.30 * total), mem_total=total) == 0.0
+    assert ram_pressure_fraction(ram_bytes=int(0.25 * total), mem_total=total) == 0.0
+    mid = ram_pressure_fraction(ram_bytes=int(0.15 * total), mem_total=total)
+    assert 0.4 < mid < 0.6
+    assert ram_pressure_fraction(ram_bytes=int(0.05 * total), mem_total=total) == 1.0
+    assert ram_throttle_sleep_s(0.0) == 0.0
+    assert ram_throttle_sleep_s(1.0) == 0.50
+
+
+def test_ram_wait_timeout_env(monkeypatch):
+    monkeypatch.delenv("LITDATA_RAM_WAIT_TIMEOUT", raising=False)
+    assert ram_wait_timeout_s() == 120.0
+    monkeypatch.setenv("LITDATA_RAM_WAIT_TIMEOUT", "0")
+    assert ram_wait_timeout_s() == 0.0
+    monkeypatch.setenv("LITDATA_RAM_WAIT_TIMEOUT", "2.5")
+    assert ram_wait_timeout_s() == 2.5
+
+
+def test_wait_for_ram_budget_skips_when_budget_positive(monkeypatch):
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 10**9)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_pressure_fraction", lambda **_kw: 0.0)
+    monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
+    t0 = time.monotonic()
+    assert wait_for_ram_budget(timeout_s=5) == 10**9
+    assert time.monotonic() - t0 < 0.5
+
+
+def test_wait_for_ram_budget_throttles_before_the_ceiling(monkeypatch):
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 10**9)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_pressure_fraction", lambda **_kw: 0.5)
+    monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
+    t0 = time.monotonic()
+    assert wait_for_ram_budget(timeout_s=5) == 10**9
+    elapsed = time.monotonic() - t0
+    assert 0.005 < elapsed < 0.2
+
+
+def test_wait_for_ram_budget_times_out(monkeypatch):
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 0)
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_pressure_fraction", lambda **_kw: 1.0)
+    monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="did not recover"):
+        wait_for_ram_budget(timeout_s=0.15, poll_s=0.05)
+    assert time.monotonic() - t0 >= 0.1
+
+
+def test_wait_for_ram_budget_resumes_with_hysteresis(monkeypatch):
+    budgets = iter([0, 0, 10**9])
+    pressures = iter([1.0, 1.0, 0.4])
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: next(budgets, 10**9))
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_pressure_fraction", lambda **_kw: next(pressures, 0.4))
+    monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
+    assert wait_for_ram_budget(need_bytes=100, timeout_s=2, poll_s=0.01) == 10**9
+
+
+def test_wait_for_ram_budget_disabled(monkeypatch):
+    monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 0)
+    monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
+    assert wait_for_ram_budget(timeout_s=0) == 0
 
 
 def test_window_shuffle_does_not_share_chunks(tmpdir, monkeypatch):
