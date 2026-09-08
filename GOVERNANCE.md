@@ -18,7 +18,7 @@ Changes land through pull requests against `main`; direct pushes are not used. A
 
 ## Communication
 
-GitHub issues and pull requests are the source of truth for decisions. Discussion also happens on [Discord](https://discord.com/invite/XncpTy7DSt), but anything affecting the project is recorded on GitHub.
+GitHub issues and pull requests are the source of truth for decisions. Discussion also happens on [Discord](https://discord.com/invite/MWAEvnC5fU), but anything affecting the project is recorded on GitHub.
 
 ## Releases
 
