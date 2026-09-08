@@ -364,13 +364,13 @@ def test_wait_for_ram_budget_skips_when_budget_positive(monkeypatch):
 
 
 def test_wait_for_ram_budget_throttles_before_the_ceiling(monkeypatch):
+    sleeps: list[float] = []
     monkeypatch.setattr("litdata.streaming.posix_fast.ram_budget_bytes", lambda **_kw: 10**9)
     monkeypatch.setattr("litdata.streaming.posix_fast.ram_pressure_fraction", lambda **_kw: 0.5)
     monkeypatch.setattr("litdata.streaming.posix_fast._logged_ram_wait", False)
-    t0 = time.monotonic()
+    monkeypatch.setattr("litdata.streaming.posix_fast.time.sleep", sleeps.append)
     assert wait_for_ram_budget(timeout_s=5) == 10**9
-    elapsed = time.monotonic() - t0
-    assert 0.005 < elapsed < 0.2
+    assert sleeps == [0.125]
 
 
 def test_wait_for_ram_budget_times_out(monkeypatch):
