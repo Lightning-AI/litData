@@ -300,11 +300,11 @@ def test_ram_prefetch_factor_caps(monkeypatch):
     assert ram_prefetch_factor(8, num_workers=8, batch_bytes=1024**3) == 1
 
 
-def test_ram_in_flight_budget_is_half_reserve(monkeypatch):
+def test_ram_in_flight_budget_is_ssh_reserve(monkeypatch):
     monkeypatch.delenv("LITDATA_RAM_CEILING", raising=False)
     total = 100 * 1024**3
     reserve = total - int(total * 0.95)
-    assert ram_in_flight_budget_bytes(mem_total=total) == reserve // 2
+    assert ram_in_flight_budget_bytes(mem_total=total) == reserve
 
 
 def test_ram_pressure_ramps_in_the_soft_band(monkeypatch):

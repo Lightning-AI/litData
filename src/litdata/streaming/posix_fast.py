@@ -310,14 +310,14 @@ def ram_budget_bytes(
 def ram_in_flight_budget_bytes(*, mem_total: int | None = None) -> int | None:
     """Max decoded-batch RAM that can sit in the DataLoader queue without crossing the ceiling.
 
-    Half of the SSH reserve: ``workers × prefetch × batch`` is already allocated when
-    we hit the ceiling, and draining that queue must not push used RAM to 100%.
+    The SSH reserve: ``workers × prefetch × batch`` can be outstanding when the
+    scheduler starts draining, so it must fit in the headroom below the ceiling.
     """
     total = mem_total if mem_total is not None else mem_total_bytes()
     if total is None:
         return None
     reserve = max(0, total - int(total * ram_ceiling_fraction()))
-    return max(1, reserve // 2)
+    return max(1, reserve)
 
 
 def ram_soft_margin() -> float:
