@@ -63,8 +63,11 @@ def _synthetic_imagenet_sample(index: int) -> dict:
 
 
 def _git_sha() -> str:
+    git = shutil.which("git")
+    if git is None:
+        return "unknown"
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True).strip()
+        return subprocess.check_output([git, "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 
