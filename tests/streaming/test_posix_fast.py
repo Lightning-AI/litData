@@ -224,7 +224,7 @@ def test_live_memory_snapshot_reuses_host_and_cgroup_reads(monkeypatch):
     assert mem_total_bytes() == 1000
     assert calls == 1
 
-    now += 0.06
+    now += 0.11
     assert available_ram_bytes() == 800
     assert calls == 2
 
