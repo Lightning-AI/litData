@@ -25,9 +25,9 @@ GitHub issues and pull requests are the source of truth for decisions. Discussio
 LitData follows `MAJOR.MINOR.PATCH` versioning, with the version in [src/litdata/\_\_about\_\_.py](src/litdata/__about__.py).
 
 - **Cadence:** cut as needed rather than on a fixed calendar, once a meaningful set of fixes or features has landed on `main`. Regressions and security fixes ship as soon as they are ready.
-- **Criteria:** `main` green across the CI matrix in [.github/workflows](.github/workflows) — unit and emulation tests on Linux, macOS and Windows in [`ci-testing.yml`](.github/workflows/ci-testing.yml), typing, packaging and docs checks in [`ci-checks.yml`](.github/workflows/ci-checks.yml), and the Go simulator tests in [`ci-litsim.yml`](.github/workflows/ci-litsim.yml) — plus the internal streaming and optimize benchmarks, which maintainers trigger on a pull request with `@benchmark` ([`ci-benchmark.yml`](.github/workflows/ci-benchmark.yml)).
-- **Process:** a maintainer bumps the version and publishes a GitHub Release; [`release-pypi.yml`](.github/workflows/release-pypi.yml) builds the distributions and publishes to PyPI via trusted publishing.
-- **Supported versions:** the supported Python range and the dependency bounds are declared in [setup.py](setup.py) and [requirements.txt](requirements.txt), and the tested Python versions in the [`ci-testing.yml`](.github/workflows/ci-testing.yml) matrix. LitData is validated against the latest two PyTorch minor releases and relies only on stable PyTorch primitives, so older releases generally keep working; support for a PyTorch or Python version is dropped only in a minor release, announced in the release notes.
+- **Criteria:** `main` is green across the CI matrix, including tests, typing, packaging, documentation, simulator, and benchmark checks.
+- **Process:** a maintainer bumps the version and publishes a GitHub Release, which builds and publishes the distributions to PyPI via trusted publishing.
+- **Supported versions:** supported Python and dependency ranges are documented in the project configuration and tested in CI. LitData is validated against the latest two PyTorch minor releases; support for a PyTorch or Python version is dropped only in a minor release and announced in the release notes.
 
 ## Code of Conduct
 
