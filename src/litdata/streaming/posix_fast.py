@@ -176,8 +176,10 @@ _DEFAULT_RAM_CEILING = 0.95  # used fraction of MemTotal; leave ~5% for SSH/OS
 _DEFAULT_RAM_SOFT_MARGIN = 0.20  # start slowing at 75% used RAM
 _DEFAULT_RAM_THROTTLE_MAX_S = 0.50  # sleep per batch at the ceiling
 _DEFAULT_RAM_WAIT_TIMEOUT = 120.0  # seconds; fail closed rather than wait forever
+_RAM_SNAPSHOT_TTL_S = 0.05
 _DEFAULT_WORKER_RSS = 256 * 1024 * 1024  # process + one collated JPEG batch, not four WILLNEED chunks
 _logged_willneed_skip = False
+_ram_snapshot_cache: tuple[int, float, int | None, int | None] | None = None
 
 
 def _read_memory_counter(path: str, *, allow_zero: bool = False) -> int | None:
@@ -235,29 +237,57 @@ def _read_meminfo(meminfo_text: str | None = None) -> dict[str, int]:
     return out
 
 
-def available_ram_bytes(meminfo_text: str | None = None, *, cgroup_root: str | None = None) -> int | None:
-    """Available bytes, bounded by the process's cgroup memory headroom when finite."""
-    info = _read_meminfo(meminfo_text)
+def _effective_memory_bytes(
+    info: dict[str, int],
+    *,
+    cgroup_root: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Return effective ``(available, total)`` from host and finite cgroup memory."""
     if "MemAvailable" in info:
         host_available: int | None = info["MemAvailable"]
     else:
         host_available = info.get("MemFree", 0) + info.get("Cached", 0) or None
+    host_total = info.get("MemTotal") or None
     limit = cgroup_memory_limit_bytes(cgroup_root)
     current = cgroup_memory_current_bytes(cgroup_root)
     cgroup_available = max(0, limit - current) if limit is not None and current is not None else None
     if host_available is not None and cgroup_available is not None:
-        return min(host_available, cgroup_available)
-    return host_available if host_available is not None else cgroup_available
+        available = min(host_available, cgroup_available)
+    else:
+        available = host_available if host_available is not None else cgroup_available
+    if host_total is not None and limit is not None:
+        total = min(host_total, limit)
+    else:
+        total = host_total or limit
+    return available, total
+
+
+def _live_memory_snapshot() -> tuple[int | None, int | None]:
+    """Read host/cgroup memory once per short interval for a process."""
+    global _ram_snapshot_cache
+    now = time.monotonic()
+    pid = os.getpid()
+    if _ram_snapshot_cache is not None:
+        cached_pid, expires_at, available, total = _ram_snapshot_cache
+        if cached_pid == pid and now < expires_at:
+            return available, total
+    available, total = _effective_memory_bytes(_read_meminfo())
+    _ram_snapshot_cache = (pid, now + _RAM_SNAPSHOT_TTL_S, available, total)
+    return available, total
+
+
+def available_ram_bytes(meminfo_text: str | None = None, *, cgroup_root: str | None = None) -> int | None:
+    """Available bytes, bounded by the process's cgroup memory headroom when finite."""
+    if meminfo_text is None and cgroup_root is None:
+        return _live_memory_snapshot()[0]
+    return _effective_memory_bytes(_read_meminfo(meminfo_text), cgroup_root=cgroup_root)[0]
 
 
 def mem_total_bytes(meminfo_text: str | None = None, *, cgroup_root: str | None = None) -> int | None:
     """Total addressable bytes, bounded by the process's finite cgroup limit."""
-    info = _read_meminfo(meminfo_text)
-    host_total = info.get("MemTotal") or None
-    cgroup_limit = cgroup_memory_limit_bytes(cgroup_root)
-    if host_total is not None and cgroup_limit is not None:
-        return min(host_total, cgroup_limit)
-    return host_total or cgroup_limit
+    if meminfo_text is None and cgroup_root is None:
+        return _live_memory_snapshot()[1]
+    return _effective_memory_bytes(_read_meminfo(meminfo_text), cgroup_root=cgroup_root)[1]
 
 
 def posix_ram_fraction() -> float:
