@@ -180,6 +180,8 @@ def _build_loader(
     batch_size: int,
     prefetch_factor: int | None,
     max_pre_download: int,
+    profile_cprofile: bool = False,
+    profile_dir: str | None = None,
 ) -> StreamingDataLoader:
     ds = StreamingDataset(
         input_dir,
@@ -195,6 +197,8 @@ def _build_loader(
         num_workers=workers,
         prefetch_factor=prefetch_factor if workers > 0 else None,
         pin_memory=True,
+        profile_cprofile=profile_cprofile,
+        profile_dir=profile_dir,
     )
 
 
@@ -230,6 +234,8 @@ def run_stream(args: argparse.Namespace) -> dict:
         batch_size=args.batch_size,
         prefetch_factor=prefetch,
         max_pre_download=max_pre,
+        profile_cprofile=args.profile_cprofile,
+        profile_dir=args.profile_dir,
     )
     actual_workers = loader.num_workers
     samples = 0
@@ -355,6 +361,8 @@ def main() -> None:
     parser.add_argument("--min-batches", type=int, default=80)
     parser.add_argument("--min-seconds", type=float, default=45.0)
     parser.add_argument("--sample-every", type=int, default=10)
+    parser.add_argument("--profile-cprofile", action="store_true", help="Write main and worker-0 cProfile files.")
+    parser.add_argument("--profile-dir", help="Directory for cProfile output (default: current directory).")
     parser.add_argument(
         "--ram-ceiling",
         type=float,
