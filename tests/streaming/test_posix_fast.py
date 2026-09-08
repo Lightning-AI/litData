@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+import litdata.streaming.posix_fast as posix_fast
 from litdata.constants import _ZSTD_AVAILABLE
 from litdata.streaming import Cache
 from litdata.streaming.dataset import StreamingDataset
@@ -202,6 +203,30 @@ def test_advise_willneed_missing_file(tmp_path):
 def test_available_ram_bytes_parses_meminfo():
     text = "MemTotal:       1000000 kB\nMemFree:          1000 kB\nMemAvailable:    500000 kB\nCached: 0 kB\n"
     assert available_ram_bytes(text) == 500000 * 1024
+
+
+def test_live_memory_snapshot_reuses_host_and_cgroup_reads(monkeypatch):
+    calls = 0
+    now = 100.0
+
+    def read_meminfo() -> dict[str, int]:
+        nonlocal calls
+        calls += 1
+        return {"MemTotal": 1000, "MemAvailable": 800}
+
+    monkeypatch.setattr(posix_fast, "_ram_snapshot_cache", None)
+    monkeypatch.setattr(posix_fast, "_read_meminfo", read_meminfo)
+    monkeypatch.setattr(posix_fast, "cgroup_memory_limit_bytes", lambda _root=None: None)
+    monkeypatch.setattr(posix_fast, "cgroup_memory_current_bytes", lambda _root=None: None)
+    monkeypatch.setattr(posix_fast.time, "monotonic", lambda: now)
+
+    assert available_ram_bytes() == 800
+    assert mem_total_bytes() == 1000
+    assert calls == 1
+
+    now += 0.06
+    assert available_ram_bytes() == 800
+    assert calls == 2
 
 
 def test_cgroup_v2_memory_bounds_host_accounting(tmp_path):
