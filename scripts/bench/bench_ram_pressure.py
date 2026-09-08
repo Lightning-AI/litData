@@ -51,9 +51,7 @@ def _synthetic_sample(index: int) -> dict:
 
 def _git_sha() -> str:
     try:
-        return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True).strip()
-        )
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 

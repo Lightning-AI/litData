@@ -47,8 +47,8 @@ from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.posix_fast import (
     mean_sample_bytes,
     raise_nofile_limit,
-    ram_pressure_fraction,
     ram_prefetch_factor,
+    ram_pressure_fraction,
     wait_for_ram_budget,
 )
 from litdata.streaming.sampler import CacheBatchSampler
@@ -657,11 +657,7 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
 
     def _next_data(self) -> Any:
         """Drip-feed one task while pressure is soft; hold only at the hard ceiling."""
-        while (
-            getattr(self, "_ram_schedule_paused", False)
-            and self._rcvd_idx >= self._send_idx
-            and not self._shutdown
-        ):
+        while getattr(self, "_ram_schedule_paused", False) and self._rcvd_idx >= self._send_idx and not self._shutdown:
             pressure = ram_pressure_fraction()
             if pressure < 1.0:
                 # The user has consumed the last queued batch. One replacement
