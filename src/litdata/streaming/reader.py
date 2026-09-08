@@ -46,8 +46,8 @@ from litdata.streaming.posix_fast import (
     posix_prefetch_fits_ram,
     posix_safe_keep,
     ram_budget_bytes,
-    ram_pressure_fraction,
     ram_prefetch_keep,
+    ram_pressure_fraction,
     ram_used_fraction,
 )
 from litdata.streaming.sampler import ChunkedIndex
@@ -467,11 +467,14 @@ class PrepareChunksThread(Thread):
                 chunk_bytes=mean_chunk,
                 num_readers=readers,
             )
-            willneed = posix_prefetch_fits_ram(
-                keep=posix_keep,
-                chunk_bytes=mean_chunk,
-                num_readers=readers,
-            ) and not self._ram_over_ceiling
+            willneed = (
+                posix_prefetch_fits_ram(
+                    keep=posix_keep,
+                    chunk_bytes=mean_chunk,
+                    num_readers=readers,
+                )
+                and not self._ram_over_ceiling
+            )
             setter = getattr(self._item_loader, "set_posix_fast", None)
             if setter is not None:
                 setter(True, keep=posix_keep, willneed=willneed)
@@ -509,9 +512,7 @@ class PrepareChunksThread(Thread):
         if getattr(self._item_loader, "_posix_fast", False):
             return
         previous_willneed = getattr(self._item_loader, "_posix_willneed", None)
-        willneed = posix_prefetch_fits_ram(
-            keep=self._max_pre_download, chunk_bytes=mean_chunk, num_readers=readers
-        )
+        willneed = posix_prefetch_fits_ram(keep=self._max_pre_download, chunk_bytes=mean_chunk, num_readers=readers)
         if budget is not None:
             willneed = willneed and projected <= budget and not self._ram_over_ceiling
         setter = getattr(self._item_loader, "set_willneed", None)

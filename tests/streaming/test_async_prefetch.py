@@ -125,9 +125,7 @@ def test_adaptive_pre_download_covers_many_remote_chunks(monkeypatch):
     assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=tiny, ram_bytes=64 * 1024**3) == 4
     assert adaptive_pre_download(8, remote_dir=None, chunks=chunks_64) == 8
     # 0.5 × 1GiB / (8 readers × 64MiB) = 1 → floor 2 so delete-when-processed cannot deadlock.
-    assert (
-        adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64, ram_bytes=1 * 1024**3, num_readers=8) == 2
-    )
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64, ram_bytes=1 * 1024**3, num_readers=8) == 2
 
 
 def test_downloader_supports_adownload_detects_override():

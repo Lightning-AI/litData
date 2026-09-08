@@ -208,8 +208,10 @@ def cgroup_memory_current_bytes(cgroup_root: str | None = None) -> int | None:
     """Return current cgroup memory usage for this process, if available."""
     root = cgroup_root or "/sys/fs/cgroup"
     current = _read_memory_counter(os.path.join(root, "memory.current"), allow_zero=True)
-    return current if current is not None else _read_memory_counter(
-        os.path.join(root, "memory", "memory.usage_in_bytes"), allow_zero=True
+    return (
+        current
+        if current is not None
+        else _read_memory_counter(os.path.join(root, "memory", "memory.usage_in_bytes"), allow_zero=True)
     )
 
 
