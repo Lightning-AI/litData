@@ -2923,6 +2923,8 @@ Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scho
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
+* Peyton Gardipee ([pwgardipee](https://github.com/pwgardipee))
+* David Edey ([dhedey](https://github.com/dhedey))
 
 
 ## Emeritus Maintainers
