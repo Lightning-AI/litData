@@ -44,7 +44,13 @@ from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.elastic import _round_down_drop_first, sample_in_epoch_from_state, topology_changed
 from litdata.streaming.parallel import ParallelStreamingDataset
-from litdata.streaming.posix_fast import posix_max_data_workers, raise_nofile_limit
+from litdata.streaming.posix_fast import (
+    mean_sample_bytes,
+    raise_nofile_limit,
+    ram_prefetch_factor,
+    ram_pressure_fraction,
+    wait_for_ram_budget,
+)
 from litdata.streaming.sampler import CacheBatchSampler
 from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities._pytree import tree_flatten
@@ -60,6 +66,57 @@ logger = logging.getLogger("litdata.streaming.dataloader")
 
 _CPROFILE_MAIN_STEM = "cprofile_main"
 _CPROFILE_WORKER_STEM = "cprofile_worker0"
+_RAM_QUEUE_DRAIN_PRESSURE = 0.0  # drain before 16 in-flight workers consume SSH headroom
+
+
+def _estimate_sample_bytes(dataset: Any) -> int:
+    """Best-effort decoded sample size from ``index.json``; else the worker RSS default."""
+    ds = dataset
+    inner = getattr(ds, "_datasets", None)
+    if inner:
+        ds = inner[0]
+    cache = getattr(ds, "cache", None)
+    config = getattr(getattr(cache, "_reader", None), "_config", None) if cache is not None else None
+    if config is None:
+        create = getattr(ds, "_create_cache", None)
+        if create is not None:
+            try:
+                from litdata.utilities.env import _WorkerEnv
+
+                cache = create(worker_env=_WorkerEnv.detect())
+                config = getattr(getattr(cache, "_reader", None), "_config", None)
+            except (OSError, ValueError, RuntimeError, AttributeError):
+                config = None
+    if config is None:
+        return 256 * 1024 * 1024
+    return mean_sample_bytes(config)
+
+
+def _cap_workers_and_prefetch(
+    dataset: Any,
+    num_workers: int,
+    batch_size: int,
+    prefetch_factor: int | None,
+    *,
+    pin_memory: bool = False,
+) -> tuple[int, int | None, int]:
+    """Shrink workers / prefetch_factor so decoded batches stay under ``LITDATA_RAM_CEILING``."""
+    sample_b = _estimate_sample_bytes(dataset)
+    batch_b = max(1, sample_b) * max(1, batch_size)
+    if pin_memory:
+        batch_b *= 2
+    if num_workers <= 0:
+        return num_workers, prefetch_factor, batch_b
+    requested_pf = 2 if prefetch_factor is None else prefetch_factor
+    capped_pf = ram_prefetch_factor(requested_pf, num_workers=num_workers, batch_bytes=batch_b)
+    if capped_pf < requested_pf:
+        logger.warning(
+            "Reducing prefetch_factor %s → %s so workers × prefetch × batch fits "
+            "LITDATA_RAM_CEILING (set LITDATA_POSIX_MAX_WORKERS=0 to disable).",
+            requested_pf,
+            capped_pf,
+        )
+    return num_workers, capped_pf, batch_b
 
 
 def _cprofile_output_dir(profile_dir: str | None) -> str:
@@ -598,7 +655,49 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
             self._cprofile = None
         super()._shutdown_workers()
 
+    def _next_data(self) -> Any:
+        """Drip-feed one task while pressure is soft; hold only at the hard ceiling."""
+        while getattr(self, "_ram_schedule_paused", False) and self._rcvd_idx >= self._send_idx and not self._shutdown:
+            pressure = ram_pressure_fraction()
+            if pressure < 1.0:
+                # The user has consumed the last queued batch. One replacement
+                # lets their training loop release its oldest retained batch,
+                # without reopening the full PyTorch prefetch window.
+                self._ram_force_one_refill = True
+                logger.debug("RAM pressure drip-feeding one worker task (pressure=%.0f%%).", pressure * 100)
+                self._try_put_index()
+                break
+            wait_for_ram_budget(need_bytes=getattr(self._loader, "_ram_batch_bytes", 1))
+            self._try_put_index()
+        return super()._next_data()
+
     def _try_put_index(self) -> None:
+        # PyTorch calls this after every received batch. Stop replacing completed
+        # tasks as soon as RAM enters the control band. Sixteen in-flight
+        # workers can consume 10%+ of host RAM, so delaying this drain can
+        # cross the 95% ceiling before the scheduler regains control.
+        pressure = ram_pressure_fraction()
+        was_paused = getattr(self, "_ram_schedule_paused", False)
+        force_one_refill = getattr(self, "_ram_force_one_refill", False)
+        if pressure > _RAM_QUEUE_DRAIN_PRESSURE and not force_one_refill:
+            self._ram_schedule_paused = True
+            if not was_paused:
+                logger.debug(
+                    "RAM pressure paused worker-queue refill (pressure=%.0f%%, outstanding=%d/%d).",
+                    pressure * 100,
+                    self._tasks_outstanding,
+                    self._prefetch_factor * self._num_workers,
+                )
+            return
+        self._ram_force_one_refill = False
+        self._ram_schedule_paused = False
+        if was_paused:
+            logger.debug(
+                "RAM pressure resumed worker-queue refill (pressure=%.0f%%, outstanding=%d/%d).",
+                pressure * 100,
+                self._tasks_outstanding,
+                self._prefetch_factor * self._num_workers,
+            )
         # Used to restart on the right DataLoader worker
         if self._loader.restore and self._indexes:
             assert self._tasks_outstanding < self._prefetch_factor * self._num_workers
@@ -769,16 +868,15 @@ class StreamingDataLoader(DataLoader):
             dataset.set_drop_last(drop_last)
 
         posix = getattr(dataset, "posix_fast", None)
-        if posix is not None and num_workers > 0:
-            capped = posix_max_data_workers(requested=num_workers)
-            if capped < num_workers:
-                logger.warning(
-                    "POSIX-fast: reducing num_workers %s → %s so worker RSS fits MemAvailable "
-                    "(set LITDATA_POSIX_MAX_WORKERS=0 to disable).",
-                    num_workers,
-                    capped,
-                )
-                num_workers = capped
+        num_workers, prefetch_factor, ram_batch_bytes = _cap_workers_and_prefetch(
+            dataset,
+            num_workers,
+            batch_size,
+            prefetch_factor,
+            pin_memory=bool(kwargs.get("pin_memory", False)),
+        )
+        self._ram_batch_bytes = ram_batch_bytes
+        if num_workers > 0 and posix is not None:
             raise_nofile_limit()
 
         dataset.set_batch_size(batch_size)
@@ -901,7 +999,6 @@ class StreamingDataLoader(DataLoader):
                         yield batch
                     emit_trace("batch", "E", CAT_BATCH, batch=batch_idx, epoch=self.current_epoch)
                     batch_idx += 1
-
             # NOTE: `restore` is intentionally *not* cleared in a `finally` block here. Breaking out of
             # this generator early (or letting it get garbage-collected, which throws `GeneratorExit` at
             # the last `yield`) must leave `restore` untouched: callers that explicitly resumed from a

@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -171,32 +172,119 @@ def detect_posix_fast(
 
 _DEFAULT_PAGE_BYTES = 256 * 1024
 _DEFAULT_RAM_FRACTION = 0.5
+_DEFAULT_RAM_CEILING = 0.95  # used fraction of MemTotal; leave ~5% for SSH/OS
+_DEFAULT_RAM_SOFT_MARGIN = 0.20  # start slowing at 75% used RAM
+_DEFAULT_RAM_THROTTLE_MAX_S = 0.50  # sleep per batch at the ceiling
+_DEFAULT_RAM_WAIT_TIMEOUT = 120.0  # seconds; fail closed rather than wait forever
+_RAM_SNAPSHOT_TTL_S = 0.10
 _DEFAULT_WORKER_RSS = 256 * 1024 * 1024  # process + one collated JPEG batch, not four WILLNEED chunks
 _logged_willneed_skip = False
+_ram_snapshot_cache: tuple[int, float, int | None, int | None] | None = None
 
 
-def available_ram_bytes(meminfo_text: str | None = None) -> int | None:
-    """``MemAvailable`` in bytes from ``/proc/meminfo``, or ``None`` if unknown."""
+def _read_memory_counter(path: str, *, allow_zero: bool = False) -> int | None:
+    """Read a cgroup memory counter, treating ``max`` and huge sentinels as unlimited."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read().strip()
+        value = int(raw)
+    except (OSError, ValueError):
+        return None
+    # cgroup v1 commonly represents "no limit" with a near-int64 maximum.
+    return value if (value >= 0 if allow_zero else value > 0) and value < (1 << 60) else None
+
+
+def cgroup_memory_limit_bytes(cgroup_root: str | None = None) -> int | None:
+    """Return the finite cgroup memory limit for this process, if present.
+
+    Container runtimes normally mount the process's cgroup at ``/sys/fs/cgroup``.
+    The optional root exists for deterministic tests.
+    """
+    root = cgroup_root or "/sys/fs/cgroup"
+    return _read_memory_counter(os.path.join(root, "memory.max")) or _read_memory_counter(
+        os.path.join(root, "memory", "memory.limit_in_bytes")
+    )
+
+
+def cgroup_memory_current_bytes(cgroup_root: str | None = None) -> int | None:
+    """Return current cgroup memory usage for this process, if available."""
+    root = cgroup_root or "/sys/fs/cgroup"
+    current = _read_memory_counter(os.path.join(root, "memory.current"), allow_zero=True)
+    return (
+        current
+        if current is not None
+        else _read_memory_counter(os.path.join(root, "memory", "memory.usage_in_bytes"), allow_zero=True)
+    )
+
+
+def _read_meminfo(meminfo_text: str | None = None) -> dict[str, int]:
+    """Parse ``/proc/meminfo`` keys (bytes). Empty dict if unknown."""
     text = meminfo_text
     if text is None:
         try:
             with open("/proc/meminfo", encoding="utf-8") as fh:
                 text = fh.read()
         except OSError:
-            return None
-    available = None
-    fallback = 0
+            return {}
+    out: dict[str, int] = {}
     for line in text.splitlines():
-        if line.startswith("MemAvailable:"):
-            parts = line.split()
-            available = int(parts[1]) * 1024
-            break
-        if line.startswith("MemFree:") or line.startswith("Cached:"):
-            parts = line.split()
-            fallback += int(parts[1]) * 1024
-    if available is not None:
-        return available
-    return fallback or None
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        key = parts[0].rstrip(":")
+        with contextlib.suppress(ValueError):
+            out[key] = int(parts[1]) * 1024
+    return out
+
+
+def _effective_memory_bytes(
+    info: dict[str, int],
+    *,
+    cgroup_root: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Return effective ``(available, total)`` from host and finite cgroup memory."""
+    if "MemAvailable" in info:
+        host_available: int | None = info["MemAvailable"]
+    else:
+        host_available = info.get("MemFree", 0) + info.get("Cached", 0) or None
+    host_total = info.get("MemTotal") or None
+    limit = cgroup_memory_limit_bytes(cgroup_root)
+    current = cgroup_memory_current_bytes(cgroup_root)
+    cgroup_available = max(0, limit - current) if limit is not None and current is not None else None
+    if host_available is not None and cgroup_available is not None:
+        available = min(host_available, cgroup_available)
+    else:
+        available = host_available if host_available is not None else cgroup_available
+    total = min(host_total, limit) if host_total is not None and limit is not None else host_total or limit
+    return available, total
+
+
+def _live_memory_snapshot() -> tuple[int | None, int | None]:
+    """Read host/cgroup memory once per short interval for a process."""
+    global _ram_snapshot_cache
+    now = time.monotonic()
+    pid = os.getpid()
+    if _ram_snapshot_cache is not None:
+        cached_pid, expires_at, available, total = _ram_snapshot_cache
+        if cached_pid == pid and now < expires_at:
+            return available, total
+    available, total = _effective_memory_bytes(_read_meminfo())
+    _ram_snapshot_cache = (pid, now + _RAM_SNAPSHOT_TTL_S, available, total)
+    return available, total
+
+
+def available_ram_bytes(meminfo_text: str | None = None, *, cgroup_root: str | None = None) -> int | None:
+    """Available bytes, bounded by the process's cgroup memory headroom when finite."""
+    if meminfo_text is None and cgroup_root is None:
+        return _live_memory_snapshot()[0]
+    return _effective_memory_bytes(_read_meminfo(meminfo_text), cgroup_root=cgroup_root)[0]
+
+
+def mem_total_bytes(meminfo_text: str | None = None, *, cgroup_root: str | None = None) -> int | None:
+    """Total addressable bytes, bounded by the process's finite cgroup limit."""
+    if meminfo_text is None and cgroup_root is None:
+        return _live_memory_snapshot()[1]
+    return _effective_memory_bytes(_read_meminfo(meminfo_text), cgroup_root=cgroup_root)[1]
 
 
 def posix_ram_fraction() -> float:
@@ -208,6 +296,107 @@ def posix_ram_fraction() -> float:
     except ValueError:
         return _DEFAULT_RAM_FRACTION
     return min(1.0, max(0.0, value))
+
+
+def ram_ceiling_fraction() -> float:
+    """Max used fraction of ``MemTotal`` LitData should leave the host at.
+
+    Override with ``LITDATA_RAM_CEILING`` (default 0.95). Clamped to ``[0.50, 0.99]``.
+    """
+    raw = os.getenv("LITDATA_RAM_CEILING")
+    if raw is None or not raw.strip():
+        return _DEFAULT_RAM_CEILING
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_RAM_CEILING
+    return min(0.99, max(0.50, value))
+
+
+def ram_budget_bytes(
+    *,
+    ram_bytes: int | None = None,
+    mem_total: int | None = None,
+) -> int | None:
+    """Bytes LitData may still fill while staying under ``LITDATA_RAM_CEILING``.
+
+    Keeps ``(1 - ceiling) * MemTotal`` as ``MemAvailable`` headroom for sshd / the
+    OS. When ``MemTotal`` is unknown (tests passing only ``ram_bytes``), falls
+    back to ``LITDATA_POSIX_RAM_FRACTION`` of available.
+    """
+    available = ram_bytes if ram_bytes is not None else available_ram_bytes()
+    if available is None:
+        return None
+    total = mem_total if mem_total is not None else mem_total_bytes()
+    if total is None:
+        return max(1, int(available * posix_ram_fraction()))
+    reserve = max(0, total - int(total * ram_ceiling_fraction()))
+    return max(0, available - reserve)
+
+
+def ram_in_flight_budget_bytes(*, mem_total: int | None = None) -> int | None:
+    """Max decoded-batch RAM that can sit in the DataLoader queue without crossing the ceiling.
+
+    The SSH reserve: ``workers × prefetch × batch`` can be outstanding when the
+    scheduler starts draining, so it must fit in the headroom below the ceiling.
+    """
+    total = mem_total if mem_total is not None else mem_total_bytes()
+    if total is None:
+        return None
+    reserve = max(0, total - int(total * ram_ceiling_fraction()))
+    return max(1, reserve)
+
+
+def ram_soft_margin() -> float:
+    """How far below ``LITDATA_RAM_CEILING`` we start throttling (default 0.20)."""
+    raw = os.getenv("LITDATA_RAM_SOFT_MARGIN")
+    if raw is None or not raw.strip():
+        return _DEFAULT_RAM_SOFT_MARGIN
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_RAM_SOFT_MARGIN
+    return min(0.30, max(0.02, value))
+
+
+def ram_used_fraction(
+    *,
+    ram_bytes: int | None = None,
+    mem_total: int | None = None,
+) -> float | None:
+    """Used RAM as a fraction of ``MemTotal`` (``1 - MemAvailable/MemTotal``)."""
+    available = ram_bytes if ram_bytes is not None else available_ram_bytes()
+    total = mem_total if mem_total is not None else mem_total_bytes()
+    if available is None or total is None or total <= 0:
+        return None
+    return min(1.0, max(0.0, 1.0 - (available / total)))
+
+
+def ram_pressure_fraction(
+    *,
+    ram_bytes: int | None = None,
+    mem_total: int | None = None,
+) -> float:
+    """0 below the soft limit, 1 at ``LITDATA_RAM_CEILING``, linear in between.
+
+    With the defaults (ceiling 0.95, margin 0.20) throttling starts at 75% used.
+    """
+    used = ram_used_fraction(ram_bytes=ram_bytes, mem_total=mem_total)
+    if used is None:
+        return 0.0
+    ceiling = ram_ceiling_fraction()
+    soft = max(0.50, ceiling - ram_soft_margin())
+    if used <= soft:
+        return 0.0
+    if used >= ceiling:
+        return 1.0
+    return (used - soft) / (ceiling - soft)
+
+
+def ram_throttle_sleep_s(pressure: float) -> float:
+    """Backoff sleep for one batch. Quadratic so we ease in, then bite near the ceiling."""
+    p = min(1.0, max(0.0, pressure))
+    return _DEFAULT_RAM_THROTTLE_MAX_S * p * p
 
 
 def posix_prefetch_fits_ram(
@@ -254,6 +443,158 @@ def posix_safe_keep(
     return max(1, min(keep, budget // per))
 
 
+def ram_prefetch_keep(
+    *,
+    keep: int,
+    chunk_bytes: int,
+    num_readers: int,
+    ram_bytes: int | None = None,
+    min_keep: int = 2,
+) -> int:
+    """Cap per-worker chunk prefetch so ``readers × keep × chunk`` fits RAM.
+
+    Unlike :func:`posix_safe_keep`, this ignores ``LITDATA_POSIX_WILLNEED`` (that
+    flag only controls page-cache hints) and never returns below ``min_keep``
+    (``max_pre_download == 1`` deadlocks delete-when-processed).
+    """
+    keep = max(min_keep, keep)
+    budget = ram_budget_bytes(ram_bytes=ram_bytes)
+    if budget is None:
+        return keep
+    per = max(1, num_readers) * max(1, chunk_bytes)
+    if budget <= 0:
+        return min_keep
+    keep = max(min_keep, min(keep, budget // per))
+    if ram_bytes is None:
+        pressure = ram_pressure_fraction()
+        if pressure > 0:
+            keep = max(min_keep, int(round(keep * (1.0 - pressure) + min_keep * pressure)))
+    return keep
+
+
+def mean_sample_bytes(config: Any) -> int:
+    """Mean payload bytes per sample from ``index.json`` chunks, else mean chunk size."""
+    chunks = getattr(config, "_chunks", None) or []
+    total_b = 0
+    total_n = 0
+    for chunk in chunks:
+        size = chunk.get("chunk_bytes")
+        n_items = chunk.get("chunk_size")
+        if size and n_items:
+            total_b += int(size)
+            total_n += int(n_items)
+    if total_n:
+        return max(1, total_b // total_n)
+    return mean_chunk_bytes(config)
+
+
+def ram_prefetch_factor(
+    requested: int,
+    *,
+    num_workers: int,
+    batch_bytes: int,
+    ram_bytes: int | None = None,
+    min_prefetch: int = 1,
+) -> int:
+    """Cap DataLoader ``prefetch_factor`` so ``workers × prefetch × batch`` fits the RAM budget.
+
+    ``LITDATA_POSIX_MAX_WORKERS=0`` disables this cap (same hatch as worker capping).
+    Torch forbids ``prefetch_factor`` below 1 when ``num_workers > 0``.
+    """
+    requested = max(min_prefetch, requested)
+    if num_workers <= 0:
+        return requested
+    raw = os.getenv("LITDATA_POSIX_MAX_WORKERS")
+    if raw is not None and raw.strip() == "0":
+        return requested
+    budget = ram_budget_bytes(ram_bytes=ram_bytes)
+    if ram_bytes is None:
+        in_flight = ram_in_flight_budget_bytes()
+        if in_flight is not None and budget is not None:
+            budget = min(budget, in_flight)
+        elif in_flight is not None:
+            budget = in_flight
+    if budget is None:
+        return requested
+    if budget <= 0:
+        return min_prefetch
+    per = max(1, num_workers) * max(1, batch_bytes)
+    return max(min_prefetch, min(requested, budget // per))
+
+
+_logged_ram_wait = False
+
+
+def ram_wait_timeout_s() -> float:
+    """Max seconds to block once used RAM is at the ceiling. ``0`` disables.
+
+    Default is 120 seconds. When it expires, raise instead of allocating more
+    memory beyond the ceiling. Override with ``LITDATA_RAM_WAIT_TIMEOUT``.
+    Below the ceiling we only sleep a few milliseconds (see
+    :func:`ram_throttle_sleep_s`), not this timeout.
+    """
+    raw = os.getenv("LITDATA_RAM_WAIT_TIMEOUT")
+    if raw is None or not raw.strip():
+        return _DEFAULT_RAM_WAIT_TIMEOUT
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_RAM_WAIT_TIMEOUT
+
+
+def wait_for_ram_budget(
+    *,
+    need_bytes: int = 1,
+    timeout_s: float | None = None,
+    poll_s: float = 0.05,
+) -> int | None:
+    """Slow down as used RAM approaches ``LITDATA_RAM_CEILING``, then hold the band.
+
+    * Pressure 0 (below ceiling − margin): no wait.
+    * Pressure in (0, 1): short quadratic sleep so we do not slam into the limit.
+    * Pressure 1 (at/over ceiling): wait until pressure is back to 0.5, then
+      resume. If this does not happen within the timeout, fail closed rather
+      than allocating beyond the target.
+    """
+    global _logged_ram_wait
+    need = max(1, need_bytes)
+    limit = ram_wait_timeout_s() if timeout_s is None else timeout_s
+    budget = ram_budget_bytes()
+    if budget is None or limit <= 0:
+        return budget
+    pressure = ram_pressure_fraction()
+    if pressure <= 0 and budget >= need:
+        return budget
+    if pressure < 1.0 and budget >= need:
+        time.sleep(ram_throttle_sleep_s(pressure))
+        return ram_budget_bytes()
+    resume_pressure = 0.5
+    if not _logged_ram_wait:
+        logger.warning(
+            "RAM ceiling: holding new DataLoader work until used RAM drops "
+            "(LITDATA_RAM_CEILING=%s). Reduce batch_size or num_workers if this persists.",
+            ram_ceiling_fraction(),
+        )
+        _logged_ram_wait = True
+    deadline = time.monotonic() + limit
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _logged_ram_wait = False
+            raise RuntimeError(
+                "LitData RAM ceiling was reached and MemAvailable did not recover within "
+                f"{limit:.0f}s. Reduce batch_size, prefetch_factor, or retained batches; "
+                "set LITDATA_RAM_WAIT_TIMEOUT=0 to disable this protection."
+            )
+        time.sleep(min(poll_s, remaining))
+        pressure = ram_pressure_fraction()
+        budget = ram_budget_bytes()
+        if budget is None or (pressure <= resume_pressure and budget >= need):
+            _logged_ram_wait = False
+            return budget
+    return budget
+
+
 def posix_max_data_workers(
     *,
     requested: int,
@@ -287,8 +628,10 @@ def posix_max_data_workers(
     if raw_rss and rss_bytes is None:
         with contextlib.suppress(ValueError):
             rss = max(1, int(raw_rss))
-    budget = max(1, int(ram * posix_ram_fraction()))
-    capped = max(1, budget // max(1, rss))
+    budget = ram_budget_bytes(ram_bytes=ram)
+    if budget is None:
+        return requested
+    capped = max(1, max(0, budget) // max(1, rss))
     return min(requested, capped)
 
 
@@ -332,7 +675,7 @@ def mean_chunk_bytes(config: Any) -> int:
         return 64 * 1024 * 1024
     if num_bytes <= 0:
         return 64 * 1024 * 1024
-    return max(1, num_bytes // len(chunks))
+    return max(1, num_bytes // max(1, len(chunks)))
 
 
 def posix_page_bytes() -> int:
@@ -369,6 +712,28 @@ def advise_willneed(path: str) -> None:
         os.close(fd)
 
 
+def advise_dontneed(path: str) -> None:
+    """Drop ``path`` from the page cache so consumed chunks do not pin RAM."""
+    if os.name != "posix" or not os.path.isfile(path):
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        if hasattr(os, "posix_fadvise"):
+            size = 0
+            try:
+                size = os.fstat(fd).st_size
+            except OSError:
+                size = 0
+            os.posix_fadvise(fd, 0, size, os.POSIX_FADV_DONTNEED)
+    except OSError:
+        logger.debug("posix_fadvise DONTNEED failed for %s", path)
+    finally:
+        os.close(fd)
+
+
 def madvise_mmap(mapping: Any, *, willneed: bool = True) -> None:
     """Hint sequential access; ``WILLNEED`` only when the prefetch window fits in RAM."""
     madvise = getattr(mapping, "madvise", None)
@@ -384,6 +749,18 @@ def madvise_mmap(mapping: Any, *, willneed: bool = True) -> None:
             madvise(flag)
         except (OSError, OverflowError, ValueError):
             continue
+
+
+def madvise_mmap_dontneed(mapping: Any) -> None:
+    """Release pages of an mmap that is leaving the local LRU."""
+    madvise = getattr(mapping, "madvise", None)
+    if madvise is None:
+        return
+    flag = getattr(__import__("mmap"), "MADV_DONTNEED", None)
+    if flag is None:
+        return
+    with contextlib.suppress(OSError, OverflowError, ValueError):
+        madvise(flag)
 
 
 def posix_fast_supports_config(config: Any) -> bool:

@@ -39,7 +39,17 @@ from litdata.streaming.async_prefetch import (
 )
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
-from litdata.streaming.posix_fast import advise_willneed, mean_chunk_bytes, posix_prefetch_fits_ram, posix_safe_keep
+from litdata.streaming.posix_fast import (
+    advise_dontneed,
+    advise_willneed,
+    mean_chunk_bytes,
+    posix_prefetch_fits_ram,
+    posix_safe_keep,
+    ram_budget_bytes,
+    ram_prefetch_keep,
+    ram_pressure_fraction,
+    ram_used_fraction,
+)
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
@@ -88,14 +98,18 @@ class PrepareChunksThread(Thread):
         super().__init__(daemon=True)
         self._config = config
         self._item_loader = item_loader
-        # Async gather needs enough in-flight slots to overlap RTT; raise the
-        # floor when async prefetch is active (real-S3 benches: 2→4).
-        self._max_pre_download = adaptive_pre_download(
-            max_pre_download, remote_dir=config._remote_dir, chunks=config._chunks
-        )
-        self._pre_download_counter = 0
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
+        # Async gather needs enough in-flight slots to overlap RTT; raise the
+        # floor when async prefetch is active (real-S3 benches: 2→4), then
+        # shrink so page cache fits MemAvailable (SSH hangs near 100% RAM).
+        self._max_pre_download = adaptive_pre_download(
+            max_pre_download,
+            remote_dir=config._remote_dir,
+            chunks=config._chunks,
+            num_readers=self._node_readers(),
+        )
+        self._pre_download_counter = 0
 
         self._chunks_index_to_be_deleted: deque[int] = deque()
         self._max_cache_size = max_cache_size
@@ -133,6 +147,10 @@ class PrepareChunksThread(Thread):
         self._timing = StreamingTimingStats.instance()
         # Keep peak disk near ``max_cache_size`` under multi-worker prefetch.
         self._cap_pre_download_for_cache_budget()
+        self._prefetch_ceiling = self._max_pre_download
+        self._last_ram_guard_s = 0.0
+        self._ram_over_ceiling = False
+        self._apply_ram_prefetch_guard()
 
     def _async_prefetch(self) -> bool:
         """True when this prepare thread should batch-download via asyncio."""
@@ -301,6 +319,8 @@ class PrepareChunksThread(Thread):
 
         file_existed = os.path.exists(chunk_filepath)
         try:
+            if file_existed:
+                advise_dontneed(chunk_filepath)
             self._item_loader.delete(chunk_index, chunk_filepath)
             compressor = getattr(self._config, "_compressor_name", None)
             basename = os.path.basename(chunk_filepath)
@@ -339,7 +359,11 @@ class PrepareChunksThread(Thread):
         self._chunks_index_to_be_deleted.append(chunk_index)
 
         # Get the current cache size and decide whether we need to start cleanup. Otherwise, keep track of it
-        while self._max_cache_size and self._chunks_index_to_be_deleted and self._can_delete_chunk():
+        while (
+            self._chunks_index_to_be_deleted
+            and self._can_delete_chunk()
+            and (self._max_cache_size or self._ram_over_ceiling)
+        ):
             # Delete the oldest chunk
             self._apply_delete(self._chunks_index_to_be_deleted.popleft())
         # Decrement the pre-download counter
@@ -403,6 +427,115 @@ class PrepareChunksThread(Thread):
                 capped,
             )
             self._max_pre_download = capped
+
+    def _node_readers(self) -> int:
+        """DataLoader workers on this node (workers × local ranks)."""
+        worker_env = getattr(self, "_worker_env", None) or _WorkerEnv.detect()
+        self._worker_env = worker_env
+        workers = max(1, worker_env.world_size)
+        dist = self._distributed_env
+        ranks_per_node = max(1, dist.world_size // max(1, dist.num_nodes))
+        return workers * ranks_per_node
+
+    def _apply_ram_prefetch_guard(self) -> None:
+        """Shrink prefetch / skip WILLNEED / evict when used RAM would pass the ceiling."""
+        mean_chunk = mean_chunk_bytes(self._config)
+        readers = self._node_readers()
+        ceiling = getattr(self, "_prefetch_ceiling", self._max_pre_download)
+        budget = ram_budget_bytes()
+        previous_keep = self._max_pre_download
+        capped = ram_prefetch_keep(keep=ceiling, chunk_bytes=mean_chunk, num_readers=readers, min_keep=2)
+        if capped < self._max_pre_download:
+            logger.info(
+                "RAM ceiling: capping max_pre_download %d → %d so readers × chunks stay under "
+                "LITDATA_RAM_CEILING (default 0.95 of MemTotal)",
+                self._max_pre_download,
+                capped,
+            )
+        self._max_pre_download = capped
+        projected = max(1, self._max_pre_download) * max(1, mean_chunk) * max(1, readers)
+        # Start dropping consumed chunks and stop page-cache hints as soon as we
+        # enter the control band. Waiting until projected prefetch alone exceeds
+        # the remaining budget misses page-cache growth from already-read chunks.
+        self._ram_over_ceiling = ram_pressure_fraction() > 0.0
+        if getattr(self._item_loader, "_posix_fast", False):
+            previous_keep = max(1, int(getattr(self._item_loader, "_mmap_keep", 1)))
+            previous_willneed = bool(getattr(self._item_loader, "_posix_willneed", True))
+            ceiling = getattr(self, "_posix_keep_ceiling", previous_keep)
+            posix_keep = posix_safe_keep(
+                keep=ceiling,
+                chunk_bytes=mean_chunk,
+                num_readers=readers,
+            )
+            willneed = (
+                posix_prefetch_fits_ram(
+                    keep=posix_keep,
+                    chunk_bytes=mean_chunk,
+                    num_readers=readers,
+                )
+                and not self._ram_over_ceiling
+            )
+            setter = getattr(self._item_loader, "set_posix_fast", None)
+            if setter is not None:
+                setter(True, keep=posix_keep, willneed=willneed)
+            if previous_keep != posix_keep:
+                logger.debug(
+                    "RAM pressure changed POSIX mmap keep %d → %d (used=%.1f%%, available budget=%.2fGiB, "
+                    "readers=%d, mean_chunk=%.2fMiB).",
+                    previous_keep,
+                    posix_keep,
+                    (ram_used_fraction() or 0.0) * 100,
+                    (budget or 0) / 1024**3,
+                    readers,
+                    mean_chunk / 1024**2,
+                )
+            if previous_willneed != willneed:
+                logger.debug(
+                    "RAM pressure changed POSIX WILLNEED %s → %s (used=%.1f%%, available budget=%.2fGiB).",
+                    previous_willneed,
+                    willneed,
+                    (ram_used_fraction() or 0.0) * 100,
+                    (budget or 0) / 1024**3,
+                )
+            return
+        if self._max_pre_download != previous_keep:
+            logger.debug(
+                "RAM pressure changed max_pre_download %d → %d (used=%.1f%%, available budget=%.2fGiB, "
+                "readers=%d, mean_chunk=%.2fMiB).",
+                previous_keep,
+                self._max_pre_download,
+                (ram_used_fraction() or 0.0) * 100,
+                (budget or 0) / 1024**3,
+                readers,
+                mean_chunk / 1024**2,
+            )
+        if getattr(self._item_loader, "_posix_fast", False):
+            return
+        previous_willneed = getattr(self._item_loader, "_posix_willneed", None)
+        willneed = posix_prefetch_fits_ram(keep=self._max_pre_download, chunk_bytes=mean_chunk, num_readers=readers)
+        if budget is not None:
+            willneed = willneed and projected <= budget and not self._ram_over_ceiling
+        setter = getattr(self._item_loader, "set_willneed", None)
+        if setter is not None:
+            setter(willneed)
+        elif hasattr(self._item_loader, "_posix_willneed"):
+            self._item_loader._posix_willneed = willneed
+        if previous_willneed is not None and previous_willneed != willneed:
+            logger.debug(
+                "RAM pressure changed WILLNEED %s → %s (used=%.1f%%, available budget=%.2fGiB).",
+                previous_willneed,
+                willneed,
+                (ram_used_fraction() or 0.0) * 100,
+                (budget or 0) / 1024**3,
+            )
+
+    def _maybe_refresh_ram_prefetch_guard(self) -> None:
+        """Re-check MemAvailable about once a second during the download loop."""
+        now = time()
+        if (now - self._last_ram_guard_s) < 1.0:
+            return
+        self._last_ram_guard_s = now
+        self._apply_ram_prefetch_guard()
 
     def _cache_over_budget(self, *, reconcile: bool = False, extra_bytes: int = 0) -> bool:
         """True when on-disk cache is at/over ``max_cache_size`` (node-wide folder)."""
@@ -529,6 +662,8 @@ class PrepareChunksThread(Thread):
             logger.debug(f"_release_cache_slot failed: {e}")
 
     def _can_delete_chunk(self) -> bool:
+        if getattr(self, "_ram_over_ceiling", False):
+            return True
         if self._max_cache_size is None:
             return False
         # Size always wins so multi-worker prefetch cannot ignore ``max_cache_size``.
@@ -709,6 +844,8 @@ class PrepareChunksThread(Thread):
             if self._force_stop_event.is_set():
                 self._has_exited = True
                 return
+
+            self._maybe_refresh_ram_prefetch_guard()
 
             over_budget = False
             if self._slot_budget_enabled():
@@ -915,6 +1052,7 @@ class BinaryReader:
         chunk_b = mean_chunk_bytes(self._config)
         readers = self._posix_node_readers()
         self._posix_keep = posix_safe_keep(keep=max(1, keep), chunk_bytes=chunk_b, num_readers=readers)
+        self._posix_keep_ceiling = self._posix_keep
         self._posix_willneed = posix_prefetch_fits_ram(
             keep=self._posix_keep,
             chunk_bytes=chunk_b,
