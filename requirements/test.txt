@@ -13,7 +13,7 @@ pandas
 pyarrow >=25.0.1,<26.0.0  # TODO: unpin once pyarrow 25 parquet segfault is resolved
 polars >1.0.0
 lightning
-transformers >=4.51.0
+transformers >=5.16.1
 zstd; python_version < "3.14"
 soundfile >=0.13.0
 torchcodec >=0.1.0 # check compatibility table: https://github.com/meta-pytorch/torchcodec?tab=readme-ov-file#installing-torchcodec
