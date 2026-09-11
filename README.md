@@ -43,6 +43,7 @@
 <p align="center">
   <a href="https://lightning.ai/">Lightning AI</a> •
   <a href="#quick-start">Quick start</a> •
+  <a href="#litdata-vs-torchdata">vs torchdata</a> •
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#modality">Modality</a> •
@@ -71,6 +72,24 @@
 Speeding up model training involves more than kernel tuning. Data loading frequently slows down training, because datasets are too large to fit on disk, consist of millions of small files, or stream slowly from the cloud. 
 
 LitData provides tools to preprocess and optimize datasets into a format that streams efficiently from any cloud or local source. It also includes a map operator for distributed data processing before optimization. This makes data pipelines faster, cloud-agnostic, and can improve training throughput by up to 20×.
+
+&nbsp;
+
+## LitData vs torchdata <a id="litdata-vs-torchdata"></a>
+
+Different layers, not competitors: **LitData is a streaming layer with its own on-disk format, plus a no-conversion path for files you already have; [torchdata](https://github.com/meta-pytorch/data) is a toolkit of dataloading primitives with no format of its own.**
+
+| | LitData | torchdata |
+|--|--|--|
+| Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
+| Remote data | Chunk-level streaming from S3, GCS, Azure, R2, HF Hub. Async batched downloads, prefetch, local cache, retries | Per-file reads (`FileLister` / `FileReader`, fsspec + smart_open). No chunk cache or prefetch pipeline |
+| Main API | `StreamingDataset` / `StreamingDataLoader`, `CombinedStreamingDataset` | `torchdata.nodes` iterators you chain yourself, `StatefulDataLoader` |
+| Mid-epoch resume | `StreamingDataLoader.state_dict()` / `load_state_dict()` | `StatefulDataLoader.state_dict()` / `load_state_dict()` |
+| Transforms | [`map()`](#transform-datasets) / `optimize()`. Preprocessing jobs that run before training and write a new dataset, distributed across machines | `ParallelMapper`. Transforms samples in the live pipeline, re-run every epoch |
+
+**Rule of thumb:** reach for **LitData** in most cases. It handles the streaming, caching, shuffling and resume for you. Reach for **torchdata** when you only want bare-bones primitives and are happy to build the loading pipeline yourself.
+
+The two compose rather than compete: a `StreamingDataset` is an `IterableDataset`, so `torchdata.nodes.IterableWrapper` can pull straight from it.
 
 &nbsp;
 
