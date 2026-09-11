@@ -43,6 +43,7 @@
 <p align="center">
   <a href="https://lightning.ai/">Lightning AI</a> •
   <a href="#quick-start">Quick start</a> •
+  <a href="#litdata-vs-torchdata">vs torchdata</a> •
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#modality">Modality</a> •
@@ -74,6 +75,24 @@ LitData provides tools to preprocess and optimize datasets into a format that st
 
 &nbsp;
 
+## LitData vs torchdata <a id="litdata-vs-torchdata"></a>
+
+Different layers, not competitors: **LitData is a streaming layer with its own on-disk format, plus a no-conversion path for files you already have; [torchdata](https://github.com/meta-pytorch/data) is a toolkit of dataloading primitives with no format of its own.**
+
+| | LitData | torchdata |
+|--|--|--|
+| Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
+| Remote data | Chunk-level streaming from S3, GCS, Azure, R2, HF Hub. Async batched downloads, prefetch, local cache, retries | Per-file reads (`FileLister` / `FileReader`, fsspec + smart_open). No chunk cache or prefetch pipeline |
+| Main API | `StreamingDataset` / `StreamingDataLoader`, `CombinedStreamingDataset` | `torchdata.nodes` iterators you chain yourself, `StatefulDataLoader` |
+| Mid-epoch resume | `StreamingDataLoader.state_dict()` / `load_state_dict()` | `StatefulDataLoader.state_dict()` / `load_state_dict()` |
+| Transforms | [`map()`](#transform-datasets) / `optimize()`. Preprocessing jobs that run before training and write a new dataset, distributed across machines | `ParallelMapper`. Transforms samples in the live pipeline, re-run every epoch |
+
+**Rule of thumb:** reach for **LitData** in most cases. It handles the streaming, caching, shuffling and resume for you. Reach for **torchdata** when you only want bare-bones primitives and are happy to build the loading pipeline yourself.
+
+The two compose rather than compete: a `StreamingDataset` is an `IterableDataset`, so `torchdata.nodes.IterableWrapper` can pull straight from it.
+
+&nbsp;
+
 # Looking for GPUs?
 Over 340,000 developers use [Lightning Cloud](https://lightning.ai/?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) - purpose-built for PyTorch and PyTorch Lightning. 
 - [GPUs](https://lightning.ai/pricing?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) from $0.19.   
@@ -89,6 +108,11 @@ First, install LitData:
 ```bash
 pip install litdata
 ```
+
+<!-- torch-support -->
+LitData supports the two most recent PyTorch minor releases, currently **2.14** and **2.13**; and
+requires **PyTorch 2.4 or newer**. CI exercises all three. Those versions are declared in
+[`.github/torch-support.json`](.github/torch-support.json), which drives the CI matrix.
 
 Choose your workflow:
 
@@ -2923,6 +2947,8 @@ Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scho
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
+* Peyton Gardipee ([pwgardipee](https://github.com/pwgardipee))
+* David Edey ([dhedey](https://github.com/dhedey))
 
 
 ## Emeritus Maintainers

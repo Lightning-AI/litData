@@ -19,6 +19,11 @@ updates:
       separator: "-"
     # Allow up to 5 open pull requests for pip dependencies
     open-pull-requests-limit: 3
+    ignore:
+      # `torch >=X` is the oldest release LitData supports, not a version to keep current;
+      # dependabot would raise it to the newest release. Moving that floor is a deliberate
+      # call — see .github/torch-support.json and .github/workflows/torch-policy.yml.
+      - dependency-name: "torch"
 
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"

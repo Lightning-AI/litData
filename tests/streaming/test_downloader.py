@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -16,6 +17,7 @@ from litdata.streaming.downloader import (
     R2Downloader,
     S3Downloader,
     _indexed_object_bytes,
+    _obstore_credential_provider,
     _range_parts,
     get_downloader,
     register_downloader,
@@ -832,3 +834,35 @@ def test_r2_tiny_chunk_uses_get_object(r2_client_mock, monkeypatch, tmpdir):
     client.client.get_object.assert_called_once_with(Bucket="bucket", Key="chunk-0-0.zstd.bin")
     client.client.download_file.assert_not_called()
     get_store.assert_not_called()
+
+
+def test_obstore_credential_provider_reports_the_client_refresh_time():
+    """Obstore must be told when the client rolls over, not a flat guess from now.
+
+    It caches what the provider hands back until ``expires_at``, so a guess that outlives
+    credentials read off a warm client leaves it signing with ones already dead.
+    """
+    rolls_over_at = datetime.now(timezone.utc) + timedelta(minutes=4)
+
+    s3_client = MagicMock()
+    s3_client.next_refresh_time.return_value = rolls_over_at
+    frozen = s3_client.client._get_credentials.return_value.get_frozen_credentials.return_value
+    frozen.access_key = "AKIATEST"
+    frozen.secret_key = "secret"
+    frozen.token = "token"
+
+    credentials = _obstore_credential_provider(s3_client)()
+
+    assert credentials["access_key_id"] == "AKIATEST"
+    assert credentials["expires_at"] == rolls_over_at
+    s3_client.next_refresh_time.assert_called_once_with()
+
+
+def test_obstore_credential_provider_rejects_incomplete_credentials():
+    s3_client = MagicMock()
+    frozen = s3_client.client._get_credentials.return_value.get_frozen_credentials.return_value
+    frozen.access_key = None
+    frozen.secret_key = "secret"
+
+    with pytest.raises(ValueError, match="incomplete credentials"):
+        _obstore_credential_provider(s3_client)()

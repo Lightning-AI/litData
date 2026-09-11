@@ -17,7 +17,26 @@ defaults:
     shell: bash
 
 jobs:
+  torch-support:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Keep the supported PyTorch versions in one place and share them with the
+    # test matrix so CI fails early when the policy and workflow drift apart.
+    outputs:
+      latest_spec: ${{ steps.policy.outputs.latest_spec }}
+      previous_spec: ${{ steps.policy.outputs.previous_spec }}
+      minimum_spec: ${{ steps.policy.outputs.minimum_spec }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate the PyTorch support policy
+        run: python3 .github/scripts/torch_support.py check
+      - name: Export the supported PyTorch versions
+        id: policy
+        run: python3 .github/scripts/torch_support.py export
+
   pytester:
+    needs: torch-support
+    name: pytester (${{ matrix.os }}, ${{ matrix.python-version }}, torch ${{ matrix.torch-spec || needs.torch-support.outputs.latest_spec }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,6 +46,16 @@ jobs:
         exclude:
           - { os: "windows-2022", python-version: "3.13" }
           - { os: "windows-2022", python-version: "3.14" }
+        # every combination tests the `latest` PyTorch from .github/torch-support.json; these entries
+        # merge into existing combinations (they add no jobs), switching two of them to `previous` and
+        # to the declared `minimum` — the floor sits on 3.10 because old torch has no newer wheels
+        include:
+          - os: "ubuntu-22.04"
+            python-version: "3.12"
+            torch-spec: "${{ needs.torch-support.outputs.previous_spec }}"
+          - os: "ubuntu-22.04"
+            python-version: "3.10"
+            torch-spec: "${{ needs.torch-support.outputs.minimum_spec }}"
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
@@ -54,10 +83,21 @@ jobs:
           enable-cache: true
 
       - name: Install package & dependencies
+        env:
+          # the supported PyTorch this job tests, from .github/torch-support.json
+          TORCH_SPEC: ${{ matrix.torch-spec || needs.torch-support.outputs.latest_spec }}
         run: |
+          test -n "${TORCH_SPEC}" || { echo "::error::TORCH_SPEC is empty, the torch-support job exported no spec"; exit 1; }
           uv pip install -U lightning-sdk
-          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
+          uv pip install -e ".[extras]" -r requirements/test.txt "torch==${TORCH_SPEC}" -U -q
           uv pip list
+          python -c "import torch; print('torch', torch.__version__)"
+
+      # torchcodec has no build for the oldest supported torch (it starts at 2.5), and uv installs a
+      # newer one that only fails on import; dropping it lets the video tests skip themselves instead
+      - name: Drop the video stack on the minimum-PyTorch job
+        if: matrix.torch-spec == needs.torch-support.outputs.minimum_spec
+        run: uv pip uninstall torchcodec
 
       - name: Run fast tests in parallel
         run: |

@@ -50,7 +50,8 @@ repos:
         additional_dependencies: [tomli]
         exclude: >
           (?x)^(
-              .*\.ipynb
+              .*\.ipynb |
+              \.github/scripts/torch_support\.py
           )$
         #args: ["--write-changes"] # uncomment if you want to get automatic fixing
 
