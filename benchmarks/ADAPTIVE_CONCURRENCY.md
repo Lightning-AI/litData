@@ -68,6 +68,40 @@ Confirm @ `ba9da13`: interleaved n=3, `max(≥300 batches, ≥30s)`, **w=24 p=0*
 
 **Verdict: (a)** — before ≈3.7k (not ~5.5k wrong-tree). Frame high-w as robustness; do **not** headline unverifiable +53%. Artifact: `benchmarks/results/raw_before_vs_after.ba9da13.1785268543.json`.
 
+## Stateful Recovery State Machine & Deadband Control
+
+The adaptive controller incorporates a 3-state feedback controller to prevent budget jitter:
+
+| State         | Latency Condition                                                                        | Action                                                                                                 |
+| :------------ | :--------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
+| **Healthy**   | (L\_{\\text{obs}} \\le L\_{\\text{target}}) (40 ms)                                      | Recover backoff factor gradually: (f \\leftarrow \\min(1.0, f + \\alpha\_{\\text{recovery}}(1.0 - f))) |
+| **Deadband**  | (L\_{\\text{target}} < L\_{\\text{obs}} \\le 1.1 \\times L\_{\\text{target}}) (40–44 ms) | Hold current backoff factor constant (no recovery, no extra backoff)                                   |
+| **Congested** | (L\_{\\text{obs}} > 1.1 \\times L\_{\\text{target}}) (>44 ms)                            | Immediate backoff: (f \\leftarrow \\min(f, L\_{\\text{target}} / L\_{\\text{obs}}))                    |
+
+## Environment Variable Configuration Reference
+
+All controller bounds and operational knobs are configurable via validated environment variables:
+
+| Environment Variable                         | Default                | Range / Constraints                     | Description                                                 |
+| :------------------------------------------- | :--------------------- | :-------------------------------------- | :---------------------------------------------------------- |
+| `LITDATA_ASSUMED_BANDWIDTH_BPS`              | `104857600` (100 MB/s) | (> 0)                                   | Default aggregate network bandwidth fallback                |
+| `LITDATA_ASSUMED_REQUEST_LATENCY_S`          | `0.040` (40 ms)        | (> 0.0)                                 | Target baseline GET request latency                         |
+| `LITDATA_ASSUMED_REQUEST_RATE`               | `6000.0` req/s         | (\\ge 0.0)                              | Baseline request rate for Little's law model                |
+| `LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP`     | `128`                  | (\\ge 1)                                | Maximum single-process permit cap                           |
+| `LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP`   | `512`                  | (\\ge 1)                                | Maximum aggregate multi-worker permit cap                   |
+| `LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR` | `32`                   | (1 \\le \\text{floor} \\le \\text{cap}) | Adaptive dynamic concurrency budget floor                   |
+| `LITDATA_BACKOFF_RECOVERY_ALPHA`             | `0.1`                  | (0.0 < \\alpha \\le 1.0)                | Recovery EMA factor for healthy state                       |
+| `LITDATA_MIN_EMPIRICAL_SAMPLES`              | `5`                    | (\\ge 1)                                | Minimum observations required before applying empirical EMA |
+| `LITDATA_PERMIT_REFRESH_INTERVAL`            | `10`                   | (\\ge 1)                                | Iteration interval between dynamic permit recalculations    |
+
+## Adaptive Concurrency Stress Benchmark
+
+To run the stress benchmark comparing aggregate permits, per-worker permits, BPS EMA, latency EMA, and throughput across worker counts:
+
+```bash
+PYTHONPATH=src .venv/bin/python benchmarks/bench_raw_adaptive_concurrency.py
+```
+
 ## Acceptance (future adaptive)
 
 Beats **default** static everywhere; never loses by more than run-to-run noise; removes the w×p tuning matrix from the user’s cognitive load. “Beats tuned static” is the wrong bar — tuned static ties it at best per configuration.

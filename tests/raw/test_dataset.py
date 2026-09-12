@@ -91,7 +91,7 @@ def test_effective_prefetch_vs_num_workers(num_workers, max_prefetch, expected):
         (32, None, 100_000, 16),  # 512//32
         # Large objects (≥1 MiB): bandwidth-only (no Little's-law pin at 240)
         (4, None, 10 * 1024 * 1024, 8),  # budget=floor 32, 32//4=8
-        (16, None, 10 * 1024 * 1024, 8),  # 32//16=2 → floor 8
+        (16, None, 10 * 1024 * 1024, 2),  # budget=floor 32, 32//16=2
         # Unknown size uses default median (256KiB) → latency arm (240)
         (8, None, None, 30),  # 240//8
     ],
@@ -539,3 +539,729 @@ def test_streaming_raw_dataset_transform_none_and_group(tmp_path):
     gds = GroupedDS(input_dir=str(tmp_path), transform=transform)
     gds.cache_manager.download_file_async = mock_download_file_async
     assert gds[0] == b"abc"
+
+
+def test_bandwidth_tracker_basic():
+    import pytest
+
+    from litdata.raw.dataset import (
+        _ASSUMED_AGGREGATE_BANDWIDTH_BPS,
+        _LATENCY_RTT_EPSILON,
+        BandwidthTracker,
+    )
+
+    assumed_bps = float(_ASSUMED_AGGREGATE_BANDWIDTH_BPS)
+    tracker = BandwidthTracker(alpha=0.2)
+    assert tracker.sample_count == 0
+
+    # --- Tiny GET (50 KB < 64 KB) ---
+    # Only updates latency EMA; no bandwidth observation recorded.
+    # prev_bps_ema = None → fallback to assumed bandwidth for transfer estimate.
+    tracker.record_observation(50_000, 0.010)
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 1
+    assert bps_count == 0
+    assert lat_count == 1
+    assert bps is None
+    transfer1 = 50_000 / assumed_bps
+    expected_lat1 = max(_LATENCY_RTT_EPSILON, 0.010 - transfer1)
+    assert pytest.approx(lat, abs=1e-6) == expected_lat1
+    # Sanity: transfer-subtracted latency must be strictly less than raw duration.
+    assert lat < 0.010
+
+    # --- Small/Medium GET (100 KB: 64 KB <= size < 256 KB) ---
+    # Updates BOTH latency and bandwidth EMAs.
+    # prev_bps_ema is still None (previous obs was below bandwidth threshold) → fallback.
+    tracker.record_observation(100_000, 0.020)
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 2
+    assert bps_count == 1
+    assert lat_count == 2
+    assert bps is not None
+    assert pytest.approx(bps, abs=1.0) == 5_000_000.0
+    transfer2 = 100_000 / assumed_bps  # prev_bps_ema still None before this obs
+    est_lat2 = max(_LATENCY_RTT_EPSILON, 0.020 - transfer2)
+    expected_lat2 = 0.2 * est_lat2 + 0.8 * expected_lat1
+    assert pytest.approx(lat, abs=1e-6) == expected_lat2
+
+    # --- Large GET (10 MiB >= 256 KB) ---
+    # Updates bandwidth EMA only; size >= _LATENCY_OBSERVATION_MAX_BYTES.
+    tracker.record_observation(10 * 1024 * 1024, 0.118)
+    bps, lat, bps_count, lat_count = tracker.get_metrics()
+    assert tracker.sample_count == 3
+    assert bps_count == 2
+    assert lat_count == 2  # unchanged — large GETs do not update latency EMA
+    assert bps is not None
+
+
+def test_bandwidth_tracker_pickle():
+    import pickle
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    tracker.record_observation(100_000, 0.020)
+    tracker.record_observation(10 * 1024 * 1024, 0.200)
+    blob = pickle.dumps(tracker)
+    restored = pickle.loads(blob)  # noqa: S301
+    assert restored.sample_count == tracker.sample_count
+    assert restored.bps_sample_count == tracker.bps_sample_count
+    assert restored.lat_sample_count == tracker.lat_sample_count
+    assert restored.bandwidth_bps_ema == tracker.bandwidth_bps_ema
+    assert restored.request_latency_s_ema == tracker.request_latency_s_ema
+
+
+def test_concurrency_budget_warmup_gating():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # 4 observations (under threshold of 5) -> uses default static budget
+    for _ in range(4):
+        tracker.record_observation(10 * 1024 * 1024, 0.001)
+
+    # Median 10MB -> default budget: (100MB/s * 0.5s) // 10MB = 5 -> floor 32
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker) == 32
+
+    # 5th observation -> warm-up gate unlocks empirical EMA
+    tracker.record_observation(10 * 1024 * 1024, 0.001)
+    # Measured bandwidth is huge -> dynamic budget scales up from 32 to 500
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker) == 500
+
+
+def test_concurrency_budget_high_and_low_bandwidth_adaptation():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    # High bandwidth scenario
+    high_tracker = BandwidthTracker()
+    for _ in range(5):
+        high_tracker.record_observation(10 * 1024 * 1024, 0.002)
+    budget_high = _aggregate_concurrency_budget(1 * 1024 * 1024, tracker=high_tracker)
+    assert budget_high == 512
+
+    # Low bandwidth scenario
+    low_tracker = BandwidthTracker()
+    for _ in range(5):
+        low_tracker.record_observation(10 * 1024 * 1024, 5.0)
+    budget_low = _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=low_tracker)
+    assert budget_low == 32
+
+
+def test_class_gated_observation_isolation():
+    from litdata.raw.dataset import (
+        BandwidthTracker,
+        _aggregate_concurrency_budget,
+    )
+
+    # Scenario 1: 5 small GETs (< 64 KB) -> lat_sample_count = 5, bps_sample_count = 0
+    tracker_small = BandwidthTracker()
+    for _ in range(5):
+        tracker_small.record_observation(10_000, 0.010)
+
+    bps, lat, bps_cnt, lat_cnt = tracker_small.get_metrics()
+    assert bps_cnt == 0
+    assert lat_cnt == 5
+    assert bps is None
+
+    # Budget for large 10 MB objects must STILL use static default aggregate bandwidth because bps_sample_count < 5
+    # Clamped to floor 32
+    assert _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker_small) == 32
+
+    # Scenario 2: 5 large GETs (>= 256 KB) -> bps_sample_count = 5, lat_sample_count = 0
+    tracker_large = BandwidthTracker()
+    for _ in range(5):
+        tracker_large.record_observation(10 * 1024 * 1024, 0.001)
+
+    bps, lat, bps_cnt, lat_cnt = tracker_large.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 0
+    assert lat is None
+
+
+def test_environment_variable_overrides(monkeypatch):
+    from litdata.raw.dataset import (
+        _aggregate_concurrency_budget,
+        _effective_concurrency,
+    )
+
+    monkeypatch.setenv("LITDATA_ASSUMED_BANDWIDTH_BPS", str(500 * 1024 * 1024))
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", "1024")
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", "16")
+    monkeypatch.setenv("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", "256")
+
+    assert _aggregate_concurrency_budget(100_000) == 1024
+    assert _effective_concurrency(None, num_workers=1, median_file_bytes=100_000) == 256
+
+
+def test_no_latency_concurrency_inflation():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Record 5 latency observations with high latency (200ms vs assumed 40ms)
+    for _ in range(5):
+        tracker.record_observation(100_000, 0.200)
+
+    # Budget with high latency must not inflate above baseline (240 for sub-1MB)
+    budget = _aggregate_concurrency_budget(100_000, tracker=tracker)
+    assert budget <= 240
+
+
+def test_concurrency_latency_monotonicity():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    latencies = [0.040, 0.080, 0.200, 0.500]
+    budgets = []
+
+    for lat in latencies:
+        tracker = BandwidthTracker()
+        for _ in range(5):
+            tracker.record_observation(100_000, lat)
+        budgets.append(_aggregate_concurrency_budget(100_000, tracker=tracker))
+
+    # For latencies above target (40ms), increasing latency must not increase computed budget
+    for i in range(len(budgets) - 1):
+        assert budgets[i + 1] <= budgets[i]
+
+
+def test_concurrency_latency_recovery():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Inject high latency
+    for _ in range(5):
+        tracker.record_observation(100_000, 0.200)
+    budget_degraded = _aggregate_concurrency_budget(100_000, tracker=tracker)
+
+    # Now inject healthy latency
+    for _ in range(10):
+        tracker.record_observation(100_000, 0.040)
+    budget_recovered = _aggregate_concurrency_budget(100_000, tracker=tracker)
+
+    assert budget_recovered > budget_degraded
+
+
+def test_imagenet_bandwidth_observation():
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    # ImageNet JPEG size ~150 KB — straddles both latency (<256 KB) and bandwidth (>=64 KB) thresholds.
+    imagenet_file_size = 150 * 1024
+    for _ in range(5):
+        tracker.record_observation(imagenet_file_size, 0.015)
+
+    bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 5
+
+    # ImageNet files MUST record both EMA estimates.
+    assert bps is not None
+    assert bps > 0
+    assert lat is not None
+    assert lat > 0
+
+    # Transfer-subtracted latency must be strictly less than raw wall-clock duration.
+    # (transfer time is non-zero for a 150 KB file)
+    assert lat < 0.015
+
+    # Epsilon floor must hold: estimated latency must not go below _LATENCY_RTT_EPSILON.
+    assert lat >= 0.001
+
+
+def test_guarded_adaptive_floor_reduction():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget
+
+    tracker = BandwidthTracker()
+    # Low bandwidth (<10 MiB/s) AND high latency (>100 ms)
+    for _ in range(5):
+        tracker.record_observation(128 * 1024, 0.500)
+
+    # Under severe evidence (low bandwidth + high latency), budget can drop below default 32 floor
+    budget = _aggregate_concurrency_budget(10 * 1024 * 1024, tracker=tracker)
+    assert budget < 32
+
+
+def test_worker_allocation_respects_aggregate_budget():
+    from litdata.raw.dataset import BandwidthTracker, _aggregate_concurrency_budget, _effective_concurrency
+
+    test_cases = [
+        (512, 8, 100_000),
+        (32, 8, 10_000_000),
+        (32, 16, 10_000_000),
+        (32, 64, 10_000_000),
+    ]
+
+    for expected_budget_cap, workers, median_bytes in test_cases:
+        tracker = BandwidthTracker()
+        budget = _aggregate_concurrency_budget(median_bytes, tracker=tracker)
+        total_permits = sum(
+            _effective_concurrency(
+                None, num_workers=workers, median_file_bytes=median_bytes, tracker=tracker, worker_id=w
+            )
+            for w in range(workers)
+        )
+        # Sum of per-worker permits across all workers must not exceed aggregate budget
+        assert total_permits <= budget
+
+
+def test_transfer_subtracted_latency():
+    """Pre-seed the tracker with 5 large GETs to reach sample threshold.
+
+    Establishes a known bandwidth EMA (20 MB/s), then records a 200 KB request taking 30 ms.
+    Verify latency EMA is approximately 30 ms - transfer_time (10 ms) = 20 ms.
+    """
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    prior_bps = 20 * 1024 * 1024  # 20 MB/s
+    large_size = 10 * 1024 * 1024  # 10 MiB (bandwidth-only GET)
+
+    # Record 5 observations to pass the _MIN_EMPIRICAL_SAMPLES = 5 threshold
+    for _ in range(5):
+        tracker.record_observation(large_size, large_size / prior_bps)
+
+    bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
+    assert bps_cnt == 5
+    assert lat_cnt == 0
+    assert pytest.approx(bps, rel=1e-5) == prior_bps
+
+    # Now record 200 KB GET taking 30 ms
+    size = 200 * 1024
+    duration = 0.030
+    tracker.record_observation(size, duration)
+
+    _, lat_after, _, _ = tracker.get_metrics()
+    expected_lat = duration - (size / prior_bps)  # 30 ms - 10 ms = 20 ms
+    assert lat_after is not None
+    assert pytest.approx(lat_after, abs=1e-4) == expected_lat
+
+
+def test_transfer_subtracted_latency_bootstrap():
+    """When no empirical bandwidth exists or bps_sample_count < 5, verify default bandwidth is used."""
+    import pytest
+
+    from litdata.raw.dataset import _ASSUMED_AGGREGATE_BANDWIDTH_BPS, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    assert tracker.bandwidth_bps_ema is None
+
+    # Record a 50 KB GET taking 10 ms (sample 1, below 5 threshold)
+    size = 50 * 1024
+    duration = 0.010
+    tracker.record_observation(size, duration)
+
+    _, lat, _, _ = tracker.get_metrics()
+    expected_transfer = size / float(_ASSUMED_AGGREGATE_BANDWIDTH_BPS)
+    expected_lat = max(0.001, duration - expected_transfer)
+    assert lat is not None
+    assert pytest.approx(lat, abs=1e-6) == expected_lat
+
+
+def test_transfer_subtracted_latency_clamped():
+    """Provide an observation where estimated transfer time > observed duration.
+
+    Verify resulting latency is clamped to epsilon (0.001s) rather than becoming zero or negative.
+    """
+    import pytest
+
+    from litdata.raw.dataset import _LATENCY_EPSILON_S, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # Seed 5 large GETs at a slow prior BPS (1 MB/s)
+    slow_bps = 1 * 1024 * 1024
+    large_size = 10 * 1024 * 1024
+    for _ in range(5):
+        tracker.record_observation(large_size, large_size / slow_bps)
+
+    # Now record a 100 KB GET arriving in only 5 ms (faster than 100 ms transfer estimate)
+    tracker.record_observation(100 * 1024, 0.005)
+    _, lat, _, _ = tracker.get_metrics()
+
+    assert lat is not None
+    assert pytest.approx(lat, abs=1e-9) == _LATENCY_EPSILON_S
+
+
+def test_current_bandwidth_sample_does_not_explain_itself():
+    """Verify bandwidth calculated from current observation is NOT used to calculate transfer time."""
+    from litdata.raw.dataset import _LATENCY_EPSILON_S, BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # Record a single 200 KB GET taking 30 ms (bps_sample_count = 0 before this sample).
+    # If circular, it would use 200 KB / 30 ms to calculate transfer = 30 ms -> lat = 0 -> clamped to epsilon (1 ms).
+    # Since it correctly uses fallback default (100 MB/s), transfer = 2 ms -> lat = 28 ms.
+    tracker.record_observation(200 * 1024, 0.030)
+    _, lat, _, _ = tracker.get_metrics()
+
+    assert lat is not None
+    assert lat > 10 * _LATENCY_EPSILON_S  # 28 ms is >> 1 ms epsilon
+
+
+def test_256k_to_1m_bandwidth_observation():
+    """Verify 256 KiB - 1 MiB objects update BPS EMA without updating latency EMA."""
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    size_500k = 500 * 1024  # 500 KiB
+    tracker.record_observation(size_500k, 0.050)
+
+    bps, lat, bps_cnt, lat_cnt = tracker.get_metrics()
+    assert bps_cnt == 1
+    assert lat_cnt == 0
+    assert bps is not None
+    assert bps > 0
+    assert lat is None
+
+
+def test_dynamic_semaphore_scale_down_target():
+    """Verify _DynamicSemaphore updates target permits on downscale and retains permit bounds."""
+    import asyncio
+
+    import pytest
+
+    from litdata.raw.dataset import _DynamicSemaphore
+
+    @pytest.mark.asyncio
+    async def _run():
+        dyn_sem = _DynamicSemaphore(32)
+        assert dyn_sem.target_permits == 32
+
+        # Downscale to 16
+        dyn_sem.update_target(16)
+        assert dyn_sem.target_permits == 16
+
+        # Acquire 16 permits
+        for _ in range(16):
+            await dyn_sem.acquire()
+
+        # Releasing permits works cleanly
+        for _ in range(16):
+            dyn_sem.release()
+
+    asyncio.run(_run())
+
+
+def test_ranged_gather_individual_chunk_observations(tmp_path):
+    """Verify that ranged downloads record observations per chunk rather than one aggregate blob."""
+    import os
+    from unittest.mock import MagicMock
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    (tmp_path / "sample.bin").write_bytes(b"x" * 100)
+    ds = StreamingRawDataset(
+        input_dir=str(tmp_path),
+        cache_dir=str(tmp_path),
+        range_parallel_threshold=100 * 1024,
+        range_chunk_size=100 * 1024,
+    )
+
+    import asyncio
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        mock_dl = MagicMock()
+
+        def _mock_write(f_path, off, length, scratch):
+            from pathlib import Path
+
+            Path(scratch).write_bytes(b"x" * length)
+
+        mock_dl.download_bytes.side_effect = _mock_write
+        ds.cache_manager._downloader = mock_dl
+        ds.cache_manager._downloader_pid = os.getpid()
+        ds.cache_manager._downloader_loop = loop
+
+        data = await ds.cache_manager._ranged_download_bytes("s3://mock-bucket/file.bin", size=200 * 1024)
+        assert len(data) == 200 * 1024
+
+    asyncio.run(_run())
+    # 2 chunks of 100 KiB (>= 64 KiB min) -> 2 bps observations recorded
+    _, _, bps_cnt, _ = ds.cache_manager._bandwidth_tracker.get_metrics()
+    ds.cache_manager.reset_runtime_state()
+    assert bps_cnt == 2
+
+
+def test_hedged_get_excludes_hedge_delay(tmp_path):
+    """Verify that hedged GET timing is recorded inside the winning attempt."""
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    (tmp_path / "sample.bin").write_bytes(b"y" * 100_000)
+    ds = StreamingRawDataset(
+        input_dir=str(tmp_path),
+        cache_dir=str(tmp_path),
+        hedge_delay=0.1,
+    )
+
+    import asyncio
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        mock_dl = MagicMock()
+        mock_dl.adownload_fileobj = AsyncMock(return_value=b"y" * 100_000)
+        ds.cache_manager._downloader = mock_dl
+        ds.cache_manager._downloader_pid = os.getpid()
+        ds.cache_manager._downloader_loop = loop
+
+        data = await ds.cache_manager._fetch_bytes("s3://mock-bucket/file.bin", size=100_000)
+        assert len(data) == 100_000
+
+    asyncio.run(_run())
+    bps, _, bps_cnt, _ = ds.cache_manager._bandwidth_tracker.get_metrics()
+    ds.cache_manager.reset_runtime_state()
+    assert bps_cnt == 1
+    assert bps is not None
+
+
+def test_backoff_is_immediate():
+    """Verify high latency (>1.1 * target) triggers immediate backoff factor reduction."""
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # 5 samples with 200 ms latency (target = 40 ms -> factor = 0.20)
+    for _ in range(5):
+        tracker.record_observation(10 * 1024, 0.200)
+
+    factor = tracker.get_backoff_factor(0.040)
+    assert pytest.approx(factor, abs=1e-3) == 0.20
+
+
+def test_no_recovery_in_deadband():
+    """Verify latency inside deadband (target < L <= 1.1 * target) holds current backoff factor."""
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    # Trigger backoff down to 0.50 (80 ms latency)
+    for _ in range(5):
+        tracker.record_observation(10 * 1024, 0.080)
+    assert pytest.approx(tracker.get_backoff_factor(0.040), abs=1e-3) == 0.50
+
+    # Deadband sample (42 ms: 40 ms < 42 ms <= 44 ms)
+    tracker.record_observation(10 * 1024, 0.042)
+    factor = tracker.get_backoff_factor(0.040)
+    assert pytest.approx(factor, abs=1e-3) == 0.50
+
+
+def test_gradual_recovery():
+    """Verify healthy latency (<= target) triggers gradual recovery towards 1.0."""
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    for _ in range(5):
+        tracker.record_observation(10 * 1024, 0.080)
+    factor_initial = tracker.get_backoff_factor(0.040)
+    assert pytest.approx(factor_initial, abs=1e-3) == 0.50
+
+    # Healthy sample (20 ms <= 40 ms target) -> recovers by alpha (0.1 * (1.0 - 0.5) = +0.05)
+    tracker.record_observation(10 * 1024, 0.020)
+    factor_recovered = tracker.get_backoff_factor(0.040)
+    assert factor_recovered > factor_initial
+    assert pytest.approx(factor_recovered, abs=1e-3) == 0.55
+
+
+def test_congestion_interrupts_recovery():
+    """Verify new congestion immediately interrupts gradual recovery."""
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    for _ in range(5):
+        tracker.record_observation(10 * 1024, 0.080)
+    tracker.get_backoff_factor(0.040)  # 0.50
+
+    # 1 healthy sample -> recovers to 0.55
+    tracker.record_observation(10 * 1024, 0.020)
+    tracker.get_backoff_factor(0.040)
+
+    # Congestion sample (200 ms) -> immediate drop to 0.20
+    tracker.record_observation(10 * 1024, 0.200)
+    factor = tracker.get_backoff_factor(0.040)
+    assert pytest.approx(factor, abs=1e-3) == 0.20
+
+
+def test_recovery_reaches_one():
+    """Verify sustained healthy observations restore backoff factor to 1.0."""
+    import pytest
+
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker(alpha=1.0)
+    for _ in range(5):
+        tracker.record_observation(10 * 1024, 0.200)
+    tracker.get_backoff_factor(0.040)
+
+    # Repeated healthy samples
+    for _ in range(100):
+        tracker.record_observation(10 * 1024, 0.010)
+        tracker.get_backoff_factor(0.040)
+
+    factor = tracker.get_backoff_factor(0.040)
+    assert pytest.approx(factor, abs=1e-2) == 1.0
+
+
+def test_env_invalid_value_falls_back(monkeypatch):
+    """Verify invalid string in environment variable falls back to safe default."""
+    from litdata.raw.dataset import _get_assumed_aggregate_bandwidth_bps
+
+    monkeypatch.setenv("LITDATA_ASSUMED_BANDWIDTH_BPS", "not_a_number")
+    assert _get_assumed_aggregate_bandwidth_bps() > 0
+
+
+def test_env_zero_value_falls_back(monkeypatch):
+    """Verify zero value in float environment variable falls back to safe default."""
+    from litdata.raw.dataset import _get_assumed_request_latency_s
+
+    monkeypatch.setenv("LITDATA_ASSUMED_REQUEST_LATENCY_S", "0.0")
+    assert _get_assumed_request_latency_s() > 0.0
+
+
+def test_env_negative_value_falls_back(monkeypatch):
+    """Verify negative integer in environment variable falls back to default."""
+    from litdata.raw.dataset import _get_single_process_concurrency_cap
+
+    monkeypatch.setenv("LITDATA_SINGLE_PROCESS_CONCURRENCY_CAP", "-10")
+    assert _get_single_process_concurrency_cap() > 0
+
+
+def test_env_floor_cannot_exceed_cap(monkeypatch):
+    """Verify aggregate floor is clamped to cap when floor > cap."""
+    from litdata.raw.dataset import _get_aggregate_concurrency_budget_cap, _get_aggregate_concurrency_budget_floor
+
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_FLOOR", "1000")
+    monkeypatch.setenv("LITDATA_AGGREGATE_CONCURRENCY_BUDGET_CAP", "512")
+    cap = _get_aggregate_concurrency_budget_cap()
+    floor = _get_aggregate_concurrency_budget_floor()
+    assert floor <= cap
+
+
+def test_permit_refresh_respects_reduced_budget_for_new_acquisitions():
+    """Verify _DynamicSemaphore target reduction prevents additional permits beyond reduced target."""
+    import asyncio
+
+    import pytest
+
+    from litdata.raw.dataset import _DynamicSemaphore
+
+    async def _run():
+        sem = _DynamicSemaphore(32)
+        sem.update_target(16)
+        assert sem.target_permits == 16
+
+        # Acquire 16 permits cleanly
+        for _ in range(16):
+            await sem.acquire()
+
+        # Target 16 is reached — next acquire without release must fail non-blocking
+        with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+            await asyncio.wait_for(sem.acquire(), timeout=0.05)
+
+        for _ in range(16):
+            sem.release()
+
+    asyncio.run(_run())
+
+
+def test_record_observation_returns_atomic_sample_counts():
+    """Verify record_observation returns (prev_sample_count, new_sample_count) tuple atomically."""
+    from litdata.raw.dataset import BandwidthTracker
+
+    tracker = BandwidthTracker()
+    assert tracker.record_observation(-1, 0.1) is None
+    assert tracker.record_observation(100, -0.5) is None
+
+    res1 = tracker.record_observation(100_000, 0.05)
+    assert res1 == (0, 1)
+
+    res2 = tracker.record_observation(200_000, 0.04)
+    assert res2 == (1, 2)
+
+    assert tracker.sample_count == 2
+
+
+def test_record_download_observation_uses_configured_sample_and_refresh_thresholds(tmp_path, monkeypatch):
+    """Verify permit cache invalidation uses min_empirical_samples and permit_refresh_interval configs."""
+    monkeypatch.setenv("LITDATA_MIN_EMPIRICAL_SAMPLES", "3")
+    monkeypatch.setenv("LITDATA_PERMIT_REFRESH_INTERVAL", "4")
+
+    (tmp_path / "file1.jpg").write_bytes(b"x")
+    from litdata.raw.dataset import StreamingRawDataset
+
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+
+    cm._cached_permits = 64
+    cm._cached_permits_pid = os.getpid()
+
+    # Sample 1 & 2 (< min_samples 3) -> should not invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits == 64
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits == 64
+
+    # Sample 3 (== min_samples 3) -> should invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits is None
+
+    cm._cached_permits = 64
+    cm._cached_permits_pid = os.getpid()
+
+    # Sample 4 (% refresh 4 == 0) -> should invalidate permits
+    cm._record_download_observation(100_000, 0.01)
+    assert cm._cached_permits is None
+
+
+@pytest.mark.asyncio
+async def test_telemetry_duration_excludes_permit_queue_wait(tmp_path):
+    """Verify semaphore queue wait time is excluded from recorded telemetry duration."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from litdata.raw.dataset import StreamingRawDataset
+
+    (tmp_path / "file.jpg").write_bytes(b"12345")
+    ds = StreamingRawDataset(input_dir=str(tmp_path), max_prefetch=0)
+    cm = ds.cache_manager
+
+    # Force 1 permit max
+    cm.max_concurrent_downloads = 1
+    cm._downloader = AsyncMock()
+    cm._downloader_pid = os.getpid()
+    cm._downloader_loop = asyncio.get_running_loop()
+
+    async def mock_download(file_path):
+        await asyncio.sleep(0.02)  # actual download takes 20ms
+        return b"12345"
+
+    cm.downloader.adownload_fileobj.side_effect = mock_download
+
+    recorded_durations = []
+
+    def mock_record(size, dur):
+        recorded_durations.append(dur)
+
+    cm._record_download_observation = mock_record
+
+    # Task 1 holds permit for 0.1s
+    async def task1():
+        async with cm._permit(True):
+            await asyncio.sleep(0.1)
+
+    # Task 2 waits for permit (>= 0.1s wait) then performs fetch
+    async def task2():
+        await asyncio.sleep(0.01)  # start after task1 holds permit
+        await cm._fetch_bytes(str(tmp_path / "file.jpg"), size=5, gated=True)
+
+    await asyncio.gather(task1(), task2())
+
+    assert len(recorded_durations) == 1
+    # Duration recorded must measure only task2's actual fetch (20ms), excluding the ~100ms permit queue wait
+    assert recorded_durations[0] < 0.08
