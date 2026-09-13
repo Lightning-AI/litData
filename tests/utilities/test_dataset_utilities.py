@@ -131,3 +131,67 @@ def test_read_updated_at_falls_back_on_truncated_local_index(tmp_path, monkeypat
     )
     d = Dir(path=str(local), url="r2://bucket/ds", data_connection_id="cid")
     assert _read_updated_at(d, {"data_connection_id": "cid"}) == "42"
+
+
+def test_subsample_streaming_dataset_uses_index_path_for_local_dir(tmp_path):
+    """Custom index_path must work when input_dir is a plain local directory (issue #800)."""
+    from litdata.utilities.dataset_utilities import subsample_streaming_dataset
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "chunk-0.bin").write_bytes(b"x")
+
+    index_dir = tmp_path / "custom_cache"
+    index_dir.mkdir()
+    index_payload = {
+        "chunks": [
+            {
+                "filename": "chunk-0.bin",
+                "chunk_size": 2,
+                "chunk_bytes": 1,
+                "dim": None,
+            }
+        ],
+        "config": {},
+    }
+    index_file = index_dir / _INDEX_FILENAME
+    index_file.write_text(json.dumps(index_payload))
+
+    files, roi = subsample_streaming_dataset(
+        Dir(path=str(data_dir), url=None),
+        index_path=str(index_file),
+    )
+    assert files == ["chunk-0.bin"]
+    assert roi == [(0, 2)]
+    # Index was copied into the local input_dir so subsequent loads find it there.
+    assert (data_dir / _INDEX_FILENAME).is_file()
+
+
+def test_subsample_streaming_dataset_uses_index_path_dir_for_local_dir(tmp_path):
+    """index_path may be a directory containing index.json (issue #800)."""
+    from litdata.utilities.dataset_utilities import subsample_streaming_dataset
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    index_dir = tmp_path / "custom_cache"
+    index_dir.mkdir()
+    index_payload = {
+        "chunks": [
+            {
+                "filename": "chunk-0.bin",
+                "chunk_size": 3,
+                "chunk_bytes": 1,
+                "dim": None,
+            }
+        ],
+        "config": {},
+    }
+    (index_dir / _INDEX_FILENAME).write_text(json.dumps(index_payload))
+
+    files, roi = subsample_streaming_dataset(
+        Dir(path=str(data_dir), url=None),
+        index_path=str(index_dir),
+    )
+    assert files == ["chunk-0.bin"]
+    assert roi == [(0, 3)]
