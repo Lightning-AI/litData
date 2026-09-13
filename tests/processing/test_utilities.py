@@ -1,6 +1,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from litdata.processing import utilities as utilities_module
 from litdata.processing.utilities import (
     extract_rank_and_index_from_filename,
@@ -98,25 +100,22 @@ def test_read_index_file_content(tmpdir, monkeypatch):
 
 
 def test_remove_uuid_from_filename():
-    filepaths = [
-        "checkpoint-0-9fe2c4e93f654fdbb24c02b15259716c.json",
-        "checkpoint-1-9fe2c4e93f654fdbb24c02b15259716c.json",
-        "checkpoint-2-9fe2c4e93f654fdbb24c02b15259716c.json",
-        "checkpoint-101-9fe2c4e93f654fdbb24c02b15259716c.json",
-        "checkpoint-12-9fe2c4e93f654fdbb24c02b15259716c.json",
-        "checkpoint-267-9fe2c4e93f654fdbb24c02b15259716c.json",
-    ]
+    checkpoint_dir = "output/data/train/.checkpoints"
+    uuid = "9fe2c4e93f654fdbb24c02b15259716c"
 
-    expected = [
-        "checkpoint-0.json",
-        "checkpoint-1.json",
-        "checkpoint-2.json",
-        "checkpoint-101.json",
-        "checkpoint-12.json",
-        "checkpoint-267.json",
-    ]
+    for rank in (0, 1, 2, 12, 101, 267):
+        filepath = f"{checkpoint_dir}/checkpoint-{rank}-{uuid}.json"
+        assert remove_uuid_from_filename(filepath) == f"{checkpoint_dir}/checkpoint-{rank}.json"
 
-    for idx, filepath in enumerate(filepaths):
-        filepath = ".checkpoints/" + filepath
-        result = remove_uuid_from_filename(filepath)
-        assert result == ".checkpoints/" + expected[idx]
+
+@pytest.mark.parametrize(
+    "filepath",
+    [
+        "output/data/train/.checkpoints/checkpoint-0.json",
+        "input/data/val/.checkpoints/config.json",
+        "output/data/train/.checkpoints/checkpoint-0-not-a-uuid.json",
+        "output/data/train/checkpoint-0-9fe2c4e93f654fdbb24c02b15259716c.json",
+    ],
+)
+def test_remove_uuid_from_filename_leaves_other_paths_unchanged(filepath):
+    assert remove_uuid_from_filename(filepath) == filepath

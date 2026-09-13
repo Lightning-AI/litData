@@ -14,6 +14,7 @@
 import io
 import json
 import os
+import re
 import tempfile
 import urllib
 from collections.abc import Callable
@@ -202,8 +203,7 @@ def remove_uuid_from_filename(filepath: str) -> str:
     if not filepath.__contains__(".checkpoints"):
         return filepath
 
-    # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
-    return filepath[:-38] + ".json"
+    return re.sub(r"(checkpoint-\d+)-[0-9a-fA-F]{32}\.json$", r"\1.json", filepath)
 
 
 def construct_storage_options(storage_options: dict[str, Any], input_dir: Dir) -> dict[str, Any]:
