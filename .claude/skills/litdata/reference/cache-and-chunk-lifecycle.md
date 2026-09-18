@@ -8,7 +8,9 @@ How remote chunks land on disk, how much space they use, and how workers share/d
 remote URL / local path  →  download into cache_dir  →  deserialize sample  →  (optional) delete chunk when done
 ```
 
-**POSIX-fast exception:** a local `input_dir` (Vast, NFS, disk — not `s3://`) **mmaps the source chunks**. Nothing is copied into `cache_dir` and sources are never deleted. Peak disk for those datasets is the dataset itself, not `num_workers × max_pre_download × chunk`. `WILLNEED` / worker count still scale with RAM (`MemAvailable`; unused hugepages look like missing RAM).
+**POSIX-fast exception:** a local `input_dir` (Vast, NFS, disk — not `s3://`) **mmaps the source chunks**. Nothing is copied into `cache_dir` and sources are never deleted. Peak disk for those datasets is the dataset itself, not `num_workers × max_pre_download × chunk`. `WILLNEED` / worker count still scale with RAM (the lower of host `MemAvailable` and finite cgroup headroom; unused hugepages look like missing RAM).
+
+**Remote RAM:** downloaded `.bin` files are `posix_fadvise(WILLNEED)`'d into the page cache. Peak RAM ≈ `num_workers × max_pre_download × mean_chunk_size` plus decoded batches (`num_workers × prefetch_factor × batch`). LitData keeps used RAM under `LITDATA_RAM_CEILING` (default **0.95** of the lower host/cgroup memory limit): reserve the SSH headroom for PyTorch's queued decoded batches, cap prefetch, and when it enters the 75–95% control band, skip `WILLNEED`, evict consumed chunks, and stop refilling completed worker tasks. This preserves the user-selected `num_workers` while queued batches drain; when empty, it drip-feeds one batch so the consumer can release an old batch without reopening the full prefetch window. At the ceiling it holds until used RAM drops to the middle of that band; after 120s without recovery it raises rather than allocating further. 1× H100 Lightning Cloud boxes have less host RAM than 2× — this headroom keeps sshd alive.
 
 `StreamingDataset` builds a `Cache` (`streaming/cache.py`) that owns a `BinaryReader` (and, on the write path, a `BinaryWriter`). Users almost never construct `Cache` directly. Class APIs, `index.json` / chunk binary layout, FsProvider, sampler → [storage-format.md](storage-format.md).
 
@@ -64,6 +66,7 @@ Full env catalog → [env-vars.md](env-vars.md). Fair benches → [benchmarking.
 ### Prefetch / eviction invariants
 
 - When delete-when-processed is active, budget capping may shrink `max_pre_download` so `workers × max_pre × chunk` fits near `max_cache_size`.
+- **RAM cap (remote too):** `PrepareChunksThread` also shrinks `max_pre_download` so `workers × max_pre × chunk` fits `LITDATA_POSIX_RAM_FRACTION` of `MemAvailable`, and skips `WILLNEED` when it would not. Re-checked about once a second.
 - **Never leave live `max_pre_download == 1` via that cap** — download and delete can deadlock (reader waits forever for the next chunk). Floor capped values at **2**.
 - Prepare-thread teardown must not block on stuck `asyncio` default-executor workers (`shutdown(wait=False)`).
 

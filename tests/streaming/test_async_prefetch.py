@@ -115,14 +115,17 @@ def test_apply_async_pre_download_floor(monkeypatch):
 def test_adaptive_pre_download_covers_many_remote_chunks(monkeypatch):
     monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
     monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    monkeypatch.delenv("LITDATA_POSIX_RAM_FRACTION", raising=False)
     chunks_64 = [{"chunk_bytes": 64 * 1024 * 1024} for _ in range(36)]
-    # 3GB / 64MB = 48, capped at n_chunks then 32.
-    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64) == 32
+    # Plenty of RAM: 3GB / 64MB = 48, capped at n_chunks then 32.
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64, ram_bytes=64 * 1024**3) == 32
     chunks_256 = [{"chunk_bytes": 256 * 1024 * 1024} for _ in range(15)]
-    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_256) == 12
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_256, ram_bytes=64 * 1024**3) == 12
     tiny = [{"chunk_bytes": 16} for _ in range(4)]
-    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=tiny) == 4
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=tiny, ram_bytes=64 * 1024**3) == 4
     assert adaptive_pre_download(8, remote_dir=None, chunks=chunks_64) == 8
+    # 0.5 × 1GiB / (8 readers × 64MiB) = 1 → floor 2 so delete-when-processed cannot deadlock.
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64, ram_bytes=1 * 1024**3, num_readers=8) == 2
 
 
 def test_downloader_supports_adownload_detects_override():
@@ -209,6 +212,27 @@ def test_prepare_chunks_thread_applies_async_floor(tmpdir, monkeypatch):
     assert cfg is not None
     thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=2)
     assert thread._max_pre_download == 4
+
+
+def test_prepare_chunks_thread_caps_prefetch_when_ram_low(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    monkeypatch.delenv("LITDATA_POSIX_WILLNEED", raising=False)
+
+    def _keep2(**_kwargs):
+        return 2
+
+    monkeypatch.setattr("litdata.streaming.async_prefetch.ram_prefetch_keep", _keep2)
+    monkeypatch.setattr("litdata.streaming.reader.ram_prefetch_keep", _keep2)
+    monkeypatch.setattr("litdata.streaming.reader.posix_prefetch_fits_ram", lambda **_kwargs: False)
+    cache_dir = _seed_local_chunks(tmpdir, n_chunks=8, chunk_size=4)
+    loader = PyTreeLoader()
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, loader)
+    assert cfg is not None
+    cfg._remote_dir = "r2://bucket/data"
+    thread = PrepareChunksThread(cfg, loader, _DistributedEnv(1, 0, 1), max_pre_download=8)
+    assert thread._max_pre_download == 2
+    assert loader._posix_willneed is False
 
 
 def test_prepare_chunks_thread_batches_when_async_enabled(tmpdir, monkeypatch):

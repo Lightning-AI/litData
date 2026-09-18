@@ -1,7 +1,7 @@
 import os
 import pickle
 import struct
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -67,6 +67,20 @@ def test_batch_rows_for_format(monkeypatch):
     monkeypatch.delenv("LITDATA_BATCH_DECODE")
     monkeypatch.setenv("LITDATA_BATCH_ROWS", "256")
     assert _batch_rows_for_format(["json"]) == 256
+
+
+def test_pytree_pre_load_chunk_skips_willneed_when_disabled(tmp_path):
+    loader = PyTreeLoader()
+    chunk = tmp_path / "chunk.bin"
+    chunk.write_bytes(b"x" * 32)
+    loader.set_willneed(False)
+    with patch("litdata.streaming.item_loader.advise_willneed") as mocked:
+        loader.pre_load_chunk(0, str(chunk))
+    mocked.assert_not_called()
+    loader.set_willneed(True)
+    with patch("litdata.streaming.item_loader.advise_willneed") as mocked:
+        loader.pre_load_chunk(0, str(chunk))
+    mocked.assert_called_once()
 
 
 def test_decode_window_is_aligned():
