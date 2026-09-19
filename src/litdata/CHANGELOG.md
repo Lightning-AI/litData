@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - S3/R2 range reads close SDK response bodies on success and failure and reject truncated responses.
+### Fixed
+
+- R2 clients default to the `auto` signing region independently of ambient AWS configuration, and custom client/session options no longer reuse an incompatible cached SDK client. Temporary credentials remain shared across clients.
 
 ## [0.2.75] - 2026-09-01
 
