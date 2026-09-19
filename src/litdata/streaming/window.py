@@ -1,4 +1,11 @@
-"""Selected frame reads from the existing, uncompressed PyTree chunk format."""
+"""Read selected axis-0 frames without fetching complete records on S3/R2.
+
+TemporalArrayLoader records use index metadata to plan one range per selected
+group; see temporal.py for the byte layout and a complete two-track example.
+Ordinary PyTree array records are also supported, but their per-field headers
+must first be read and cached, and each selected field requires its own range.
+Only metadata is retained here: repeated remote windows fetch their payload again.
+"""
 
 import asyncio
 import math
@@ -205,6 +212,15 @@ class _WindowReader:
         if start + frames > count:
             raise IndexError("Window is outside the record.")
         groups = loader.schema["groups"]
+        # Skip the record's uint32 frame count. Each group contains ALL count
+        # frames, so locating the next group advances by count, not window length.
+        # For a group with row size R, read [base + start*R, base + (start+frames)*R).
+        # In temporal.py's example, track 0 / start=3 / frames=4 yields:
+        #   features:    base=20,  R=8 -> offset=44,  length=32 (S3 bytes 44..75)
+        #   score/valid: base=100, R=8 -> offset=124, length=32 (S3 bytes 124..155)
+        # Selecting features + valid therefore fetches 64 bytes in two requests,
+        # including score/padding in the selected group, and returns only those
+        # two fields. No other frames, tracks, or payload headers are fetched.
         cursor = offset + 4
         plans = []
         for group, dtype in enumerate(loader._group_dtypes):
@@ -217,6 +233,8 @@ class _WindowReader:
             async with permits:
                 return group, await self._read(index, offset, length)
 
+        # Parallelize selected groups within this window. The caller controls the
+        # number of windows in flight and sampling/batching across ranks/workers.
         tasks = [asyncio.create_task(fetch(*plan)) for plan in plans]
         try:
             buffers = dict(await asyncio.gather(*tasks))

@@ -878,6 +878,14 @@ class StreamingDataset(IterableDataset):
         This explicit random-access operation does not advance the iteration/checkpoint
         position or assign requests to ranks/workers. Use ``aread_window`` for async callers.
         Dataset objects should be initialized independently in each process, as usual.
+
+        For example, ``read_window(0, start=3, frames=4, fields=["features", "valid"])``
+        returns frames 3, 4, 5 and 6 from record 0. A field shaped ``(T, 2)`` becomes
+        ``(4, 2)``. Windows never cross records, pad or wrap; the application's sampler
+        chooses valid starts using ``frame_counts`` for TemporalArrayLoader datasets.
+        That loader stores whole tracks in field groups: selecting any field fetches
+        its group's window, but returns only requested fields. See temporal.py and
+        window.py for the binary layout and the corresponding byte-range calculation.
         """
         from litdata.raw.dataset import _get_loop_runner
 

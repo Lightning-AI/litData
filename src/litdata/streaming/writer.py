@@ -554,6 +554,10 @@ class BinaryWriter:
         }
         if isinstance(self._item_loader, TemporalArrayLoader):
             # Small per-record metadata avoids GETs for chunk/array headers during random windows.
+            # These are absolute chunk byte offsets, excluding the final end sentinel.
+            # Frame counts plus the shared temporal_schema determine every group's
+            # position and row size; see temporal.py for an exact binary example.
+            # Payload headers remain in the chunk for normal full-record decoding.
             chunk_info["temporal_offsets"] = offsets[:-1].tolist()
             chunk_info["temporal_frames"] = [struct.unpack_from("<I", item.data)[0] for item in items]
 

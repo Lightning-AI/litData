@@ -1,4 +1,50 @@
-"""Temporal array item layout for optimize and StreamingDataset."""
+"""Temporal array item layout for optimize and StreamingDataset.
+
+Store each complete track once; choose training windows later with read_window().
+An input record is a flat dictionary of arrays with time on axis 0. For example,
+features: float32[T, 2], score: float32[T], valid: bool[T]. Only T may vary between
+records. The application chooses tracks/windows; LitData owns packing and I/O.
+
+BinaryWriter supplies the usual chunk envelope (see writer.py):
+    [record count: uint32][N + 1 absolute offsets: uint32][record 0][record 1]...
+Each temporal record is:
+    [frame count: little-endian uint32][group 0 bytes][group 1 bytes]...
+Records stay whole within a chunk; chunk_bytes is a packing target, not a window
+length. The existing chunk envelope uses native-endian uint32 (little-endian on
+our usual platforms); array byte order is preserved in the schema's dtype strings.
+
+Each group is a contiguous sequence of fixed-size frame rows, constructed with
+np.dtype(..., align=True). With groups [["features"], ["score", "valid"]]:
+    group 0: [x0, y0][x1, y1]...                       -> 8 bytes/frame
+    group 1: [score0, valid0, padding][score1, ...]... -> 8 bytes/frame
+The second row has a 4-byte float, a 1-byte bool and 3 zero padding bytes. This
+alignment (including trailing padding) is part of the layout: range calculations
+must use the structured dtype's itemsize, not the sum of useful field bytes.
+
+Concrete example: one chunk containing tracks of 10 and 6 frames (280 bytes):
+    bytes   0..3:   record count = 2
+    bytes   4..15:  boundaries = [16, 180, 280]
+    bytes  16..19:  track 0 frame count = 10
+    bytes  20..99:  track 0 features
+    bytes 100..179: track 0 score + valid
+    bytes 180..183: track 1 frame count = 6
+    bytes 184..231: track 1 features
+    bytes 232..279: track 1 score + valid
+All byte ranges in this example are inclusive. A record occupies
+4 + T * sum(group.itemsize) bytes; no per-field headers are stored in its payload.
+
+index.json stores temporal_schema once: field dtypes, trailing shapes, original
+array/tensor types, field order and groups. Per chunk it also stores record starts
+(temporal_offsets = [16, 180]) and lengths (temporal_frames = [10, 6]). Duplicating
+these small headers in the index lets window.py compute ranges without fetching
+chunk/record headers first. The same schema reconstructs group dtypes on read.
+
+Grouping trades fewer requests for extra bytes: selecting valid also fetches
+score and padding, but only valid is returned. Keep large independently selected
+fields separate; group small fields commonly requested together. Unlisted fields
+each form a separate group. Compression/encryption are unsupported because this
+layout relies on directly addressable fixed-size rows.
+"""
 
 import math
 import struct
@@ -103,6 +149,8 @@ class TemporalArrayLoader(PyTreeLoader):
             raise ValueError("Temporal record schema differs: field names, dtypes and trailing shapes must match.")
         data = [struct.pack("<I", frames)]
         for group, dtype in zip(self.schema["groups"], self._group_dtypes):
+            # Interleave only within this group, frame by frame. Zero initialization
+            # makes alignment padding deterministic instead of storing uninitialized bytes.
             packed = np.zeros(frames, dtype=dtype)
             for name in group:
                 packed[name] = arrays[name]
@@ -118,6 +166,8 @@ class TemporalArrayLoader(PyTreeLoader):
         }
         result = {}
         for name in fields:
+            # Structured views are strided and may reference immutable network bytes.
+            # Copy only requested fields into independent, writable output arrays.
             array = views[self._group_by_name[name]][name].copy()
             result[name] = torch.from_numpy(array) if self.schema["fields"][name]["tensor"] else array
         return result
