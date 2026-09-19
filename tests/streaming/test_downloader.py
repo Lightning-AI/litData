@@ -866,3 +866,117 @@ def test_obstore_credential_provider_rejects_incomplete_credentials():
 
     with pytest.raises(ValueError, match="incomplete credentials"):
         _obstore_credential_provider(s3_client)()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_range_response_body_is_closed_even_on_failure(cls, scheme, tmp_path):
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    body = MagicMock()
+    downloader._client = MagicMock()
+    downloader._client.client.get_object.return_value = {"Body": body}
+    body.read.side_effect = OSError("interrupted body")
+    with pytest.raises(OSError, match="interrupted body"):
+        downloader.download_bytes(f"{scheme}://bucket/data", 2, 3, str(tmp_path / "scratch"))
+    body.close.assert_called_once()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_async_native_range_validation_and_cancellation(cls, scheme, tmp_path, monkeypatch, obstore_mock):
+    import asyncio
+
+    import litdata.streaming.downloader as mod
+
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    store = MagicMock()
+    monkeypatch.setattr(downloader, "_get_store", MagicMock(return_value=store))
+    monkeypatch.setattr(mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(mod, "obstore_usable", lambda: True)
+    obstore_mock.get_range_async = mock.AsyncMock(return_value=b"abc")
+    path = f"{scheme}://bucket/data"
+    scratch = str(tmp_path / "scratch")
+
+    async def run():
+        assert await downloader.adownload_bytes(path, 2, 3, scratch) == b"abc"
+        obstore_mock.get_range_async.assert_awaited_once_with(store, "data", start=2, length=3)
+        assert await downloader.adownload_bytes(path, 0, 0, scratch) == b""
+        assert obstore_mock.get_range_async.await_count == 1
+        for offset, length in [(-1, 3), (0, -1)]:
+            with pytest.raises(ValueError, match="non-negative"):
+                await downloader.adownload_bytes(path, offset, length, scratch)
+        with pytest.raises(ValueError, match="scheme"):
+            await downloader.adownload_bytes("gs://bucket/data", 0, 3, scratch)
+        obstore_mock.get_range_async.return_value = b"ab"
+        with pytest.raises(OSError, match="Short range read"):
+            await downloader.adownload_bytes(path, 2, 3, scratch)
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def stalled(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        obstore_mock.get_range_async.side_effect = stalled
+        task = asyncio.create_task(downloader.adownload_bytes(path, 2, 3, scratch))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stopped.is_set()
+
+    asyncio.run(run())
+    assert not (tmp_path / "scratch").exists()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+@pytest.mark.parametrize("native_available", [False, True])
+def test_async_range_falls_back_without_native_or_after_fork(cls, scheme, native_available, monkeypatch, tmp_path):
+    import asyncio
+
+    import litdata.streaming.downloader as mod
+
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    monkeypatch.setattr(mod, "_OBSTORE_AVAILABLE", native_available)
+    monkeypatch.setattr(mod, "obstore_usable", lambda: False)
+    downloader._get_store = MagicMock(side_effect=AssertionError("must not initialize native runtime"))
+    downloader._client = MagicMock()
+    body = io.BytesIO(b"abc")
+    sdk = downloader._client.client
+    sdk.get_object.return_value = {"Body": body}
+    assert asyncio.run(downloader.adownload_bytes(f"{scheme}://bucket/data", 2, 3, "unused")) == b"abc"
+    sdk.get_object.assert_called_once_with(Bucket="bucket", Key="data", Range="bytes=2-4")
+    assert body.closed
+
+
+def test_async_range_base_fallback_validates_and_caches(tmp_path):
+    import asyncio
+
+    class CopyDownloader(Downloader):
+        def download_file(self, remote_path, local_path):
+            with open(local_path, "wb") as handle:
+                handle.write(b"012345")
+
+    downloader = CopyDownloader("custom://bucket", str(tmp_path), [])
+    target = str(tmp_path / "cached")
+    assert asyncio.run(downloader.adownload_bytes("custom://bucket/data", 2, 3, target)) == b"234"
+    with pytest.raises(OSError, match="Short range read"):
+        asyncio.run(downloader.adownload_bytes("custom://bucket/data", 5, 2, target))
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_sync_range_validates_and_closes_short_responses(cls, scheme, tmp_path):
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    downloader._client = MagicMock()
+    sdk = downloader._client.client
+    path = f"{scheme}://bucket/data"
+    assert downloader.download_bytes(path, 0, 0, "unused") == b""
+    with pytest.raises(ValueError, match="non-negative"):
+        downloader.download_bytes(path, -1, 2, "unused")
+    sdk.get_object.assert_not_called()
+    body = io.BytesIO(b"ab")
+    sdk.get_object.return_value = {"Body": body}
+    with pytest.raises(OSError, match="Short range read"):
+        downloader.download_bytes(path, 0, 3, "unused")
+    assert body.closed

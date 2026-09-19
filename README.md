@@ -445,6 +445,8 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 
 Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
+For custom indexed records, see the [array-window reference](examples/temporal_arrays): arbitrary numeric/bool fields and runtime frame slices using async range reads. This is an adaptable example, not a public temporal dataset API.
+
 ----
 
 # Hugging Face Datasets 🤗 <a id="huggingface-datasets"></a><a id="stream-hf"></a>
