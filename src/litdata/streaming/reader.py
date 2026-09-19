@@ -839,6 +839,7 @@ class BinaryReader:
         self._session_options = session_options
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
+        self._window_reader: Any = None
         self._posix_fast = False
         self._posix_keep = 4
         self._posix_willneed = True

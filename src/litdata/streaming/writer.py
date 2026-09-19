@@ -43,6 +43,7 @@ from litdata.streaming.item_loader import (
     append_arrow_row_footer,
 )
 from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
+from litdata.streaming.temporal import TemporalArrayLoader
 from litdata.types import (
     _MEDIA_KINDS,
     JsonType,
@@ -210,6 +211,8 @@ class BinaryWriter:
             raise ValueError("compression_batch_size must be a positive integer.")
         self._encryption = encryption
         self._item_loader = item_loader or PyTreeLoader()
+        if isinstance(self._item_loader, TemporalArrayLoader) and (compression or encryption or serializers):
+            raise ValueError("TemporalArrayLoader requires no compression, encryption or custom serializers.")
         self.msg_queue = msg_queue
 
         self._data_format: list[str] | None = None
@@ -311,10 +314,19 @@ class BinaryWriter:
             "types": schema_to_json(self._types),
             "encryption": self._encryption.state_dict() if self._encryption else None,
             "item_loader": self._item_loader.__class__.__name__,
+            **(
+                {"temporal_schema": self._item_loader.schema}
+                if isinstance(self._item_loader, TemporalArrayLoader)
+                else {}
+            ),
         }
 
     def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
+        if isinstance(self._item_loader, TemporalArrayLoader):
+            self._data_format = ["bytes"]
+            self._data_spec = tree_flatten(b"")[1]
+            return self._item_loader.serialize_record(items), None
         # Flatten the items provided by the users. After the first sample the treespec is cached,
         # so later writes only walk leaves (same order as ``tree_flatten``).
         sizes: list[int] = []
@@ -535,11 +547,15 @@ class BinaryWriter:
         if items[0].dim:
             dim = sum([item.dim if item.dim is not None else 0 for item in items])
 
-        chunk_info = {
+        chunk_info: dict[str, Any] = {
             "chunk_bytes": current_chunk_bytes,
             "chunk_size": num_items.item(),
             "dim": dim,
         }
+        if isinstance(self._item_loader, TemporalArrayLoader):
+            # Small per-record metadata avoids GETs for chunk/array headers during random windows.
+            chunk_info["temporal_offsets"] = offsets[:-1].tolist()
+            chunk_info["temporal_frames"] = [struct.unpack_from("<I", item.data)[0] for item in items]
 
         return data, nested_arrow_only, chunk_info
 
@@ -966,7 +982,7 @@ def index_parquet_dataset(
                     f"Found {config}; {chunk_dtypes}."
                 )
             config["data_format"] = chunk_dtypes
-            chunk_info = {
+            chunk_info: dict[str, Any] = {
                 "chunk_bytes": file_metadata["file_size"],
                 "chunk_size": file_metadata["num_rows"],
                 "filename": file_metadata["file_name"],

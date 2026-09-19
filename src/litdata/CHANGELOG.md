@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- `Downloader.adownload_bytes` supports validated async range reads, with native S3/R2 requests and direct local slices. Added an indexed-array window reference example with runtime field/window selection.
+- `Downloader.adownload_bytes` supports validated async range reads, with native S3/R2 requests and direct local slices. Added `StreamingDataset.read_window` / `aread_window` and `TemporalArrayLoader` for built-in field/window selection, grouped array records, and index-only frame counts through the normal optimize workflow.
 
 ### Fixed
 

@@ -566,6 +566,7 @@ def _fake_boto_s3_client(access_key="AKIATEST", secret_key="", token="", endpoin
     client._get_credentials.return_value = creds
     client.meta.endpoint_url = endpoint
     client.meta.region_name = region
+    client.meta.config.s3 = {}
     return client
 
 
@@ -980,3 +981,21 @@ def test_sync_range_validates_and_closes_short_responses(cls, scheme, tmp_path):
     with pytest.raises(OSError, match="Short range read"):
         downloader.download_bytes(path, 0, 3, "unused")
     assert body.closed
+
+
+def test_native_ranges_preserve_s3_acceleration(monkeypatch):
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured = {}
+
+    def fake_store(bucket, **kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_store)
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(endpoint="https://s3.us-west-2.amazonaws.com", region="us-west-2")
+    wrapper.client.meta.config.s3 = {"use_accelerate_endpoint": True}
+    _build_obstore_s3_store("bucket", wrapper)
+    assert captured["config"]["endpoint"] == "https://bucket.s3-accelerate.amazonaws.com"
+    assert captured["config"]["virtual_hosted_style_request"] is True

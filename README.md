@@ -445,7 +445,10 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 
 Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
-For custom indexed records, see the [array-window reference](examples/temporal_arrays): arbitrary numeric/bool fields and runtime frame slices using async range reads. This is an adaptable example, not a public temporal dataset API.
+For temporal arrays, use `optimize(..., item_loader=TemporalArrayLoader(field_groups=[["clock", "valid"]]))`
+and `StreamingDataset(..., item_loader=TemporalArrayLoader()).read_window(index, start=7, frames=64)`.
+LitData owns field grouping, window offsets, range reads and decoding; the application keeps its sampling policy.
+See the [built-in window example](examples/temporal_arrays) for a small training adapter and request-count tradeoffs.
 
 ----
 

@@ -304,6 +304,12 @@ def _build_obstore_s3_store(bucket: str, s3_client: S3Client) -> Any:
         # Path-style addressing is required for R2 and most S3-compatible endpoints.
         if "amazonaws.com" not in endpoint_url:
             config["virtual_hosted_style_request"] = False
+    s3_options = boto_client.meta.config.s3 or {}
+    if s3_options.get("use_accelerate_endpoint"):
+        config["endpoint"] = f"https://{bucket}.s3-accelerate.amazonaws.com"
+        config["virtual_hosted_style_request"] = True
+    elif s3_options.get("addressing_style") == "virtual":
+        config["virtual_hosted_style_request"] = True
 
     return S3Store(
         bucket,
