@@ -353,6 +353,7 @@ def test_r2_client_create_client_success(monkeypatch):
     boto3_session().client.assert_called_once_with(
         "s3",
         config=client._r2_botocore_config(),
+        region_name="auto",
         aws_access_key_id="test-access-key",
         aws_secret_access_key="test-secret-key",
         aws_session_token="test-session-token",
@@ -1243,3 +1244,79 @@ def test_refresh_gives_up_once_the_reported_expiry_passes(monkeypatch):
 
     with pytest.raises(RuntimeError, match="they have expired"):
         _ = s3.client
+
+
+@pytest.mark.parametrize(
+    ("storage_options", "session_options", "expected"),
+    [
+        ({}, {}, "auto"),
+        ({"region_name": None}, {}, "auto"),
+        ({"region_name": "enam"}, {}, "enam"),
+        ({}, {"region_name": "wnam"}, "wnam"),
+    ],
+)
+def test_r2_region_is_independent_of_ambient_aws_region(monkeypatch, storage_options, session_options, expected):
+    """An AWS-configured process can open R2 without inheriting an invalid signing region."""
+    _mock_login_env(monkeypatch)
+    _successful_login_session(monkeypatch)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    r2 = client.R2Client(
+        storage_options={"data_connection_id": "conn-region", **storage_options}, session_options=session_options
+    )
+    sdk = r2.client
+    try:
+        assert sdk.meta.region_name == expected
+    finally:
+        sdk.close()
+
+
+def test_r2_preserves_explicit_config_region(monkeypatch):
+    from botocore.config import Config
+
+    _mock_login_env(monkeypatch)
+    _successful_login_session(monkeypatch)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    r2 = client.R2Client(storage_options={"data_connection_id": "conn-region", "config": Config(region_name="enam")})
+    sdk = r2.client
+    try:
+        assert sdk.meta.region_name == "enam"
+    finally:
+        sdk.close()
+
+
+@pytest.mark.parametrize("custom_first", [False, True])
+@pytest.mark.parametrize("option_kind", ["region", "config", "session"])
+def test_r2_custom_clients_do_not_reuse_or_replace_default_client(monkeypatch, custom_first, option_kind):
+    """Credentials may be shared, but explicit client/session settings must not be discarded."""
+    from botocore.config import Config
+
+    _mock_login_env(monkeypatch)
+    requests_mock = _successful_login_session(monkeypatch)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    options = {"data_connection_id": "conn-options"}
+    custom_options = dict(options)
+    session_options = {}
+    if option_kind == "region":
+        custom_options["region_name"] = "enam"
+    elif option_kind == "config":
+        custom_options["config"] = Config(max_pool_connections=37, retries={"mode": "standard", "max_attempts": 2})
+    else:
+        session_options["region_name"] = "wnam"
+    default = client.R2Client(storage_options=options)
+    custom = client.R2Client(storage_options=custom_options, session_options=session_options)
+    ordered = [custom, default] if custom_first else [default, custom]
+    opened = [r2.client for r2 in ordered]
+    try:
+        assert custom.client is not default.client
+        assert client.R2Client(storage_options=options).client is default.client
+        assert default.client.meta.region_name == "auto"
+        if option_kind == "config":
+            assert custom.client.meta.config.max_pool_connections == 37
+            assert custom.client.meta.config.retries["total_max_attempts"] == 3
+        else:
+            assert custom.client.meta.region_name == ("enam" if option_kind == "region" else "wnam")
+        assert requests_mock.post.call_count == 1
+        assert options == {"data_connection_id": "conn-options"}
+    finally:
+        for sdk in opened:
+            sdk.close()
