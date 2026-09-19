@@ -217,6 +217,7 @@ class BinaryWriter:
 
         self._data_format: list[str] | None = None
         self._data_spec: PyTree | None = None
+        self._checkpoint_config: dict[str, Any] | None = None
         self._types: JsonType | None = None
         self._pytree_keys: list[str] | None = None
 
@@ -294,6 +295,11 @@ class BinaryWriter:
 
     def get_config(self) -> dict[str, Any]:
         """Returns the config of the writer."""
+        # A resumed worker can have saved chunks but no remaining inputs. It never
+        # calls serialize(), so retain the saved schema and compression metadata
+        # instead of publishing an uninferred config for those existing chunks.
+        if self._data_format is None and self._checkpoint_config is not None:
+            return copy.deepcopy(self._checkpoint_config)
         return {
             "compression": self._compression
             if (self._file_compression_used or self._framed_compression_used or not self._chunks_info)

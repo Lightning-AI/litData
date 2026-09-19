@@ -912,6 +912,7 @@ class BaseWorker:
         item_paths: list[list[str] | None] | None = None,
         items_lookup_path: str | None = None,
         shared_write_queue: "Queue | None" = None,
+        checkpoint_config: dict[str, Any] | None = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
         self.worker_index = worker_index
@@ -967,6 +968,7 @@ class BaseWorker:
         self.checkpoint_chunks_info: list[dict[str, Any]] | None = checkpoint_chunks_info
         self.checkpoint_next_index: int | None = checkpoint_next_index
         self.checkpoint_next_chunk_index: int | None = checkpoint_next_chunk_index
+        self.checkpoint_config = checkpoint_config
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
         # Explicit (writer_sample_index, key) pairs — index is the same value passed to Cache._add_item.
@@ -1152,6 +1154,7 @@ class BaseWorker:
             assert isinstance(self.checkpoint_chunks_info, list)
 
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
+            self.cache._writer._checkpoint_config = self.checkpoint_config
             self.cache._writer._chunk_index = _writer_chunk_index_from_checkpoint(
                 self.writer_starting_chunk_index,
                 self.checkpoint_chunks_info,
@@ -1887,6 +1890,7 @@ class DataProcessor:
         self.checkpoint_chunks_info: list[list[dict[str, Any]]] | None = None
         self.checkpoint_next_index: list[int] | None = None
         self.checkpoint_next_chunk_index: list[int | None] | None = None
+        self.checkpoint_configs: list[dict[str, Any] | None] | None = None
         self.item_loader = item_loader
         self.storage_options = construct_storage_options(storage_options, self.output_dir)
         self.keep_data_ordered = resolve_keep_data_ordered(
@@ -2439,6 +2443,7 @@ class DataProcessor:
                 checkpoint_next_chunk_index=(
                     self.checkpoint_next_chunk_index[worker_idx] if self.checkpoint_next_chunk_index else None
                 ),
+                checkpoint_config=self.checkpoint_configs[worker_idx] if self.checkpoint_configs else None,
                 shared_upload_queue=self.shared_upload_queue,
                 shared_remove_queue=self.shared_remove_queue,
                 item_paths=None if items_lookup_path else self.node_paths,
@@ -2556,6 +2561,7 @@ class DataProcessor:
         self.checkpoint_chunks_info = [default_chunk_info for _ in range(self.num_workers)]
         self.checkpoint_next_index = [0 for _ in range(self.num_workers)]
         self.checkpoint_next_chunk_index = [None for _ in range(self.num_workers)]
+        self.checkpoint_configs = [None for _ in range(self.num_workers)]
 
         if self.output_dir.url is None:
             assert self.output_dir.path
@@ -2588,6 +2594,7 @@ class DataProcessor:
                 with open(os.path.join(self.output_dir.path, ".checkpoints", checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
+                self.checkpoint_configs[i] = checkpoint.get("config")
                 self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
                     _resume_fields_from_checkpoint(checkpoint)
                 )
@@ -2634,6 +2641,7 @@ class DataProcessor:
                 with open(os.path.join(saved_file_dir, checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
+                self.checkpoint_configs[i] = checkpoint.get("config")
                 self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
                     _resume_fields_from_checkpoint(checkpoint)
                 )
