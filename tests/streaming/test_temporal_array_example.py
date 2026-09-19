@@ -298,6 +298,28 @@ def test_temporal_optimize_and_three_range_customer_pattern(tmp_path, monkeypatc
             assert_values(split.read_window(i, 1, 2), make_record(count), 1, 2, list(actual))
 
 
+@pytest.mark.parametrize(
+    ("groups", "full_reads", "valid_row_bytes"),
+    [([["embedding", "clock", "tensor", "valid"]], 1, 56), ([], 4, 1)],
+)
+def test_temporal_all_fields_or_separate_packing(tmp_path, monkeypatch, groups, full_reads, valid_row_bytes):
+    # Both packing choices preserve the API and values, while projection changes
+    # physical I/O: a single selected bool still fetches an entire grouped row.
+    cache = Cache(str(tmp_path), chunk_size=1, item_loader=TemporalArrayLoader(field_groups=groups))
+    record = make_record(17)
+    cache[0] = record
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmp_path), item_loader=TemporalArrayLoader())
+    remote = attach_remote(dataset, tmp_path, monkeypatch)
+    assert_values(dataset.read_window(0, 3, 7), record, 3, 7, list(record))
+    assert len(remote.reads) == full_reads
+    remote.reads.clear()
+    assert_values(dataset.read_window(0, 15, 2, ["valid"]), record, 15, 2, ["valid"])
+    assert len(remote.reads) == 1
+    assert remote.reads[0][2] == 2 * valid_row_bytes
+
+
 @pytest.mark.parametrize("groups", [[["missing"]], [["clock"], ["clock"]], [[]], ["clock"]])
 def test_invalid_grouping(tmp_path, groups):
     with pytest.raises(ValueError, match="."):  # noqa: PT012

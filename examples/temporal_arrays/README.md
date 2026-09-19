@@ -57,7 +57,25 @@ This example samples eligible records uniformly with replacement. If the applica
 
 ## Request count and tradeoffs
 
-`TemporalArrayLoader` writes ordinary chunk framing with its own versioned item layout. Compact frame counts and item offsets live in each chunk's index entry, so even the first window reads only its selected field groups: **one range per group, no per-window metadata GETs**. Unlisted fields each get a separate group. Group small fields commonly read together; leave large fields separate. Selecting one field in a group fetches that group's window, so narrow projections can overfetch. Returned NumPy arrays and tensors preserve type/dtype and own writable storage.
+`TemporalArrayLoader` writes ordinary chunk framing with its own versioned item layout. Compact frame counts and item offsets live in each chunk's index entry, so even the first window reads only its selected field groups: **one range per group, no per-window metadata GETs**. Unlisted fields each get a separate group. Selecting one field in a group fetches that group's window, so narrow projections can overfetch. Returned NumPy arrays and tensors preserve type/dtype and own writable storage.
+
+Choose packing from field sizes and the fields usually read together, rather than total dataset size alone. All these layouts use the same read API:
+
+```python
+# Full-field windows: all fields for each frame are adjacent -> one range.
+all_fields = ["features", "clock", "valid", "pose"]
+all_together = TemporalArrayLoader(field_groups=[all_fields])
+
+# Mixed projections: large features separate; small co-accessed fields together.
+grouped = TemporalArrayLoader(field_groups=[["clock", "valid", "pose"]])
+
+# Narrow projections: each field separate -> one range per requested field.
+separate = TemporalArrayLoader()
+```
+
+For separate groups, a track stores `[all feature frames][all clock/valid/pose frames]`, so a full-field window needs two disjoint ranges. A single group instead stores `[frame 0: all fields][frame 1: all fields]...`; the same window is one contiguous range. The full-field payload is approximately unchanged, apart from alignment padding. Fewer requests do not guarantee a proportional speedup. Selecting only `clock` from the single group still fetches every field in that window. Changing packing requires rewriting records; the persisted schema lets readers discover the layout automatically.
+
+`chunk_bytes` controls how complete records are packed into objects, independently of field grouping and window length. Direct range reads do not fetch the whole chunk, so larger chunks do not inherently reduce bytes per window. Dataset size also affects index memory and cache behavior. This temporal format currently requires uncompressed data; setting chunk compression is not a supported way to compress partial windows.
 
 Existing uncompressed default `optimize` output also supports `read_window` on flat dictionaries of numeric/bool array fields. This path reads small chunk/array headers on demand, retains metadata for at most 256 records, and uses one range per selected field. Use `TemporalArrayLoader` when request count matters.
 
