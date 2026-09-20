@@ -217,6 +217,7 @@ class StreamingDataset(IterableDataset):
                 )
 
         self.cache: Cache | None = None
+        self._window_pid = os.getpid()
         self.worker_env: _WorkerEnv | None = None
         self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
         self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
@@ -812,6 +813,120 @@ class StreamingDataset(IterableDataset):
             )
 
         return item
+
+    @property
+    def frame_counts(self) -> list[int]:
+        """Frame counts in record-index order for data written with ``TemporalArrayLoader``.
+
+        Reads index metadata only, including the dataset's subsample/split selection.
+        Use these counts to keep application-specific window sampling outside storage code.
+        """
+        self._ensure_window_reader()
+        assert self.cache is not None
+        config = self.cache._reader.config
+        if config.config.get("item_loader") != "TemporalArrayLoader":
+            raise ValueError("frame_counts requires data written with TemporalArrayLoader.")
+        chunks = config._chunks
+        assert chunks is not None
+        return [
+            count
+            for chunk, interval in zip(chunks, config.intervals)
+            for count in chunk["temporal_frames"][interval[1] - interval[0] : interval[2] - interval[0]]
+        ]
+
+    def _ensure_window_reader(self) -> Any:
+        from litdata.streaming.window import _WindowReader
+
+        if getattr(self, "_window_pid", os.getpid()) != os.getpid():
+            self.cache = None
+            self.shuffler = None
+        self._window_pid = os.getpid()
+        if self.cache is None:
+            self.worker_env = _WorkerEnv.detect()
+            self.cache = self._create_cache(worker_env=self.worker_env)
+            self.shuffler = self._create_shuffler(self.cache)
+        reader = self.cache._reader
+        if reader._config is None:
+            reader._try_load_config()
+        config = reader.config
+        window_reader = getattr(reader, "_window_reader", None)
+        if window_reader is None or window_reader.config is not config:
+            window_reader = reader._window_reader = _WindowReader(config)
+        return window_reader
+
+    def read_window(
+        self,
+        index: int,
+        start: int,
+        frames: int,
+        fields: Sequence[str] | None = None,
+        *,
+        max_concurrent_reads: int = 8,
+    ) -> dict[str, Any]:
+        """Read selected axis-0 frames directly from a record written by ``optimize``.
+
+        Records must be flat dictionaries; selected fields must be fixed-width NumPy arrays
+        or CPU tensors with matching frame-axis lengths. ``fields=None`` selects all fields;
+        an empty sequence returns an empty dictionary without payload I/O. Windows use
+        ``[start, start + frames)`` and must fit entirely within the selected arrays.
+
+        Requires uncompressed, unencrypted PyTree chunks and built-in array serializers.
+        S3/R2 fetch array ranges plus small, bounded-cache metadata reads. Other cloud
+        backends may download a whole chunk. Returned arrays/tensors are writable and
+        independent of the source. Dataset transforms are not applied to partial records.
+
+        This explicit random-access operation does not advance the iteration/checkpoint
+        position or assign requests to ranks/workers. Use ``aread_window`` for async callers.
+        Dataset objects should be initialized independently in each process, as usual.
+
+        For example, ``read_window(0, start=3, frames=4, fields=["features", "valid"])``
+        returns frames 3, 4, 5 and 6 from record 0. A field shaped ``(T, 2)`` becomes
+        ``(4, 2)``. Windows never cross records, pad or wrap; the application's sampler
+        chooses valid starts using ``frame_counts`` for TemporalArrayLoader datasets.
+        That loader stores whole tracks in field groups: selecting any field fetches
+        its group's window, but returns only requested fields. See temporal.py and
+        window.py for the binary layout and the corresponding byte-range calculation.
+        """
+        from litdata.raw.dataset import _get_loop_runner
+
+        return _get_loop_runner().run(
+            self.aread_window(index, start, frames, fields, max_concurrent_reads=max_concurrent_reads)
+        )
+
+    async def aread_window(
+        self,
+        index: int,
+        start: int,
+        frames: int,
+        fields: Sequence[str] | None = None,
+        *,
+        max_concurrent_reads: int = 8,
+    ) -> dict[str, Any]:
+        """Async :meth:`read_window`, with bounded parallel field reads per call.
+
+        The first call initializes dataset metadata synchronously. Reuse one dataset per
+        worker/event loop; callers bound simultaneous window requests. Cancellation drains
+        child tasks, but an SDK/thread fallback may finish its underlying I/O afterward.
+        """
+        for name, value in (("index", index), ("start", start), ("frames", frames)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer.")
+        if index < 0 or start < 0 or frames < 1:
+            raise IndexError("index/start must be nonnegative and frames must be positive.")
+        if (
+            not isinstance(max_concurrent_reads, int)
+            or isinstance(max_concurrent_reads, bool)
+            or max_concurrent_reads < 1
+        ):
+            raise ValueError("max_concurrent_reads must be a positive integer.")
+        if self.serializers:
+            raise ValueError("Window reads require the built-in array serializers.")
+        window_reader = self._ensure_window_reader()
+        assert self.cache is not None
+        if index >= window_reader.length:
+            raise IndexError("Unknown record index.")
+        chunked_index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
+        return await window_reader.read(chunked_index, start, frames, fields, max_concurrent_reads)
 
     def get_by_key(self, key: Any) -> Any:
         """Load a sample by entity key from the ``keys/`` store (str or int keys).

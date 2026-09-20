@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import math
 import os
 import random
@@ -374,6 +375,52 @@ def test_optimize_checkpoint_in_none_and_append_mode(tmpdir):
     assert ds[:] == [(i, i**2) for i in range(8)]
     # checkpoints should be deleted
     assert not os.path.exists(os.path.join(output_dir, ".checkpoints"))
+
+
+@pytest.mark.parametrize("mode", [None, "append"])
+@pytest.mark.parametrize("compression", [None, "zstd"])
+def test_optimize_resume_completed_worker(tmp_path, monkeypatch, mode, compression):
+    """A worker with no remaining inputs must retain its checkpoint's chunk schema."""
+    output_dir = str(tmp_path / "output")
+    compression_options = {"compression": compression, "compression_level": "chunk" if compression else None}
+    start = 0
+    if mode == "append":
+        existing = Cache(output_dir, chunk_size=1, **compression_options)
+        existing._writer._rank = 0
+        for i in range(2):
+            existing[i] = another_fn(i)
+        existing.done()
+        existing.merge()
+        start = 2
+
+    inputs = list(range(start, start + 4))
+    # Simulate a completed optimizer worker, including append writes alongside
+    # an existing index. The other worker has no checkpoint and still has work.
+    with monkeypatch.context() as context:
+        context.setenv("DATA_OPTIMIZER_GLOBAL_RANK", "0")
+        completed = Cache(output_dir, chunk_size=1, writer_chunk_index=start, **compression_options)
+        for i, value in enumerate(inputs[:2]):
+            completed[i] = another_fn(value)
+        completed.done()
+        completed._writer.save_checkpoint(inputs_done=2)
+    checkpoint_dir = tmp_path / "output" / ".checkpoints"
+    (checkpoint_dir / "config.json").write_text(
+        json.dumps({"num_workers": 2, "workers_user_items": [inputs[:2], inputs[2:]]})
+    )
+
+    optimize(
+        fn=another_fn,
+        inputs=inputs,
+        output_dir=output_dir,
+        chunk_size=1,
+        num_workers=2,
+        use_checkpoint=True,
+        mode=mode,
+        **compression_options,
+    )
+
+    assert StreamingDataset(output_dir)[:] == [another_fn(i) for i in range(start + 4)]
+    assert not checkpoint_dir.exists()
 
 
 def test_merge_datasets(tmpdir):
