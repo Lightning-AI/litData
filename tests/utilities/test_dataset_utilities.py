@@ -16,6 +16,7 @@ from litdata.utilities.dataset_utilities import (
     generate_roi,
     get_default_cache_dir,
     load_index_file,
+    subsample_streaming_dataset,
 )
 
 
@@ -99,6 +100,25 @@ def test_adapt_mds_shards_to_chunks(mosaic_mds_index_data):
     assert "chunks" in adapted_data
     assert "config" in adapted_data
     assert len(mosaic_mds_index_data["shards"]) == len(adapted_data["chunks"])
+
+
+def test_subsample_streaming_dataset_with_local_index_path(tmpdir):
+    # `input_dir` is a local directory that does NOT contain an index.json file.
+    data_dir = tmpdir.mkdir("data")
+    # The index.json lives in a separate directory provided via `index_path`.
+    index_dir = tmpdir.mkdir("index")
+    index_data = {"chunks": [{"chunk_size": 30, "filename": "chunk-0.bin"}], "config": {}}
+    with open(os.path.join(index_dir, _INDEX_FILENAME), "w") as f:
+        f.write(json.dumps(index_data))
+
+    input_dir = Dir(path=str(data_dir), url=None)
+    with mock.patch.dict(os.environ, {}, clear=True):
+        subsampled_files, roi = subsample_streaming_dataset(input_dir, index_path=str(index_dir))
+
+    assert subsampled_files == ["chunk-0.bin"]
+    assert roi == [(0, 30)]
+    # The user-provided index is materialized into the local dataset directory.
+    assert os.path.exists(os.path.join(str(data_dir), _INDEX_FILENAME))
 
 
 def test_get_default_cache_dir():
