@@ -53,7 +53,7 @@ loader = DataLoader(
 )
 ```
 
-This example samples eligible records uniformly with replacement. If the application needs weighted tracks, uniform frames, multiple tables or other policies, keep its sampler and call `read_window` with the chosen request. Initialize each dataset in its worker process before issuing concurrent reads. `await tracks.aread_window(...)` supports concurrent async callers; synchronous callers use LitData's process-local loop. No private imports or separate storage clients are needed.
+This example samples eligible records uniformly with replacement. If the application needs weighted tracks, uniform frames, multiple tables or other policies, keep its sampler and call `read_window` with the chosen request. Initialize each dataset in its worker process before issuing concurrent reads. `await tracks.aread_window(...)` supports concurrent async callers; synchronous POSIX temporal reads execute in the caller's thread, while other synchronous readers use LitData's process-local loop. No private imports or separate storage clients are needed.
 
 ## Request count and tradeoffs
 
@@ -99,3 +99,9 @@ PYTHONPATH=src pytest tests/streaming/test_temporal_array_example.py
 ```
 
 Tests exercise the real optimize/StreamingDataset workflow, full-record compatibility, frame/field correctness, cold and warm byte/request counts, schema validation, split mapping, concurrency, cancellation and failures. Performance must be measured on the application's own field/window distribution; the generic API does not inherit a previous prototype's throughput results.
+
+## Local and parallel filesystems
+
+Temporal window reads reuse the POSIX-fast path on local disks and mounted parallel filesystems such as NFS/VAST. LitData maps immutable chunks in place, retains a bounded set of mappings, and copies only selected field windows into writable outputs. A mapping does not load the whole chunk or require the dataset to fit in RAM; the OS manages resident pages. Source chunks must remain unchanged while mapped.
+
+Where supported and permitted by the existing POSIX memory policy, selected page ranges receive a prefetch hint. Windows do not request whole-chunk prefetch. Concurrent calls hold mapping leases until decoding completes, so eviction or async cancellation cannot unmap an active read. Async reads offload page faults and decoding to a thread. `LITDATA_POSIX_FAST=0` retains the buffered fallback. Request sampling and rank/worker partitioning remain the application's responsibility.

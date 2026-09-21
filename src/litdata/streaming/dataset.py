@@ -851,7 +851,12 @@ class StreamingDataset(IterableDataset):
         config = reader.config
         window_reader = getattr(reader, "_window_reader", None)
         if window_reader is None or window_reader.config is not config:
-            window_reader = reader._window_reader = _WindowReader(config)
+            window_reader = reader._window_reader = _WindowReader(
+                config,
+                posix_fast=reader._posix_fast,
+                mmap_keep=reader._posix_keep,
+                posix_willneed=reader._posix_willneed,
+            )
         return window_reader
 
     def read_window(
@@ -875,6 +880,11 @@ class StreamingDataset(IterableDataset):
         backends may download a whole chunk. Returned arrays/tensors are writable and
         independent of the source. Dataset transforms are not applied to partial records.
 
+        POSIX TemporalArrayLoader windows use bounded in-place chunk mappings when
+        POSIX-fast is enabled. Only selected group views are decoded; source chunks
+        must remain immutable while in use. The synchronous path executes in the
+        caller's thread; the async path offloads page faults and decoding to a thread.
+
         This explicit random-access operation does not advance the iteration/checkpoint
         position or assign requests to ranks/workers. Use ``aread_window`` for async callers.
         Dataset objects should be initialized independently in each process, as usual.
@@ -887,6 +897,12 @@ class StreamingDataset(IterableDataset):
         its group's window, but returns only requested fields. See temporal.py and
         window.py for the binary layout and the corresponding byte-range calculation.
         """
+        # A synchronous POSIX window need not make a round-trip through the
+        # async cloud runner. Callers may already have their own worker threads.
+        if self.posix_fast is not None:
+            reader, chunked_index = self._prepare_window_request(index, start, frames, max_concurrent_reads)
+            if reader.posix_windows:
+                return reader.read_posix_window(chunked_index, start, frames, fields)
         from litdata.raw.dataset import _get_loop_runner
 
         return _get_loop_runner().run(
@@ -908,6 +924,12 @@ class StreamingDataset(IterableDataset):
         worker/event loop; callers bound simultaneous window requests. Cancellation drains
         child tasks, but an SDK/thread fallback may finish its underlying I/O afterward.
         """
+        window_reader, chunked_index = self._prepare_window_request(index, start, frames, max_concurrent_reads)
+        return await window_reader.read(chunked_index, start, frames, fields, max_concurrent_reads)
+
+    def _prepare_window_request(
+        self, index: int, start: int, frames: int, max_concurrent_reads: int
+    ) -> tuple[Any, ChunkedIndex]:
         for name, value in (("index", index), ("start", start), ("frames", frames)):
             if not isinstance(value, int) or isinstance(value, bool):
                 raise TypeError(f"{name} must be an integer.")
@@ -926,7 +948,7 @@ class StreamingDataset(IterableDataset):
         if index >= window_reader.length:
             raise IndexError("Unknown record index.")
         chunked_index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
-        return await window_reader.read(chunked_index, start, frames, fields, max_concurrent_reads)
+        return window_reader, chunked_index
 
     def get_by_key(self, key: Any) -> Any:
         """Load a sample by entity key from the ``keys/`` store (str or int keys).
