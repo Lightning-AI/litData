@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Temporal window reads on local and parallel POSIX filesystems reuse bounded chunk mappings and prefetch selected ranges, preserving owned outputs and safe concurrent mapping lifetimes.
 - S3/R2 range reads close SDK response bodies on success and failure and reject truncated responses.
 - Resumed optimize workers with no remaining inputs preserve their checkpoint's schema and compression metadata, so index merging also succeeds when a worker completed before interruption.
 - R2 clients default to the `auto` signing region independently of ambient AWS configuration, and custom client/session options no longer reuse an incompatible cached SDK client. Temporary credentials remain shared across clients.

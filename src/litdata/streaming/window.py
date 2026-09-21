@@ -5,6 +5,8 @@ group; see temporal.py for the byte layout and a complete two-track example.
 Ordinary PyTree array records are also supported, but their per-field headers
 must first be read and cached, and each selected field requires its own range.
 Only metadata is retained here: repeated remote windows fetch their payload again.
+POSIX temporal windows reuse bounded mappings and decode selected views directly
+into owned outputs; they do not prefetch or copy complete tracks or chunks.
 """
 
 import asyncio
@@ -21,12 +23,15 @@ from litdata.constants import _NUMPY_DTYPES_MAPPING, _TORCH_DTYPES_MAPPING
 from litdata.streaming.config import ChunksConfig
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.temporal import TemporalArrayLoader
+from litdata.streaming.window_mmap import _advise_window_ranges, _WindowMMapCache
 
 
 class _WindowReader:
-    """Plan bounded range reads; retain metadata only, never decoded payloads."""
+    """Plan ranges or POSIX views; retain metadata/mappings, never decoded payloads."""
 
-    def __init__(self, config: ChunksConfig) -> None:
+    def __init__(
+        self, config: ChunksConfig, *, posix_fast: bool = False, mmap_keep: int = 4, posix_willneed: bool = True
+    ) -> None:
         self.config = config
         self.length = sum(interval[2] - interval[1] for interval in config.intervals)
         self.metadata: OrderedDict[tuple[int, int], dict[str, Any]] = OrderedDict()
@@ -39,6 +44,8 @@ class _WindowReader:
         ):
             raise ValueError("Window reads require uncompressed, unencrypted PyTree chunks from optimize().")
         self.temporal = config._item_loader if isinstance(config._item_loader, TemporalArrayLoader) else None
+        self._maps = _WindowMMapCache(mmap_keep) if posix_fast and self.temporal is not None else None
+        self._posix_willneed = posix_willneed
         if self.temporal is not None:
             assert self.temporal.schema is not None
             self.names = self.temporal.schema["field_order"]
@@ -138,14 +145,52 @@ class _WindowReader:
         record["fields"][position] = result
         return result
 
-    async def read(
-        self, index: ChunkedIndex, start: int, frames: int, fields: Sequence[str] | None, max_concurrent_reads: int
-    ) -> dict[str, Any]:
+    @property
+    def posix_windows(self) -> bool:
+        return self._maps is not None and self.config._downloader is None
+
+    def close(self) -> None:
+        if self._maps is not None:
+            self._maps.close()
+
+    def _field_names(self, fields: Sequence[str] | None) -> list[str]:
         names = self.names if fields is None else list(fields)
         if isinstance(fields, str) or any(not isinstance(name, str) for name in names):
             raise TypeError("fields must be a sequence of field names, not a string.")
         if len(set(names)) != len(names):
             raise ValueError("Duplicate requested fields.")
+        return names
+
+    def read_posix_window(
+        self, index: ChunkedIndex, start: int, frames: int, fields: Sequence[str] | None
+    ) -> dict[str, Any]:
+        """Decode selected mmap views into owned arrays, with one mapping lease/window."""
+        assert self._maps is not None
+        assert self.temporal is not None
+        names = self._field_names(fields)
+        plans = self._temporal_plans(index, start, frames, names)
+        if not plans:
+            return {}
+        path, _, size = self.config[index]
+        with self._maps.acquire(path, size) as mapping:
+            if self._posix_willneed:
+                _advise_window_ranges(mapping, [(offset, length) for _, offset, length in plans])
+            buffers = {}
+            try:
+                for group, offset, length in plans:
+                    buffers[group] = memoryview(mapping)[offset : offset + length]
+                return self.temporal.decode_groups(buffers, frames, names)
+            finally:
+                for view in buffers.values():
+                    view.release()
+
+    async def read(
+        self, index: ChunkedIndex, start: int, frames: int, fields: Sequence[str] | None, max_concurrent_reads: int
+    ) -> dict[str, Any]:
+        if self.posix_windows:
+            # Page faults and decoding must not block an application's event loop.
+            return await asyncio.to_thread(self.read_posix_window, index, start, frames, fields)
+        names = self._field_names(fields)
         if self.temporal is not None:
             return await self._read_temporal(index, start, frames, names, max_concurrent_reads)
         positions = []
@@ -187,9 +232,9 @@ class _WindowReader:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _read_temporal(
-        self, index: ChunkedIndex, start: int, frames: int, names: list[str], max_concurrent_reads: int
-    ) -> dict[str, Any]:
+    def _temporal_plans(
+        self, index: ChunkedIndex, start: int, frames: int, names: list[str]
+    ) -> list[tuple[int, int, int]]:
         loader = self.temporal
         assert loader is not None
         assert loader.schema is not None
@@ -227,6 +272,14 @@ class _WindowReader:
             if any(name in names for name in groups[group]):
                 plans.append((group, cursor + start * dtype.itemsize, frames * dtype.itemsize))
             cursor += count * dtype.itemsize
+        return plans
+
+    async def _read_temporal(
+        self, index: ChunkedIndex, start: int, frames: int, names: list[str], max_concurrent_reads: int
+    ) -> dict[str, Any]:
+        loader = self.temporal
+        assert loader is not None
+        plans = self._temporal_plans(index, start, frames, names)
         permits = asyncio.Semaphore(max_concurrent_reads)
 
         async def fetch(group: int, offset: int, length: int) -> tuple[int, bytes]:
