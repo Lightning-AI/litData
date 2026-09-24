@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -303,6 +304,12 @@ def _build_obstore_s3_store(bucket: str, s3_client: S3Client) -> Any:
         # Path-style addressing is required for R2 and most S3-compatible endpoints.
         if "amazonaws.com" not in endpoint_url:
             config["virtual_hosted_style_request"] = False
+    s3_options = boto_client.meta.config.s3 or {}
+    if s3_options.get("use_accelerate_endpoint"):
+        config["endpoint"] = f"https://{bucket}.s3-accelerate.amazonaws.com"
+        config["virtual_hosted_style_request"] = True
+    elif s3_options.get("addressing_style") == "virtual":
+        config["virtual_hosted_style_request"] = True
 
     return S3Store(
         bucket,
@@ -326,6 +333,40 @@ def _cached_obstore_store(downloader: Any, factory: Any) -> Any:
         downloader._store_pid = os.getpid()
         _note_obstore_init()
     return downloader._store
+
+
+def _validate_byte_range(offset: int, length: int) -> None:
+    if offset < 0 or length < 0:
+        raise ValueError("Range offset and length must be non-negative")
+
+
+def _checked_range(data: bytes, length: int) -> bytes:
+    if len(data) != length:
+        raise OSError(f"Short range read: expected {length} bytes, received {len(data)}")
+    return data
+
+
+async def _adownload_s3_range(
+    downloader: "S3Downloader | R2Downloader",
+    remote_filepath: str,
+    offset: int,
+    length: int,
+    local_chunkpath: str,
+    scheme: str,
+) -> bytes:
+    obj = parse.urlparse(remote_filepath)
+    if obj.scheme != scheme:
+        raise ValueError(f"Expected obj.scheme to be {scheme!r}, got {obj.scheme!r}")
+    _validate_byte_range(offset, length)
+    if length == 0:
+        return b""
+    if not _OBSTORE_AVAILABLE or not obstore_usable():
+        return await asyncio.to_thread(downloader.download_bytes, remote_filepath, offset, length, local_chunkpath)
+    import obstore
+
+    store = downloader._get_store(obj.netloc)
+    data = await obstore.get_range_async(store, obj.path.lstrip("/"), start=offset, length=length)
+    return _checked_range(bytes(data), length)
 
 
 class Downloader(ABC):
@@ -437,6 +478,25 @@ class Downloader(ABC):
         with open(local_chunkpath, "rb") as f:
             f.seek(offset)
             return f.read(length)
+
+    async def adownload_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Read exactly ``length`` bytes asynchronously, starting at ``offset``.
+
+        Negative offsets/lengths raise ValueError; zero length performs no I/O.
+        A short response raises OSError. S3/R2 use native range reads when safe;
+        other backends delegate to download_bytes in a thread and may cache a
+        whole file at local_chunkpath. Callers own cache paths and concurrency.
+
+        Cancelling the SDK/thread fallback stops waiting but cannot stop its
+        running I/O. Do not delete/reuse its scratch path until I/O has finished.
+        Native cancellation propagates to the request, but cannot undo bytes
+        already transferred. Construction alone never starts a native runtime.
+        """
+        _validate_byte_range(offset, length)
+        if length == 0:
+            return b""
+        data = await asyncio.to_thread(self.download_bytes, remote_filepath, offset, length, local_chunkpath)
+        return _checked_range(data, length)
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from remote storage directly to a file-like object."""
@@ -550,11 +610,19 @@ class S3Downloader(Downloader):
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
+        _validate_byte_range(offset, length)
+        if length == 0:
+            return b""
         byte_range = f"bytes={offset}-{offset + length - 1}"
 
         response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
 
-        return response["Body"].read()
+        with contextlib.closing(response["Body"]) as body:
+            return _checked_range(body.read(), length)
+
+    async def adownload_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Read one S3 range without a payload cache; see Downloader.adownload_bytes."""
+        return await _adownload_s3_range(self, remote_filepath, offset, length, local_chunkpath, "s3")
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from S3 directly to a file-like object."""
@@ -680,11 +748,19 @@ class R2Downloader(Downloader):
         bucket = obj.netloc
         key = obj.path.lstrip("/")
 
+        _validate_byte_range(offset, length)
+        if length == 0:
+            return b""
         byte_range = f"bytes={offset}-{offset + length - 1}"
 
         response = self._client.client.get_object(Bucket=bucket, Key=key, Range=byte_range)
 
-        return response["Body"].read()
+        with contextlib.closing(response["Body"]) as body:
+            return _checked_range(body.read(), length)
+
+    async def adownload_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Read one R2 range without a payload cache; see Downloader.adownload_bytes."""
+        return await _adownload_s3_range(self, remote_filepath, offset, length, local_chunkpath, "r2")
 
     def download_fileobj(self, remote_filepath: str, fileobj: Any) -> None:
         """Download a file from R2 directly to a file-like object."""
@@ -993,6 +1069,19 @@ class AzureDownloader(Downloader):
 
 
 class LocalDownloader(Downloader):
+    async def adownload_bytes(self, remote_filepath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
+        """Read a local range directly without copying the complete source into the cache."""
+        _validate_byte_range(offset, length)
+        if length == 0:
+            return b""
+
+        def read() -> bytes:
+            with open(remote_filepath, "rb") as handle:
+                handle.seek(offset)
+                return _checked_range(handle.read(length), length)
+
+        return await asyncio.to_thread(read)
+
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
         """Read a local file (sync I/O; avoids leaking default-executor threads in tests)."""
         from pathlib import Path
