@@ -2362,6 +2362,10 @@ def test_data_processor_load_checkpoint_config_with_data_connection_id(tmpdir, m
     with open(config_file, "w") as f:
         json.dump(config_data, f)
 
+    writer_config = {"data_format": ["int"], "compression": None}
+    with open(os.path.join(tmpdir, "checkpoint-0.json"), "w") as f:
+        json.dump({"chunks": [], "done_till_index": 2, "config": writer_config}, f)
+
     storage_options = {"read_timeout": 15}
     data_processor = DataProcessor(
         input_dir=str(tmpdir),
@@ -2373,6 +2377,7 @@ def test_data_processor_load_checkpoint_config_with_data_connection_id(tmpdir, m
 
     workers_user_items = [[1, 2], [3, 4]]
     data_processor._load_checkpoint_config(workers_user_items)
+    assert data_processor.checkpoint_configs == [writer_config, None]
 
     # Verify fs_provider was called with merged storage_options including data_connection_id
     expected_storage_options = storage_options.copy()

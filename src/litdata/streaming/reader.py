@@ -839,6 +839,7 @@ class BinaryReader:
         self._session_options = session_options
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
+        self._window_reader: Any = None
         self._posix_fast = False
         self._posix_keep = 4
         self._posix_willneed = True
@@ -1155,6 +1156,8 @@ class BinaryReader:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_prepare_thread"] = None
+        # Window metadata and POSIX mappings are process-local; recreate after spawn.
+        state["_window_reader"] = None
         # StreamingTimingStats holds a threading.Lock and is process-local.
         state.pop("_timing", None)
         return state
@@ -1164,6 +1167,10 @@ class BinaryReader:
         self._timing = StreamingTimingStats.instance()
 
     def __del__(self) -> None:
+        window_reader = getattr(self, "_window_reader", None)
+        if window_reader is not None:
+            with suppress(Exception):
+                window_reader.close()
         # Release eagerly-acquired shared-chunk locks that were never released (e.g. the loop was
         # broken out of before the last item). Without this, an aborted epoch would leak reference
         # counts and prevent those chunks from ever being deleted.

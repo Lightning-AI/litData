@@ -598,7 +598,10 @@ class R2Client(S3Client):
         if not data_connection_id:
             raise _CredentialsConfigurationError("data_connection_id is required in storage_options for R2 client")
 
-        if not self._force_refresh_credentials:
+        # SDK options may contain Config objects, callbacks or custom sessions. Share only
+        # default clients; custom clients still reuse the independently cached credentials.
+        cache_default_client = set(self._base_storage_options) == {"data_connection_id"} and not self._session_options
+        if cache_default_client and not self._force_refresh_credentials:
             with _temp_creds_lock_for_pid():
                 cached_client = _temp_creds_boto_clients.get(data_connection_id)
             if cached_client is not None:
@@ -626,6 +629,14 @@ class R2Client(S3Client):
 
         # Combine filtered storage options with fresh credentials
         combined_storage_options = {**filtered_storage_options, **r2_credentials}
+        # Do not inherit an AWS region from the environment or shared configuration.
+        # Preserve explicit client, Config and session regions in boto3 precedence order.
+        combined_storage_options["region_name"] = (
+            combined_storage_options.get("region_name")
+            or getattr(filtered_storage_options.get("config"), "region_name", None)
+            or self._session_options.get("region_name")
+            or "auto"
+        )
 
         # Update the inherited storage options with R2 credentials
         self._storage_options = combined_storage_options
@@ -639,5 +650,6 @@ class R2Client(S3Client):
                 **combined_storage_options,
             },
         )
-        with _temp_creds_lock_for_pid():
-            _temp_creds_boto_clients[data_connection_id] = (self._creds_fetched_at or time(), self._client)
+        if cache_default_client:
+            with _temp_creds_lock_for_pid():
+                _temp_creds_boto_clients[data_connection_id] = (self._creds_fetched_at or time(), self._client)
