@@ -1,11 +1,11 @@
 # Each line is a file pattern followed by one or more owners.
 
-# These owners will be the default owners for everything in the repo. Unless a later match takes precedence,
-# @global-owner1 and @global-owner2 will be requested for review when someone opens a pull request.
-* @tchaton @lantiga @justusschock
+# Default owners for everything in the repo. Unless a later match takes precedence,
+# these owners are requested for review when someone opens a pull request.
+* @tchaton @bhimrazy @deependujha @pwgardipee @dhedey
 
 # CI/CD and configs
-/.github/       @tchaton @justusschock
-*.yml           @tchaton @justusschock
+/.github/       @tchaton @bhimrazy @pwgardipee @dhedey
+*.yml           @tchaton @pwgardipee @dhedey
 
-/src            @tchaton @lantiga @justusschock
+/src            @tchaton @pwgardipee @dhedey
