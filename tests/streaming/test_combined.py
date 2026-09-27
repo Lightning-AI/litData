@@ -766,4 +766,3 @@ def test_combined_dataset_reset_state_dict_after_checkpoint_resume(tmpdir):
     assert loader.restore
     resumed_epoch_2_tail = [batch.tolist() for batch in loader]
     assert resumed_epoch_2_tail == ref_epoch_2[3:]
-

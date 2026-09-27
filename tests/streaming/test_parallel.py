@@ -1223,4 +1223,3 @@ def test_parallel_dataset_reset_state_dict_after_checkpoint_resume(tmp_path_fact
     state_epoch_2 = dataloader.state_dict()
     assert state_epoch_2["num_samples_yielded"] == {0: [6, 4]}
     assert state_epoch_2["num_cycles"] == {0: [1, 1]}
-
