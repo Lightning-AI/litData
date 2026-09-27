@@ -153,4 +153,3 @@ def test_upload_dest_checkpoint_paths():
 
     assert local_dest.replace("\\", "/") == "/output/data/train/.checkpoints/checkpoint-0.json"
     assert remote_dest.replace("\\", "/") == "s3://bucket/output/data/train/.checkpoints/checkpoint-0.json"
-
