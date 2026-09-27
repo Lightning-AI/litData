@@ -191,7 +191,7 @@ class _CombinedDatasetIterator(Iterator):
         self._is_done = False
 
         if num_samples_yielded is not None:
-            self._num_samples_yielded = num_samples_yielded
+            self._num_samples_yielded = deepcopy(num_samples_yielded)
             for _ in range(sum(num_samples_yielded)):
                 choice_indexes: list[int] = [index for index in self._dataset_indexes if index is not None]
                 choice_weights: list[float] = [w for w in self._weights if w is not None]

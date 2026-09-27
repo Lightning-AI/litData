@@ -703,3 +703,67 @@ def test_combined_rejects_topology_change_on_resume(tmpdir):
     loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=2)
     with pytest.raises(ValueError, match="support resume only"):
         loader_b.load_state_dict(state)
+
+
+def test_combined_dataset_reset_state_dict_after_checkpoint_resume(tmpdir):
+    data_dir_1 = os.path.join(tmpdir, "data_1")
+    data_dir_2 = os.path.join(tmpdir, "data_2")
+    os.makedirs(data_dir_1)
+    os.makedirs(data_dir_2)
+    for path, count, offset in ((data_dir_1, 10, 0), (data_dir_2, 12, 100)):
+        cache = Cache(input_dir=path, chunk_size=2)
+        for i in range(count):
+            cache[i] = i + offset
+        cache.done()
+        cache.merge()
+
+    def make_loader():
+        dataset = CombinedStreamingDataset(
+            datasets=[
+                StreamingDataset(input_dir=data_dir_1, shuffle=True),
+                StreamingDataset(input_dir=data_dir_2, shuffle=True),
+            ],
+            seed=42,
+            iterate_over_all=True,
+        )
+        return StreamingDataLoader(dataset, num_workers=0, batch_size=2)
+
+    # Baseline: run 2 full epochs without checkpoint resume
+    ref_loader = make_loader()
+    list(ref_loader)
+    ref_epoch_2 = [batch.tolist() for batch in ref_loader]
+
+    # Resumed: break mid-epoch 1, restore, finish epoch 1, then run epoch 2
+    loader = make_loader()
+    ckpt = None
+    for idx, _ in enumerate(loader):
+        if idx == 2:
+            ckpt = deepcopy(loader.state_dict())
+            break
+
+    assert ckpt is not None
+    loader.load_state_dict(ckpt)
+    assert loader.restore
+
+    # Finish epoch 1
+    list(loader)
+    assert not loader.restore
+
+    # Epoch 2 should reset _num_samples_yielded and match the baseline epoch 2 batches and state
+    resumed_epoch_2 = []
+    epoch_2_mid_ckpt = None
+    for idx, batch in enumerate(loader):
+        resumed_epoch_2.append(batch.tolist())
+        if idx == 2:
+            epoch_2_mid_ckpt = deepcopy(loader.state_dict())
+
+    assert resumed_epoch_2 == ref_epoch_2
+    assert sum(loader.state_dict()["num_samples_yielded"][0]) == len(loader.dataset)
+
+    # A mid-epoch checkpoint saved in epoch 2 must still be restorable
+    assert epoch_2_mid_ckpt is not None
+    loader.load_state_dict(epoch_2_mid_ckpt)
+    assert loader.restore
+    resumed_epoch_2_tail = [batch.tolist() for batch in loader]
+    assert resumed_epoch_2_tail == ref_epoch_2[3:]
+

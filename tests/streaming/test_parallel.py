@@ -1193,3 +1193,34 @@ def test_parallel_dataset_complete_iteration_resume_without_dataloader(tmp_path_
             assert all(x == y for x, y in zip(sample, expected[i]))
         elif not resume and length is not None:
             assert all(x == y for x, y in zip(sample, samples[i]))
+
+
+def test_parallel_dataset_reset_state_dict_after_checkpoint_resume(tmp_path_factory):
+    _, _, pardset, dataloader, _ = prepare_parallel_dataset_and_dataloder(
+        tmp_path_factory, parlen=16, len1=10, len2=12, batch_size=2, num_workers=0, shuffle=False, resume=False
+    )
+
+    ckpt = None
+    for idx, _ in enumerate(dataloader):
+        if idx == 2:
+            ckpt = deepcopy(dataloader.state_dict())
+            break
+
+    assert ckpt is not None
+    dataloader.load_state_dict(ckpt)
+    assert dataloader.restore
+
+    # Finish epoch 1
+    remaining_epoch_1 = list(dataloader)
+    assert len(remaining_epoch_1) == 5
+    assert not dataloader.restore
+
+    # Epoch 2 must reset _num_samples_yielded and _num_cycles on the dataset
+    epoch_2_batches = list(dataloader)
+    assert len(epoch_2_batches) == 8
+    assert pardset._num_samples_yielded is None
+    assert pardset._num_cycles is None
+    state_epoch_2 = dataloader.state_dict()
+    assert state_epoch_2["num_samples_yielded"] == {0: [6, 4]}
+    assert state_epoch_2["num_cycles"] == {0: [1, 1]}
+

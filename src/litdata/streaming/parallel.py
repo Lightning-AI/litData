@@ -291,10 +291,17 @@ class ParallelStreamingDataset(_BaseStreamingDatasetWrapper):
             output[i] = sum(s for (s, c) in zip(num_samples_yielded, num_cycles) if c == cycles[i])
         return output, cycles
 
+    def reset_state_dict(self) -> None:
+        """Reset the state of the dataset."""
+        super().reset_state_dict()
+        self._num_cycles = None
+
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        if not state_dict:
+            return
         super().load_state_dict(state_dict)
         if self._use_streaming_dataloader:
-            self._num_cycles = state_dict["num_cycles"]
+            self._num_cycles = deepcopy(state_dict["num_cycles"])
 
     def state_dict(
         self, num_workers: int, batch_size: int, num_samples_yielded: list[int] | None = None
@@ -327,8 +334,8 @@ class _ParallelDatasetIterator(Iterator):
     ) -> None:
         self._datasets = datasets
         self._dataset_iters = [iter(dataset) for dataset in datasets]
-        self._num_samples_yielded = num_samples_yielded or [0 for _ in range(len(datasets))]
-        self._num_cycles = num_cycles or [0 for _ in range(len(datasets))]
+        self._num_samples_yielded = deepcopy(num_samples_yielded) or [0 for _ in range(len(datasets))]
+        self._num_cycles = deepcopy(num_cycles) or [0 for _ in range(len(datasets))]
         self._length = length
         self._use_streaming_dataloader = use_streaming_dataloader
         self._transform = transform
