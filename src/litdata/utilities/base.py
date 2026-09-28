@@ -13,6 +13,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
+from copy import deepcopy
 from typing import Any
 
 from torch.utils.data import IterableDataset
@@ -115,8 +116,6 @@ class _BaseStreamingDatasetWrapper(IterableDataset, ABC):
 
         # Used to iterate over the sampler to avoid sampling the same samples
         if self._use_streaming_dataloader:
-            from copy import deepcopy
-
             self._num_samples_yielded = deepcopy(state_dict["num_samples_yielded"])
 
     def _get_len(self, d: Any) -> int:
