@@ -11,16 +11,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
+import shutil
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14, _ZSTD_AVAILABLE
-from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.debugger import CAT_DECOMPRESS, trace_span
 
 TCompressor = TypeVar("TCompressor", bound="Compressor")
-
-logger = logging.getLogger("litdata.streaming.compression")
 
 
 class Compressor(ABC):
@@ -33,6 +31,13 @@ class Compressor(ABC):
     @abstractmethod
     def decompress(self, data: bytes) -> bytes:
         pass
+
+    def decompress_file(self, src: str, dst: str) -> None:
+        """Decompress ``src`` onto ``dst``. Default reads the whole file."""
+        with open(src, "rb") as inf:
+            data = self.decompress(inf.read())
+        with open(dst, "wb") as outf:
+            outf.write(data)
 
     @classmethod
     @abstractmethod
@@ -49,29 +54,49 @@ class ZSTDCompressor(Compressor):
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
         self.level = level
         self.extension = "zstd"
+        self._zstd: Any | None = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_zstd"] = None
+        return state
+
+    def _zstd_mod(self) -> Any:
+        if self._zstd is None:
+            if _PYTHON_GREATER_EQUAL_3_14:
+                from compression import zstd as mod
+            else:
+                import zstd as mod
+            self._zstd = mod
+        return self._zstd
 
     @property
     def name(self) -> str:
         return f"{self.extension}:{self.level}"
 
     def compress(self, data: bytes) -> bytes:
-        if _PYTHON_GREATER_EQUAL_3_14:
-            from compression import zstd
-        else:
-            import zstd
-
-        return zstd.compress(data, self.level)
+        return self._zstd_mod().compress(data, self.level)
 
     def decompress(self, data: bytes) -> bytes:
-        if _PYTHON_GREATER_EQUAL_3_14:
-            from compression import zstd
-        else:
-            import zstd
+        with trace_span("decompress", CAT_DECOMPRESS):
+            return self._zstd_mod().decompress(data)
 
-        logger.debug(_get_log_msg({"name": "decompress", "ph": "B", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
-        decompressed_data = zstd.decompress(data)
-        logger.debug(_get_log_msg({"name": "decompress", "ph": "E", "cname": ChromeTraceColors.MUSTARD_YELLOW}))
-        return decompressed_data
+    def decompress_file(self, src: str, dst: str) -> None:
+        if _PYTHON_GREATER_EQUAL_3_14:
+            from compression.zstd import ZstdFile
+
+            with open(src, "rb") as inf, open(dst, "wb") as outf, ZstdFile(inf, "r") as zf:
+                shutil.copyfileobj(zf, outf, length=1024 * 1024)
+            return
+        try:
+            import zstandard
+
+            dctx = zstandard.ZstdDecompressor()
+            with open(src, "rb") as inf, open(dst, "wb") as outf:
+                dctx.copy_stream(inf, outf)
+            return
+        except ImportError:
+            super().decompress_file(src, dst)
 
     @classmethod
     def register(cls, compressors: dict[str, "Compressor"]) -> None:

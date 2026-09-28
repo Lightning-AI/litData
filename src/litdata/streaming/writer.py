@@ -11,10 +11,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import os
 import re
-import uuid
+import struct
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
@@ -26,14 +27,105 @@ import numpy as np
 from litdata.constants import _INDEX_FILENAME, _POLARS_AVAILABLE, _TQDM_AVAILABLE
 from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
-from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.utilities._pytree import PyTree, tree_flatten, treespec_dumps
+from litdata.streaming.framed_zstd import (
+    DEFAULT_COMPRESSION_BATCH_SIZE,
+    is_in_file_compression,
+    make_zstd_codec,
+    pack_framed_zstd,
+    pack_sample_zstd,
+    resolve_write_compression_level,
+)
+from litdata.streaming.item_loader import (
+    _ARROW_FOOTER_MAGIC,
+    BaseItemLoader,
+    ParquetLoader,
+    PyTreeLoader,
+    append_arrow_row_footer,
+)
+from litdata.streaming.serializers import JsonLeaf, Serializer, _get_serializers
+from litdata.streaming.temporal import TemporalArrayLoader
+from litdata.types import (
+    _MEDIA_KINDS,
+    JsonType,
+    fuse_schema_json,
+    fuse_type,
+    infer_type,
+    is_arrow_footer_type,
+    is_json_row,
+    schema_to_json,
+    wrap_for_pytree,
+)
+from litdata.utilities._pytree import PyTree, tree_flatten, tree_leaves, treespec_dumps
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
 from litdata.utilities.parquet import get_parquet_indexer_cls
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
+
+
+def _is_worker_index_file(filename: str) -> bool:
+    """True for ``{rank}.index.json`` (dot), not ``index.json`` or ``{node}-index.json``."""
+    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+
+
+def _is_node_index_file(filename: str) -> bool:
+    """True for ``{node}-index.json`` (hyphen), the per-node merge output."""
+    return bool(re.fullmatch(rf"\d+-{re.escape(_INDEX_FILENAME)}", filename))
+
+
+def _config_body(config: dict[str, Any]) -> dict[str, Any]:
+    """Config equality for merge, ignoring fused ``types`` (workers see different rows)."""
+    return {key: value for key, value in config.items() if key != "types"}
+
+
+_MEDIA_FORMAT_KEYS = frozenset(_MEDIA_KINDS.values()) | {"no_header_tensor", "no_header_numpy"}
+# Hub JPEG/WAV barely compress; treating them as 3× zstd packed first shards to 140–188MB.
+_BINARY_HEAVY_RATIO = 0.6
+
+
+def _sample_leaf_bytes(value: Any) -> tuple[int, int]:
+    """Return ``(binary_bytes, total_bytes)`` for an Arrow sample tree."""
+    if value is None:
+        return 0, 0
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        n = len(value)
+        return n, n
+    if isinstance(value, str):
+        return 0, len(value)
+    if isinstance(value, dict):
+        binary = total = 0
+        for item in value.values():
+            b, t = _sample_leaf_bytes(item)
+            binary += b
+            total += t
+        return binary, total
+    if isinstance(value, (list, tuple)):
+        binary = total = 0
+        for item in value:
+            b, t = _sample_leaf_bytes(item)
+            binary += b
+            total += t
+        return binary, total
+    return 0, 8
+
+
+def _sample_account_bytes(sample: Any) -> int:
+    """Uncompressed payload estimate from the kept Arrow row (not pytree JSON)."""
+    _, total = _sample_leaf_bytes(sample)
+    return total
+
+
+def _sample_is_binary_heavy(sample: Any) -> bool:
+    """True when Hub ``{bytes, path}`` JPEG/WAV (or similar) dominate the row."""
+    binary, total = _sample_leaf_bytes(sample)
+    return total > 0 and binary / total >= _BINARY_HEAVY_RATIO
+
+
+def _data_format_is_arrow_safe(data_format: list[str] | None) -> bool:
+    """False when a leaf is media/tensor — those stay on pytree serializers, not IPC."""
+    if not data_format:
+        return True
+    return all(name.split(":", 1)[0].lower() not in _MEDIA_FORMAT_KEYS for name in data_format)
 
 
 @dataclass
@@ -42,6 +134,7 @@ class Item:
     data: bytes
     bytes: int
     dim: int | None = None
+    sample: Any = None
 
     def __len__(self) -> int:
         return self.bytes
@@ -54,6 +147,8 @@ class BinaryWriter:
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         follow_tensor_dimension: bool = True,
         serializers: dict[str, Serializer] | None = None,
@@ -67,7 +162,13 @@ class BinaryWriter:
             cache_dir: The path to where the chunks will be saved.
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
-            compression: The compression algorithm to use.
+            compression: The compression algorithm to use (``"zstd"`` or ``"zstd:N"``).
+            compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+                ``"batch"`` (framed zstd inside ``.bin``). ``"chunk"`` is whole-file
+                ``.zstd.bin``; ``"sample"`` is per-item zstd inside ``.bin``. Not the
+                zstd numeric level — use ``compression="zstd:4"`` for that.
+            compression_batch_size: Items per zstd frame when ``compression_level="batch"``.
+                Default is 256 (same as Arrow IPC / decode windows).
             encryption: The encryption algorithm to use.
             follow_tensor_dimension: Whether to follow the tensor dimension when serializing the data.
             serializers: Provide your own serializers.
@@ -88,15 +189,37 @@ class BinaryWriter:
 
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._serializers_extra: dict[str, Serializer] = {}
+        self._format_serializers: list[Serializer] | None = None
+        self._format_fixed_sizes: list[int | None] | None = None
+        self._fixed_header: bytes | None = None
+        self._fixed_body_len: int = 0
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
+        if compression and (compression == "zstd_framed" or str(compression).startswith("zstd_framed:")):
+            raise ValueError(
+                "compression='zstd_framed' is not a codec. Use compression='zstd' with "
+                "compression_level='batch' (framed .bin) or 'chunk' (whole-file .zstd.bin)."
+            )
+        self._compression_level = (
+            resolve_write_compression_level(compression, compression_level) if compression else "chunk"
+        )
+        self._compression_batch_size = compression_batch_size
+        if compression and self._compression_level != "chunk" and not str(compression).startswith("zstd"):
+            raise ValueError("compression_level='batch'/'sample' is only supported with compression='zstd'.")
+        if compression_batch_size is not None and int(compression_batch_size) < 1:
+            raise ValueError("compression_batch_size must be a positive integer.")
         self._encryption = encryption
         self._item_loader = item_loader or PyTreeLoader()
+        if isinstance(self._item_loader, TemporalArrayLoader) and (compression or encryption or serializers):
+            raise ValueError("TemporalArrayLoader requires no compression, encryption or custom serializers.")
         self.msg_queue = msg_queue
 
         self._data_format: list[str] | None = None
         self._data_spec: PyTree | None = None
+        self._checkpoint_config: dict[str, Any] | None = None
+        self._types: JsonType | None = None
+        self._pytree_keys: list[str] | None = None
 
         if self._compression:
             if len(_COMPRESSORS) == 0:
@@ -107,12 +230,33 @@ class BinaryWriter:
                     f"The provided compression {self._compression} isn't available in {sorted(_COMPRESSORS)}"
                 )
             self._compressor: Compressor = _COMPRESSORS[self._compression]
+            if is_in_file_compression(self._compression_level):
+                if self._encryption is not None:
+                    raise ValueError("compression_level='batch'/'sample' does not support encryption.")
+                if not isinstance(self._item_loader, PyTreeLoader):
+                    raise ValueError(
+                        "compression_level='batch'/'sample' is only supported for pytree chunks (PyTreeLoader)."
+                    )
 
         self._serialized_items: dict[int, Item] = {}
         self._chunk_index = chunk_index or 0
         self._min_index: int | None = None
         self._max_index: int | None = None
         self._chunks_info: list[dict[str, Any]] = []
+        # True once a chunk was wrapped with LitData file-level compression.
+        # Nested Arrow chunks skip that wrap (IPC zstd instead) so index.json
+        # must not advertise ``compression="zstd"`` or the reader will inflate
+        # already-readable ``.bin`` files through Python.
+        self._file_compression_used = False
+        self._framed_compression_used = False
+        self._ipc_compression_used = False
+        # Skip Arrow IPC zstd when the row is already-compressed binary (JPEG/WAV).
+        # Decided from the first Arrow sample so food101/superb do not pay inflate.
+        self._skip_ipc_zstd = False
+        self._ipc_zstd_decided = False
+        # On-disk bytes per nested row from the last flushed Arrow chunk. ``_should_write``
+        # used discarded pytree JSON lengths, so a 64MB target became ~23MB zstd IPC files.
+        self._nested_on_disk_bpi: float | None = None
         self._worker_env: _WorkerEnv | None = None
         self._rank: int | None = None
         self._is_done = False
@@ -125,17 +269,16 @@ class BinaryWriter:
 
     @property
     def filled(self) -> bool:
-        """Returns whether the caching phase is done."""
+        """True once the merged ``index.json`` exists for a standalone Cache.
+
+        Optimizer workers must keep writing during ``mode='append'`` even when
+        a previous ``index.json`` is already in the write-through output dir.
+        """
+        if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK") is not None:
+            return False
         if self._is_done:
             return True
-        files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
-        worker_env = _WorkerEnv.detect()
-        data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
-        if data_optimiser_num_workers is not None:
-            self._is_done = len(index_files) == int(data_optimiser_num_workers)
-        else:
-            self._is_done = len(index_files) == self._distributed_env.world_size * worker_env.world_size
+        self._is_done = os.path.exists(os.path.join(self._cache_dir, _INDEX_FILENAME))
         return self._is_done
 
     @property
@@ -152,26 +295,51 @@ class BinaryWriter:
 
     def get_config(self) -> dict[str, Any]:
         """Returns the config of the writer."""
+        # A resumed worker can have saved chunks but no remaining inputs. It never
+        # calls serialize(), so retain the saved schema and compression metadata
+        # instead of publishing an uninferred config for those existing chunks.
+        if self._data_format is None and self._checkpoint_config is not None:
+            return copy.deepcopy(self._checkpoint_config)
         return {
-            "compression": self._compression,
+            "compression": self._compression
+            if (self._file_compression_used or self._framed_compression_used or not self._chunks_info)
+            else None,
+            "compression_level": self._compression_level
+            if self._framed_compression_used and self._compression_level != "chunk"
+            else None,
+            "compression_batch_size": (
+                self._resolved_batch_size()
+                if self._framed_compression_used and self._compression_level == "batch"
+                else None
+            ),
+            "ipc_compression": self._ipc_codec() if self._ipc_compression_used else None,
             "chunk_size": self._chunk_size,
             "chunk_bytes": self._chunk_bytes,
             "data_format": self._data_format,
             "data_spec": treespec_dumps(self._data_spec) if self._data_spec else None,
+            "types": schema_to_json(self._types),
             "encryption": self._encryption.state_dict() if self._encryption else None,
             "item_loader": self._item_loader.__class__.__name__,
+            **(
+                {"temporal_schema": self._item_loader.schema}
+                if isinstance(self._item_loader, TemporalArrayLoader)
+                else {}
+            ),
         }
 
     def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
-        # Flatten the items provided by the users
-        flattened, data_spec = tree_flatten(items)
-
-        # Collect the sizes and associated bytes for each item
+        if isinstance(self._item_loader, TemporalArrayLoader):
+            self._data_format = ["bytes"]
+            self._data_spec = tree_flatten(b"")[1]
+            return self._item_loader.serialize_record(items), None
+        # Flatten the items provided by the users. After the first sample the treespec is cached,
+        # so later writes only walk leaves (same order as ``tree_flatten``).
         sizes: list[int] = []
         data: list[bytes] = []
 
         if self._data_format is None:
+            flattened, data_spec = tree_flatten(items)
             data_format: list[str] = []
             for item in flattened:
                 data_format.append(self._serialize(item, sizes, data))
@@ -185,11 +353,46 @@ class BinaryWriter:
                     print(msg, flush=True)
             self._data_format = data_format
             self._data_spec = data_spec
+            self._format_serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in self._format_serializers]
+            self._cache_fixed_item_layout()
+        elif self._fixed_header is not None:
+            return self._serialize_fixed_leaves(items)
         else:
-            # tiny optimization to avoid looping over all the data format
+            flattened = tree_leaves(items)
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
 
         return self._item_loader.encode_data(data, sizes, flattened)
+
+    def _cache_fixed_item_layout(self) -> None:
+        """If every leaf has a constant byte size, cache the size header for every later sample."""
+        sizes = self._format_fixed_sizes
+        if not sizes or any(size is None for size in sizes):
+            self._fixed_header = None
+            self._fixed_body_len = 0
+            return
+        typed = [int(size) for size in sizes if size is not None]
+        self._fixed_header = struct.pack("<" + "I" * len(typed), *typed)
+        self._fixed_body_len = sum(typed)
+
+    def _serialize_fixed_leaves(self, items: Any) -> tuple[bytes, int | None]:
+        flattened = tree_leaves(items)
+        header = self._fixed_header
+        serializers = self._format_serializers
+        sizes = self._format_fixed_sizes
+        assert header is not None
+        assert serializers is not None
+        assert sizes is not None
+        out = bytearray(len(header) + self._fixed_body_len)
+        out[0 : len(header)] = header
+        cursor = len(header)
+        for element, serializer, size in zip(flattened, serializers, sizes):
+            blob, _ = serializer.serialize(element)
+            assert size is not None
+            end = cursor + size
+            out[cursor:end] = blob
+            cursor = end
+        return bytes(out), None
 
     def _serialize(self, item: Any, sizes: list[int], data: list[bytes]) -> str:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
@@ -197,7 +400,8 @@ class BinaryWriter:
             if serializer.can_serialize(item):
                 serialized_item, name = serializer.serialize(item)
                 data.append(serialized_item)
-                sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+                size = getattr(serializer, "size", None)
+                sizes.append(size if size is not None else len(serialized_item))
                 name = name or serializer_name
                 if name and name not in self._serializers_extra:
                     self._serializers_extra[name] = serializer
@@ -208,15 +412,28 @@ class BinaryWriter:
         self, item: Any, sizes: list[int], data: list[bytes], data_format: list[str]
     ) -> None:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
-        assert data_format
-        for element, item_format in zip(item, data_format):
-            serializer = self._serializers_extra[item_format]
+        serializers = self._format_serializers
+        if serializers is None:
+            serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_serializers = serializers
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._cache_fixed_item_layout()
+        fixed_sizes = self._format_fixed_sizes
+        if fixed_sizes is None:
+            fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._format_fixed_sizes = fixed_sizes
+            self._cache_fixed_item_layout()
+        for element, serializer, fixed in zip(item, serializers, fixed_sizes):
             serialized_item, _ = serializer.serialize(element)
             data.append(serialized_item)
-            sizes.append(serializer.size if hasattr(serializer, "size") else len(serialized_item))
+            sizes.append(fixed if fixed is not None else len(serialized_item))
 
-    def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
-        """Creates a binary chunk file from serialized items."""
+    def _create_chunk(self, on_done: bool = False) -> tuple[bytes, bool, dict[str, Any]]:
+        """Build chunk bytes. Returns ``(data, nested_arrow_only, chunk_meta)``.
+
+        ``nested_arrow_only`` chunks already carry Arrow IPC zstd and must not
+        be wrapped again with LitData file-level compression.
+        """
         # The chunk's binary format is structured as follows:
 
         # +------------+---------------+-------------+
@@ -264,16 +481,51 @@ class BinaryWriter:
                 f" Found {self._pretty_serialized_items()} with boundaries: {self._min_index}, {self._max_index}."
             )
 
-        num_items = np.uint32(len(items))  # total number of items in the chunk
-        sizes = list(map(len, items))  # list of sizes (length of bytes) of each item
-        offsets = np.array([0] + sizes).cumsum().astype(np.uint32)  # let's say: [0, 10, 30, 45]
+        n = len(items)
+        num_items = np.uint32(n)
+        header = 4 + 4 * (n + 1)
+        samples = [item.sample for item in items]
+        arrow_rows = (
+            is_arrow_footer_type(self._types)
+            and _data_format_is_arrow_safe(self._data_format)
+            and all(sample is not None for sample in samples)
+        )
+        nested_arrow_only = False
+        if arrow_rows:
+            # Header + Arrow footer only. The pytree body duplicated every JSON
+            # row (leaves + IPC) and the reader never used it once the footer existed.
+            offsets = np.full(n + 1, header, dtype=np.uint32)
+            slim = bytearray(header)
+            slim[0:4] = num_items.tobytes()
+            slim[4:header] = offsets.tobytes()
+            data = append_arrow_row_footer(bytes(slim), samples, ipc_compression=self._ipc_codec())
+            if data[-8:] != _ARROW_FOOTER_MAGIC:
+                arrow_rows = False
+            else:
+                nested_arrow_only = True
+        if not arrow_rows:
+            offsets = np.empty(n + 1, dtype=np.uint32)
+            offsets[0] = header
+            cursor = header
+            for i, item in enumerate(items):
+                cursor += item.bytes
+                offsets[i + 1] = cursor
 
-        # add the number of bytes taken to store (num_items and offsets). Let's say 60: offsets -> [60, 70, 90, 105]
-        offsets += len(num_items.tobytes()) + len(offsets.tobytes())
-        sample_data = b"".join([item.data for item in items])
-
-        # combine all bytes data which will be written to the chunk file
-        data = num_items.tobytes() + offsets.tobytes() + sample_data
+            data = bytearray(cursor)
+            data[0:4] = num_items.tobytes()
+            data[4:header] = offsets.tobytes()
+            pos = header
+            for item in items:
+                end = pos + item.bytes
+                data[pos:end] = item.data
+                pos = end
+            data = bytes(data)
+            if is_arrow_footer_type(self._types) and _data_format_is_arrow_safe(self._data_format):
+                data = append_arrow_row_footer(data, samples, ipc_compression=self._ipc_codec())
+            elif self._compression_level == "batch":
+                data = pack_framed_zstd(data, self._in_file_zstd_codec(), self._resolved_batch_size())
+            elif self._compression_level == "sample":
+                data = pack_sample_zstd(data, self._in_file_zstd_codec())
 
         # Whether to encrypt the data at the chunk level
         if self._encryption and self._encryption.level == EncryptionLevel.CHUNK:
@@ -281,7 +533,13 @@ class BinaryWriter:
 
         current_chunk_bytes = len(data)
 
-        if self._chunk_bytes and current_chunk_bytes > self._chunk_bytes:
+        if (
+            self._chunk_bytes
+            and current_chunk_bytes > self._chunk_bytes
+            and (n == 1 or current_chunk_bytes > int(self._chunk_bytes * 1.1))
+        ):
+            # Packing includes the item that crossed the target (~0.1–1%). Only
+            # warn when one sample is larger than the target or overshoot is >10%.
             warnings.warn(
                 f"An item was larger than the target chunk size ({_human_readable_bytes(self._chunk_bytes)})."
                 f" The current chunk will be {_human_readable_bytes(current_chunk_bytes)} in size.",
@@ -295,26 +553,80 @@ class BinaryWriter:
         if items[0].dim:
             dim = sum([item.dim if item.dim is not None else 0 for item in items])
 
-        chunk_info = {
+        chunk_info: dict[str, Any] = {
             "chunk_bytes": current_chunk_bytes,
             "chunk_size": num_items.item(),
-            "filename": filename,
             "dim": dim,
         }
+        if isinstance(self._item_loader, TemporalArrayLoader):
+            # Small per-record metadata avoids GETs for chunk/array headers during random windows.
+            # These are absolute chunk byte offsets, excluding the final end sentinel.
+            # Frame counts plus the shared temporal_schema determine every group's
+            # position and row size; see temporal.py for an exact binary example.
+            # Payload headers remain in the chunk for normal full-record decoding.
+            chunk_info["temporal_offsets"] = offsets[:-1].tolist()
+            chunk_info["temporal_frames"] = [struct.unpack_from("<I", item.data)[0] for item in items]
 
-        self._chunks_info.append(chunk_info)
+        return data, nested_arrow_only, chunk_info
 
-        return data
+    def _resolved_batch_size(self) -> int:
+        if self._compression_batch_size is not None:
+            return max(1, int(self._compression_batch_size))
+        return DEFAULT_COMPRESSION_BATCH_SIZE
 
-    def get_chunk_filename(self) -> str:
-        if self._compression:
+    def _in_file_zstd_codec(self) -> Any:
+        """Arrow C++ zstd for framed/sample wraps; python-zstd if pyarrow is missing."""
+        codec = getattr(self, "_in_file_zstd", None)
+        if codec is None:
+            self._in_file_zstd = make_zstd_codec(self._compression)
+            codec = self._in_file_zstd
+        return codec
+
+    def _ipc_codec(self) -> str | None:
+        """Arrow IPC codec when the user asked for compression; nested skips file-level zstd."""
+        if not self._compression or self._skip_ipc_zstd:
+            return None
+        codec = self._compression.split(":")[0]
+        return codec if codec in {"zstd", "lz4"} else None
+
+    def _item_account_bytes(self, item: Item) -> int:
+        """Bytes that count toward ``chunk_bytes``. Arrow JSON is discarded; use on-disk size."""
+        if (
+            item.sample is None
+            or not is_arrow_footer_type(self._types)
+            or not _data_format_is_arrow_safe(self._data_format)
+        ):
+            return item.bytes
+        if self._nested_on_disk_bpi is not None:
+            return max(1, int(round(self._nested_on_disk_bpi)))
+        # Before the first flush there is no measured on-disk size. Count the
+        # sample payload — not pytree JSON and not a 3× zstd guess. JPEG/WAV
+        # ratios are ~1.0–1.4; the old ``raw // 3`` packed first shards to 140–188MB.
+        estimated = _sample_account_bytes(item.sample)
+        return max(1, estimated if estimated else item.bytes)
+
+    def get_chunk_filename(self, file_compression: bool | None = None) -> str:
+        if file_compression is None:
+            file_compression = bool(self._compression)
+        if file_compression and self._compression:
             return f"chunk-{self.rank}-{self._chunk_index}.{self._compression}.bin"
         return f"chunk-{self.rank}-{self._chunk_index}.bin"
 
     def write_chunk(self, on_done: bool = False) -> str:
         """Write a chunk to the filesystem."""
-        filename = self.get_chunk_filename()
-        self.write_chunk_to_file(self._create_chunk(filename, on_done=on_done), filename)
+        data, nested_arrow_only, chunk_info = self._create_chunk(on_done=on_done)
+        use_file_compression = bool(self._compression) and not nested_arrow_only and self._compression_level == "chunk"
+        if nested_arrow_only:
+            self._ipc_compression_used = self._ipc_codec() is not None
+            n_rows = int(chunk_info["chunk_size"])
+            if n_rows:
+                self._nested_on_disk_bpi = int(chunk_info["chunk_bytes"]) / n_rows
+        elif is_in_file_compression(self._compression_level):
+            self._framed_compression_used = True
+        filename = self.get_chunk_filename(file_compression=use_file_compression)
+        chunk_info["filename"] = filename
+        self._chunks_info.append(chunk_info)
+        self.write_chunk_to_file(data, filename, compress=use_file_compression)
         self._chunk_index += 1
         return os.path.join(self._cache_dir, filename)
 
@@ -335,17 +647,34 @@ class BinaryWriter:
         if index in self._serialized_items:
             raise ValueError(f"The provided index {index} already exists in the cache.")
 
+        original = items
+        inferred = infer_type(items)
+        self._types = inferred if self._types is None else fuse_type(self._types, inferred)
+        if isinstance(items, dict) and self._types is not None:
+            items = wrap_for_pytree(items, self._types, keys=self._pytree_keys, wrap_leaf=JsonLeaf)
+
         data, dim = self.serialize(items)
+        if self._pytree_keys is None and isinstance(items, dict):
+            self._pytree_keys = list(items.keys())
 
         # Whether to encrypt the data at the sample level
         if self._encryption and self._encryption.level == EncryptionLevel.SAMPLE:
             data = self._encryption.encrypt(data)
 
+        keep_sample = (
+            isinstance(original, dict)
+            and _data_format_is_arrow_safe(self._data_format)
+            and (is_arrow_footer_type(self._types) or is_json_row(original))
+        )
+        if keep_sample and not self._ipc_zstd_decided:
+            self._skip_ipc_zstd = _sample_is_binary_heavy(original)
+            self._ipc_zstd_decided = True
         self._serialized_items[index] = Item(
             index=index,
             data=data,
             bytes=len(data),
             dim=dim,
+            sample=original if keep_sample else None,
         )
         if self._min_index is None:
             # When processing the first item for the current chunk
@@ -366,9 +695,7 @@ class BinaryWriter:
         else:
             return None
 
-        filepath = os.path.join(self._cache_dir, self.get_chunk_filename())
-
-        self.write_chunk()
+        filepath = self.write_chunk()
 
         # now to reset
         self._min_index = None
@@ -394,7 +721,7 @@ class BinaryWriter:
         while True:
             item = self._serialized_items.get(index, None)
             if item:
-                num_bytes += item.bytes
+                num_bytes += self._item_account_bytes(item)
                 num_items += item.dim if item.dim else 1
                 index += 1
                 if (self._chunk_bytes and self._chunk_bytes < num_bytes) or (
@@ -412,11 +739,14 @@ class BinaryWriter:
         self,
         raw_data: bytes,
         filename: str,
+        compress: bool | None = None,
     ) -> None:
         """Write chunk bytes to a file."""
-        # Whether to compress the raw bytes
-        if self._compression:
+        if compress is None:
+            compress = bool(self._compression)
+        if compress:
             raw_data = self._compressor.compress(raw_data)
+            self._file_compression_used = True
 
         # Write the binary chunk file
         with open(os.path.join(self._cache_dir, filename), "wb") as out:
@@ -473,7 +803,7 @@ class BinaryWriter:
             if _INDEX_FILENAME in files:
                 return
 
-            index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
             # When using the Data Optimizer, we don't use multi processes.
             is_done = len(index_files) == self._distributed_env.world_size * num_workers
@@ -491,7 +821,10 @@ class BinaryWriter:
 
         """
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+        if node_rank is None:
+            index_files = [f for f in files if _is_worker_index_file(f) or _is_node_index_file(f)]
+        else:
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
         chunks_info = []
         config = None
@@ -511,20 +844,24 @@ class BinaryWriter:
                 if config is None:
                     config = data["config"]
 
-                elif config != data["config"]:
+                elif _config_body(config) != _config_body(data["config"]):
                     raise Exception(
                         "The config isn't consistent between chunks. This shouldn't have happened."
                         f"Found {config}; {data['config']}."
                     )
+                else:
+                    config["types"] = fuse_schema_json(config.get("types"), data["config"].get("types"))
 
                 chunks_info.extend(data["chunks"])
 
             os.remove(chunk_path)
 
         if node_rank is None:
-            with open(os.path.join(self._cache_dir, _INDEX_FILENAME), "w") as f:
-                data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
-                json.dump(data, f, sort_keys=True)
+            dest = os.path.join(self._cache_dir, _INDEX_FILENAME)
+            tmp = dest + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"chunks": chunks_info, "config": config, "updated_at": str(time())}, f, sort_keys=True)
+            os.replace(tmp, dest)
         else:
             with open(os.path.join(self._cache_dir, f"{node_rank}-{_INDEX_FILENAME}"), "w") as f:
                 json.dump({"chunks": chunks_info, "config": config}, f, sort_keys=True)
@@ -552,26 +889,39 @@ class BinaryWriter:
             )
         return out
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
-        """Save the current state of the writer to a checkpoint."""
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints", inputs_done: int | None = None) -> str | None:
+        """Save the current writer state to ``checkpoint-{rank}.json``.
+
+        ``inputs_done`` is how many *input items* this worker has processed (used to slice
+        the work list on resume). ``samples_written`` is the sum of chunk sizes.
+        ``next_chunk_index`` is the next chunk file index — not the sample count.
+        """
         checkpoint_dir = os.path.join(self._cache_dir, checkpoint_dir)
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
         if self._chunks_info == self.last_checkpoint_chunk_info:
-            # to avoid saving the same checkpoint twice
             return None
 
-        unique_id = uuid.uuid4().hex
-        done_till_index = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        samples_written = sum(chnk_info["chunk_size"] for chnk_info in self._chunks_info)
+        resolved_inputs = samples_written if inputs_done is None else inputs_done
+        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}.json")
+        tmp_filepath = checkpoint_filepath + f".tmp.{os.getpid()}"
 
-        checkpoint_filepath = os.path.join(checkpoint_dir, f"checkpoint-{self.rank}-{unique_id}.json")
+        payload = {
+            "chunks": self._chunks_info,
+            "config": self.get_config(),
+            "inputs_done": resolved_inputs,
+            "samples_written": samples_written,
+            "next_chunk_index": self._chunk_index,
+            # Backward compatible alias used by older loaders.
+            "done_till_index": resolved_inputs,
+        }
 
-        checkPoint = {"chunks": self._chunks_info, "config": self.get_config(), "done_till_index": done_till_index}
-
-        with open(checkpoint_filepath, "w") as f:
-            json.dump(checkPoint, f)
-
+        with open(tmp_filepath, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp_filepath, checkpoint_filepath)
+        self.last_checkpoint_chunk_info = copy.deepcopy(self._chunks_info)
         return checkpoint_filepath
 
 
@@ -611,6 +961,7 @@ def index_parquet_dataset(
             "chunk_bytes": None,
             "data_format": [],
             "data_spec": None,
+            "types": None,
             "encryption": None,
             "item_loader": ParquetLoader.__name__,
         }
@@ -641,7 +992,7 @@ def index_parquet_dataset(
                     f"Found {config}; {chunk_dtypes}."
                 )
             config["data_format"] = chunk_dtypes
-            chunk_info = {
+            chunk_info: dict[str, Any] = {
                 "chunk_bytes": file_metadata["file_size"],
                 "chunk_size": file_metadata["num_rows"],
                 "filename": file_metadata["file_name"],

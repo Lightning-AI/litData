@@ -26,7 +26,8 @@ def test_get_newer_version_respects_env_flag(monkeypatch, disable_version_check)
 
     result = _get_newer_version("0.2.50")
 
-    if disable_version_check:
+    if disable_version_check or disable_version_check is None:
+        # Default is disabled (no PyPI call) unless LITDATA_CHECK_UPDATES=1.
         assert result is None
         mock_get.assert_not_called()
     else:

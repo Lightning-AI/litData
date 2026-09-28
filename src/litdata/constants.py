@@ -20,6 +20,12 @@ import torch
 from lightning_utilities.core.imports import RequirementCache
 
 _INDEX_FILENAME = "index.json"
+_KEYS_DIRNAME = "keys"
+_KEYS_SHARD_TEMPLATE = "shard-{:05d}.parquet"
+# Legacy single-file sidecar (still read if present).
+_KEYS_FILENAME = "keys.parquet"
+_RANK_KEYS_SUFFIX = ".keys.parquet"
+_DEFAULT_KEYS_NUM_SHARDS = 1
 _DEFAULT_CHUNK_BYTES = 1 << 26  # 64M B
 _DEFAULT_FAST_DEV_RUN_ITEMS = 10
 _DEFAULT_CACHE_DIR = os.path.join(Path.home(), ".lightning", "chunks")
@@ -51,6 +57,10 @@ _PIL_AVAILABLE = RequirementCache("PIL")
 _TORCH_VISION_AVAILABLE = RequirementCache("torchvision")
 _TORCH_VISION_LESS_THAN_0_26 = RequirementCache("torchvision<0.26.0")
 _AV_AVAILABLE = RequirementCache("av")
+_TORCHCODEC_AVAILABLE = RequirementCache("torchcodec")
+_TRIMESH_AVAILABLE = RequirementCache("trimesh")
+_NIBABEL_AVAILABLE = RequirementCache("nibabel")
+_PDFPLUMBER_AVAILABLE = RequirementCache("pdfplumber")
 _OBSTORE_AVAILABLE = RequirementCache("obstore")
 
 _DEBUG = bool(int(os.getenv("DEBUG_LITDATA", "0")))
@@ -58,7 +68,14 @@ _PRINT_DEBUG_LOGS = bool(int(os.getenv("PRINT_DEBUG_LOGS", "0")))
 
 _MAX_WAIT_TIME = int(os.getenv("MAX_WAIT_TIME", "120"))
 _FORCE_DOWNLOAD_TIME = int(os.getenv("FORCE_DOWNLOAD_TIME", "30"))
-_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0"))
+# Opt-in PyPI upgrade nag. Downstream libraries pin litdata and disable this.
+# ``LITDATA_CHECK_UPDATES=1`` turns it back on. ``LITDATA_DISABLE_VERSION_CHECK``
+# still wins when set.
+_LITDATA_CHECK_UPDATES = int(os.getenv("LITDATA_CHECK_UPDATES", "0"))
+_LITDATA_DISABLE_VERSION_CHECK = int(os.getenv("LITDATA_DISABLE_VERSION_CHECK", "0" if _LITDATA_CHECK_UPDATES else "1"))
+# Experimental async chunk prefetch (see ``litdata.streaming.async_prefetch``).
+# Default: on for remote datasets when ``LITDATA_ASYNC_CHUNK_PREFETCH`` is unset;
+# force with ``LITDATA_ASYNC_CHUNK_PREFETCH=0/1``.
 
 # DON'T CHANGE ORDER
 _TORCH_DTYPES_MAPPING = {

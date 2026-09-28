@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LitData Simulator · Lightning.AI</title>
+  <link rel="icon" type="image/svg+xml" href="/bolt.svg" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="https://lightning.ai/" target="_blank" rel="noopener">
+      <img class="bolt" src="/bolt.svg" alt="" />
+      <span class="brand-copy">
+        <span class="product">LitData Simulator</span>
+        <span class="org">Lightning.AI</span>
+      </span>
+    </a>
+    <div class="meta" id="meta">loading…</div>
+    <div class="status" id="status"></div>
+    <div class="simms" id="simms"></div>
+  </header>
+  <div class="layout">
+    <aside>
+      <p class="hint">Remote storage is the default: object-store GETs, RTT, and 429s. Compaction (chunks vs per-sample files) is what Vast and S3 both reward. Changing a knob re-runs the Go engine; History keeps every run.</p>
+      <div class="presets">
+        <button type="button" data-preset="s3">S3 1 Gbps</button>
+        <button type="button" data-preset="s3fast">S3 10 Gbps</button>
+        <button type="button" data-preset="vast">Vast POSIX</button>
+        <button type="button" data-preset="gpu">+ 1 ms GPU</button>
+      </div>
+      <button type="button" class="primary" id="search">Auto-search best knobs</button>
+      <label>num_workers <input id="num_workers" type="range" min="0" max="32" step="1"><span data-val></span></label>
+      <label>batch_size <input id="batch_size" type="range" min="8" max="512" step="8"><span data-val></span></label>
+      <label>prefetch_factor <input id="prefetch_factor" type="range" min="1" max="8" step="1"><span data-val></span></label>
+      <label>max_pre_download <input id="max_pre_download" type="range" min="1" max="32" step="1"><span data-val></span></label>
+      <label>bandwidth_bps <input id="bandwidth_bps" type="range" min="12500000" max="5000000000" step="12500000"><span data-val></span></label>
+      <label>rtt_ms <input id="rtt_ms" type="range" min="0" max="200" step="1"><span data-val></span></label>
+      <label>max_concurrent_gets <input id="max_concurrent_gets" type="range" min="1" max="64" step="1"><span data-val></span></label>
+      <label>requests_per_sec <input id="requests_per_sec" type="range" min="50" max="8000" step="50"><span data-val></span></label>
+      <label>time_per_sample_s <input id="time_per_sample_s" type="range" min="0" max="0.005" step="0.0001"><span data-val></span></label>
+      <label>decompress_ns_per_byte <input id="decompress_ns_per_byte" type="range" min="0" max="20" step="0.1"><span data-val></span></label>
+      <label>deserialize_us_per_sample <input id="deserialize_us_per_sample" type="range" min="0" max="8000" step="50"><span data-val></span></label>
+      <label>jitter_sigma <input id="jitter_sigma" type="range" min="0" max="1" step="0.05"><span data-val></span></label>
+      <label class="check"><input id="rate_limit_enabled" type="checkbox"> rate limit (429s)</label>
+    </aside>
+    <main>
+      <section class="stats" id="stats"></section>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div id="tip" class="tip" hidden></div>
+      </div>
+      <p class="caption">Every run is a curve. History is ranked by samples/s with a stall penalty (same score as the tuner). Hover for details; click a row to restore that spec.</p>
+      <div class="hist-head">
+        <h2>History</h2>
+        <button type="button" id="clear">Clear</button>
+      </div>
+      <div class="hist-bars"><canvas id="histchart"></canvas></div>
+      <div class="table-wrap">
+        <table id="hist">
+          <thead>
+            <tr>
+              <th>rank</th><th>run</th><th>source</th><th>samples/s</th><th>stall</th><th>ttfb</th><th>429</th>
+              <th>workers</th><th>batch</th><th>prefetch</th><th>pre-dl</th><th>conc</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <footer class="foot">
+    <span>Built for <a href="https://lightning.ai/" target="_blank" rel="noopener">Lightning.AI</a></span>
+    <span class="sep">·</span>
+    <span>LitData streaming</span>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

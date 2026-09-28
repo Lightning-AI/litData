@@ -27,7 +27,7 @@ from litdata.streaming.serializers import Serializer
 from litdata.streaming.writer import BinaryWriter
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int
+from litdata.utilities.format import _resolve_max_cache_size
 
 logger = logging.Logger(__name__)
 
@@ -39,11 +39,13 @@ class Cache:
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         item_loader: BaseItemLoader | None = None,
-        max_cache_size: int | str = "100GB",
+        max_cache_size: int | float | str | None = None,
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
         storage_options: dict | None = {},
@@ -60,11 +62,17 @@ class Cache:
             subsampled_files: List of subsampled chunk files loaded from `input_dir/index.json` file.
             region_of_interest: List of tuples of (start,end) of region of interest for each chunk.
             compression: The name of the algorithm to reduce the size of the chunks.
+            compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+                ``"batch"``. ``"chunk"`` is whole-file ``.zstd.bin``; ``"sample"`` is
+                per-item zstd. Default batch size is 256.
+            compression_batch_size: Items per frame when ``compression_level="batch"``
+                (default 256).
             encryption: The encryption algorithm to use.
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
             item_loader: The object responsible to generate the chunk intervals and load an item froma chunk.
-            max_cache_size: The maximum cache size used by the reader when fetching the chunks.
+            max_cache_size: Cache budget. ``None`` uses 75% of free disk (see ``StreamingDataset``).
+                A float such as ``0.90`` is that fraction of currently free space.
             serializers: Provide your own serializers.
             writer_chunk_index: The index of the chunk to start from when writing.
             storage_options: Additional connection options for accessing storage services.
@@ -83,6 +91,8 @@ class Cache:
             chunk_size=chunk_size,
             chunk_bytes=chunk_bytes,
             compression=compression,
+            compression_level=compression_level,
+            compression_batch_size=compression_batch_size,
             encryption=encryption,
             serializers=serializers,
             chunk_index=writer_chunk_index or 0,
@@ -93,7 +103,7 @@ class Cache:
             self._cache_dir,
             subsampled_files=subsampled_files,
             region_of_interest=region_of_interest,
-            max_cache_size=_convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
+            max_cache_size=_resolve_max_cache_size(max_cache_size, self._cache_dir),
             remote_input_dir=input_dir.url,
             compression=compression,
             encryption=encryption,
@@ -175,6 +185,6 @@ class Cache:
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         return self._reader._get_chunk_index_from_index(index)
 
-    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints") -> str | None:
+    def save_checkpoint(self, checkpoint_dir: str = ".checkpoints", inputs_done: int | None = None) -> str | None:
         """Save the current state of the writer to a checkpoint."""
-        return self._writer.save_checkpoint(checkpoint_dir=checkpoint_dir)
+        return self._writer.save_checkpoint(checkpoint_dir=checkpoint_dir, inputs_done=inputs_done)

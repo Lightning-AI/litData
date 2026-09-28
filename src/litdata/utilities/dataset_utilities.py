@@ -17,6 +17,18 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
 
 
+def _looks_like_parquet_dir(path: str | None, fnmatch_pattern: str | None) -> bool:
+    if fnmatch_pattern and fnmatch_pattern.endswith(".parquet"):
+        return True
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    return any(name.endswith(".parquet") for name in names)
+
+
 def wait_for_predicate(
     predicate: Callable[[], bool],
     timeout: float,
@@ -79,12 +91,15 @@ def subsample_streaming_dataset(
 
     cache_index_filepath = os.path.join(input_dir.path, _INDEX_FILENAME)
 
-    # Check if `index.json` file exists in cache path
-    if not os.path.exists(cache_index_filepath) and isinstance(input_dir.url, str):
-        assert input_dir.url is not None
+    # Check if `index.json` file exists in cache path.
+    # Honor a custom ``index_path`` for both remote and local ``input_dir`` values;
+    # previously this ran only when ``input_dir.url`` was set, so local directories
+    # ignored ``index_path`` (see https://github.com/Lightning-AI/litData/issues/800).
+    if not os.path.exists(cache_index_filepath):
         if index_path is not None:
             copy_index_to_cache_index_filepath(index_path, cache_index_filepath)
-        else:
+        elif isinstance(input_dir.url, str):
+            assert input_dir.url is not None
             # Merge data_connection_id from resolved directory into storage_options for R2 connections
             merged_storage_options = storage_options.copy() if storage_options is not None else {}
             if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
@@ -104,15 +119,46 @@ def subsample_streaming_dataset(
         data = load_index_file(input_dir.path)
         original_chunks = data["chunks"]
     else:
-        raise ValueError(
-            f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
-            "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
-        )
+        from litdata.processing.complete import complete_dataset, is_complete_dataset
+
+        try:
+            complete_dataset(input_dir.path)
+        except FileNotFoundError:
+            parquet_root = input_dir.url or input_dir.path
+            if parquet_root and _looks_like_parquet_dir(input_dir.path, fnmatch_pattern):
+                from litdata.streaming.writer import index_parquet_dataset
+
+                index_parquet_dataset(
+                    parquet_root,
+                    cache_dir=input_dir.path,
+                    storage_options=storage_options,
+                )
+            else:
+                raise ValueError(
+                    f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
+                    "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
+                    " If workers wrote {rank}.index.json shards, call litdata.complete_dataset(dir)."
+                    " For a Parquet folder, StreamingDataset now builds the index automatically."
+                ) from None
+        if not is_complete_dataset(input_dir.path) and not os.path.exists(
+            os.path.join(input_dir.path, _INDEX_FILENAME)
+        ):
+            raise ValueError(
+                f"The provided dataset `{input_dir.path}` doesn't contain any {_INDEX_FILENAME} file."
+                "\n HINT: Did you successfully optimize a dataset to the provided `input_dir`?"
+            )
+        data = load_index_file(input_dir.path)
+        original_chunks = data["chunks"]
 
     if fnmatch_pattern is not None:
         from fnmatch import fnmatch
 
-        original_chunks = [chunk for chunk in original_chunks if fnmatch(chunk["filename"], fnmatch_pattern)]
+        original_chunks = [
+            chunk
+            for chunk in original_chunks
+            if fnmatch(chunk["filename"], fnmatch_pattern)
+            or fnmatch(os.path.basename(chunk["filename"]), fnmatch_pattern)
+        ]
 
     assert len(original_chunks) > 0, f"No chunks found in the `{input_dir}/index.json` file"
 
@@ -192,11 +238,14 @@ def _read_updated_at(
     index_json_content = None
     assert isinstance(input_dir, Dir)
 
-    # Try to read index.json locally
+    # Try to read index.json locally. A FUSE mount can expose a truncated
+    # leftover from a killed optimize; fall back to the object-store copy.
     if input_dir.path is not None and os.path.exists(os.path.join(input_dir.path, _INDEX_FILENAME)):
-        index_json_content = load_index_file(input_dir.path)
-    # Try to read index.json remotely
-    elif input_dir.url is not None:
+        try:
+            index_json_content = load_index_file(input_dir.path)
+        except (json.JSONDecodeError, OSError):
+            index_json_content = None
+    if index_json_content is None and input_dir.url is not None:
         assert input_dir.url is not None
         # download index.json file and read last_updation_timestamp
         with tempfile.TemporaryDirectory() as tmp_directory:
@@ -204,7 +253,12 @@ def _read_updated_at(
             if index_path is not None:
                 copy_index_to_cache_index_filepath(index_path, temp_index_filepath)
             else:
-                downloader = get_downloader(input_dir.url, tmp_directory, [], storage_options, session_options)
+                # Same merge as subsample_streaming_dataset: R2 needs data_connection_id
+                # even when the caller passed empty storage_options.
+                merged = dict(storage_options or {})
+                if input_dir.data_connection_id:
+                    merged["data_connection_id"] = input_dir.data_connection_id
+                downloader = get_downloader(input_dir.url, tmp_directory, [], merged, session_options)
                 downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), temp_index_filepath)
             index_json_content = load_index_file(tmp_directory)
 
