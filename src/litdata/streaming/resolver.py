@@ -252,6 +252,8 @@ def _resolve_gcs_folders(dir_path: str) -> Dir:
 
 def _resolve_lightning_storage(dir_path: str) -> Dir:
     data_connection = _resolve_data_connection(dir_path)
+    if getattr(data_connection, "type", None) == "mountable_data_connection":
+        return Dir(path=dir_path)
 
     return Dir(
         path=dir_path,

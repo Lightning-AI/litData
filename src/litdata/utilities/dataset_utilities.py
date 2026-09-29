@@ -205,6 +205,9 @@ def _should_replace_path(path: str | None) -> bool:
     if path is None or path == "":
         return True
 
+    if path.startswith("/teamspace/lightning_storage/") and _resolve_dir(path).url is None:
+        return False
+
     return (
         path.startswith("/teamspace/datasets/")
         or path.startswith("/teamspace/s3_connections/")

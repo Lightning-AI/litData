@@ -448,6 +448,7 @@ Examples (path on disk → optimize → batch): [examples/modality](examples/mod
 For temporal arrays, use `optimize(..., item_loader=TemporalArrayLoader(field_groups=[["clock", "valid"]]))`
 and `StreamingDataset(..., item_loader=TemporalArrayLoader()).read_window(index, start=7, frames=64)`.
 LitData owns field grouping, window offsets, range reads and decoding; the application keeps its sampling policy.
+When in-place mmap is disabled (`LITDATA_POSIX_FAST=0`), local window reads request only the selected byte ranges without Python file buffering. Operating-system caching still applies; this setting does not enable direct I/O.
 See the [built-in window example](examples/temporal_arrays) for a small training adapter and request-count tradeoffs.
 
 ----
@@ -2521,9 +2522,9 @@ optimize(
 )
 ```
 
-### Lightning Studio `/teamspace/...` paths (direct bucket I/O)
+### Lightning Studio `/teamspace/...` paths
 
-In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer these paths in LitData** — optimize/map uploads and StreamingDataset downloads use the **backing object store URL** (and temporary credentials when needed), which is much faster than reading every file through the FUSE mount.
+In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer these paths in LitData**: object-store connections use their backing URL and temporary credentials when needed. Mounted Lightning Storage filesystems are read and written in place, without redirecting the dataset to a download cache.
 
 | Path prefix | What LitData does |
 |-------------|-------------------|
@@ -2533,7 +2534,7 @@ In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer t
 | `/teamspace/gcs_connections/<name>/...` | Direct GCS |
 | `/teamspace/s3_folders/<name>/...` | S3 folder connection |
 | `/teamspace/gcs_folders/<name>/...` | GCS folder connection |
-| `/teamspace/lightning_storage/<name>/...` | Lightning-managed object storage (R2-style) |
+| `/teamspace/lightning_storage/<name>/...` | Direct R2 for object-store connections; in-place file access for mounted filesystems |
 | `/teamspace/datasets/...` | Teamspace datasets mount → project datasets bucket |
 
 ```python

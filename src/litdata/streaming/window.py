@@ -73,9 +73,17 @@ class _WindowReader:
         else:
 
             def read_local() -> bytes:
-                with open(path, "rb") as handle:
+                with open(path, "rb", buffering=0) as handle:
                     handle.seek(offset)
-                    return handle.read(length)
+                    parts = []
+                    remaining = length
+                    while remaining:
+                        part = handle.read(remaining)
+                        if not part:
+                            break
+                        parts.append(part)
+                        remaining -= len(part)
+                    return b"".join(parts)
 
             data = await asyncio.to_thread(read_local)
         if len(data) != length:

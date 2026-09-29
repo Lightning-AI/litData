@@ -3,6 +3,8 @@ import json
 import os
 from unittest import mock
 
+import pytest
+
 import litdata.constants
 import litdata.utilities
 import litdata.utilities.dataset_utilities
@@ -19,7 +21,8 @@ from litdata.utilities.dataset_utilities import (
 )
 
 
-def test_should_replace_path():
+def test_should_replace_path(monkeypatch):
+    monkeypatch.setattr(litdata.utilities.dataset_utilities, "_resolve_dir", lambda path: Dir(path, "r2://example"))
     assert _should_replace_path(None)
     assert _should_replace_path("")
     assert not _should_replace_path(".../datasets/...")
@@ -195,3 +198,10 @@ def test_subsample_streaming_dataset_uses_index_path_dir_for_local_dir(tmp_path)
     )
     assert files == ["chunk-0.bin"]
     assert roi == [(0, 3)]
+
+
+@pytest.mark.parametrize(("url", "replace"), [(None, False), ("r2://example/train", True)])
+def test_lightning_storage_cache_routing(monkeypatch, url, replace):
+    path = "/teamspace/lightning_storage/example/train"
+    monkeypatch.setattr(litdata.utilities.dataset_utilities, "_resolve_dir", lambda _: Dir(path, url))
+    assert _should_replace_path(path) is replace
