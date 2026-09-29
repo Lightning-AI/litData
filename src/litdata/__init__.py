@@ -29,6 +29,7 @@ from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.temporal import TemporalArrayLoader
 from litdata.streaming.writer import index_parquet_dataset
 from litdata.types import Audio, File, Graph, Image, Jpeg, JpegArray, Mesh, Nifti, Pdf, Pil, Tensor, Text, Tiff, Video
+from litdata.utilities.affinity import NumaAffinity, get_gpu_affinity, get_numa_affinity
 from litdata.utilities.breakpoint import breakpoint
 from litdata.utilities.hf_dataset import index_hf_dataset, optimize_hf
 from litdata.utilities.keys_index import build_keys_index
@@ -41,6 +42,9 @@ warnings.filterwarnings(
 )
 
 __all__ = [
+    "NumaAffinity",
+    "get_gpu_affinity",
+    "get_numa_affinity",
     "StreamingDataset",
     "StreamingRawDataset",
     "CombinedStreamingDataset",

@@ -2572,6 +2572,52 @@ if __name__ == "__main__":
 &nbsp;
 
 
+### GPU-local CPU and NUMA memory affinity
+
+On Linux, opt in to placing each training rank and its DataLoader workers on the CPUs and RAM local to its GPU:
+
+```python
+import os
+
+from litdata import StreamingDataLoader, StreamingDataset
+from litdata import get_gpu_affinity
+
+
+def main():
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    affinity = get_gpu_affinity(local_rank, bind_memory=True)
+    affinity.bind()
+
+    dataset = StreamingDataset("/path/to/optimized/data")
+    loader = StreamingDataLoader(
+        dataset,
+        batch_size=32,
+        num_workers=4,
+        worker_init_fn=affinity,
+        multiprocessing_context="spawn",
+        persistent_workers=True,
+        pin_memory=True,
+    )
+    for batch in loader:
+        train_step(batch)  # Your training step.
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Launch this example with `torchrun --nproc_per_node=8 train.py`, adjusting the GPU count. `get_gpu_affinity` uses PyTorch's **logical CUDA device** and its PCI NUMA topology, so CUDA visibility and device reordering are respected. It initializes CUDA in the rank process. The returned `NumaAffinity` object contains only the node, CPU IDs and memory-binding option; it can be pickled and applied in workers without querying CUDA. It also works with `torch.utils.data.DataLoader`.
+
+- Bind the rank before creating its reader threads, model and loader. Also pass the plan as `worker_init_fn`, particularly with spawned workers. To run an existing worker initializer, call `affinity(worker_id)` first in a top-level picklable callable, then run the existing initializer.
+- CPU selection intersects the GPU-local CPUs with the calling thread's current affinity mask. An empty intersection or unknown topology raises an error; it does not select a remote node. Multiple GPUs can share one NUMA node; these helpers do not reserve or divide CPUs between GPUs.
+- `bind_memory=True` uses `libnuma.so.1` (the `libnuma1` system package) to request and verify `MPOL_BIND`. CPU-only placement, `bind_memory=False`, does not require libnuma. Kernel or container restrictions on memory binding produce an error.
+- Binding affects the **calling thread and future child threads/processes**. Existing sibling threads retain their policies, and pages already allocated are not migrated. Call the helper early; `pin_memory=True` alone does not select a NUMA node. A strict binding limits allocations to that node's available memory.
+- This is optional and does not change existing loaders. Locality does not guarantee a throughput gain; compare the same workload with and without memory binding.
+
+If the GPU topology is known already, use `get_numa_affinity(numa_node, bind_memory=True)` to build a plan without initializing CUDA. This also supports older PyTorch builds that do not expose PCI identifiers in CUDA device properties. GPU discovery requires those properties (available in PyTorch 2.8). Create plans before narrowing a parent process's CPU mask; a child resolving a different GPU after inheriting that narrowed mask will raise rather than silently expand it. Apply a previously resolved plan to that child instead.
+
+See the [Linux NUMA policy documentation](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) for policy inheritance and allocation semantics.
+
 ## Features for transforming datasets
 
 <details>
