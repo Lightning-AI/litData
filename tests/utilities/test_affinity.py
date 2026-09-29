@@ -8,6 +8,9 @@ import torch
 
 from litdata.utilities import affinity
 
+_WORD_BITS = ctypes.sizeof(ctypes.c_ulong) * 8
+_MASK_WORDS = 1024 // _WORD_BITS
+
 
 @pytest.fixture
 def topology(tmp_path, monkeypatch):
@@ -23,7 +26,7 @@ def topology(tmp_path, monkeypatch):
     monkeypatch.setattr(affinity, "_SYS_NODES", nodes)
     monkeypatch.setattr(affinity, "_SYS_PCI", pci.parent)
     monkeypatch.setattr(affinity.sys, "platform", "linux")
-    state = SimpleNamespace(cpus=set(range(8)), policy=(0, (0,) * 16))
+    state = SimpleNamespace(cpus=set(range(8)), policy=(0, (0,) * _MASK_WORDS))
     monkeypatch.setattr(affinity.os, "sched_getaffinity", lambda pid: state.cpus.copy(), raising=False)
     monkeypatch.setattr(
         affinity.os, "sched_setaffinity", lambda pid, cpus: setattr(state, "cpus", set(cpus)), raising=False
@@ -82,7 +85,7 @@ def test_bind_both_and_inherited_narrow_cpu_mask(topology):
     topology.cpus = {0}
     plan.bind()
     assert topology.cpus == {4, 5, 6, 7}
-    assert topology.policy == (2, (2,) + (0,) * 15)
+    assert topology.policy == (2, (2,) + (0,) * (_MASK_WORDS - 1))
 
 
 def test_cpu_only_needs_no_libnuma(topology):
@@ -184,13 +187,20 @@ def test_gpu_discovery_is_rejected_in_worker(topology, monkeypatch):
     query.assert_not_called()
 
 
-def test_ctypes_policy_roundtrip(tmp_path, monkeypatch):
+@pytest.mark.parametrize("word_type", [ctypes.c_uint32, ctypes.c_uint64])
+def test_ctypes_policy_roundtrip(tmp_path, monkeypatch, word_type):
+    monkeypatch.setattr(affinity, "ctypes", SimpleNamespace(**(vars(ctypes) | {"c_ulong": word_type})))
+    word_bits = ctypes.sizeof(word_type) * 8
+    mask_words = 1024 // word_bits
     (tmp_path / "possible").write_text("0-130")
     monkeypatch.setattr(affinity, "_SYS_NODES", tmp_path)
     saved = {}
 
     def set_policy(mode, mask, maxnode):
-        saved.update(mode=mode, words=tuple(mask[i] for i in range(maxnode // 64)) if mask else (0,) * (maxnode // 64))
+        saved.update(
+            mode=mode,
+            words=tuple(mask[i] for i in range(maxnode // word_bits)) if mask else (0,) * (maxnode // word_bits),
+        )
         return 0
 
     def get_policy(mode, mask, maxnode, address, flags):
@@ -200,11 +210,13 @@ def test_ctypes_policy_roundtrip(tmp_path, monkeypatch):
         return 0
 
     lib = SimpleNamespace(set_mempolicy=set_policy, get_mempolicy=get_policy)
-    policy = (2, (0, 0, 4) + (0,) * 13)
+    words = [0] * mask_words
+    words[130 // word_bits] = 1 << (130 % word_bits)
+    policy = (2, tuple(words))
     affinity._write_policy(lib, policy)
     assert affinity._read_policy(lib) == policy
-    affinity._write_policy(lib, (0, (0,) * 16))
-    assert affinity._read_policy(lib) == (0, (0,) * 16)
+    affinity._write_policy(lib, (0, (0,) * mask_words))
+    assert affinity._read_policy(lib) == (0, (0,) * mask_words)
 
 
 @pytest.mark.parametrize("operation", ["read", "write"])
@@ -216,7 +228,7 @@ def test_ctypes_errno_is_preserved(tmp_path, monkeypatch, operation):
     call = (
         (lambda: affinity._read_policy(lib))
         if operation == "read"
-        else (lambda: affinity._write_policy(lib, (2, (1,) * 16)))
+        else (lambda: affinity._write_policy(lib, (2, (1,) * _MASK_WORDS)))
     )
     with pytest.raises(OSError, match="NUMA memory policy") as error:
         call()
