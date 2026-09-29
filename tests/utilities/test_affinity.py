@@ -1,7 +1,7 @@
 import ctypes
 import pickle
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 import torch
@@ -20,11 +20,14 @@ def topology(tmp_path, monkeypatch):
         path.mkdir(parents=True)
         (path / "cpulist").write_text(cpus)
     (nodes / "possible").write_text("0-1")
-    pci = tmp_path / "pci" / "0000:81:00.0"
+    pci = tmp_path / "pci_device"
     pci.mkdir(parents=True)
     (pci / "numa_node").write_text("1")
     monkeypatch.setattr(affinity, "_SYS_NODES", nodes)
-    monkeypatch.setattr(affinity, "_SYS_PCI", pci.parent)
+    # PCI addresses contain colons, which Windows cannot create as directory names.
+    pci_root = MagicMock()
+    pci_root.__truediv__.side_effect = {"0000:81:00.0": pci}.__getitem__
+    monkeypatch.setattr(affinity, "_SYS_PCI", pci_root)
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     state = SimpleNamespace(cpus=set(range(8)), policy=(0, (0,) * _MASK_WORDS))
     monkeypatch.setattr(affinity.os, "sched_getaffinity", lambda pid: state.cpus.copy(), raising=False)
@@ -159,6 +162,7 @@ def test_gpu_lookup_uses_logical_device_properties(topology, monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a,GPU-b")
     assert affinity.get_gpu_affinity(1) == affinity.NumaAffinity(1, (4, 5, 6, 7))
     query.assert_called_once_with(1)
+    affinity._SYS_PCI.__truediv__.assert_called_once_with("0000:81:00.0")
 
 
 def test_older_torch_has_explicit_node_fallback(topology, monkeypatch):
