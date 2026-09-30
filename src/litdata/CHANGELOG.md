@@ -8,11 +8,27 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+## [0.2.76] - 2026-09-30
+
 ### Added
+
+- GPU-local CPU affinity and optional NUMA memory binding helpers for ranks and DataLoader workers. ([#932](https://github.com/Lightning-AI/litData/pull/932))
+- Opt-in NFS direct reads for temporal windows with `window_direct_io=True`, plus reusable Python and experimental native-loader helpers. Direct reads bypass the client page cache; the native launcher requires a C compiler. ([#934](https://github.com/Lightning-AI/litData/pull/934))
 
 - `Downloader.adownload_bytes` supports validated async range reads, with native S3/R2 requests and direct local slices. Added `StreamingDataset.read_window` / `aread_window` and `TemporalArrayLoader` for built-in field/window selection, grouped array records, and index-only frame counts through the normal optimize workflow.
 
+### Changed
+
+- Declare PyTorch 2.4.0 as the minimum supported version. ([#909](https://github.com/Lightning-AI/litData/pull/909))
+- Remove the PyArrow upper version bound from optional dependencies. ([#929](https://github.com/Lightning-AI/litData/pull/929))
+
 ### Fixed
+
+- Preserve mounted storage paths and use exact, unbuffered local range reads for temporal windows. ([#931](https://github.com/Lightning-AI/litData/pull/931))
+- Honor `index_path` for local dataset directories. ([#917](https://github.com/Lightning-AI/litData/pull/917))
+- Preserve output prefixes when deriving checkpoint filenames. ([#926](https://github.com/Lightning-AI/litData/pull/926))
+- Reset wrapper sample and cycle counters with `reset_state_dict` and avoid mutating restored checkpoint counters. ([#928](https://github.com/Lightning-AI/litData/pull/928))
+- Refresh temporary credentials against their reported expiry and send S3 reads to the bucket's reported endpoint and region. ([#906](https://github.com/Lightning-AI/litData/pull/906), [#904](https://github.com/Lightning-AI/litData/pull/904))
 
 - Temporal window reads on local and parallel POSIX filesystems reuse bounded chunk mappings and prefetch selected ranges, preserving owned outputs and safe concurrent mapping lifetimes.
 - S3/R2 range reads close SDK response bodies on success and failure and reject truncated responses.
