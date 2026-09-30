@@ -82,10 +82,14 @@ class StreamingDataset(IterableDataset):
         num_canonical_nodes: int | None = None,
         batch_decode: int | str | bool = "auto",
         item_shuffle_window: int | str | None = None,
+        window_direct_io: bool = False,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
         Args:
+            window_direct_io: Read windows through Linux NFS O_DIRECT handles, bypassing the client page cache.
+                Only ``read_window`` / ``aread_window`` are supported in this mode; ordinary iteration is disabled.
+                Requires an uncompressed, unencrypted local NFS dataset. Defaults to False.
             input_dir: Path to the folder where the input data is stored. Supports paths ending with `.parquet`
                 with wildcards in the basename to stream specific Parquet files.
             cache_dir: Path to the folder where the cache data is stored. If not provided, the cache will be stored
@@ -161,6 +165,20 @@ class StreamingDataset(IterableDataset):
 
             item_loader = item_loader or ParquetLoader()
 
+        if not isinstance(window_direct_io, bool):
+            raise ValueError("window_direct_io must be a boolean.")
+        self.window_direct_io = window_direct_io
+        if window_direct_io:
+            from litdata.utilities.direct_io import _check_nfs, _check_platform
+
+            _check_platform()
+            if input_dir.url is not None or input_dir.path is None:
+                raise ValueError("window_direct_io requires a local NFS dataset path.")
+            fd = os.open(input_dir.path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                _check_nfs(fd)
+            finally:
+                os.close(fd)
         self.input_dir = input_dir
         self.cache_dir = cache_dir
         self.subsampled_files: list[str] = []
@@ -332,7 +350,7 @@ class StreamingDataset(IterableDataset):
             self.current_epoch = current_epoch
 
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
-        skip_copy = self.posix_fast is not None and self.posix_fast.skip_cache_copy
+        skip_copy = self.window_direct_io or (self.posix_fast is not None and self.posix_fast.skip_cache_copy)
         if not skip_copy and _should_replace_path(self.input_dir.path):
             cache_path = _try_create_cache_dir(
                 input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
@@ -341,7 +359,7 @@ class StreamingDataset(IterableDataset):
             if cache_path is not None:
                 self.input_dir.path = cache_path
 
-        if _should_replace_path_filestores(self.input_dir.path):
+        if not self.window_direct_io and _should_replace_path_filestores(self.input_dir.path):
             # Load the config to know whether the dataset has been compressed
             config = ChunksConfig.load(
                 self.input_dir.path or "",
@@ -403,7 +421,12 @@ class StreamingDataset(IterableDataset):
         if self.posix_fast is not None and not posix_fast_supports_config(cache._reader._config):
             self.posix_fast = None
 
-        if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
+        if (
+            not self.window_direct_io
+            and self.posix_fast is not None
+            and self.posix_fast.in_place
+            and cache._reader._config is not None
+        ):
             chunks = cache._reader._config._chunks or []
             cache._reader.enable_posix_fast(
                 list(range(len(chunks))), keep=max(4, self.max_pre_download), prefetch=False
@@ -514,6 +537,8 @@ class StreamingDataset(IterableDataset):
         )
 
     def __iter__(self) -> "StreamingDataset":
+        if self.window_direct_io:
+            raise RuntimeError("Use read_window/aread_window when window_direct_io=True.")
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
             self.distributed_env = _DistributedEnv.detect()
@@ -771,6 +796,8 @@ class StreamingDataset(IterableDataset):
         return workers_chunks
 
     def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
+        if self.window_direct_io:
+            raise RuntimeError("Use read_window/aread_window when window_direct_io=True.")
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -856,6 +883,7 @@ class StreamingDataset(IterableDataset):
                 posix_fast=reader._posix_fast,
                 mmap_keep=reader._posix_keep,
                 posix_willneed=reader._posix_willneed,
+                direct_io=self.window_direct_io,
             )
         return window_reader
 

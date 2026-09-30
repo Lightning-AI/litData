@@ -2969,3 +2969,74 @@ Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scho
 * Adrian Wälchli ([awaelchli](https://github.com/awaelchli))
 
 </details>
+
+### Direct reads on Linux NFS
+
+For a working set larger than client RAM, direct I/O can avoid filling the client's
+page cache with streamed payloads. It is an opt-in performance option: benchmark
+it with your access pattern. Server-side caches still apply. This support is
+currently limited to Linux x86_64/aarch64 and regular files on NFS; other
+filesystems raise an error rather than silently using buffered reads.
+
+For LitData window reads, no compiler or preload library is needed:
+
+```python
+from litdata import StreamingDataset, TemporalArrayLoader
+
+windows = StreamingDataset(
+    "/mnt/dataset",
+    item_loader=TemporalArrayLoader(),
+    window_direct_io=True,
+)
+sample = windows.read_window(0, start=128, frames=64)
+```
+
+`window_direct_io=True` supports `read_window` and `aread_window` on uncompressed,
+unencrypted datasets. It disables the window mmap path and ordinary dataset
+indexing/iteration. Keep sampling in your application and call window reads from
+your DataLoader workers. Defaults remain unchanged.
+
+Custom Python loaders can use the same reader without converting to LitData:
+
+```python
+from litdata.utilities.direct_io import open_nfs_direct
+
+with open_nfs_direct("/mnt/dataset/payload.bin") as handle:
+    handle.seek(123)
+    data = handle.read(4096)
+```
+
+This returns an unbuffered, read-only `FileIO` handle. Open it inside each worker,
+close it normally, and handle short reads when an exact byte count is required.
+Linux NFS permits unaligned byte ranges; this helper does not generalize that
+assumption to local disks. Do not mmap the same payload or modify files during reads.
+
+#### Experimental launcher for Lance and other native readers
+
+A native reader opens its own files, so the Python opener above cannot change its
+behavior. The launcher below builds a small C preload helper and starts your
+command with it. A system C compiler (`cc`) and mounted `/proc` are required.
+Only read-only regular files under the resolved root with the selected suffixes
+receive `O_DIRECT`. Metadata and writes retain their existing behavior.
+
+```bash
+python -m litdata.utilities.direct_io \
+  --root /mnt/dataset --suffix .lance -- \
+  python train.py --data /mnt/dataset
+```
+
+Use `--suffix .bin` for a native reader of binary payload files, or repeat
+`--suffix` to select several types. Run from a foreground terminal and wait for
+all workers to finish. The temporary compiled helper is removed when the command
+exits. A Python application can use `nfs_direct_io_environment(root,
+suffixes=[".lance"])` as a context manager and pass its returned environment to
+`subprocess.run(..., env=env, check=True)`.
+
+This is experimental integration support, not an upstream Lance configuration
+option. It supports dynamically linked libc `open`/`openat` readers, including the
+tested Lance `file+uring` path. It does not enable io_uring by itself, change
+already-open files, or affect the current Python process. Readers using mmap,
+static binaries, raw open syscalls, or io_uring open operations are unsupported.
+Do not use it for applications that detach workers after their parent exits.
+Use an immutable dataset and verify the reader's actual direct-I/O path before
+interpreting cache-bypass or throughput results. No speedup is guaranteed.

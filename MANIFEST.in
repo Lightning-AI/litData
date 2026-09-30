@@ -43,3 +43,5 @@ prune notebook*
 prune temp*
 prune test*
 prune benchmark*
+
+include src/litdata/utilities/_nfs_direct_io.c

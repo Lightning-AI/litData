@@ -24,15 +24,25 @@ from litdata.streaming.config import ChunksConfig
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.temporal import TemporalArrayLoader
 from litdata.streaming.window_mmap import _advise_window_ranges, _WindowMMapCache
+from litdata.utilities.direct_io import open_nfs_direct
 
 
 class _WindowReader:
     """Plan ranges or POSIX views; retain metadata/mappings, never decoded payloads."""
 
     def __init__(
-        self, config: ChunksConfig, *, posix_fast: bool = False, mmap_keep: int = 4, posix_willneed: bool = True
+        self,
+        config: ChunksConfig,
+        *,
+        posix_fast: bool = False,
+        mmap_keep: int = 4,
+        posix_willneed: bool = True,
+        direct_io: bool = False,
     ) -> None:
         self.config = config
+        self._direct_io = direct_io
+        if direct_io and config._downloader is not None:
+            raise ValueError("Direct window reads require a local NFS dataset.")
         self.length = sum(interval[2] - interval[1] for interval in config.intervals)
         self.metadata: OrderedDict[tuple[int, int], dict[str, Any]] = OrderedDict()
         spec = config.config.get("data_spec")
@@ -44,7 +54,7 @@ class _WindowReader:
         ):
             raise ValueError("Window reads require uncompressed, unencrypted PyTree chunks from optimize().")
         self.temporal = config._item_loader if isinstance(config._item_loader, TemporalArrayLoader) else None
-        self._maps = _WindowMMapCache(mmap_keep) if posix_fast and self.temporal is not None else None
+        self._maps = _WindowMMapCache(mmap_keep) if posix_fast and not direct_io and self.temporal is not None else None
         self._posix_willneed = posix_willneed
         if self.temporal is not None:
             assert self.temporal.schema is not None
@@ -73,7 +83,7 @@ class _WindowReader:
         else:
 
             def read_local() -> bytes:
-                with open(path, "rb", buffering=0) as handle:
+                with open_nfs_direct(path) if self._direct_io else open(path, "rb", buffering=0) as handle:
                     handle.seek(offset)
                     parts = []
                     remaining = length
