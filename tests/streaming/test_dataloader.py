@@ -69,6 +69,30 @@ class TestCombinedStreamingDataset(CombinedStreamingDataset):
         pass
 
 
+@pytest.mark.parametrize("num_workers", [0, 2])
+@pytest.mark.parametrize("drop_last", [False, True])
+@pytest.mark.parametrize("shuffle_kind", ["none", "window"])
+def test_streaming_dataloader_length_counts_worker_batches(tmpdir, monkeypatch, num_workers, drop_last, shuffle_kind):
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "1" if shuffle_kind == "window" else "0")
+    cache = Cache(input_dir=str(tmpdir), chunk_size=5)
+    for index in range(10):
+        cache[index] = index
+    cache.done()
+    cache.merge()
+
+    dataset = StreamingDataset(str(tmpdir), shuffle=shuffle_kind != "none")
+    loader = StreamingDataLoader(dataset, batch_size=4, num_workers=num_workers, drop_last=drop_last)
+    reported_length = len(loader)
+    batches = list(loader)
+
+    # Workers collate separately: with 2 window-shuffled workers, two 5-item chunks yield 2 full + 2 partial batches.
+    assert reported_length == len(batches)
+    if not drop_last:
+        assert sorted(torch.cat(batches).tolist()) == list(range(10))
+    else:
+        assert all(len(batch) == 4 for batch in batches)
+
+
 def test_streaming_dataloader():
     dataset = TestCombinedStreamingDataset(
         [TestStatefulDataset(10, 1), TestStatefulDataset(10, -1)],
