@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Added
+
+- `CombinedStreamingDataset(max_cache_size=..., cache_allocation=...)`: an optional total cache budget shared across all child datasets, split by sampling weight (`cache_allocation="proportional"`, default) or evenly (`"equal"`) when iteration starts. `None` (default) leaves each child's `max_cache_size` unchanged. ([#790](https://github.com/Lightning-AI/litData/issues/790))
+
 ### Fixed
 
 - Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes.
