@@ -926,6 +926,8 @@ class StreamingDataLoader(DataLoader):
         if self._dataset_kind == _DatasetKind.Iterable:
             length = self._IterableDataset_len_called = self.dataset.get_len(self.num_workers, self.batch_size)
             if self.batch_size is not None:  # IterableDataset doesn't allow custom sampler or batch_sampler
+                if isinstance(self.dataset, StreamingDataset):
+                    return self.dataset._get_num_batches(self.num_workers, self.batch_size)
                 from math import ceil
 
                 return length // self.batch_size if self.drop_last else ceil(length / self.batch_size)

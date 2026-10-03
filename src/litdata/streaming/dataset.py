@@ -473,6 +473,22 @@ class StreamingDataset(IterableDataset):
             self.shuffler = self._create_shuffler(cache)
         return self.shuffler.get_len(self.distributed_env, self.num_workers, self.batch_size, self.current_epoch)
 
+    def _get_num_batches(self, num_workers: int, batch_size: int) -> int:
+        """Count batches collated independently by each worker on this rank."""
+        self.get_len(num_workers, batch_size)
+        assert self.shuffler is not None
+        _, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
+            self.distributed_env, self.num_workers, batch_size, self.current_epoch
+        )
+        worker_start = self.distributed_env.global_rank * self.num_workers
+        worker_end = worker_start + self.num_workers
+        num_batches = 0
+        for intervals in workers_intervals[worker_start:worker_end]:
+            # With `drop_last`, the shuffler has already trimmed each worker to whole batches.
+            num_items = sum(interval[2] - interval[1] for interval in intervals)
+            num_batches += -(-num_items // batch_size)
+        return num_batches
+
     def _canonical_plans(
         self,
         *,

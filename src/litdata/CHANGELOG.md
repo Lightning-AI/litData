@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Fixed
+
+- Fix `len(StreamingDataLoader)` undercounting per-worker partial batches with whole-chunk window shuffling. ([#939](https://github.com/Lightning-AI/litData/pull/939))
+
 ## [0.2.76] - 2026-09-30
 
 ### Added
