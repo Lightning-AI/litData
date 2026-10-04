@@ -120,3 +120,36 @@ def test_remove_uuid_from_filename():
         filepath = ".checkpoints/" + filepath
         result = remove_uuid_from_filename(filepath)
         assert result == ".checkpoints/" + expected[idx]
+
+
+def test_remove_uuid_from_filename_stable_names():
+    stable_paths = [
+        ".checkpoints/checkpoint-0.json",
+        ".checkpoints/checkpoint-12.json",
+        "/output/data/train/.checkpoints/checkpoint-0.json",
+        "s3://bucket/output/data/train/.checkpoints/checkpoint-0.json",
+        "s3://bucket/output/data/train/.checkpoints/checkpoint-101.json",
+    ]
+    for path in stable_paths:
+        assert remove_uuid_from_filename(path) == path
+
+
+def test_upload_dest_checkpoint_paths():
+    from litdata.processing.data_processor import _upload_dest
+    from litdata.streaming.cache import Dir
+
+    local_checkpoint = "/cache/.checkpoints/checkpoint-0.json"
+
+    local_dest = _upload_dest(
+        Dir(path="/output/data/train", url=None),
+        local_checkpoint,
+        None,
+    )
+    remote_dest = _upload_dest(
+        Dir(path=None, url="s3://bucket/output/data/train"),
+        local_checkpoint,
+        None,
+    )
+
+    assert local_dest.replace("\\", "/") == "/output/data/train/.checkpoints/checkpoint-0.json"
+    assert remote_dest.replace("\\", "/") == "s3://bucket/output/data/train/.checkpoints/checkpoint-0.json"

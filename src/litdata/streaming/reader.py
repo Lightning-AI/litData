@@ -31,7 +31,7 @@ from filelock import FileLock, Timeout
 from litdata.constants import _DEBUG
 from litdata.debugger import CAT_CRASH, CAT_DOWNLOAD, CAT_READ, emit_trace, trace_span
 from litdata.streaming.async_prefetch import (
-    apply_async_pre_download_floor,
+    adaptive_pre_download,
     async_chunk_prefetch_enabled,
     async_download_concurrency,
     close_thread_event_loop,
@@ -90,7 +90,9 @@ class PrepareChunksThread(Thread):
         self._item_loader = item_loader
         # Async gather needs enough in-flight slots to overlap RTT; raise the
         # floor when async prefetch is active (real-S3 benches: 2→4).
-        self._max_pre_download = apply_async_pre_download_floor(max_pre_download, remote_dir=config._remote_dir)
+        self._max_pre_download = adaptive_pre_download(
+            max_pre_download, remote_dir=config._remote_dir, chunks=config._chunks
+        )
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
@@ -134,7 +136,11 @@ class PrepareChunksThread(Thread):
 
     def _async_prefetch(self) -> bool:
         """True when this prepare thread should batch-download via asyncio."""
-        return async_chunk_prefetch_enabled(self._config._remote_dir)
+        if not async_chunk_prefetch_enabled(self._config._remote_dir):
+            return False
+        # One tiny chunk: asyncio/obstore startup is larger than the GET (sst2-sized).
+        chunks = self._config._chunks or []
+        return not (len(chunks) == 1 and int(chunks[0].get("chunk_bytes") or 0) < 8 * 1024 * 1024)
 
     def _async_gather_width(self) -> int:
         """How many queued chunk indexes to download together."""
@@ -539,6 +545,8 @@ class PrepareChunksThread(Thread):
         self._item_loader.pre_load_chunk(chunk_index, chunk_filepath)
 
     def _force_download(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
+            return
         chunk_index = _get_from_queue(self._force_download_queue, timeout=timeout)
         if chunk_index is None:
             return
@@ -600,6 +608,11 @@ class PrepareChunksThread(Thread):
     def _download_chunk_indexes(self, chunk_indexes: list[int]) -> None:
         """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
         if not chunk_indexes:
+            return
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
+            for chunk_index in dict.fromkeys(int(idx) for idx in chunk_indexes):
+                self._pre_load_chunk(chunk_index)
+                self._pre_download_counter += 1
             return
         # Shuffle / queue can repeat an index; one GET per chunk per batch.
         chunk_indexes = list(dict.fromkeys(int(idx) for idx in chunk_indexes))
@@ -771,8 +784,8 @@ class BinaryReader:
         encryption: Encryption | None = None,
         item_loader: BaseItemLoader | None = None,
         serializers: dict[str, Serializer] | None = None,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         on_demand_bytes: bool = False,
     ) -> None:
@@ -826,6 +839,7 @@ class BinaryReader:
         self._session_options = session_options
         self._max_pre_download = max_pre_download
         self.on_demand_bytes = on_demand_bytes
+        self._window_reader: Any = None
         self._posix_fast = False
         self._posix_keep = 4
         self._posix_willneed = True
@@ -1142,6 +1156,8 @@ class BinaryReader:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_prepare_thread"] = None
+        # Window metadata and POSIX mappings are process-local; recreate after spawn.
+        state["_window_reader"] = None
         # StreamingTimingStats holds a threading.Lock and is process-local.
         state.pop("_timing", None)
         return state
@@ -1151,6 +1167,10 @@ class BinaryReader:
         self._timing = StreamingTimingStats.instance()
 
     def __del__(self) -> None:
+        window_reader = getattr(self, "_window_reader", None)
+        if window_reader is not None:
+            with suppress(Exception):
+                window_reader.close()
         # Release eagerly-acquired shared-chunk locks that were never released (e.g. the loop was
         # broken out of before the last item). Without this, an aborted epoch would leak reference
         # counts and prevent those chunks from ever being deleted.

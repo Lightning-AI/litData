@@ -27,6 +27,7 @@ from litdata.debugger import CAT_LOCK, emit_trace
 from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
+from litdata.streaming.framed_zstd import is_in_file_compression
 from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer
@@ -45,8 +46,8 @@ class ChunksConfig:
         item_loader: BaseItemLoader | None = None,
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
     ) -> None:
         """Reads the index files associated a chunked dataset and enables to map an index to its chunk.
 
@@ -89,6 +90,9 @@ class ChunksConfig:
 
         assert self._chunks is not None
         self._item_loader.setup(self._config, self._chunks, serializers, region_of_interest)
+        set_remote = getattr(self._item_loader, "set_remote_source", None)
+        if callable(set_remote):
+            set_remote(self._remote_dir, self._storage_options)
         self._intervals = self._item_loader.generate_intervals()
         self._length = self._intervals[-1][-1] if len(self._intervals) > 0 else 0
         self._downloader = None
@@ -111,11 +115,19 @@ class ChunksConfig:
                 raise ValueError(
                     "No compression algorithms are installed. To use zstd compression,  run `pip install zstd`."
                 )
-            if self._compressor_name not in _COMPRESSORS:
+            # Batch/sample frames live inside ``.bin``; do not whole-file inflate.
+            if is_in_file_compression(self._config.get("compression_level")):
+                if self._compressor_name not in _COMPRESSORS:
+                    raise ValueError(
+                        f"The provided compression {self._compressor_name} isn't available in {sorted(_COMPRESSORS)}",
+                    )
+                self._compressor = None
+            elif self._compressor_name not in _COMPRESSORS:
                 raise ValueError(
                     f"The provided compression {self._compressor_name} isn't available in {sorted(_COMPRESSORS)}",
                 )
-            self._compressor = _COMPRESSORS[self._compressor_name]
+            else:
+                self._compressor = _COMPRESSORS[self._compressor_name]
 
         self._skip_chunk_indexes_deletion: list[int] | None = None
         # Chunk indexes that are shared across workers on this node. Shared chunks are
@@ -207,6 +219,10 @@ class ChunksConfig:
         self._skip_chunk_indexes_deletion = skip_chunk_indexes_deletion
 
     def download_chunk_from_index(self, chunk_index: int, skip_lock: bool = False) -> None:
+        # ``hf://`` parquet is opened with fsspec range reads; do not GET the whole file.
+        if getattr(self._item_loader, "uses_direct_remote", False) is True:
+            return
+
         assert self._chunks is not None
         chunk_filename = self._chunks[chunk_index]["filename"]
 
@@ -461,8 +477,8 @@ class ChunksConfig:
         item_loader: BaseItemLoader | None = None,
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
     ) -> Optional["ChunksConfig"]:
         cache_index_filepath = os.path.join(cache_dir, _INDEX_FILENAME)
 

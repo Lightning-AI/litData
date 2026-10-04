@@ -241,10 +241,16 @@ class DatasetUpdate:
 
         tmp_dir = tempfile.mkdtemp(prefix="litdata-update-")
         try:
+            # Legacy whole-file wrap stored no compression_level; infer from filename.
+            compression_level = config.get("compression_level")
+            if not compression_level and compression and filename.endswith(f".{compression}.bin"):
+                compression_level = "chunk"
             writer = BinaryWriter(
                 tmp_dir,
                 chunk_size=len(samples),
                 compression=compression,
+                compression_level=compression_level,
+                compression_batch_size=config.get("compression_batch_size"),
                 chunk_index=chunk_index,
             )
             writer._rank = rank

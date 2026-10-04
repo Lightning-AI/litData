@@ -267,7 +267,12 @@ def _get_cache_dir(name: str | None = None) -> str:
 
 
 def _is_local_write_through(output_dir: Dir | None) -> bool:
-    """True when chunks can be written directly into a local output directory."""
+    """True when chunks can be written directly into a local output directory.
+
+    A Dir with both a FUSE ``path`` and a remote ``url`` (lightning_storage) is
+    remote: chunks go to the optimizer cache and are uploaded via R2/S3, not
+    written through the mount.
+    """
     return bool(output_dir is not None and output_dir.url is None and output_dir.path)
 
 
@@ -907,6 +912,7 @@ class BaseWorker:
         item_paths: list[list[str] | None] | None = None,
         items_lookup_path: str | None = None,
         shared_write_queue: "Queue | None" = None,
+        checkpoint_config: dict[str, Any] | None = None,
     ) -> None:
         """The BaseWorker is responsible to process the user data."""
         self.worker_index = worker_index
@@ -962,6 +968,7 @@ class BaseWorker:
         self.checkpoint_chunks_info: list[dict[str, Any]] | None = checkpoint_chunks_info
         self.checkpoint_next_index: int | None = checkpoint_next_index
         self.checkpoint_next_chunk_index: int | None = checkpoint_next_chunk_index
+        self.checkpoint_config = checkpoint_config
         self.storage_options = storage_options
         self.using_queue_optimize = using_queue_optimize
         # Explicit (writer_sample_index, key) pairs — index is the same value passed to Cache._add_item.
@@ -1068,6 +1075,11 @@ class BaseWorker:
             elif isinstance(combined_data, int):
                 index = combined_data
                 assert self.items is not None
+                if index < 0 or index >= len(self.items):
+                    raise IndexError(
+                        f"Optimize worker got item index {index} but only {len(self.items)} items "
+                        f"(lookup={self._items_lookup_path})."
+                    )
                 item = self.items[index]
                 paths = self.paths[index] if index < len(self.paths) else None
             else:
@@ -1120,6 +1132,8 @@ class BaseWorker:
             chunk_bytes=self.data_recipe.chunk_bytes,
             chunk_size=self.data_recipe.chunk_size,
             compression=self.data_recipe.compression,
+            compression_level=getattr(self.data_recipe, "compression_level", None),
+            compression_batch_size=getattr(self.data_recipe, "compression_batch_size", None),
             encryption=self.data_recipe.encryption,
             writer_chunk_index=self.writer_starting_chunk_index,
             item_loader=self.item_loader,
@@ -1140,6 +1154,7 @@ class BaseWorker:
             assert isinstance(self.checkpoint_chunks_info, list)
 
             self.cache._writer._chunks_info = self.checkpoint_chunks_info
+            self.cache._writer._checkpoint_config = self.checkpoint_config
             self.cache._writer._chunk_index = _writer_chunk_index_from_checkpoint(
                 self.writer_starting_chunk_index,
                 self.checkpoint_chunks_info,
@@ -1402,6 +1417,8 @@ class ChunkWriterProcess(Process):
                 chunk_bytes=self.data_recipe.chunk_bytes,
                 chunk_size=self.data_recipe.chunk_size,
                 compression=self.data_recipe.compression,
+                compression_level=getattr(self.data_recipe, "compression_level", None),
+                compression_batch_size=getattr(self.data_recipe, "compression_batch_size", None),
                 encryption=self.data_recipe.encryption,
                 writer_chunk_index=0,
                 item_loader=self.item_loader,
@@ -1487,6 +1504,8 @@ class DataChunkRecipe(DataRecipe):
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         storage_options: dict[str, Any] = {},
         key_fn: Callable[[Any], Any] | None = None,
@@ -1498,6 +1517,8 @@ class DataChunkRecipe(DataRecipe):
         self.chunk_size = chunk_size
         self.chunk_bytes = 1 << 26 if chunk_size is None and chunk_bytes is None else chunk_bytes  # 1<<26 = 64 MB
         self.compression = compression
+        self.compression_level = compression_level
+        self.compression_batch_size = compression_batch_size
         self.encryption = encryption
         self.key_fn = key_fn
 
@@ -1518,12 +1539,28 @@ class DataChunkRecipe(DataRecipe):
         cache_dir = _chunks_dir(output_dir)
 
         chunks = [file for file in os.listdir(cache_dir) if file.endswith(".bin")] if os.path.isdir(cache_dir) else []
-        if chunks and delete_cached_files and output_dir.path is not None and not _is_local_write_through(output_dir):
-            raise RuntimeError(f"All the chunks should have been deleted. Found {chunks} in cache: {cache_dir}")
+        # Remote dests (url set), including lightning_storage (FUSE path + R2 url), write
+        # chunks to a shared cache then upload. Leftover ``.bin`` from another job must
+        # not abort merge — that skipped ``index.json`` entirely.
+        if chunks and delete_cached_files and output_dir.url is not None:
+            logger.warning(
+                "Leftover chunk files in cache %s after remote upload: %s. Continuing index merge.",
+                cache_dir,
+                chunks[:8],
+            )
 
         merge_cache = Cache(cache_dir, chunk_bytes=1)
         node_rank = _get_node_rank()
-        merge_cache._merge_no_wait(node_rank if num_nodes > 1 else None, getattr(self, "existing_index", None))
+        # With more than one node, every node would otherwise fold the existing
+        # index into its own {node_rank}-index.json, and the final cross-node
+        # merge below then repeats those chunks once per node. Add the existing
+        # index only once, either here for the single-node case or in the final
+        # merge for the multi-node case.
+        existing_index = getattr(self, "existing_index", None)
+        merge_cache._merge_no_wait(
+            node_rank if num_nodes > 1 else None,
+            existing_index if num_nodes == 1 else None,
+        )
 
         self._merge_and_upload_keys(output_dir, cache_dir, num_nodes, node_rank)
         self._upload_index(output_dir, cache_dir, num_nodes, node_rank)
@@ -1734,7 +1771,9 @@ class DataChunkRecipe(DataRecipe):
                     shutil.copyfile(remote_filepath, node_index_filepath)
 
             merge_cache = Cache(merge_dir, chunk_bytes=1)
-            merge_cache._merge_no_wait()
+            # The per-node index files hold only their own new chunks now, so the
+            # existing index is folded in here, once, as the node files are merged.
+            merge_cache._merge_no_wait(existing_index=getattr(self, "existing_index", None))
             self._upload_index(output_dir, merge_dir, 1, None)
 
 
@@ -1851,8 +1890,9 @@ class DataProcessor:
         self.checkpoint_chunks_info: list[list[dict[str, Any]]] | None = None
         self.checkpoint_next_index: list[int] | None = None
         self.checkpoint_next_chunk_index: list[int | None] | None = None
+        self.checkpoint_configs: list[dict[str, Any] | None] | None = None
         self.item_loader = item_loader
-        self.storage_options = storage_options
+        self.storage_options = construct_storage_options(storage_options, self.output_dir)
         self.keep_data_ordered = resolve_keep_data_ordered(
             keep_data_ordered, use_checkpoint=use_checkpoint, align_chunking=align_chunking
         )
@@ -1867,6 +1907,11 @@ class DataProcessor:
         self.node_paths: list[list[str] | None] | None = None
         self._queue_input = False
         self._feeder_thread: Thread | None = None
+        # Unique pickle of node items for unordered workers. A shared
+        # ``node-{rank}-items.pkl`` under ``_get_cache_dir()`` raced when two
+        # ``optimize()`` runs overlapped (pytest-xdist) and ``_cleanup_cache``
+        # rmtree'd the folder.
+        self._items_lookup_path: str | None = None
         self._n_node_downloaders = 0
         self._n_node_uploaders = 0
         self.shared_write_queue: Queue | None = None
@@ -2124,6 +2169,7 @@ class DataProcessor:
 
         if self._feeder_thread is not None:
             self._feeder_thread.join(timeout=5)
+        self._unlink_items_lookup()
         self._stop_chunk_writers()
         self._stop_node_io_pools()
 
@@ -2138,6 +2184,22 @@ class DataProcessor:
             # clean up checkpoints
             self._cleanup_checkpoints()
 
+    def _drain_shared_queue(self) -> None:
+        """Unblock ``_feed_ready`` after workers die (``Queue.put`` waits on a full prefetch)."""
+        if self.shared_queue is None:
+            return
+        with suppress(Exception):
+            while True:
+                self.shared_queue.get_nowait()
+
+    def _unlink_items_lookup(self) -> None:
+        path = self._items_lookup_path
+        if not path:
+            return
+        with suppress(FileNotFoundError, OSError):
+            os.unlink(path)
+        self._items_lookup_path = None
+
     def _exit_on_error(self, error: str) -> None:
         for w in self.workers:
             # w.join(0)
@@ -2145,8 +2207,10 @@ class DataProcessor:
         for writer in self.chunk_writers:
             if writer.is_alive():
                 writer.terminate()
+        self._drain_shared_queue()
         if self._feeder_thread is not None:
-            self._feeder_thread.join(timeout=1)
+            self._feeder_thread.join(timeout=2)
+        self._unlink_items_lookup()
         raise RuntimeError(f"We found the following error {error}.")
 
     def _queue_prefetch(self) -> int:
@@ -2221,7 +2285,10 @@ class DataProcessor:
         cache_data_dir = _get_cache_data_dir()
         cache_chunks_dir = _chunks_dir(self.output_dir)
 
-        if self.delete_cached_files and (self.input_dir.path or self.input_dir.url):
+        if self.delete_cached_files:
+            # Always drain uploaded chunk files, even when input_dir is empty
+            # (``hf://`` optimize has no local/remote input Dir). Missing removers
+            # left ``.bin`` in the cache and used to abort lightning_storage merge.
             self.shared_remove_queue = Queue()
             self.node_removers.append(
                 self._start_io_thread(_remove_target, self.input_dir, cache_data_dir, self.shared_remove_queue)
@@ -2330,9 +2397,21 @@ class DataProcessor:
         stop_queues: list[Queue] = []
         items_lookup_path: str | None = None
         if not self.keep_data_ordered and self.node_user_items is not None:
-            items_lookup_path = os.path.join(_get_cache_dir(), f"node-{_get_node_rank()}-items.pkl")
-            with open(items_lookup_path, "wb") as handle:
-                pickle.dump((self.node_user_items, self.node_paths), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # Keep this file *outside* ``_get_cache_dir()`` so a concurrent
+            # ``optimize()`` ``rmtree`` cannot replace or delete it.
+            fd, items_lookup_path = tempfile.mkstemp(
+                prefix=f"litdata-node-{_get_node_rank()}-items-{os.getpid()}-",
+                suffix=".pkl",
+            )
+            os.close(fd)
+            try:
+                with open(items_lookup_path, "wb") as handle:
+                    pickle.dump((self.node_user_items, self.node_paths), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception:
+                with suppress(FileNotFoundError, OSError):
+                    os.unlink(items_lookup_path)
+                raise
+            self._items_lookup_path = items_lookup_path
         for worker_idx in range(self.num_workers):
             worker_user_items = workers_user_items[worker_idx] if workers_user_items is not None else None
             stop_queues.append(Queue())
@@ -2364,6 +2443,7 @@ class DataProcessor:
                 checkpoint_next_chunk_index=(
                     self.checkpoint_next_chunk_index[worker_idx] if self.checkpoint_next_chunk_index else None
                 ),
+                checkpoint_config=self.checkpoint_configs[worker_idx] if self.checkpoint_configs else None,
                 shared_upload_queue=self.shared_upload_queue,
                 shared_remove_queue=self.shared_remove_queue,
                 item_paths=None if items_lookup_path else self.node_paths,
@@ -2481,6 +2561,7 @@ class DataProcessor:
         self.checkpoint_chunks_info = [default_chunk_info for _ in range(self.num_workers)]
         self.checkpoint_next_index = [0 for _ in range(self.num_workers)]
         self.checkpoint_next_chunk_index = [None for _ in range(self.num_workers)]
+        self.checkpoint_configs = [None for _ in range(self.num_workers)]
 
         if self.output_dir.url is None:
             assert self.output_dir.path
@@ -2513,6 +2594,7 @@ class DataProcessor:
                 with open(os.path.join(self.output_dir.path, ".checkpoints", checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
+                self.checkpoint_configs[i] = checkpoint.get("config")
                 self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
                     _resume_fields_from_checkpoint(checkpoint)
                 )
@@ -2559,6 +2641,7 @@ class DataProcessor:
                 with open(os.path.join(saved_file_dir, checkpoint_file_name)) as f:
                     checkpoint = json.load(f)
 
+                self.checkpoint_configs[i] = checkpoint.get("config")
                 self.checkpoint_chunks_info[i], self.checkpoint_next_index[i], self.checkpoint_next_chunk_index[i] = (
                     _resume_fields_from_checkpoint(checkpoint)
                 )

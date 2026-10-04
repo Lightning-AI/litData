@@ -35,6 +35,8 @@ from litdata.streaming.serializers import (
     IntegerSerializer,
     JPEGArraySerializer,
     JPEGSerializer,
+    JsonLeaf,
+    JsonSerializer,
     MeshSerializer,
     NiftiSerializer,
     NoHeaderNumpySerializer,
@@ -88,6 +90,7 @@ def test_serializers():
         "numpy",
         "no_header_tensor",
         "tensor",
+        "json",
         "pickle",
     ]
 
@@ -99,6 +102,28 @@ def test_int_serializer():
         data, _ = serializer.serialize(i)
         assert isinstance(data, bytes)
         assert i == serializer.deserialize(data)
+
+
+def test_json_leaf_serializer():
+    serializer = JsonSerializer()
+    payloads = [
+        [],
+        ["opt0", "opt1", "opt2", "opt3"],
+        [10, 20, 30],
+        [1.5, 2.5],
+        [True, False],
+        {"text": ["A", "B"], "label": ["1", "2"]},
+        {"id": "q1", "n": 3, "answers": ["span"], "choices": {"text": ["A"], "label": ["1"]}},
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey"}],
+        [["nested"], ["lists"]],
+    ]
+    for payload in payloads:
+        data, name = serializer.serialize(JsonLeaf(payload))
+        assert name == "json"
+        assert serializer.deserialize(data) == payload
+    assert serializer.deserialize(b'["legacy"]') == ["legacy"]
+    assert not serializer.can_serialize(["x"])
+    assert serializer.can_serialize(JsonLeaf(["x"]))
 
 
 @pytest.mark.skipif(condition=not _PIL_AVAILABLE, reason="Requires: ['pil']")

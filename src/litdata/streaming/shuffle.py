@@ -24,6 +24,7 @@ from litdata.utilities.shuffle import (
     _associate_chunks_and_intervals_to_workers,
     _associate_whole_chunks_to_workers,
     _associate_within_nodes,
+    _block_shuffle,
     _permute_node_chunk_indexes,
     _unique_chunk_indexes_per_node,
     _window_shuffle,
@@ -32,6 +33,8 @@ from litdata.utilities.shuffle import (
 )
 
 _DEFAULT_POSIX_SHUFFLE_WINDOW = 16
+# Match ``PyTreeLoader`` text ``batch_decode`` so shuffled training reuses a window.
+_DEFAULT_ITEM_SHUFFLE_WINDOW = 256
 
 
 def posix_shuffle_window() -> int:
@@ -43,6 +46,39 @@ def posix_shuffle_window() -> int:
         return max(1, int(raw))
     except ValueError:
         return _DEFAULT_POSIX_SHUFFLE_WINDOW
+
+
+def item_shuffle_window() -> int:
+    """Env fallback for ``StreamingDataset(item_shuffle_window=...)``.
+
+    ``LITDATA_ITEM_SHUFFLE_WINDOW=0`` / ``full`` restores a full in-chunk permutation.
+    """
+    raw = os.getenv("LITDATA_ITEM_SHUFFLE_WINDOW")
+    if raw is None or not raw.strip():
+        return _DEFAULT_ITEM_SHUFFLE_WINDOW
+    key = raw.strip().lower()
+    if key in {"auto", ""}:
+        return _DEFAULT_ITEM_SHUFFLE_WINDOW
+    return resolve_item_shuffle_window(key)
+
+
+def resolve_item_shuffle_window(value: int | str | bool | None) -> int:
+    """``None`` / ``"auto"`` → env or 256. ``0`` / ``"full"`` → full in-chunk permute."""
+    if value is None:
+        return item_shuffle_window()
+    if isinstance(value, bool):
+        return _DEFAULT_ITEM_SHUFFLE_WINDOW if value else 0
+    if isinstance(value, int):
+        return max(0, value)
+    key = str(value).strip().lower()
+    if key in {"auto", ""}:
+        return item_shuffle_window()
+    if key in {"0", "off", "full", "all"}:
+        return 0
+    try:
+        return max(0, int(key))
+    except ValueError:
+        return _DEFAULT_ITEM_SHUFFLE_WINDOW
 
 
 class Shuffle(ABC):
@@ -118,9 +154,10 @@ class FullShuffle(Shuffle):
 
     """
 
-    def __init__(self, cache: Cache, seed: int, drop_last: bool):
+    def __init__(self, cache: Cache, seed: int, drop_last: bool, item_window: int | None = None):
         super().__init__(cache, seed, drop_last)
         self.node_shard_fits: bool = True
+        self.item_window = resolve_item_shuffle_window(item_window)
 
     def _global_assign(
         self,
@@ -183,7 +220,9 @@ class FullShuffle(Shuffle):
         )
 
     def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
-        return np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index]).permutation(array).tolist()
+        rng = np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index])
+        # Aligned blocks pair with ``batch_decode``; ``window <= 1`` is a full permute.
+        return _block_shuffle(array.tolist(), self.item_window, rng)
 
 
 class WindowShuffle(Shuffle):
@@ -199,9 +238,18 @@ class WindowShuffle(Shuffle):
     span and split samples from it.
     """
 
-    def __init__(self, cache: Cache, seed: int, drop_last: bool, window: int | None = None):
+    def __init__(
+        self,
+        cache: Cache,
+        seed: int,
+        drop_last: bool,
+        window: int | None = None,
+        item_window: int | None = None,
+    ):
         super().__init__(cache, seed, drop_last)
         self.window = posix_shuffle_window() if window is None else max(1, window)
+        # None keeps the POSIX sliding item window. Dataset passes a resolved int.
+        self.item_window = None if item_window is None else resolve_item_shuffle_window(item_window)
 
     @lru_cache(maxsize=10)
     def get_chunks_and_intervals_per_workers(
@@ -218,4 +266,6 @@ class WindowShuffle(Shuffle):
 
     def __call__(self, array: np.ndarray, num_chunks: int, current_epoch: int, chunk_index: int) -> list[int]:
         rng = np.random.RandomState([self.seed, num_chunks, current_epoch, chunk_index])
+        if self.item_window is not None:
+            return _block_shuffle(array.tolist(), self.item_window, rng)
         return _window_shuffle(array.tolist(), self.window, rng)

@@ -43,9 +43,11 @@
 <p align="center">
   <a href="https://lightning.ai/">Lightning AI</a> •
   <a href="#quick-start">Quick start</a> •
+  <a href="#litdata-vs-torchdata">vs torchdata</a> •
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#modality">Modality</a> •
+  <a href="#huggingface-datasets">Hugging Face Datasets</a> •
   <a href="#key-features">Features</a> •
   <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
@@ -73,6 +75,24 @@ LitData provides tools to preprocess and optimize datasets into a format that st
 
 &nbsp;
 
+## LitData vs torchdata <a id="litdata-vs-torchdata"></a>
+
+Different layers, not competitors: **LitData is a streaming layer with its own on-disk format, plus a no-conversion path for files you already have; [torchdata](https://github.com/meta-pytorch/data) is a toolkit of dataloading primitives with no format of its own.**
+
+| | LitData | torchdata |
+|--|--|--|
+| Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
+| Remote data | Chunk-level streaming from S3, GCS, Azure, R2, HF Hub. Async batched downloads, prefetch, local cache, retries | Per-file reads (`FileLister` / `FileReader`, fsspec + smart_open). No chunk cache or prefetch pipeline |
+| Main API | `StreamingDataset` / `StreamingDataLoader`, `CombinedStreamingDataset` | `torchdata.nodes` iterators you chain yourself, `StatefulDataLoader` |
+| Mid-epoch resume | `StreamingDataLoader.state_dict()` / `load_state_dict()` | `StatefulDataLoader.state_dict()` / `load_state_dict()` |
+| Transforms | [`map()`](#transform-datasets) / `optimize()`. Preprocessing jobs that run before training and write a new dataset, distributed across machines | `ParallelMapper`. Transforms samples in the live pipeline, re-run every epoch |
+
+**Rule of thumb:** reach for **LitData** in most cases. It handles the streaming, caching, shuffling and resume for you. Reach for **torchdata** when you only want bare-bones primitives and are happy to build the loading pipeline yourself.
+
+The two compose rather than compete: a `StreamingDataset` is an `IterableDataset`, so `torchdata.nodes.IterableWrapper` can pull straight from it.
+
+&nbsp;
+
 # Looking for GPUs?
 Over 340,000 developers use [Lightning Cloud](https://lightning.ai/?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) - purpose-built for PyTorch and PyTorch Lightning. 
 - [GPUs](https://lightning.ai/pricing?utm_source=litdata&utm_medium=referral&utm_campaign=litdata) from $0.19.   
@@ -88,6 +108,11 @@ First, install LitData:
 ```bash
 pip install litdata
 ```
+
+<!-- torch-support -->
+LitData supports the two most recent PyTorch minor releases, currently **2.14** and **2.13**; and
+requires **PyTorch 2.4 or newer**. CI exercises all three. Those versions are declared in
+[`.github/torch-support.json`](.github/torch-support.json), which drives the CI matrix.
 
 Choose your workflow:
 
@@ -420,7 +445,82 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 
 Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
+For temporal arrays, use `optimize(..., item_loader=TemporalArrayLoader(field_groups=[["clock", "valid"]]))`
+and `StreamingDataset(..., item_loader=TemporalArrayLoader()).read_window(index, start=7, frames=64)`.
+LitData owns field grouping, window offsets, range reads and decoding; the application keeps its sampling policy.
+When in-place mmap is disabled (`LITDATA_POSIX_FAST=0`), local window reads request only the selected byte ranges without Python file buffering. Operating-system caching still applies; this setting does not enable direct I/O.
+See the [built-in window example](examples/temporal_arrays) for a small training adapter and request-count tradeoffs.
+
 ----
+
+# Hugging Face Datasets 🤗 <a id="huggingface-datasets"></a><a id="stream-hf"></a>
+
+Train on the Hub datasets you already use. Drop in a Hugging Face dataset with one call — then optimize once onto Lightning Cloud storage when you want faster training I/O than Hub parquet or Hugging Face `datasets` streaming.
+
+<details>
+  <summary>How to get the dataset URL</summary>
+
+https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
+
+</details>
+
+```bash
+pip install 'litdata[extras]' huggingface_hub
+```
+
+Gated datasets: set `HF_TOKEN`.
+
+**Load from the Hub**
+
+```python
+import litdata as ld
+
+dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
+print("Sample", dataset[0])
+
+dataloader = ld.StreamingDataLoader(
+    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
+)
+for sample in dataloader:
+    pass
+```
+
+**Optimize once for faster training**
+
+```python
+import litdata as ld
+
+ld.optimize_hf("stanfordnlp/imdb", output_dir="imdb-opt", split="train")
+dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
+```
+
+`optimize_hf` converts a Hub dataset into LitData chunks. Later calls reuse `output_dir` if it is already optimized. Pass `revision=`, `config=`, `chunk_size=`, or `fn=` when you need them.
+
+### Faster than Hub parquet and `datasets` streaming
+
+`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **12/15** prefer `optimize_hf`; parquet stays ahead on [OpenThoughts](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k), [food101](https://huggingface.co/datasets/ethz/food101), and [cifar100](https://huggingface.co/datasets/uoft-cs/cifar100). Minipile, food101, and superb ks were re-measured with current defaults; the other twelve rows are unchanged.
+
+Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
+
+| Dataset | `optimize_hf` rows/s | parquet (`hf://`) rows/s | HF streaming rows/s |
+| --- | ---: | ---: | ---: |
+| [HuggingFaceH4/ultrachat_200k](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k) / train_sft | **47,285** | 31,209 | 6,752 |
+| [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) / train | 6,508 | **12,292** | 1,492 |
+| [abisee/cnn_dailymail](https://huggingface.co/datasets/abisee/cnn_dailymail) / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
+| [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) / train | **108,420** | 74,502 | 8,280 |
+| [roneneldan/TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) / train | **164,825** | 141,235 | 58,331 |
+| [fancyzhx/amazon_polarity](https://huggingface.co/datasets/fancyzhx/amazon_polarity) / train | **214,217** | 162,448 | 14,613 |
+| [Yelp/yelp_review_full](https://huggingface.co/datasets/Yelp/yelp_review_full) / train | **123,670** | 88,400 | 58,621 |
+| [EdinburghNLP/xsum](https://huggingface.co/datasets/EdinburghNLP/xsum) / train | **55,941** | 37,684 | 15,377 |
+| [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) / train | **92,741** | 46,573 | 18,263 |
+| [JeanKaddour/minipile](https://huggingface.co/datasets/JeanKaddour/minipile) / train | **81,871** | 50,160 | 3,928 |
+| [ethz/food101](https://huggingface.co/datasets/ethz/food101) / train | 1,989 | **4,782** | 384 |
+| [zh-plus/tiny-imagenet](https://huggingface.co/datasets/zh-plus/tiny-imagenet) / train | **57,855** | 43,535 | 6,491 |
+| [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) / train | **31,671** | 20,657 | 8,843 |
+| [uoft-cs/cifar100](https://huggingface.co/datasets/uoft-cs/cifar100) / train | 22,448 | **24,332** | 7,553 |
+| [s3prl/superb](https://huggingface.co/datasets/s3prl/superb) / train / ks | **7,101** | 6,775 | 314 |
+
+Your own parquet on disk or S3 → [Stream parquet datasets](#stream-parquet).
 
 # Key Features
 
@@ -868,89 +968,6 @@ for sample in dataloader:
 </details>
 
 <details>
-  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
-
-&nbsp;
-
-To use your favorite  Hugging Face dataset with LitData, simply pass its URL to `StreamingDataset`.
-
-<details>
-  <summary>How to get HF dataset URI?</summary>
-
-https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
-
-</details>
-
-**Prerequisites:**
-
-```sh
-pip install 'litdata[extras]' huggingface_hub
-
-# Optional: faster downloads on high-bandwidth networks
-pip install hf_transfer
-export HF_HUB_ENABLE_HF_TRANSFER=1
-```
-
-**Supported for HF:** datasets stored as **Parquet** only. Gated datasets: set `HF_TOKEN`.
-
-**Stream Hugging Face dataset** (auto-index + auto `ParquetLoader`):
-
-```python
-import litdata as ld
-
-hf_dataset_uri = "hf://datasets/leonardPKU/clevr_cogen_a_train/data"
-
-dataset = ld.StreamingDataset(hf_dataset_uri)  # indexes on first use; caches index.json locally
-print("Sample", dataset[0])  # dict of columns
-
-# With workers on Linux, use spawn (same as other ParquetLoader usage)
-dataloader = ld.StreamingDataLoader(
-    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
-)
-for sample in dataloader:
-    pass
-```
-
-Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes (if needed) and selects `ParquetLoader`.
-
-### Indexing the HF dataset (optional, faster cold start)
-
-```python
-import litdata as ld
-
-# Returns the local cache directory that contains index.json
-cache_dir = ld.index_hf_dataset("hf://datasets/leonardPKU/clevr_cogen_a_train/data")
-```
-
-Or control the index path explicitly:
-
-```python
-import litdata as ld
-from litdata.streaming.item_loader import ParquetLoader
-
-uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
-ld.index_parquet_dataset(uri, "hf-index-dir")  # writes index under hf-index-dir
-
-dataset = ld.StreamingDataset(uri, item_loader=ParquetLoader(), index_path="hf-index-dir")
-for batch in ld.StreamingDataLoader(dataset, batch_size=4, multiprocessing_context="spawn"):
-    pass
-```
-
-See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
-
-### LitData `Optimize` v/s `Parquet`
-<!-- TODO: Update benchmark -->
-Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that **`optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files`**.
-
-| **Operation**                    | **Size (GB)** | **Time (seconds)** | **Throughput (images/sec)** |
-|-----------------------------------|---------------|---------------------|-----------------------------|
-| LitData Optimize Dataset          | 45            | 283.17             | 4000-4700                  |
-| Parquet Optimize Dataset          | 51            | 465.96             | 3600-3900                  |
-| Index Parquet Dataset (overhead)  | N/A           | 6                  | N/A                         |
-
-</details>
-
-<details>
   <summary> ✅ Streams on multi-GPU, multi-node <a id="multi-gpu" href="#multi-gpu">🔗</a> </summary>
 
 &nbsp;
@@ -993,9 +1010,9 @@ Shuffling is **deterministic** and designed for distributed training:
 
 The permutation depends on `seed`, the epoch, and chunk metadata — the same settings always yield the same order (required for resumable `state_dict`).
 
-**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
+**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache. Items *inside* a chunk are shuffled as aligned ``batch_decode`` windows. Pass ``item_shuffle_window=256`` (default / ``"auto"``) so blocks are shuffled, then the items inside each block — training still reuses the decode cache. ``item_shuffle_window=0`` (or ``"full"``) restores a full in-chunk permutation. ``LITDATA_ITEM_SHUFFLE_WINDOW`` applies only when the argument is omitted.
 
-**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`) for both chunk order and in-chunk items. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
+**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles chunk order inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). In-chunk items still use ``item_shuffle_window``. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
@@ -1005,6 +1022,7 @@ train = StreamingDataset(
     shuffle=True,
     drop_last=True,  # keep every rank/worker at the same length (default True under DDP)
     seed=42,         # default is 42; keep stable when resuming
+    item_shuffle_window=256,  # 0 / "full" = permute every item in the chunk
 )
 loader = StreamingDataLoader(train, batch_size=64, num_workers=8)
 
@@ -1829,7 +1847,7 @@ The `overwrite` mode will delete the existing data and start from fresh.
   <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
-Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face parquet datasets are covered in [Stream Hugging Face datasets](#stream-hf).
+Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face Hub datasets are covered in [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream vs optimize vs map
 
@@ -1874,7 +1892,7 @@ ld.index_parquet_dataset(
 - Lists **top-level** `.parquet` files only (not recursive subfolders).
 - All files must share the same schema.
 - Supported for indexing today: local, `s3://`, `gs://`, `hf://` (not `r2://` / `azure://` yet).
-- For HF, prefer `index_hf_dataset(uri)` (returns a local cache dir) or auto-index via `StreamingDataset("hf://...")` — see [HF section](#stream-hf).
+- For Hub datasets, use `StreamingDataset("hf://...")` — see [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream with `ParquetLoader`
 
@@ -1967,6 +1985,8 @@ Using [zstd](https://github.com/facebook/zstd), you can achieve high compression
 | Without | With |
 | -------- | -------- | 
 | 2.8kb | 646b |
+
+`compression="zstd"` (default `compression_level="batch"`, `compression_batch_size=256`) keeps a `.bin` with an uncompressed directory plus zstd frames of 256 items — the same window as Arrow IPC record batches and aligned decode. `compression_level="chunk"` wraps each pytree chunk as one whole-file `.zstd.bin`. `compression_level="sample"` zstd-compresses each item between the pytree offsets. Numeric zstd levels are `compression="zstd:4"`, not `compression_level`. Nested JSON / Hub Arrow IPC still uses Arrow’s own per-batch zstd when you pass `"zstd"`.
 
 
 </details>
@@ -2211,6 +2231,7 @@ export LITDATA_ASYNC_DOWNLOAD_CONCURRENCY=4
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LITDATA_CACHE_DIR` | `~/.lightning/chunks` | Default chunk cache directory |
+| `LITDATA_ITEM_SHUFFLE_WINDOW` | `256` | In-chunk shuffle block size when `item_shuffle_window` is omitted (`0` = full permute) |
 | `LITDATA_ASYNC_CHUNK_PREFETCH` | on for remote | `0`/`1` force async chunk download overlap |
 | `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` | `4` | Floor for `max_pre_download` when async is on (`0` = no floor) |
 | `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` | `8` | Max in-flight chunk GETs per gather |
@@ -2274,6 +2295,81 @@ from litdata import StreamingDataset
 
 dataset = StreamingDataset(input_dir="local:/data/shared-drive/some-data")
 ```
+
+</details>
+
+<details>
+  <summary> ✅ Direct reads on Linux NFS <a id="direct-reads-on-linux-nfs" href="#direct-reads-on-linux-nfs">🔗</a> </summary>
+&nbsp;
+
+For a working set larger than client RAM, direct I/O can avoid filling the client's
+page cache with streamed payloads. It is an opt-in performance option: benchmark
+it with your access pattern. Server-side caches still apply. This support is
+currently limited to Linux x86_64/aarch64 and regular files on NFS; other
+filesystems raise an error rather than silently using buffered reads.
+
+For LitData window reads, no compiler or preload library is needed:
+
+```python
+from litdata import StreamingDataset, TemporalArrayLoader
+
+windows = StreamingDataset(
+    "/mnt/dataset",
+    item_loader=TemporalArrayLoader(),
+    window_direct_io=True,
+)
+sample = windows.read_window(0, start=128, frames=64)
+```
+
+`window_direct_io=True` supports `read_window` and `aread_window` on uncompressed,
+unencrypted datasets. It disables the window mmap path and ordinary dataset
+indexing/iteration. Keep sampling in your application and call window reads from
+your DataLoader workers. Defaults remain unchanged.
+
+Custom Python loaders can use the same reader without converting to LitData:
+
+```python
+from litdata.utilities.direct_io import open_nfs_direct
+
+with open_nfs_direct("/mnt/dataset/payload.bin") as handle:
+    handle.seek(123)
+    data = handle.read(4096)
+```
+
+This returns an unbuffered, read-only `FileIO` handle. Open it inside each worker,
+close it normally, and handle short reads when an exact byte count is required.
+Linux NFS permits unaligned byte ranges; this helper does not generalize that
+assumption to local disks. Do not mmap the same payload or modify files during reads.
+
+### Experimental launcher for Lance and other native readers
+
+A native reader opens its own files, so the Python opener above cannot change its
+behavior. The launcher below builds a small C preload helper and starts your
+command with it. A system C compiler (`cc`) and mounted `/proc` are required.
+Only read-only regular files under the resolved root with the selected suffixes
+receive `O_DIRECT`. Metadata and writes retain their existing behavior.
+
+```bash
+python -m litdata.utilities.direct_io \
+  --root /mnt/dataset --suffix .lance -- \
+  python train.py --data /mnt/dataset
+```
+
+Use `--suffix .bin` for a native reader of binary payload files, or repeat
+`--suffix` to select several types. Run from a foreground terminal and wait for
+all workers to finish. The temporary compiled helper is removed when the command
+exits. A Python application can use `nfs_direct_io_environment(root,
+suffixes=[".lance"])` as a context manager and pass its returned environment to
+`subprocess.run(..., env=env, check=True)`.
+
+This is experimental integration support, not an upstream Lance configuration
+option. It supports dynamically linked libc `open`/`openat` readers, including the
+tested Lance `file+uring` path. It does not enable io_uring by itself, change
+already-open files, or affect the current Python process. Readers using mmap,
+static binaries, raw open syscalls, or io_uring open operations are unsupported.
+Do not use it for applications that detach workers after their parent exits.
+Use an immutable dataset and verify the reader's actual direct-I/O path before
+interpreting cache-bypass or throughput results. No speedup is guaranteed.
 
 </details>
 
@@ -2523,9 +2619,9 @@ optimize(
 )
 ```
 
-### Lightning Studio `/teamspace/...` paths (direct bucket I/O)
+### Lightning Studio `/teamspace/...` paths
 
-In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer these paths in LitData** — optimize/map uploads and StreamingDataset downloads use the **backing object store URL** (and temporary credentials when needed), which is much faster than reading every file through the FUSE mount.
+In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer these paths in LitData**: object-store connections use their backing URL and temporary credentials when needed. Mounted Lightning Storage filesystems are read and written in place, without redirecting the dataset to a download cache.
 
 | Path prefix | What LitData does |
 |-------------|-------------------|
@@ -2535,7 +2631,7 @@ In Lightning Studios, data connections appear under `/teamspace/...`. **Prefer t
 | `/teamspace/gcs_connections/<name>/...` | Direct GCS |
 | `/teamspace/s3_folders/<name>/...` | S3 folder connection |
 | `/teamspace/gcs_folders/<name>/...` | GCS folder connection |
-| `/teamspace/lightning_storage/<name>/...` | Lightning-managed object storage (R2-style) |
+| `/teamspace/lightning_storage/<name>/...` | Direct R2 for object-store connections; in-place file access for mounted filesystems |
 | `/teamspace/datasets/...` | Teamspace datasets mount → project datasets bucket |
 
 ```python
@@ -2572,6 +2668,52 @@ if __name__ == "__main__":
 
 &nbsp;
 
+
+### GPU-local CPU and NUMA memory affinity
+
+On Linux, opt in to placing each training rank and its DataLoader workers on the CPUs and RAM local to its GPU:
+
+```python
+import os
+
+from litdata import StreamingDataLoader, StreamingDataset
+from litdata import get_gpu_affinity
+
+
+def main():
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    affinity = get_gpu_affinity(local_rank, bind_memory=True)
+    affinity.bind()
+
+    dataset = StreamingDataset("/path/to/optimized/data")
+    loader = StreamingDataLoader(
+        dataset,
+        batch_size=32,
+        num_workers=4,
+        worker_init_fn=affinity,
+        multiprocessing_context="spawn",
+        persistent_workers=True,
+        pin_memory=True,
+    )
+    for batch in loader:
+        train_step(batch)  # Your training step.
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Launch this example with `torchrun --nproc_per_node=8 train.py`, adjusting the GPU count. `get_gpu_affinity` uses PyTorch's **logical CUDA device** and its PCI NUMA topology, so CUDA visibility and device reordering are respected. It initializes CUDA in the rank process. The returned `NumaAffinity` object contains only the node, CPU IDs and memory-binding option; it can be pickled and applied in workers without querying CUDA. It also works with `torch.utils.data.DataLoader`.
+
+- Bind the rank before creating its reader threads, model and loader. Also pass the plan as `worker_init_fn`, particularly with spawned workers. To run an existing worker initializer, call `affinity(worker_id)` first in a top-level picklable callable, then run the existing initializer.
+- CPU selection intersects the GPU-local CPUs with the calling thread's current affinity mask. An empty intersection or unknown topology raises an error; it does not select a remote node. Multiple GPUs can share one NUMA node; these helpers do not reserve or divide CPUs between GPUs.
+- `bind_memory=True` uses `libnuma.so.1` (the `libnuma1` system package) to request and verify `MPOL_BIND`. CPU-only placement, `bind_memory=False`, does not require libnuma. Kernel or container restrictions on memory binding produce an error.
+- Binding affects the **calling thread and future child threads/processes**. Existing sibling threads retain their policies, and pages already allocated are not migrated. Call the helper early; `pin_memory=True` alone does not select a NUMA node. A strict binding limits allocations to that node's available memory.
+- This is optional and does not change existing loaders. Locality does not guarantee a throughput gain; compare the same workload with and without memory binding.
+
+If the GPU topology is known already, use `get_numa_affinity(numa_node, bind_memory=True)` to build a plan without initializing CUDA. This also supports older PyTorch builds that do not expose PCI identifiers in CUDA device properties. GPU discovery requires those properties (available in PyTorch 2.8). Create plans before narrowing a parent process's CPU mask; a child resolving a different GPU after inheriting that narrowed mask will raise rather than silently expand it. Apply a previously resolved plan to that child instead.
+
+See the [Linux NUMA policy documentation](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) for policy inheritance and allocation semantics.
 
 ## Features for transforming datasets
 
@@ -2645,7 +2787,9 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`; see [FAQ](#faq-chunk-shuffle) for larger samples) |
 | `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
 | `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
-| `compression` | `None` | `"zstd"` today |
+| `compression` | `None` | `"zstd"` or `"zstd:N"` (numeric level). Pair with `compression_level` for pytree wrap |
+| `compression_level` | `"batch"` (zstd) | `"batch"` framed `.bin`; `"chunk"` whole-file `.zstd.bin`; `"sample"` per-item zstd |
+| `compression_batch_size` | `256` | Items per frame when `compression_level="batch"` (matches Arrow IPC / decode windows) |
 | `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom ([encrypt](#encrypt-decrypt)) |
 | `num_workers` | CPU count | Local workers |
 | `fast_dev_run` | `False` | Smoke a subset of inputs |
@@ -2952,6 +3096,8 @@ Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scho
 * Thomas Chaton ([tchaton](https://github.com/tchaton))
 * Bhimraj Yadav ([bhimrazy](https://github.com/bhimrazy))
 * Deependu ([deependujha](https://github.com/deependujha))
+* Peyton Gardipee ([pwgardipee](https://github.com/pwgardipee))
+* David Edey ([dhedey](https://github.com/dhedey))
 
 
 ## Emeritus Maintainers

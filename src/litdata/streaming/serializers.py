@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import io
+import json
 import os
 import pickle
 import struct
@@ -186,12 +187,16 @@ class JPEGSerializer(Serializer):
         from PIL.WebPImagePlugin import WebPImageFile
 
         if isinstance(item, Jpeg):
-            if item.array is not None or item.image is not None or item.mode:
+            if (
+                item.array is not None
+                or item.image is not None
+                or item.mode
+                or item.quality is not None
+                or item.max_quality is not None
+            ):
                 data, _ = _encode_image_ref(item, default_format="JPEG", default_quality=item.quality)
                 return data, None
-            data, ext = _read_media_bytes(item)
-            if item.quality != 95:
-                data, _ = _encode_image_ref(item, default_format="JPEG", default_quality=item.quality)
+            data, _ = _read_media_bytes(item)
             return data, None
 
         if isinstance(item, JpegImageFile):
@@ -238,7 +243,12 @@ class ImageSerializer(Serializer):
 
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
         if isinstance(item, Image) and (
-            item.array is not None or item.image is not None or item.quality is not None or item.mode or item.format
+            item.array is not None
+            or item.image is not None
+            or item.quality is not None
+            or item.max_quality is not None
+            or item.mode
+            or item.format
         ):
             data, ext = _encode_image_ref(item, default_format=item.format or "PNG", default_quality=item.quality)
             return data, f"image:{ext}"
@@ -269,15 +279,29 @@ class JPEGArraySerializer(Serializer):
         image_bytes = []
         for image in images:
             if isinstance(image, Jpeg):
-                if isinstance(item, JpegArray) and image.quality == 95 and item.quality != 95:
-                    image = Jpeg(
-                        path=image.path,
-                        bytes=image.bytes,
-                        array=image.array,
-                        image=image.image,
-                        mode=image.mode,
-                        quality=item.quality,
-                    )
+                if isinstance(item, JpegArray):
+                    if item.quality is not None and image.quality != item.quality:
+                        image = Jpeg(
+                            path=image.path,
+                            bytes=image.bytes,
+                            array=image.array,
+                            image=image.image,
+                            mode=image.mode,
+                            quality=item.quality,
+                            max_quality=None,
+                        )
+                    elif (
+                        item.max_quality is not None and image.quality is None and image.max_quality != item.max_quality
+                    ):
+                        image = Jpeg(
+                            path=image.path,
+                            bytes=image.bytes,
+                            array=image.array,
+                            image=image.image,
+                            mode=image.mode,
+                            quality=None,
+                            max_quality=item.max_quality,
+                        )
                 image_bytes.append(self._jpeg_serializer.serialize(image)[0])
             elif isinstance(image, Image):
                 image_bytes.append(ImageSerializer().serialize(image)[0])
@@ -719,6 +743,285 @@ class PickleSerializer(Serializer):
         return True
 
 
+class JsonLeaf:
+    """Marker so ``tree_flatten`` treats a list/dict as one leaf instead of walking it.
+
+    ``optimize`` locks ``data_format`` from the first sample. Variable-length lists
+    (HF conversations, SQuAD answers, …) would otherwise change leaf count / types
+    across files and fail the index merge — or mis-decode ints as ``unpack`` errors.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
+# Compact nested tags. Legacy JSON payloads start with ``[`` / ``{`` (0x5B / 0x7B).
+_NEST_JSON = 0
+_NEST_STRS = 1
+_NEST_I64S = 2
+_NEST_F64S = 3
+_NEST_BOOLS = 4
+_NEST_DICT = 5
+_NEST_RECS = 6
+_NEST_STR = 7
+_NEST_I64 = 8
+_NEST_F64 = 9
+_NEST_BOOL = 10
+_NEST_NONE = 11
+_I64_MIN = -9223372036854775808
+_I64_MAX = 9223372036854775807
+_U32 = struct.Struct("<I")
+_HDR = struct.Struct("<BI")
+_I64 = struct.Struct("<q")
+_F64 = struct.Struct("<d")
+_REC_NONE = 0x10
+_REC_STR = 0x11
+_REC_I64 = 0x12
+_REC_F64 = 0x13
+_REC_BOOL = 0x14
+
+
+try:
+    import orjson as _orjson
+
+    def _json_dumps(value: Any) -> bytes:
+        return _orjson.dumps(value)
+
+    def _json_loads(data: bytes | bytearray | memoryview) -> Any:
+        return _orjson.loads(data)
+
+except ImportError:
+
+    def _json_dumps(value: Any) -> bytes:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    def _json_loads(data: bytes | bytearray | memoryview) -> Any:
+        return json.loads(bytes(data) if isinstance(data, memoryview) else data)
+
+
+def _enc_json(value: Any) -> bytes:
+    payload = _json_dumps(value)
+    return bytes([_NEST_JSON]) + _U32.pack(len(payload)) + payload
+
+
+def _enc_strs(items: list[str]) -> bytes:
+    encoded = [item.encode("utf-8") for item in items]
+    out = bytearray(5 + 4 * len(encoded) + sum(len(item) for item in encoded))
+    _HDR.pack_into(out, 0, _NEST_STRS, len(encoded))
+    offset = 5
+    for item in encoded:
+        _U32.pack_into(out, offset, len(item))
+        offset += 4
+        end = offset + len(item)
+        out[offset:end] = item
+        offset = end
+    return bytes(out)
+
+
+def _enc_i64s(items: list[int]) -> bytes:
+    arr = np.ascontiguousarray(np.asarray(items, dtype="<i8"))
+    return bytes([_NEST_I64S]) + _U32.pack(len(items)) + arr.tobytes()
+
+
+def _enc_f64s(items: list[float]) -> bytes:
+    arr = np.ascontiguousarray(np.asarray(items, dtype="<f8"))
+    return bytes([_NEST_F64S]) + _U32.pack(len(items)) + arr.tobytes()
+
+
+def _enc_bools(items: list[bool]) -> bytes:
+    return bytes([_NEST_BOOLS]) + _U32.pack(len(items)) + bytes(1 if item else 0 for item in items)
+
+
+def _enc_utf8(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _U32.pack(len(raw)) + raw
+
+
+def _nested_dumps(value: Any) -> bytes:
+    """Encode a list/dict. Homogeneous str/int/float lists and records avoid JSON."""
+    if value is None:
+        return bytes([_NEST_NONE])
+    if isinstance(value, bool):
+        return bytes([_NEST_BOOL, 1 if value else 0])
+    if isinstance(value, str):
+        return bytes([_NEST_STR]) + _enc_utf8(value)
+    if isinstance(value, int) and not isinstance(value, bool) and _I64_MIN <= value <= _I64_MAX:
+        return bytes([_NEST_I64]) + _I64.pack(value)
+    if isinstance(value, float):
+        return bytes([_NEST_F64]) + _F64.pack(value)
+    if isinstance(value, dict):
+        parts = [_HDR.pack(_NEST_DICT, len(value))]
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return _enc_json(value)
+            parts.append(_enc_utf8(key))
+            parts.append(_nested_dumps(item))
+        return b"".join(parts)
+    if not isinstance(value, list):
+        return _enc_json(value)
+    if not value:
+        return _HDR.pack(_NEST_STRS, 0)
+    first = value[0]
+    if isinstance(first, str) and all(isinstance(item, str) for item in value):
+        return _enc_strs(value)
+    if isinstance(first, bool) and all(isinstance(item, bool) for item in value):
+        return _enc_bools(value)
+    if (
+        isinstance(first, int)
+        and not isinstance(first, bool)
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        and all(_I64_MIN <= item <= _I64_MAX for item in value)
+    ):
+        return _enc_i64s(value)
+    if isinstance(first, float) and all(isinstance(item, float) for item in value):
+        return _enc_f64s(value)
+    if isinstance(first, dict) and all(isinstance(item, dict) for item in value):
+        encoded = _enc_recs(value)
+        if encoded is not None:
+            return encoded
+    return _enc_json(value)
+
+
+def _enc_recs(rows: list[dict[str, Any]]) -> bytes | None:
+    keys = list(rows[0].keys())
+    if not keys or not all(isinstance(key, str) for key in keys):
+        return None
+    keyset = set(keys)
+    parts = [_HDR.pack(_NEST_RECS, len(rows)), _U32.pack(len(keys))]
+    parts.extend(_enc_utf8(key) for key in keys)
+    for row in rows:
+        if set(row.keys()) != keyset:
+            return None
+        for key in keys:
+            item = row[key]
+            if item is None:
+                parts.append(bytes([_REC_NONE]))
+            elif isinstance(item, bool):
+                parts.append(bytes([_REC_BOOL, 1 if item else 0]))
+            elif isinstance(item, str):
+                parts.append(bytes([_REC_STR]) + _enc_utf8(item))
+            elif isinstance(item, int) and not isinstance(item, bool) and _I64_MIN <= item <= _I64_MAX:
+                parts.append(bytes([_REC_I64]) + _I64.pack(item))
+            elif isinstance(item, float):
+                parts.append(bytes([_REC_F64]) + _F64.pack(item))
+            else:
+                return None
+    return b"".join(parts)
+
+
+def _read_utf8(raw: bytes | bytearray, offset: int) -> tuple[str, int]:
+    length = _U32.unpack_from(raw, offset)[0]
+    offset += 4
+    return raw[offset : offset + length].decode("utf-8"), offset + length
+
+
+def _nested_loads(data: bytes | bytearray | memoryview) -> Any:
+    raw = data if isinstance(data, (bytes, bytearray)) else _as_bytes(data)
+    if not raw:
+        return _json_loads(raw)
+    tag = raw[0]
+    if tag > 0x20:
+        return _json_loads(raw)
+    value, _ = _nested_loads_at(raw, 0)
+    return value
+
+
+def _nested_loads_at(raw: bytes | bytearray, offset: int) -> tuple[Any, int]:
+    tag = raw[offset]
+    if tag == _NEST_JSON:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        return _json_loads(raw[start : start + n]), start + n
+    if tag == _NEST_STRS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        offset += 5
+        out = [""] * n
+        for i in range(n):
+            length = _U32.unpack_from(raw, offset)[0]
+            offset += 4
+            out[i] = raw[offset : offset + length].decode("utf-8")
+            offset += length
+        return out, offset
+    if tag == _NEST_I64S:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        payload = raw[start : start + 8 * n]
+        return np.frombuffer(payload, dtype="<i8").tolist(), start + 8 * n
+    if tag == _NEST_F64S:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        payload = raw[start : start + 8 * n]
+        return np.frombuffer(payload, dtype="<f8").tolist(), start + 8 * n
+    if tag == _NEST_BOOLS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        start = offset + 5
+        return [bool(b) for b in raw[start : start + n]], start + n
+    if tag == _NEST_STR:
+        text, end = _read_utf8(raw, offset + 1)
+        return text, end
+    if tag == _NEST_I64:
+        return _I64.unpack_from(raw, offset + 1)[0], offset + 9
+    if tag == _NEST_F64:
+        return _F64.unpack_from(raw, offset + 1)[0], offset + 9
+    if tag == _NEST_BOOL:
+        return bool(raw[offset + 1]), offset + 2
+    if tag == _NEST_NONE:
+        return None, offset + 1
+    if tag == _NEST_DICT:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        offset += 5
+        mapping: dict[str, Any] = {}
+        for _ in range(n):
+            key, offset = _read_utf8(raw, offset)
+            mapping[key], offset = _nested_loads_at(raw, offset)
+        return mapping, offset
+    if tag == _NEST_RECS:
+        n = _U32.unpack_from(raw, offset + 1)[0]
+        n_keys = _U32.unpack_from(raw, offset + 5)[0]
+        offset += 9
+        keys = [""] * n_keys
+        for i in range(n_keys):
+            keys[i], offset = _read_utf8(raw, offset)
+        rows: list[dict[str, Any]] = [{} for _ in range(n)]
+        for row in rows:
+            for key in keys:
+                kind = raw[offset]
+                offset += 1
+                if kind == _REC_NONE:
+                    row[key] = None
+                elif kind == _REC_STR:
+                    row[key], offset = _read_utf8(raw, offset)
+                elif kind == _REC_I64:
+                    row[key] = _I64.unpack_from(raw, offset)[0]
+                    offset += 8
+                elif kind == _REC_F64:
+                    row[key] = _F64.unpack_from(raw, offset)[0]
+                    offset += 8
+                elif kind == _REC_BOOL:
+                    row[key] = bool(raw[offset])
+                    offset += 1
+                else:
+                    raise ValueError(f"Unknown nested record tag {kind}")
+        return rows, offset
+    return _json_loads(raw), len(raw)
+
+
+class JsonSerializer(Serializer):
+    """Store a :class:`JsonLeaf` list/dict as compact binary (legacy JSON still reads)."""
+
+    def serialize(self, item: Any) -> tuple[bytes, str | None]:
+        value = item.value if isinstance(item, JsonLeaf) else item
+        return _nested_dumps(value), "json"
+
+    def deserialize(self, data: bytes) -> Any:
+        return _nested_loads(data)
+
+    def can_serialize(self, data: Any) -> bool:
+        return isinstance(data, JsonLeaf)
+
+
 class FileSerializer(Serializer):
     def serialize(self, item: Any) -> tuple[bytes, str | None]:
         if isinstance(item, (File, _MediaRef)):
@@ -843,6 +1146,240 @@ def _native_pil_format(image: Any) -> str:
     return "PNG" if image.mode in {"1", "L", "LA", "RGB", "RGBA"} else "TIFF"
 
 
+# Independent JPEG Group luminance table (natural order) used to estimate quality.
+_JPEG_STD_LUMA_QT = (
+    16,
+    11,
+    10,
+    16,
+    24,
+    40,
+    51,
+    61,
+    12,
+    12,
+    14,
+    19,
+    26,
+    58,
+    60,
+    55,
+    14,
+    13,
+    16,
+    24,
+    40,
+    57,
+    69,
+    56,
+    14,
+    17,
+    22,
+    29,
+    51,
+    87,
+    80,
+    62,
+    18,
+    22,
+    37,
+    56,
+    68,
+    109,
+    103,
+    77,
+    24,
+    35,
+    55,
+    64,
+    81,
+    104,
+    113,
+    92,
+    49,
+    64,
+    78,
+    87,
+    103,
+    121,
+    120,
+    101,
+    72,
+    92,
+    95,
+    98,
+    112,
+    100,
+    103,
+    99,
+)
+# DQT stores coefficients in zigzag order; IJG / Pillow quantization is natural order.
+_JPEG_ZIGZAG_TO_NATURAL = (
+    0,
+    1,
+    8,
+    16,
+    9,
+    2,
+    3,
+    10,
+    17,
+    24,
+    32,
+    25,
+    18,
+    11,
+    4,
+    5,
+    12,
+    19,
+    26,
+    33,
+    40,
+    48,
+    41,
+    34,
+    27,
+    20,
+    13,
+    6,
+    7,
+    14,
+    21,
+    28,
+    35,
+    42,
+    49,
+    56,
+    57,
+    50,
+    43,
+    36,
+    29,
+    22,
+    15,
+    23,
+    30,
+    37,
+    44,
+    51,
+    58,
+    59,
+    52,
+    45,
+    38,
+    31,
+    39,
+    46,
+    53,
+    60,
+    61,
+    54,
+    47,
+    55,
+    62,
+    63,
+)
+
+
+def _ijg_luma_qt(quality: int) -> tuple[int, ...]:
+    scale = 5000 // quality if quality < 50 else 200 - quality * 2
+    return tuple(min(255, max(1, (coeff * scale + 50) // 100)) for coeff in _JPEG_STD_LUMA_QT)
+
+
+_IJG_LUMA_BY_QUALITY: tuple[tuple[int, ...], ...] = tuple(_ijg_luma_qt(quality) for quality in range(1, 101))
+_IJG_LUMA_TO_QUALITY = {table: quality for quality, table in enumerate(_IJG_LUMA_BY_QUALITY, start=1)}
+
+
+def _jpeg_luma_qtable(data: bytes) -> tuple[int, ...] | None:
+    """Return the first / table-0 luminance DQT in natural order, or ``None``."""
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    idx = 2
+    first: tuple[int, ...] | None = None
+    while idx + 4 <= len(data):
+        if data[idx] != 0xFF:
+            return first
+        marker = data[idx + 1]
+        if marker == 0xDA:  # SOS
+            break
+        if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            idx += 2
+            continue
+        length = int.from_bytes(data[idx + 2 : idx + 4], "big")
+        if length < 2 or idx + 2 + length > len(data):
+            return first
+        if marker == 0xDB:  # DQT
+            payload = data[idx + 4 : idx + 2 + length]
+            pos = 0
+            while pos < len(payload):
+                info = payload[pos]
+                pos += 1
+                precision = info >> 4
+                table_id = info & 0x0F
+                n_bytes = 64 * (2 if precision else 1)
+                if pos + n_bytes > len(payload):
+                    return first
+                raw = payload[pos : pos + n_bytes]
+                pos += n_bytes
+                zigzag = struct.unpack(">" + "H" * 64, raw) if precision else tuple(raw)
+                natural = [0] * 64
+                for zig, nat in enumerate(_JPEG_ZIGZAG_TO_NATURAL):
+                    natural[nat] = zigzag[zig]
+                table = tuple(natural)
+                if first is None:
+                    first = table
+                if table_id == 0:
+                    return table
+        idx += 2 + length
+    return first
+
+
+def _estimate_jpeg_quality(data: bytes) -> int | None:
+    """Estimate JPEG quality from the luminance quantization table (IJG scale).
+
+    Returns ``None`` when the file is not JPEG or has no DQT (fail closed: keep bytes).
+    """
+    table = _jpeg_luma_qtable(data)
+    if table is None or len(table) != 64:
+        return None
+    exact = _IJG_LUMA_TO_QUALITY.get(table)
+    if exact is not None:
+        return exact
+    best_quality, best_err = 1, None
+    for quality, candidate in enumerate(_IJG_LUMA_BY_QUALITY, start=1):
+        err = sum(abs(left - right) for left, right in zip(table, candidate))
+        if best_err is None or err < best_err:
+            best_quality, best_err = quality, err
+    return best_quality
+
+
+def _keep_jpeg_under_max_quality(data: bytes, max_quality: int) -> bool:
+    """True when ``data`` is JPEG that should not be re-encoded under the cap."""
+    if len(data) < 2 or data[:2] != b"\xff\xd8":
+        return False
+    estimated = _estimate_jpeg_quality(data)
+    return estimated is None or estimated <= max_quality
+
+
+def _jpeg_encode_quality(item: Any, default_quality: int | None) -> int | None:
+    quality = getattr(item, "quality", default_quality)
+    if quality is not None:
+        return int(quality)
+    max_quality = getattr(item, "max_quality", None)
+    if max_quality is not None:
+        return int(max_quality)
+    return None
+
+
+def _original_jpeg_bytes_from_pil(image: Any) -> bytes | None:
+    filename = getattr(image, "filename", None)
+    if filename and os.path.isfile(filename) and str(filename).lower().endswith((".jpg", ".jpeg")):
+        with open(filename, "rb") as handle:
+            return handle.read()
+    return None
+
+
 def _save_pil(image: Any, fmt: str, quality: int | None = None, mode: str | None = None) -> tuple[bytes, str]:
     if mode and image.mode != mode:
         image = image.convert(mode)
@@ -945,25 +1482,45 @@ def _nifti_encoded_bytes(image: Any) -> tuple[bytes, str]:
 
 
 def _encode_image_ref(item: Any, default_format: str = "PNG", default_quality: int | None = None) -> tuple[bytes, str]:
-    """Encode ``Image`` / ``Jpeg`` / ``Pil`` from path, bytes, array, or PIL image."""
+    """Encode ``Image`` / ``Jpeg`` / ``Pil`` from path, bytes, array, or PIL image.
+
+    ``quality`` force-encodes at that JPEG quality. ``max_quality`` is a cap: existing
+    JPEG bytes whose estimated quality is at or below the cap are kept (unknown
+    quality is kept so Hub q=75 is not inflated to 95). Pixels / PNG / higher-quality
+    JPEGs encode at ``max_quality``.
+    """
     array = getattr(item, "array", None)
     image = getattr(item, "image", None)
     mode = getattr(item, "mode", None)
     quality = getattr(item, "quality", default_quality)
+    max_quality = getattr(item, "max_quality", None)
     explicit_format = getattr(item, "format", None)
+    encode_quality = _jpeg_encode_quality(item, default_quality)
+
+    def _save(pil: Any, fmt: str) -> tuple[bytes, str]:
+        if max_quality is not None:
+            fmt = "JPEG"
+        return _save_pil(pil, fmt, quality=encode_quality, mode=mode)
+
     if image is not None or array is not None:
+        if max_quality is not None and image is not None:
+            original = _original_jpeg_bytes_from_pil(image)
+            if original is not None and _keep_jpeg_under_max_quality(original, int(max_quality)):
+                return original, "jpg"
         pil = image if image is not None else _pil_from_array(array)
         fmt = explicit_format or (_native_pil_format(pil) if image is not None else default_format)
-        return _save_pil(pil, fmt, quality=quality, mode=mode)
+        return _save(pil, fmt)
     data, ext = _read_media_bytes(item)
-    if quality is None and mode is None and getattr(item, "format", None) is None:
+    if quality is None and max_quality is None and mode is None and explicit_format is None:
         return data, ext or default_format.lower()
+    if max_quality is not None and _keep_jpeg_under_max_quality(data, int(max_quality)):
+        return data, ext or "jpg"
     if not _PIL_AVAILABLE:
         raise ModuleNotFoundError("PIL is required. Run `pip install pillow`")
     from PIL import Image as PILImage
 
     pil = PILImage.open(io.BytesIO(data))
-    return _save_pil(pil, explicit_format or ext or default_format, quality=quality, mode=mode)
+    return _save(pil, explicit_format or ext or default_format)
 
 
 def _encode_video_array(array: Any, fps: float) -> bytes:
@@ -1651,6 +2208,7 @@ _SERIALIZERS = OrderedDict(
         "numpy": NumpySerializer(),
         "no_header_tensor": NoHeaderTensorSerializer(),
         "tensor": TensorSerializer(),
+        "json": JsonSerializer(),
         "pickle": PickleSerializer(),
     }
 )

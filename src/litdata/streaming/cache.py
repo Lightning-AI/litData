@@ -39,6 +39,8 @@ class Cache:
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
         compression: str | None = None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         chunk_size: int | None = None,
         chunk_bytes: int | str | None = None,
@@ -46,8 +48,8 @@ class Cache:
         max_cache_size: int | float | str | None = None,
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         msg_queue: "Queue | None" = None,
         on_demand_bytes: bool = False,
@@ -60,6 +62,11 @@ class Cache:
             subsampled_files: List of subsampled chunk files loaded from `input_dir/index.json` file.
             region_of_interest: List of tuples of (start,end) of region of interest for each chunk.
             compression: The name of the algorithm to reduce the size of the chunks.
+            compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+                ``"batch"``. ``"chunk"`` is whole-file ``.zstd.bin``; ``"sample"`` is
+                per-item zstd. Default batch size is 256.
+            compression_batch_size: Items per frame when ``compression_level="batch"``
+                (default 256).
             encryption: The encryption algorithm to use.
             chunk_bytes: The maximum number of bytes within a chunk.
             chunk_size: The maximum number of items within a chunk.
@@ -84,6 +91,8 @@ class Cache:
             chunk_size=chunk_size,
             chunk_bytes=chunk_bytes,
             compression=compression,
+            compression_level=compression_level,
+            compression_batch_size=compression_batch_size,
             encryption=encryption,
             serializers=serializers,
             chunk_index=writer_chunk_index or 0,

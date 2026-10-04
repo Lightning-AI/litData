@@ -75,6 +75,7 @@ lint.per-file-ignores."scripts/bench/**" = [
   "D404",
   "S108",   # local bench fixtures under /tmp
   "S110",   # teardown best-effort
+  "S112",   # skip missing parquet URL candidates
   "S311",
   "S603",   # trusted local subprocess for bench orchestration
   "S605",   # historic cache wipe via shell glob
@@ -142,7 +143,12 @@ addopts = [
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-markers = [ "cloud: Run the cloud tests for example" ]
+markers = [
+  "cloud: Run the cloud tests for example",
+  "xdist_group: Pin tests that share ~/.lightning/chunks onto one xdist worker",
+  "asyncio: mark a test as a coroutine",
+  "timeout: per-test timeout from pytest-timeout",
+]
 filterwarnings = [ "error::FutureWarning" ]
 xfail_strict = true
 junit_duration_report = "call"

@@ -14,6 +14,7 @@
 import io
 import json
 import os
+import re
 import tempfile
 import urllib
 from collections.abc import Callable
@@ -191,6 +192,9 @@ def extract_rank_and_index_from_filename(chunk_filename: str) -> tuple[int, int]
     return rank, index
 
 
+_CHECKPOINT_UUID_PATTERN = re.compile(r"^(.*checkpoint-\d+)-[0-9a-fA-F]{32}\.json$")
+
+
 def remove_uuid_from_filename(filepath: str) -> str:
     """Remove the unique id from the filepath. Expects the filepath to be in the format
     `checkpoint-<rank>-<uuid>.json`.
@@ -199,11 +203,14 @@ def remove_uuid_from_filename(filepath: str) -> str:
         -> `checkpoint-0.json`
 
     """
-    if not filepath.__contains__(".checkpoints"):
+    if ".checkpoints" not in filepath:
         return filepath
 
-    # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
-    return filepath[:-38] + ".json"
+    match = _CHECKPOINT_UUID_PATTERN.match(filepath)
+    if match:
+        return match.group(1) + ".json"
+
+    return filepath
 
 
 def construct_storage_options(storage_options: dict[str, Any], input_dir: Dir) -> dict[str, Any]:

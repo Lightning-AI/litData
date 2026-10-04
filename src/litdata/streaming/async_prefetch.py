@@ -55,7 +55,10 @@ _THREAD_LOOPS = threading.local()
 # (only 1–2 in-flight). Floor to 4 when the feature is enabled unless overridden.
 _DEFAULT_ASYNC_MIN_PRE_DOWNLOAD = 4
 # Cap in-flight GETs so a large drain batch does not open one connection per slot.
-_DEFAULT_ASYNC_DOWNLOAD_CONCURRENCY = 8
+_DEFAULT_ASYNC_DOWNLOAD_CONCURRENCY = 16
+# Raise prefetch toward unique remote objects without blowing RAM (256MB × 12 ≈ 3GB).
+_PREFETCH_RAM_BUDGET = 3 * 1024 * 1024 * 1024
+_MAX_ADAPTIVE_PRE_DOWNLOAD = 32
 
 
 def async_chunk_prefetch_enabled(remote_dir: str | None = None) -> bool:
@@ -109,6 +112,31 @@ def apply_async_pre_download_floor(max_pre_download: int, remote_dir: str | None
         floor,
     )
     return floor
+
+
+def adaptive_pre_download(
+    max_pre_download: int,
+    *,
+    remote_dir: str | None = None,
+    chunks: list | None = None,
+) -> int:
+    """Floor for async gather, then raise toward unique remote objects within a RAM budget.
+
+    A 36-chunk minipile / 53-chunk food101 scan stalls when only 4–8 slots are
+    in flight. Cap at ``n_chunks`` and ~3GB so 256MB objects stay around 12.
+    """
+    base = apply_async_pre_download_floor(max_pre_download, remote_dir=remote_dir)
+    if not remote_dir or not chunks:
+        return base
+    n = len(chunks)
+    if n <= 1:
+        return base
+    total = sum(int(chunk.get("chunk_bytes") or 0) for chunk in chunks)
+    mean_b = total / n if n else 0
+    if mean_b <= 0:
+        return min(n, max(base, 8))
+    by_ram = max(1, int(_PREFETCH_RAM_BUDGET // mean_b))
+    return min(n, _MAX_ADAPTIVE_PRE_DOWNLOAD, max(base, by_ram))
 
 
 def downloader_supports_aupload(downloader: Downloader | None) -> bool:

@@ -1,6 +1,7 @@
 import datetime
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -623,3 +624,23 @@ def test_src_resolver_lightning_storage(monkeypatch, lightning_cloud_mock):
         resolver._resolve_dir("/teamspace/lightning_storage/my_dataset")
 
     auth.clear()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Studio paths are POSIX paths")
+@pytest.mark.parametrize("suffix", ["", "/train", "/train/nested"])
+def test_lightning_storage_mount_stays_local(monkeypatch, suffix):
+    connection = SimpleNamespace(type="mountable_data_connection", r2=None)
+    monkeypatch.setattr(resolver, "_resolve_data_connection", lambda _: connection)
+    path = "/teamspace/lightning_storage/example" + suffix
+    assert resolver._resolve_dir(path) == resolver.Dir(path=path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Studio paths are POSIX paths")
+@pytest.mark.parametrize("suffix", ["", "/train"])
+def test_lightning_storage_object_store_keeps_remote_url(monkeypatch, suffix):
+    connection = SimpleNamespace(type="r2", id="example-id", r2=SimpleNamespace(source="r2://example"))
+    monkeypatch.setattr(resolver, "_resolve_data_connection", lambda _: connection)
+    path = "/teamspace/lightning_storage/example" + suffix
+    assert resolver._resolve_dir(path) == resolver.Dir(
+        path=path, url="r2://example" + suffix, data_connection_id="example-id"
+    )

@@ -72,6 +72,7 @@ setup(
     },
     long_description_content_type="text/markdown",
     include_package_data=True,
+    package_data={"litdata.utilities": ["_nfs_direct_io.c"]},
     zip_safe=False,
     keywords=["deep learning", "pytorch", "AI", "streaming", "cloud", "data processing"],
     python_requires=">=3.10",

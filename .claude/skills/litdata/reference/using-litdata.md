@@ -461,7 +461,8 @@ Deps: `pip install 'litdata[extras]'` (+ `s3fs` / `gcsfs` / `huggingface_hub`). 
 
 ```python
 ld.index_parquet_dataset(uri, cache_dir=None, storage_options={}, num_workers=4)
-cache = ld.index_hf_dataset("hf://datasets/org/name/data")  # returns local cache dir
+cache = ld.index_hf_dataset("hf://datasets/org/name/data")  # persists {cache}/hf-index/<hash>/index.json; reused next time
+ld.optimize_hf("org/name", output_dir="opt", split="train")  # index → persist parquet → 64MB chunks
 ```
 
 | Scheme            | Index written to                               |
@@ -470,7 +471,7 @@ cache = ld.index_hf_dataset("hf://datasets/org/name/data")  # returns local cach
 | `s3://` / `gs://` | uploaded to `{url}/index.json` (write access)  |
 | `hf://`           | local cache (`index_hf_dataset` / `cache_dir`) |
 
-Top-level `.parquet` only; uniform schema; index schemes today: local / s3 / gs / hf (**not** r2/azure).
+Uniform schema; index schemes today: local / s3 / gs / hf (**not** r2/azure). Local / cloud indexers list the top-level directory. `hf://` also globs `**/*.parquet` when the listed prefix has no parquet files (nested `data/` trees). Token via `storage_options={"token": ...}` or `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN`.
 
 **Stream**
 
@@ -491,10 +492,10 @@ ds = StreamingDataset("s3://bucket/data/train-*.parquet", item_loader=ParquetLoa
 StreamingDataLoader(ds, num_workers=4, multiprocessing_context="spawn")  # required on Linux
 ```
 
-| `ParquetLoader` arg | Default | Notes                                                         |
-| ------------------- | ------- | ------------------------------------------------------------- |
-| `low_memory`        | `True`  | Row-group path (pyarrow + polars). `False` = full file in RAM |
-| `pre_load_chunk`    | `False` | Only effective when `low_memory=False`                        |
+| `ParquetLoader` arg | Default | Notes                                                                                                                                                                                                                                                                      |
+| ------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `low_memory`        | `True`  | Row-group path (pyarrow). Each group is `to_pylist()` once (HF-style), not per-cell `as_py()`. `False` = full file in RAM via Polars. On `hf://`, default still **downloads** the file in `PrepareChunksThread` then reads locally (faster than HF streaming once cached). |
+| `pre_load_chunk`    | `False` | Only effective when `low_memory=False`                                                                                                                                                                                                                                     |
 
 **`ParquetReader`** (`litdata.processing.readers`) for `map`/`optimize` `reader=` — splits oversized parquet inputs by `num_rows` into a cache folder; `fn` receives a `ParquetFile`.
 

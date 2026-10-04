@@ -125,16 +125,25 @@ def test_profile_cprofile_conflicts_with_profile_batches(tmpdir):
 
 
 def test_profile_cprofile_main_and_worker(tmpdir):
+    from torch.utils.data._utils import worker
+
     dataset = TestCombinedStreamingDataset(
         [TestStatefulDataset(8, 1), TestStatefulDataset(8, -1)],
         42,
         weights=(0.5, 0.5),
         iterate_over_all=False,
     )
+    original_worker_loop = worker._worker_loop
     dataloader = StreamingDataLoader(
         dataset, batch_size=2, num_workers=1, profile_cprofile=True, profile_dir=str(tmpdir)
     )
-    batches = list(dataloader)
+    dataloader_iter = iter(dataloader)
+    try:
+        first_batch = next(dataloader_iter)
+        assert worker._worker_loop is original_worker_loop
+        batches = [first_batch, *dataloader_iter]
+    finally:
+        dataloader_iter.close()
     assert len(batches) > 0
     main_prof = os.path.join(tmpdir, "cprofile_main.prof")
     worker_prof = os.path.join(tmpdir, "cprofile_worker0.prof")
@@ -161,10 +170,11 @@ def test_profile_cprofile_num_workers_zero(tmpdir):
     assert not os.path.exists(os.path.join(tmpdir, "cprofile_worker0.prof"))
 
 
-@pytest.mark.skip(reason="Profiling patches torch which leads to undesired test interactions")
 @pytest.mark.skipif(not _VIZ_TRACKER_AVAILABLE, reason="viz tracker required")
 @pytest.mark.parametrize("profile", [2, True])
 def test_dataloader_profiling(profile, tmpdir, monkeypatch):
+    from torch.utils.data._utils import worker
+
     monkeypatch.setattr(streaming_dataloader_module, "_VIZ_TRACKER_AVAILABLE", True)
 
     dataset = TestCombinedStreamingDataset(
@@ -173,13 +183,17 @@ def test_dataloader_profiling(profile, tmpdir, monkeypatch):
         weights=(0.5, 0.5),
         iterate_over_all=False,
     )
+    original_worker_loop = worker._worker_loop
     dataloader = StreamingDataLoader(
         dataset, batch_size=2, profile_batches=profile, profile_dir=str(tmpdir), num_workers=1
     )
     dataloader_iter = iter(dataloader)
-    batches = []
-    for batch in dataloader_iter:
-        batches.append(batch)
+    try:
+        next(dataloader_iter)
+        assert worker._worker_loop is original_worker_loop
+        assert list(dataloader_iter)
+    finally:
+        dataloader_iter.close()
 
     assert os.path.exists(os.path.join(tmpdir, "result.json"))
 

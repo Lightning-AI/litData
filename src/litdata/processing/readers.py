@@ -75,8 +75,9 @@ class ParquetReader(BaseReader):
 
         if not _PYARROW_AVAILABLE:
             raise ModuleNotFoundError("Please, run: `pip install pyarrow`")
+        import pyarrow.parquet as pq
 
-        self.parquet_file = None
+        self.parquet_file: pq.ParquetFile | None = None
 
     def _get_num_rows(self, path: str) -> int:
         import pyarrow.parquet as pq

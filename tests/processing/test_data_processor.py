@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 import os
+import pickle
 import random
 import sys
 import tempfile
@@ -17,7 +18,7 @@ import pytest
 import torch
 from lightning_utilities.core.imports import RequirementCache
 
-from litdata.constants import _ZSTD_AVAILABLE
+from litdata.constants import _INDEX_FILENAME, _ZSTD_AVAILABLE
 from litdata.processing import data_processor as data_processor_module
 from litdata.processing import functions
 from litdata.processing.data_processor import (
@@ -47,7 +48,7 @@ from litdata.processing.data_processor import (
     _wait_for_file_to_exist,
     resolve_keep_data_ordered,
 )
-from litdata.processing.functions import LambdaMapRecipe, _get_input_dir, map, optimize
+from litdata.processing.functions import LambdaDataChunkRecipe, LambdaMapRecipe, _get_input_dir, map, optimize
 from litdata.streaming import StreamingDataLoader, StreamingDataset, resolver
 from litdata.streaming.cache import Cache, Dir
 from litdata.streaming.serializers import _torchcodec_usable
@@ -1027,12 +1028,20 @@ def test_data_processor_default_is_unordered():
 def test_is_local_write_through_and_chunks_dir(tmp_path):
     local = Dir(path=str(tmp_path / "out"), url=None)
     remote = Dir(path=str(tmp_path / "out"), url="s3://bucket/out")
+    lightning = Dir(
+        path="/teamspace/lightning_storage/testing/out",
+        url="r2://bucket/out",
+        data_connection_id="conn-1",
+    )
     empty = Dir(path=None, url=None)
     assert _is_local_write_through(local) is True
     assert _is_local_write_through(remote) is False
+    assert _is_local_write_through(lightning) is False
     assert _is_local_write_through(empty) is False
     assert _is_local_write_through(None) is False
     assert _chunks_dir(local) == local.path
+    assert _chunks_dir(remote) != remote.path
+    assert _chunks_dir(lightning) != lightning.path
     assert os.path.isdir(local.path)
 
 
@@ -1079,6 +1088,50 @@ def test_n_chunk_writers_and_upload_threads_write_through(tmp_path, monkeypatch)
     remote = Dir(path=str(tmp_path / "out"), url="s3://bucket/out")
     processor = DataProcessor(input_dir=Dir(), output_dir=remote, num_workers=8, verbose=False)
     assert processor._n_upload_threads() >= 2
+    r2 = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    processor = DataProcessor(input_dir=Dir(), output_dir=r2, num_workers=8, verbose=False)
+    assert processor._n_upload_threads() >= 2
+    assert processor.storage_options["data_connection_id"] == "conn-1"
+
+
+def test_node_removers_start_when_input_dir_empty(tmp_path, monkeypatch):
+    """HF optimize has no input Dir; removers must still delete uploaded cache chunks."""
+    remote = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    processor = DataProcessor(
+        input_dir=Dir(), output_dir=remote, num_workers=1, verbose=False, delete_cached_files=True
+    )
+    started: list = []
+
+    def _fake_start(fn, *args):
+        started.append(fn)
+        return mock.Mock(is_alive=lambda: False)
+
+    monkeypatch.setattr(processor, "_start_io_thread", _fake_start)
+    monkeypatch.setattr(processor, "_n_upload_threads", lambda: 0)
+    processor._start_node_io_pools()
+    assert data_processor_module._remove_target in started
+    assert processor.shared_remove_queue is not None
+
+
+def test_done_merges_index_despite_leftover_cache_bins_for_lightning_storage(tmp_path, monkeypatch):
+    """Dir with FUSE path + R2 url must not abort merge on leftover ``.bin`` in the shared cache."""
+    cache_dir = tmp_path / "chunks"
+    cache_dir.mkdir()
+    (cache_dir / "stale-from-other-job.bin").write_bytes(b"stale")
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda name=None: str(cache_dir))
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 1)
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+    monkeypatch.setattr(data_processor_module, "_put_files_remote", lambda *a, **k: (None, None))
+
+    _write_worker_index(str(cache_dir), "C.bin")
+    recipe = _AppendChunkRecipe()
+    dest = Dir(path=str(tmp_path / "fuse"), url="r2://bucket/out", data_connection_id="conn-1")
+    result = recipe._done(size=None, delete_cached_files=True, output_dir=dest)
+
+    index_path = os.path.join(str(cache_dir), _INDEX_FILENAME)
+    assert os.path.isfile(index_path)
+    assert _chunk_names(index_path) == ["C.bin"]
+    assert result.num_chunks == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Not supported on windows")
@@ -1346,6 +1399,24 @@ def test_data_processing_optimize_class_yield(monkeypatch, tmpdir):
 
     cache = Cache(output_dir, chunk_size=1)
     assert len(cache) == 5
+
+
+def _noop_map_item(item: Any, output_dir: str) -> None:
+    return None
+
+
+def test_lambda_recipe_pickle_drops_inputs():
+    inputs = [bytearray(1024)]
+    chunk_recipe = LambdaDataChunkRecipe(str, inputs, 1, None, None)
+    map_recipe = LambdaMapRecipe(_noop_map_item, inputs)
+    pickled_chunk = pickle.loads(pickle.dumps(chunk_recipe))  # noqa: S301
+    pickled_map = pickle.loads(pickle.dumps(map_recipe))  # noqa: S301
+
+    assert chunk_recipe.prepare_structure(None) is inputs
+    assert map_recipe.prepare_structure(None) is inputs
+    assert pickled_chunk.prepare_structure(None) is None
+    assert pickled_map.prepare_structure(None) is None
+    assert pickled_chunk.prepare_item(123) == "123"
 
 
 def test_lambda_transform_recipe(monkeypatch):
@@ -2135,6 +2206,94 @@ def test_data_chunk_recipe_upload_index_with_data_connection_id(tmpdir, monkeypa
     assert put_mock.call_args[0][2] == storage_options
 
 
+class _AppendChunkRecipe(DataChunkRecipe):
+    def prepare_structure(self, input_dir: str | None) -> list:
+        return []
+
+    def prepare_item(self, item_metadata: Any) -> Any:
+        return item_metadata
+
+
+def _index_chunk(name: str) -> dict[str, Any]:
+    return {"chunk_size": 1, "chunk_bytes": 4, "column_sizes": [4], "dim": None, "filename": name}
+
+
+def _write_worker_index(directory: str, chunk_name: str) -> None:
+    with open(os.path.join(directory, f"0.{_INDEX_FILENAME}"), "w") as f:
+        json.dump({"chunks": [_index_chunk(chunk_name)], "config": None}, f)
+
+
+def _chunk_names(index_path: str) -> list[str]:
+    with open(index_path) as f:
+        return [c["filename"] for c in json.load(f)["chunks"]]
+
+
+def test_data_chunk_recipe_multinode_append_folds_existing_index_once(tmpdir, monkeypatch):
+    """Regression for #865: ``existing_index`` must not be folded into every ``{node}-index.json``.
+
+    ``DataChunkRecipe._done`` is the real two-stage merge (per-node, then last-node
+    ``_upload_index``). Spying ``Cache._merge_no_wait`` asserts the existing chunks
+    are passed only on the final merge.
+    """
+    output_path = str(tmpdir.mkdir("output"))
+    merge_cache_dir = str(tmpdir.mkdir("merge_cache"))
+    monkeypatch.setattr(data_processor_module, "_get_cache_dir", lambda name=None: merge_cache_dir)
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 2)
+
+    existing_index = {"chunks": [_index_chunk("A.bin"), _index_chunk("B.bin")], "config": None}
+    recipe = _AppendChunkRecipe()
+    recipe.existing_index = existing_index
+    output_dir = Dir(path=output_path, url=None)
+
+    merge_calls: list[tuple[int | None, list[str] | None]] = []
+    orig_merge = data_processor_module.Cache._merge_no_wait
+
+    def _spy_merge(self, node_rank=None, existing_index=None):
+        names = None if existing_index is None else [c["filename"] for c in existing_index["chunks"]]
+        merge_calls.append((node_rank, names))
+        return orig_merge(self, node_rank=node_rank, existing_index=existing_index)
+
+    monkeypatch.setattr(data_processor_module.Cache, "_merge_no_wait", _spy_merge)
+
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+    _write_worker_index(output_path, "C.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=output_dir)
+    assert _chunk_names(os.path.join(output_path, f"0-{_INDEX_FILENAME}")) == ["C.bin"]
+
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 1)
+    _write_worker_index(output_path, "D.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=output_dir)
+
+    assert _chunk_names(os.path.join(output_path, _INDEX_FILENAME)) == ["A.bin", "B.bin", "C.bin", "D.bin"]
+    assert merge_calls == [(0, None), (1, None), (None, ["A.bin", "B.bin"])]
+
+
+def test_data_chunk_recipe_singlenode_append_folds_existing_index_on_node_merge(tmpdir, monkeypatch):
+    output_path = str(tmpdir.mkdir("output"))
+    monkeypatch.setattr(data_processor_module, "_get_num_nodes", lambda: 1)
+    monkeypatch.setattr(data_processor_module, "_get_node_rank", lambda: 0)
+
+    existing_index = {"chunks": [_index_chunk("A.bin"), _index_chunk("B.bin")], "config": None}
+    recipe = _AppendChunkRecipe()
+    recipe.existing_index = existing_index
+
+    merge_calls: list[tuple[int | None, list[str] | None]] = []
+    orig_merge = data_processor_module.Cache._merge_no_wait
+
+    def _spy_merge(self, node_rank=None, existing_index=None):
+        names = None if existing_index is None else [c["filename"] for c in existing_index["chunks"]]
+        merge_calls.append((node_rank, names))
+        return orig_merge(self, node_rank=node_rank, existing_index=existing_index)
+
+    monkeypatch.setattr(data_processor_module.Cache, "_merge_no_wait", _spy_merge)
+
+    _write_worker_index(output_path, "C.bin")
+    recipe._done(size=None, delete_cached_files=False, output_dir=Dir(path=output_path, url=None))
+
+    assert _chunk_names(os.path.join(output_path, _INDEX_FILENAME)) == ["A.bin", "B.bin", "C.bin"]
+    assert merge_calls == [(None, ["A.bin", "B.bin"])]
+
+
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
 def test_data_processor_cleanup_checkpoints_with_data_connection_id(tmpdir, monkeypatch):
     """Test DataProcessor._cleanup_checkpoints passes data_connection_id correctly."""
@@ -2203,6 +2362,10 @@ def test_data_processor_load_checkpoint_config_with_data_connection_id(tmpdir, m
     with open(config_file, "w") as f:
         json.dump(config_data, f)
 
+    writer_config = {"data_format": ["int"], "compression": None}
+    with open(os.path.join(tmpdir, "checkpoint-0.json"), "w") as f:
+        json.dump({"chunks": [], "done_till_index": 2, "config": writer_config}, f)
+
     storage_options = {"read_timeout": 15}
     data_processor = DataProcessor(
         input_dir=str(tmpdir),
@@ -2214,6 +2377,7 @@ def test_data_processor_load_checkpoint_config_with_data_connection_id(tmpdir, m
 
     workers_user_items = [[1, 2], [3, 4]]
     data_processor._load_checkpoint_config(workers_user_items)
+    assert data_processor.checkpoint_configs == [writer_config, None]
 
     # Verify fs_provider was called with merged storage_options including data_connection_id
     expected_storage_options = storage_options.copy()

@@ -11,14 +11,63 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - `CombinedStreamingDataset(max_cache_size=..., cache_allocation=...)`: an optional total cache budget shared across all child datasets, split by sampling weight (`cache_allocation="proportional"`, default) or evenly (`"equal"`) when iteration starts. `None` (default) leaves each child's `max_cache_size` unchanged. ([#790](https://github.com/Lightning-AI/litData/issues/790))
+## [0.2.76] - 2026-09-30
 
-### Fixed
+### Added
 
-- Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes.
+- GPU-local CPU affinity and optional NUMA memory binding helpers for ranks and DataLoader workers. ([#932](https://github.com/Lightning-AI/litData/pull/932))
+- Opt-in NFS direct reads for temporal windows with `window_direct_io=True`, plus reusable Python and experimental native-loader helpers. Direct reads bypass the client page cache; the native launcher requires a C compiler. ([#934](https://github.com/Lightning-AI/litData/pull/934))
+
+- `Downloader.adownload_bytes` supports validated async range reads, with native S3/R2 requests and direct local slices. Added `StreamingDataset.read_window` / `aread_window` and `TemporalArrayLoader` for built-in field/window selection, grouped array records, and index-only frame counts through the normal optimize workflow.
 
 ### Changed
 
-- `StreamingDataset` / `Cache` `max_cache_size`: `None` uses 75% of free disk (leave ≥50GB when possible). `"100G"` / `"50GB"` pins bytes; `0.90` (or `MAX_CACHE_SIZE=0.90`) uses that fraction of currently free space.
+- Declare PyTorch 2.4.0 as the minimum supported version. ([#909](https://github.com/Lightning-AI/litData/pull/909))
+- Remove the PyArrow upper version bound from optional dependencies. ([#929](https://github.com/Lightning-AI/litData/pull/929))
+
+### Fixed
+
+- Preserve mounted storage paths and use exact, unbuffered local range reads for temporal windows. ([#931](https://github.com/Lightning-AI/litData/pull/931))
+- Honor `index_path` for local dataset directories. ([#917](https://github.com/Lightning-AI/litData/pull/917))
+- Preserve output prefixes when deriving checkpoint filenames. ([#926](https://github.com/Lightning-AI/litData/pull/926))
+- Reset wrapper sample and cycle counters with `reset_state_dict` and avoid mutating restored checkpoint counters. ([#928](https://github.com/Lightning-AI/litData/pull/928))
+- Refresh temporary credentials against their reported expiry and send S3 reads to the bucket's reported endpoint and region. ([#906](https://github.com/Lightning-AI/litData/pull/906), [#904](https://github.com/Lightning-AI/litData/pull/904))
+
+- Temporal window reads on local and parallel POSIX filesystems reuse bounded chunk mappings and prefetch selected ranges, preserving owned outputs and safe concurrent mapping lifetimes.
+- S3/R2 range reads close SDK response bodies on success and failure and reject truncated responses.
+- Resumed optimize workers with no remaining inputs preserve their checkpoint's schema and compression metadata, so index merging also succeeds when a worker completed before interruption.
+- R2 clients default to the `auto` signing region independently of ambient AWS configuration, and custom client/session options no longer reuse an incompatible cached SDK client. Temporary credentials remain shared across clients.
+
+## [0.2.75] - 2026-09-01
+
+### Fixed
+
+- Shuffled JPEG (and other per-item media) streaming no longer re-decodes the same image ~16×. Auto-windowing stays on for cheap leaves (text, ints, small tensors); JPEG / image / audio / video use ``batch_decode=1`` so ImageNet-style epochs keep full decode speed. ([#899](https://github.com/Lightning-AI/litData/pull/899))
+
+## [0.2.74] - 2026-09-01
+
+### Added
+
+- Stream Hugging Face Hub datasets with ``StreamingDataset("hf://...")``. Indexes on first open and reuses the cache. ([#897](https://github.com/Lightning-AI/litData/pull/897))
+- ``optimize_hf`` converts a Hub dataset into LitData chunks for faster training. Later calls reuse ``output_dir`` if it is already optimized. ([#897](https://github.com/Lightning-AI/litData/pull/897))
+
+## [0.2.73] - 2026-08-31
+
+### Changed
+
+- `optimize` / `map` no longer pickle the full input list into every spawned worker. ([#890](https://github.com/Lightning-AI/litData/pull/890))
+
+### Fixed
+
+- Multi-node `optimize(mode="append")` no longer repeats existing chunks once per node in the merged `index.json`. ([#866](https://github.com/Lightning-AI/litData/pull/866))
+- Restore PyTorch's process-global DataLoader worker loop after VizTracer/cProfile setup, so a later loader in the same process does not inherit LitData's profiling worker. ([#893](https://github.com/Lightning-AI/litData/pull/893))
+
+## [0.2.72] - 2026-08-24
+
+### Fixed
+
+- Temporary S3/R2 credential refresh no longer kills a run on a single control-plane blip. The `/v1/auth/login` POST is now retried (urllib3 excludes POST from its default `allowed_methods`, so it never was), a failed refresh keeps serving the current credentials and retries on a timer instead of re-requesting on every read, refreshes are jittered per process so forked DataLoader workers stop stampeding, and the default refresh interval moved from 55 to 45 minutes to leave a usable grace period inside the 1 hour credential TTL. Creating the first client now waits out a control-plane outage instead of failing the job, while missing configuration, rejected credentials and local errors such as a bad `storage_options` key still fail immediately. Also fixes `_CustomRetryAdapter` never applying its default request timeout, because `requests` always passes `timeout` explicitly as `None`, and declares the `urllib3 >=1.26` floor that `streaming/client.py` has always needed for its direct `Retry` import. ([#891](https://github.com/Lightning-AI/litData/pull/891))
+- `NumpySerializer` / `NoHeaderNumpySerializer` copy on deserialize, so arrays are writable (`np.frombuffer` returns a read-only view, which made `torch.from_numpy` warn on every collate) and no longer alias an mmap the cache can unmap underneath them. ([#887](https://github.com/Lightning-AI/litData/pull/887))
 
 ## [0.2.71] - 2026-08-15
 
@@ -29,11 +78,13 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Prefetch accepts `numpy.int64` chunk indexes from shuffle (they were dropped by `isinstance(..., int)`), so force-download stays a last resort after `_FORCE_DOWNLOAD_TIME`. Concurrent `os.replace` of the same chunk is a no-op when the destination already exists.
+- Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes. ([#886](https://github.com/Lightning-AI/litData/pull/886))
 
 ### Changed
 
 - Faster pytree flatten on the writer hot path: skip typing-generic `isinstance` and PIL JPEG probes on non-list/tuple nodes, skip namedtuple/JPEG probes on scalar leaves, and call `_get_node_type` once per node. After the first sample, `BinaryWriter` walks `tree_leaves` (non-generator collect) instead of rebuilding a `TreeSpec`, caches per-leaf byte sizes, and packs the size header with `struct` instead of NumPy. When every leaf has a fixed size (int/float/bool), later samples reuse a cached size header and write into one buffer. `BooleanSerializer` advertises `size = 1`. Reader offset pairs and size headers use `struct` instead of NumPy.
 - Remote→local streaming: cap in-flight chunk GETs with `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` (default 8), drain the prefetch queue up to gather width when slots are free, signal file-ready with `Event.set` after the downloader's atomic `os.replace` (decompress publishes the readable `.bin`), and `posix_fadvise(WILLNEED)` downloaded cache files from the prefetch thread (mmap stays on the reader thread).
+- `StreamingDataset` / `Cache` `max_cache_size`: `None` uses 75% of free disk (leave ≥50GB when possible). `"100G"` / `"50GB"` pins bytes; `0.90` (or `MAX_CACHE_SIZE=0.90`) uses that fraction of currently free space. ([#886](https://github.com/Lightning-AI/litData/pull/886))
 
 ## [0.2.70] - 2026-08-15
 

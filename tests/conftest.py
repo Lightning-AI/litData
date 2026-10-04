@@ -162,6 +162,13 @@ def _thread_police():
             # asyncio.to_thread / run_in_executor default-executor workers.
             if thread.daemon and thread.name.startswith("asyncio_"):
                 continue
+            # Optimize node I/O / feeder threads are daemons; a failed worker can leave one.
+            if thread.daemon and (
+                "_io_thread_target" in thread.name
+                or "(_feed_ready)" in thread.name
+                or "(_feed_downloads)" in thread.name
+            ):
+                continue
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 

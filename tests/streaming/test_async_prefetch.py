@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 
 from litdata.streaming import Cache
 from litdata.streaming.async_prefetch import (
+    adaptive_pre_download,
     adownload_chunk_indexes,
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
@@ -46,6 +47,8 @@ class _FakeAsyncDownloader(Downloader):
         super().__init__(remote_dir, cache_dir, chunks, {})
         self.delay_s = delay_s
         self.calls: list[str] = []
+        self._in_flight = 0
+        self.max_in_flight = 0
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         time.sleep(self.delay_s)
@@ -55,9 +58,14 @@ class _FakeAsyncDownloader(Downloader):
             f.write(b"x" * 16)
 
     async def adownload_fileobj(self, remote_filepath: str) -> bytes:
-        await asyncio.sleep(self.delay_s)
-        self.calls.append(remote_filepath)
-        return b"x" * 16
+        self._in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        try:
+            await asyncio.sleep(self.delay_s)
+            self.calls.append(remote_filepath)
+            return b"x" * 16
+        finally:
+            self._in_flight -= 1
 
 
 def _seed_local_chunks(tmpdir, n_chunks: int = 4, chunk_size: int = 4) -> str:
@@ -102,6 +110,19 @@ def test_apply_async_pre_download_floor(monkeypatch):
 
     monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
     assert apply_async_pre_download_floor(2) == 2
+
+
+def test_adaptive_pre_download_covers_many_remote_chunks(monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    chunks_64 = [{"chunk_bytes": 64 * 1024 * 1024} for _ in range(36)]
+    # 3GB / 64MB = 48, capped at n_chunks then 32.
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_64) == 32
+    chunks_256 = [{"chunk_bytes": 256 * 1024 * 1024} for _ in range(15)]
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=chunks_256) == 12
+    tiny = [{"chunk_bytes": 16} for _ in range(4)]
+    assert adaptive_pre_download(8, remote_dir="r2://b/x", chunks=tiny) == 4
+    assert adaptive_pre_download(8, remote_dir=None, chunks=chunks_64) == 8
 
 
 def test_downloader_supports_adownload_detects_override():
@@ -150,8 +171,12 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
     asyncio.run(adownload_chunk_indexes(cfg, indexes))  # type: ignore[arg-type]
     elapsed = time.perf_counter() - t0
 
-    # Three 50ms downloads overlapped should finish well under serial 150ms.
-    assert elapsed < 0.12
+    # Overlap is the contract: all three GETs must be in flight together.
+    # Wall time also includes asyncio.run / to_thread(try_decompress) / fs
+    # publish, which on GitHub runners has exceeded a 120ms bound (~141ms)
+    # even when gather is correct. Serial 3×50ms is 150ms of sleep alone.
+    assert fake.max_in_flight == 3
+    assert elapsed < 1.0
     assert len(fake.calls) == 3
     for idx in indexes:
         assert os.path.exists(os.path.join(cache_dir, chunks[idx]["filename"]))
@@ -160,7 +185,7 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
 def test_async_download_concurrency_caps_gather(monkeypatch):
     monkeypatch.delenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", raising=False)
     assert async_download_concurrency(3) == 3
-    assert async_download_concurrency(32) == 8
+    assert async_download_concurrency(32) == 16
     monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "2")
     assert async_download_concurrency(32) == 2
     monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "1")
@@ -219,14 +244,17 @@ def test_should_start_download_refills_in_gather_batches(tmpdir, monkeypatch):
     assert cfg is not None
     cfg._remote_dir = "r2://bucket/data"
     thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=8)
+    # Four tiny remote chunks: adaptive prefetch caps at n_chunks.
+    cap = thread._max_pre_download
+    assert cap == 4
     assert thread._should_start_download(over_budget=False) is True
     thread._pre_download_counter = 1
     assert thread._should_start_download(over_budget=False) is True
-    thread._pre_download_counter = 7
+    thread._pre_download_counter = cap - 1
     assert thread._should_start_download(over_budget=False) is True
-    thread._pre_download_counter = 8
+    thread._pre_download_counter = cap
     assert thread._should_start_download(over_budget=False) is False
-    thread._pre_download_counter = 4
+    thread._pre_download_counter = max(0, cap // 2)
     assert thread._should_start_download(over_budget=False) is True
 
 

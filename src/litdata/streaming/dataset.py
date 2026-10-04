@@ -42,7 +42,7 @@ from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, po
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle
+from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle, resolve_item_shuffle_window
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _should_replace_path_filestores,
@@ -73,17 +73,23 @@ class StreamingDataset(IterableDataset):
         max_cache_size: int | float | str | None = None,
         subsample: float = 1.0,
         encryption: Encryption | None = None,
-        storage_options: dict | None = {},
-        session_options: dict | None = {},
+        storage_options: dict | None = None,
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         index_path: str | None = None,
         force_override_state_dict: bool = False,
         transform: Callable | list[Callable] | None = None,
         num_canonical_nodes: int | None = None,
+        batch_decode: int | str | bool = "auto",
+        item_shuffle_window: int | str | None = None,
+        window_direct_io: bool = False,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
         Args:
+            window_direct_io: Read windows through Linux NFS O_DIRECT handles, bypassing the client page cache.
+                Only ``read_window`` / ``aread_window`` are supported in this mode; ordinary iteration is disabled.
+                Requires an uncompressed, unencrypted local NFS dataset. Defaults to False.
             input_dir: Path to the folder where the input data is stored. Supports paths ending with `.parquet`
                 with wildcards in the basename to stream specific Parquet files.
             cache_dir: Path to the folder where the cache data is stored. If not provided, the cache will be stored
@@ -113,6 +119,17 @@ class StreamingDataset(IterableDataset):
             num_canonical_nodes: Frozen first-run node count recorded in checkpoints
                 (default: first-run ``world_size``). Elastic resume rebuilds remaining
                 IDs from that first-run shuffler assignment, not a different bucket layout.
+            batch_decode: How many items to deserialize together after a chunk is local.
+                ``"auto"`` (default) picks from the data format and mean sample size
+                (256 for text/nested; 1 for JPEG/image/audio so each row is decoded
+                once). ``0`` is per item, ``N`` is an aligned window, ``"all"`` is the
+                whole chunk. Shuffle permutes items inside the same window so cheap
+                leaves still hit the cache. ``LITDATA_BATCH_DECODE`` /
+                ``LITDATA_BATCH_ROWS`` apply only when this is ``"auto"``.
+            item_shuffle_window: In-chunk shuffle block size (pairs with ``batch_decode``).
+                ``None`` / ``"auto"`` (default) is 256, or ``LITDATA_ITEM_SHUFFLE_WINDOW``.
+                ``0`` / ``"full"`` is a full in-chunk permutation. Blocks are shuffled,
+                then items inside each block.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -131,9 +148,14 @@ class StreamingDataset(IterableDataset):
         cache_dir = _resolve_dir(cache_dir)
 
         if input_dir.url is not None and input_dir.url.startswith("hf://"):
+            if index_path is None and cache_dir.path:
+                cached_index = os.path.join(cache_dir.path, _INDEX_FILENAME)
+                if os.path.isfile(cached_index):
+                    # ``index_parquet_dataset(uri, cache_dir)`` layout — no extra index_path.
+                    index_path = cache_dir.path
             if index_path is None:
                 # No index_path was provided. Attempt to load it from cache or generate it dynamically on the fly.
-                index_path = index_hf_dataset(input_dir.url, cache_dir.path)
+                index_path = index_hf_dataset(input_dir.url, cache_dir.path, storage_options)
             if item_loader is not None and not isinstance(item_loader, ParquetLoader):
                 raise ValueError(
                     "Invalid item_loader for hf://datasets. "
@@ -143,6 +165,20 @@ class StreamingDataset(IterableDataset):
 
             item_loader = item_loader or ParquetLoader()
 
+        if not isinstance(window_direct_io, bool):
+            raise ValueError("window_direct_io must be a boolean.")
+        self.window_direct_io = window_direct_io
+        if window_direct_io:
+            from litdata.utilities.direct_io import _check_nfs, _check_platform
+
+            _check_platform()
+            if input_dir.url is not None or input_dir.path is None:
+                raise ValueError("window_direct_io requires a local NFS dataset path.")
+            fd = os.open(input_dir.path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                _check_nfs(fd)
+            finally:
+                os.close(fd)
         self.input_dir = input_dir
         self.cache_dir = cache_dir
         self.subsampled_files: list[str] = []
@@ -160,7 +196,14 @@ class StreamingDataset(IterableDataset):
             fnmatch_pattern,
         )
 
+        self.batch_decode = batch_decode
+        self.item_shuffle_window = item_shuffle_window
+        self._item_shuffle_window = resolve_item_shuffle_window(item_shuffle_window)
         self.item_loader = item_loader
+        if self.item_loader is not None:
+            set_batch = getattr(self.item_loader, "set_batch_decode", None)
+            if callable(set_batch):
+                set_batch(batch_decode)
         self.shuffle: bool = shuffle
         self.distributed_env = _DistributedEnv.detect()
 
@@ -192,6 +235,7 @@ class StreamingDataset(IterableDataset):
                 )
 
         self.cache: Cache | None = None
+        self._window_pid = os.getpid()
         self.worker_env: _WorkerEnv | None = None
         self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
         self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
@@ -306,7 +350,7 @@ class StreamingDataset(IterableDataset):
             self.current_epoch = current_epoch
 
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
-        skip_copy = self.posix_fast is not None and self.posix_fast.skip_cache_copy
+        skip_copy = self.window_direct_io or (self.posix_fast is not None and self.posix_fast.skip_cache_copy)
         if not skip_copy and _should_replace_path(self.input_dir.path):
             cache_path = _try_create_cache_dir(
                 input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
@@ -315,13 +359,13 @@ class StreamingDataset(IterableDataset):
             if cache_path is not None:
                 self.input_dir.path = cache_path
 
-        if _should_replace_path_filestores(self.input_dir.path):
+        if not self.window_direct_io and _should_replace_path_filestores(self.input_dir.path):
             # Load the config to know whether the dataset has been compressed
             config = ChunksConfig.load(
                 self.input_dir.path or "",
                 _get_serializers(self.serializers),
                 None,
-                self.item_loader or PyTreeLoader(),
+                self.item_loader or PyTreeLoader(batch_decode=self.batch_decode),
                 self.subsampled_files,
                 self.region_of_interest,
                 self.storage_options,
@@ -341,11 +385,22 @@ class StreamingDataset(IterableDataset):
                     self.input_dir.url = self.input_dir.path
                     self.input_dir.path = cache_path
 
+        # Keep ``self.item_loader`` as the constructor value so checkpoints stay
+        # ``item_loader: None`` when the user did not pass one. Workers still get a
+        # PyTreeLoader via the local Cache; assigning here made resume see ``{}``.
+        item_loader = self.item_loader
+        if item_loader is None:
+            item_loader = PyTreeLoader(batch_decode=self.batch_decode)
+        else:
+            set_batch = getattr(item_loader, "set_batch_decode", None)
+            if callable(set_batch):
+                set_batch(self.batch_decode)
+
         cache = Cache(
             input_dir=self.input_dir,
             subsampled_files=self.subsampled_files,
             region_of_interest=self.region_of_interest,
-            item_loader=self.item_loader,
+            item_loader=item_loader,
             chunk_bytes=1,
             serializers=self.serializers,
             max_cache_size=self.max_cache_size,
@@ -366,7 +421,12 @@ class StreamingDataset(IterableDataset):
         if self.posix_fast is not None and not posix_fast_supports_config(cache._reader._config):
             self.posix_fast = None
 
-        if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
+        if (
+            not self.window_direct_io
+            and self.posix_fast is not None
+            and self.posix_fast.in_place
+            and cache._reader._config is not None
+        ):
             chunks = cache._reader._config._chunks or []
             cache._reader.enable_posix_fast(
                 list(range(len(chunks))), keep=max(4, self.max_pre_download), prefetch=False
@@ -374,18 +434,26 @@ class StreamingDataset(IterableDataset):
 
         return cache
 
+    def _resume_item_shuffle_window(self, state: dict[str, Any]) -> int:
+        """Window from a checkpoint, or the pre-PR full in-chunk permute if omitted."""
+        if "item_shuffle_window" in state:
+            return resolve_item_shuffle_window(state["item_shuffle_window"])
+        return 0
+
     def _create_shuffler(self, cache: Cache) -> Shuffle:
         seed = self.seed
         drop_last = self.drop_last
+        item_window = self._item_shuffle_window
         if self._state_dict is not None:
             state: dict[str, Any] = self._state_dict
             seed = state["seed"]
             drop_last = state["drop_last"]
+            item_window = self._resume_item_shuffle_window(state)
         if not self.shuffle:
             return NoShuffle(cache, seed, drop_last)
         if self.posix_fast is not None and self.posix_fast.window_shuffle:
-            return WindowShuffle(cache, seed, drop_last)
-        return FullShuffle(cache, seed, drop_last)
+            return WindowShuffle(cache, seed, drop_last, item_window=item_window)
+        return FullShuffle(cache, seed, drop_last, item_window=item_window)
 
     def __len__(self) -> int:
         return self.get_len(self.num_workers, self.batch_size if self.batch_size else 1)
@@ -469,6 +537,8 @@ class StreamingDataset(IterableDataset):
         )
 
     def __iter__(self) -> "StreamingDataset":
+        if self.window_direct_io:
+            raise RuntimeError("Use read_window/aread_window when window_direct_io=True.")
         # When the StreamingDataset is used within map or optimize, let's refetch the distributed env.
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
             self.distributed_env = _DistributedEnv.detect()
@@ -726,6 +796,8 @@ class StreamingDataset(IterableDataset):
         return workers_chunks
 
     def __getitem__(self, index: ChunkedIndex | int | slice | str) -> Any:
+        if self.window_direct_io:
+            raise RuntimeError("Use read_window/aread_window when window_direct_io=True.")
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
@@ -768,6 +840,143 @@ class StreamingDataset(IterableDataset):
             )
 
         return item
+
+    @property
+    def frame_counts(self) -> list[int]:
+        """Frame counts in record-index order for data written with ``TemporalArrayLoader``.
+
+        Reads index metadata only, including the dataset's subsample/split selection.
+        Use these counts to keep application-specific window sampling outside storage code.
+        """
+        self._ensure_window_reader()
+        assert self.cache is not None
+        config = self.cache._reader.config
+        if config.config.get("item_loader") != "TemporalArrayLoader":
+            raise ValueError("frame_counts requires data written with TemporalArrayLoader.")
+        chunks = config._chunks
+        assert chunks is not None
+        return [
+            count
+            for chunk, interval in zip(chunks, config.intervals)
+            for count in chunk["temporal_frames"][interval[1] - interval[0] : interval[2] - interval[0]]
+        ]
+
+    def _ensure_window_reader(self) -> Any:
+        from litdata.streaming.window import _WindowReader
+
+        if getattr(self, "_window_pid", os.getpid()) != os.getpid():
+            self.cache = None
+            self.shuffler = None
+        self._window_pid = os.getpid()
+        if self.cache is None:
+            self.worker_env = _WorkerEnv.detect()
+            self.cache = self._create_cache(worker_env=self.worker_env)
+            self.shuffler = self._create_shuffler(self.cache)
+        reader = self.cache._reader
+        if reader._config is None:
+            reader._try_load_config()
+        config = reader.config
+        window_reader = getattr(reader, "_window_reader", None)
+        if window_reader is None or window_reader.config is not config:
+            window_reader = reader._window_reader = _WindowReader(
+                config,
+                posix_fast=reader._posix_fast,
+                mmap_keep=reader._posix_keep,
+                posix_willneed=reader._posix_willneed,
+                direct_io=self.window_direct_io,
+            )
+        return window_reader
+
+    def read_window(
+        self,
+        index: int,
+        start: int,
+        frames: int,
+        fields: Sequence[str] | None = None,
+        *,
+        max_concurrent_reads: int = 8,
+    ) -> dict[str, Any]:
+        """Read selected axis-0 frames directly from a record written by ``optimize``.
+
+        Records must be flat dictionaries; selected fields must be fixed-width NumPy arrays
+        or CPU tensors with matching frame-axis lengths. ``fields=None`` selects all fields;
+        an empty sequence returns an empty dictionary without payload I/O. Windows use
+        ``[start, start + frames)`` and must fit entirely within the selected arrays.
+
+        Requires uncompressed, unencrypted PyTree chunks and built-in array serializers.
+        S3/R2 fetch array ranges plus small, bounded-cache metadata reads. Other cloud
+        backends may download a whole chunk. Returned arrays/tensors are writable and
+        independent of the source. Dataset transforms are not applied to partial records.
+
+        POSIX TemporalArrayLoader windows use bounded in-place chunk mappings when
+        POSIX-fast is enabled. Only selected group views are decoded; source chunks
+        must remain immutable while in use. The synchronous path executes in the
+        caller's thread; the async path offloads page faults and decoding to a thread.
+
+        This explicit random-access operation does not advance the iteration/checkpoint
+        position or assign requests to ranks/workers. Use ``aread_window`` for async callers.
+        Dataset objects should be initialized independently in each process, as usual.
+
+        For example, ``read_window(0, start=3, frames=4, fields=["features", "valid"])``
+        returns frames 3, 4, 5 and 6 from record 0. A field shaped ``(T, 2)`` becomes
+        ``(4, 2)``. Windows never cross records, pad or wrap; the application's sampler
+        chooses valid starts using ``frame_counts`` for TemporalArrayLoader datasets.
+        That loader stores whole tracks in field groups: selecting any field fetches
+        its group's window, but returns only requested fields. See temporal.py and
+        window.py for the binary layout and the corresponding byte-range calculation.
+        """
+        # A synchronous POSIX window need not make a round-trip through the
+        # async cloud runner. Callers may already have their own worker threads.
+        if self.posix_fast is not None:
+            reader, chunked_index = self._prepare_window_request(index, start, frames, max_concurrent_reads)
+            if reader.posix_windows:
+                return reader.read_posix_window(chunked_index, start, frames, fields)
+        from litdata.raw.dataset import _get_loop_runner
+
+        return _get_loop_runner().run(
+            self.aread_window(index, start, frames, fields, max_concurrent_reads=max_concurrent_reads)
+        )
+
+    async def aread_window(
+        self,
+        index: int,
+        start: int,
+        frames: int,
+        fields: Sequence[str] | None = None,
+        *,
+        max_concurrent_reads: int = 8,
+    ) -> dict[str, Any]:
+        """Async :meth:`read_window`, with bounded parallel field reads per call.
+
+        The first call initializes dataset metadata synchronously. Reuse one dataset per
+        worker/event loop; callers bound simultaneous window requests. Cancellation drains
+        child tasks, but an SDK/thread fallback may finish its underlying I/O afterward.
+        """
+        window_reader, chunked_index = self._prepare_window_request(index, start, frames, max_concurrent_reads)
+        return await window_reader.read(chunked_index, start, frames, fields, max_concurrent_reads)
+
+    def _prepare_window_request(
+        self, index: int, start: int, frames: int, max_concurrent_reads: int
+    ) -> tuple[Any, ChunkedIndex]:
+        for name, value in (("index", index), ("start", start), ("frames", frames)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer.")
+        if index < 0 or start < 0 or frames < 1:
+            raise IndexError("index/start must be nonnegative and frames must be positive.")
+        if (
+            not isinstance(max_concurrent_reads, int)
+            or isinstance(max_concurrent_reads, bool)
+            or max_concurrent_reads < 1
+        ):
+            raise ValueError("max_concurrent_reads must be a positive integer.")
+        if self.serializers:
+            raise ValueError("Window reads require the built-in array serializers.")
+        window_reader = self._ensure_window_reader()
+        assert self.cache is not None
+        if index >= window_reader.length:
+            raise IndexError("Unknown record index.")
+        chunked_index = ChunkedIndex(*self.cache._get_chunk_index_from_index(index))
+        return window_reader, chunked_index
 
     def get_by_key(self, key: Any) -> Any:
         """Load a sample by entity key from the ``keys/`` store (str or int keys).
@@ -905,6 +1114,7 @@ class StreamingDataset(IterableDataset):
             "item_loader": self.item_loader.state_dict() if self.item_loader else None,
             "drop_last": self.drop_last,
             "seed": self.seed,
+            "item_shuffle_window": self._item_shuffle_window,
             "world_size": world_size,
             "shuffle": self.shuffle,
             "subsampled_files": self.subsampled_files,
@@ -1030,6 +1240,25 @@ class StreamingDataset(IterableDataset):
                 )
             logger.warning(f"Overriding state item_loader {state['item_loader']} to {self.item_loader.state_dict()}.")
             state["item_loader"] = self.item_loader.state_dict()
+
+        if "item_shuffle_window" not in state:
+            # Pre-PR checkpoints omitted this field and used a full in-chunk permute.
+            state["item_shuffle_window"] = 0
+            self._item_shuffle_window = 0
+            saved_item_window = None
+        else:
+            saved_item_window = resolve_item_shuffle_window(state["item_shuffle_window"])
+        if saved_item_window is not None and saved_item_window != self._item_shuffle_window:
+            if not self._force_override_state_dict:
+                raise ValueError(
+                    "The provided `item_shuffle_window` state doesn't match the current one. "
+                    f"Found `{self._item_shuffle_window}` instead of `{state['item_shuffle_window']}`."
+                )
+            state["item_shuffle_window"] = self._item_shuffle_window
+            logger.warning(
+                f"Overriding state item_shuffle_window {state['item_shuffle_window']} to {self._item_shuffle_window}, "
+                "this may lead to repeated or skipped datapoints within an episode."
+            )
 
         if state["drop_last"] != self.drop_last:
             if not self._force_override_state_dict:

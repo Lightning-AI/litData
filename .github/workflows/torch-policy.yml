@@ -1,0 +1,86 @@
+name: PyTorch support policy
+
+# Watches for new PyTorch releases and files an issue when
+# .github/torch-support.json falls behind.
+#
+# It opens an issue rather than a pull request because creating pull
+# requests from GITHUB_TOKEN is disabled for this organization.
+# Regular pull requests are never failed by a fresh PyTorch release —
+# they only validate the policy file (see ci-testing.yml).
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check-latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      issues: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare the policy against PyPI
+        id: bump
+        run: python3 .github/scripts/torch_support.py bump --dry-run
+
+      - name: File an issue
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.bump.outputs.latest }}
+          PREVIOUS: ${{ steps.bump.outputs.previous }}
+        run: |
+          TITLE="Update PyTorch support to ${LATEST}"
+
+          if [ -n "$(gh issue list --state all --search "\"${TITLE}\" in:title" --json number --jq '.[].number')" ]; then
+            echo "An issue for PyTorch ${LATEST} already exists — nothing to do"
+            exit 0
+          fi
+
+          gh issue create \
+            --title "$TITLE" \
+            --body "## PyTorch ${LATEST} is now available
+
+          PyTorch ${LATEST} has been released. Our supported versions should now be:
+
+          - **${LATEST}** — latest release
+          - **${PREVIOUS}** — previous release
+
+          ### What needs to be updated
+
+          Run:
+
+          \`\`\`bash
+          python3 .github/scripts/torch_support.py bump
+          \`\`\`
+
+          This will update:
+
+          - \`.github/torch-support.json\`
+          - The PyTorch versions listed in the README
+
+          The CI matrix reads from \`.github/torch-support.json\`, so **no CI configuration changes are required**.
+
+          ### Minimum PyTorch version
+
+          Please review whether the \`torch\` lower bound in \`requirements.txt\` should also be updated.
+
+          This is intentionally left as a manual decision rather than being bumped automatically.
+
+          ### Checklist
+
+          - [ ] Run the support-version bump script
+          - [ ] Review the generated changes
+          - [ ] Decide whether the \`torch\` minimum version should be updated
+          - [ ] Open a PR with the changes
+
+          ---
+          *This issue was automatically created by [\`torch-policy.yml\`](.github/workflows/torch-policy.yml).*"

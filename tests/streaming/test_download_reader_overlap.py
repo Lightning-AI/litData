@@ -20,17 +20,29 @@ from litdata.streaming.sampler import ChunkedIndex
 from litdata.utilities.env import _DistributedEnv
 
 
+def _mock_chunks_config(cache_dir: str, remote_dir: str | None = None) -> MagicMock:
+    """ChunksConfig mock with instance attrs ``spec=`` does not expose.
+
+    ``PrepareChunksThread`` feeds ``config._chunks`` to ``adaptive_pre_download``.
+    ``MagicMock(spec=ChunksConfig)`` only copies class attributes, so an unset
+    ``_chunks`` raises ``AttributeError`` during ``__init__``.
+    """
+    config = MagicMock(spec=ChunksConfig)
+    config.num_bytes = 1024
+    config._cache_dir = cache_dir
+    config._remote_dir = remote_dir
+    config._chunks = []
+    config.download_chunk_from_index = MagicMock()
+    return config
+
+
 def test_run_loop_downloads_numpy_int64_chunk_indexes(monkeypatch, tmpdir):
     """Shuffle queues numpy.int64; the prepare loop must not drop them as non-ints."""
     import numpy as np
 
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
-    config = MagicMock(spec=ChunksConfig)
-    config.num_bytes = 1024
-    config._cache_dir = cache_dir
-    config._remote_dir = "s3://bucket"
-    config.download_chunk_from_index = MagicMock()
+    config = _mock_chunks_config(cache_dir, remote_dir="s3://bucket")
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
 
@@ -54,11 +66,7 @@ def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkey
     """Force/delete polls must use timeout=0 while the prefetch buffer can still accept downloads."""
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
-    config = MagicMock(spec=ChunksConfig)
-    config.num_bytes = 1024
-    config._cache_dir = cache_dir
-    config._remote_dir = None
-    config.download_chunk_from_index = MagicMock()
+    config = _mock_chunks_config(cache_dir, remote_dir=None)
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
 
@@ -86,10 +94,7 @@ def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkey
 def test_prefetch_side_polls_use_short_timeout_when_buffer_full(monkeypatch, tmpdir):
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
-    config = MagicMock(spec=ChunksConfig)
-    config.num_bytes = 1024
-    config._cache_dir = cache_dir
-    config._remote_dir = None
+    config = _mock_chunks_config(cache_dir, remote_dir=None)
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
 
@@ -277,7 +282,7 @@ def test_try_decompress_publishes_complete_bin(tmpdir):
 
     cache_dir = str(tmpdir / "cache")
     os.makedirs(cache_dir)
-    cache = Cache(cache_dir, chunk_size=10, compression="zstd")
+    cache = Cache(cache_dir, chunk_size=10, compression="zstd", compression_level="chunk")
     for i in range(10):
         cache[i] = i
     cache.done()
