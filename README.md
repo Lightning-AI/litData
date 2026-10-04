@@ -1525,6 +1525,28 @@ combined_dataset = CombinedStreamingDataset(
 ```
 
 Other knobs: `seed` (default `42`), `force_override_state_dict=True` to let local ctor args override a loaded checkpoint.
+
+**Global cache budget** (`max_cache_size`, `cache_allocation`)
+
+Each wrapped `StreamingDataset` caches chunks independently, so a large mixture can accumulate a lot of local disk. Pass a total budget to `CombinedStreamingDataset` and it is split across the children when iteration starts:
+
+```python
+combined_dataset = CombinedStreamingDataset(
+    datasets=train_datasets,
+    seed=42,
+    weights=weights,
+    iterate_over_all=False,
+    max_cache_size="500GB",  # total budget across all child datasets (int bytes / "500GB" / 0.90 of free disk)
+    cache_allocation="proportional",  # default: split by sampling weights; "equal" splits evenly
+)
+```
+
+| Mode | Behavior |
+|------|----------|
+| `cache_allocation="proportional"` (default) | Each dataset gets a share of the budget matching its sampling weight. |
+| `cache_allocation="equal"` | The budget is split evenly across datasets. |
+
+Notes: `max_cache_size=None` (default) keeps each child's own `max_cache_size` unchanged. When a combined budget is set, it overrides any per-child `max_cache_size`. The `MAX_CACHE_SIZE` environment variable still takes precedence over a combined-level budget.
 </details>
 
 <details>

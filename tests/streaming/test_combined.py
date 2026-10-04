@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from copy import deepcopy
@@ -10,7 +11,7 @@ from torch.utils.data import IterableDataset
 from torch.utils.data.dataloader import DataLoader
 
 from litdata.streaming.cache import Cache
-from litdata.streaming.combined import CombinedStreamingDataset
+from litdata.streaming.combined import CombinedStreamingDataset, _allocate_cache_budgets
 from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import Dir, StreamingDataset
 
@@ -703,6 +704,269 @@ def test_combined_rejects_topology_change_on_resume(tmpdir):
     loader_b = StreamingDataLoader(dataset_b, num_workers=4, batch_size=2)
     with pytest.raises(ValueError, match="support resume only"):
         loader_b.load_state_dict(state)
+
+
+# -----------------------------------------------------------------------------
+# Global cache budget (max_cache_size) distributed across child datasets
+# https://github.com/Lightning-AI/litData/issues/790
+# -----------------------------------------------------------------------------
+
+
+def _seed_chunked_dataset(path: str, n_items: int, offset: int = 0) -> str:
+    """Create a real optimized dataset so children are `StreamingDataset` instances."""
+    os.makedirs(path, exist_ok=True)
+    cache = Cache(input_dir=path, chunk_size=2)
+    for i in range(n_items):
+        cache[i] = i + offset
+    cache.done()
+    cache.merge()
+    return path
+
+
+class RecordingStreamingDataset(StreamingDataset):
+    """Records the cache budget this (possibly worker-process) copy sees when iteration starts.
+
+    Defined at module level so DataLoader workers can unpickle it under the `spawn`
+    start method (macOS/Windows default).
+    """
+
+    _record_path: str | None = None
+
+    def __iter__(self):
+        if self._record_path:
+            with open(f"{self._record_path}.{os.getpid()}", "a", encoding="utf-8") as f:
+                f.write(f"{self.max_cache_size}\n")
+        return super().__iter__()
+
+
+def test_combined_no_budget_is_noop(tmpdir):
+    """Without `max_cache_size`, children keep whatever cache budget they already have."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1, max_cache_size="77GB"), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(datasets=datasets, seed=12345, iterate_over_all=True)
+    assert datasets[0].max_cache_size == "77GB"
+    assert datasets[1].max_cache_size is None
+
+    next(iter(combined), None)
+
+    assert datasets[0].max_cache_size == "77GB"
+    assert datasets[1].max_cache_size is None
+
+
+def test_combined_equal_allocation(tmpdir):
+    """`cache_allocation='equal'` splits the total budget evenly across children."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000, cache_allocation="equal"
+    )
+    assert [d.max_cache_size for d in datasets] == [None, None]  # no-op until iteration starts
+    next(iter(combined), None)
+    for dataset in datasets:
+        assert dataset.max_cache_size == 500
+
+
+def test_combined_proportional_allocation(tmpdir):
+    """`cache_allocation='proportional'` (default) splits the budget by sampling weights."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=False, weights=(0.75, 0.25), max_cache_size=1000
+    )
+    assert combined._weights == [0.75, 0.25]
+    next(iter(combined), None)  # budgets are applied when iteration starts
+    for dataset, budget in zip(datasets, [750, 250]):
+        assert dataset.max_cache_size == budget
+
+
+def test_combined_proportional_allocation_default_weights(tmpdir):
+    """Without explicit weights, the budget is split proportionally to dataset lengths."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=24, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000)
+    next(iter(combined), None)
+    assert datasets[0].max_cache_size == 250
+    assert datasets[1].max_cache_size == 750
+
+
+def test_combined_overrides_child_budget(tmpdir):
+    """A combined-level budget wins over per-child `max_cache_size` values."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1, max_cache_size="77GB"), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000, cache_allocation="equal"
+    )
+    next(iter(combined), None)  # the combined budget overrides child values when iteration starts
+    assert [d.max_cache_size for d in datasets] == [500, 500]
+
+
+def test_combined_invalid_cache_allocation_raises(tmpdir):
+    """Unknown `cache_allocation` values are rejected early."""
+    data_dir = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    with pytest.raises(ValueError, match="cache_allocation"):
+        CombinedStreamingDataset(
+            datasets=[StreamingDataset(input_dir=data_dir)], seed=1, max_cache_size=100, cache_allocation="nonsense"
+        )
+
+
+def test_combined_budget_reaches_binary_reader(tmpdir):
+    """The distributed budgets are enforced end-to-end by each child's eviction thread."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000, cache_allocation="equal"
+    )
+    for sample in combined:
+        pass
+
+    for dataset in datasets:
+        assert dataset.cache is not None
+        assert dataset.cache._reader._max_cache_size == 500
+
+
+def test_combined_budget_from_string(tmpdir):
+    """Human-readable sizes (`'1GB'`) are converted to absolute bytes before distribution."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size="100GB", cache_allocation="equal"
+    )
+    next(iter(combined), None)
+    assert [d.max_cache_size for d in datasets] == [50_000_000_000, 50_000_000_000]
+
+
+def test_combined_zero_weight_dataset_keeps_its_budget(tmpdir):
+    """Datasets that are never sampled are skipped so their budget is not set to a falsy 0."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=False, weights=(1.0, 0.0), max_cache_size=1000
+    )
+    next(iter(combined), None)
+    assert datasets[0].max_cache_size == 1000
+    assert datasets[1].max_cache_size is None
+
+
+def test_combined_budget_applied_per_dataloader_worker(tmpdir):
+    """Each DataLoader worker re-runs `__iter__` on its dataset copy, so budgets must be applied inside workers too."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+    record_path = os.path.join(tmpdir, "budgets")
+
+    datasets = [
+        RecordingStreamingDataset(input_dir=data_dir_1),
+        RecordingStreamingDataset(input_dir=data_dir_2),
+    ]
+    for dataset in datasets:
+        dataset._record_path = record_path
+
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000, cache_allocation="equal"
+    )
+    dataloader = StreamingDataLoader(combined, batch_size=2, num_workers=2)
+    samples = [sample for batch in dataloader for sample in batch]
+    assert len(samples) == 16
+
+    recorded = []
+    for filename in os.listdir(tmpdir):
+        if filename.startswith("budgets."):
+            with open(os.path.join(tmpdir, filename), encoding="utf-8") as f:
+                recorded.extend(f.read().split())
+    assert len(recorded) == 4  # 2 workers x 2 datasets
+    assert all(value == "500" for value in recorded), recorded
+
+
+def test_combined_budget_warns_when_max_cache_size_env_is_set(tmpdir, monkeypatch, caplog):
+    """The MAX_CACHE_SIZE env var overrides per-dataset budgets; the user must be warned."""
+    monkeypatch.setenv("MAX_CACHE_SIZE", "1GB")
+    data_dir = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+
+    datasets = [StreamingDataset(input_dir=data_dir)]
+    combined = CombinedStreamingDataset(datasets=datasets, seed=1, max_cache_size=1000, cache_allocation="equal")
+    with caplog.at_level(logging.WARNING, logger="litdata.streaming.combined"):
+        next(iter(combined), None)
+
+    assert any("MAX_CACHE_SIZE" in message for message in caplog.messages)
+
+
+def test_combined_budget_from_fraction(tmpdir, monkeypatch):
+    """A free-disk fraction (e.g. 0.90) resolves against the child dataset's cache dir."""
+    resolved_bytes = 10_000_000_000
+    monkeypatch.setattr("litdata.streaming.combined._resolve_max_cache_size", lambda _value, _path: resolved_bytes)
+
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=0.90, cache_allocation="equal"
+    )
+    next(iter(combined), None)
+    assert [d.max_cache_size for d in datasets] == [resolved_bytes // 2] * 2
+
+
+def test_combined_budget_reallocation_is_stable_across_epochs(tmpdir):
+    """Calling `__iter__` twice (e.g. epoch 2) re-applies the same budgets instead of re-splitting them."""
+    data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+    data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
+
+    datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
+    combined = CombinedStreamingDataset(
+        datasets=datasets, seed=12345, iterate_over_all=True, max_cache_size=1000, cache_allocation="equal"
+    )
+    next(iter(combined), None)
+    next(iter(combined), None)
+    assert [d.max_cache_size for d in datasets] == [500, 500]
+
+
+def test_combined_small_budget_warns(tmpdir, caplog):
+    """A tiny total budget per dataset triggers the same guidance as `StreamingDataset`."""
+    data_dir = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
+
+    datasets = [StreamingDataset(input_dir=data_dir)]
+    combined = CombinedStreamingDataset(datasets=datasets, seed=1, max_cache_size=1000)
+    with caplog.at_level(logging.WARNING, logger="litdata.streaming.combined"):
+        next(iter(combined), None)
+
+    assert any("less than 25GB" in message for message in caplog.messages)
+
+
+def test_allocate_cache_budgets_skips_stub_datasets():
+    """Non-StreamingDataset children (used heavily in the existing tests) are left untouched."""
+    budgets = _allocate_cache_budgets(
+        datasets=[range(10), range(10)],  # type: ignore[arg-type]
+        weights=[0.5, 0.5],
+        max_cache_size=1000,
+        cache_allocation="equal",
+    )
+    assert budgets == [None, None]
+
+
+def test_allocate_cache_budgets_noop_when_none():
+    """`max_cache_size=None` must never rewrite any child budget."""
+    budgets = _allocate_cache_budgets(
+        datasets=[range(10)],  # type: ignore[arg-type]
+        weights=[1.0],
+        max_cache_size=None,
+        cache_allocation="equal",
+    )
+    assert budgets == [None]
 
 
 def test_combined_dataset_reset_state_dict_after_checkpoint_resume(tmpdir):
