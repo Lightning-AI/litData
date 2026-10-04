@@ -967,6 +967,8 @@ def test_allocate_cache_budgets_noop_when_none():
         cache_allocation="equal",
     )
     assert budgets == [None]
+
+
 def test_combined_dataset_reset_state_dict_after_checkpoint_resume(tmpdir):
     data_dir_1 = os.path.join(tmpdir, "data_1")
     data_dir_2 = os.path.join(tmpdir, "data_2")
