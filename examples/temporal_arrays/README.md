@@ -31,6 +31,7 @@ Keep the customer's choice of records/windows in their code. Their storage imple
 import numpy as np
 from torch.utils.data import Dataset, DataLoader, RandomSampler
 
+
 class TrainingWindows(Dataset):
     def __init__(self, uri, frames=64):
         self.records = StreamingDataset(uri, item_loader=TemporalArrayLoader())
@@ -46,9 +47,13 @@ class TrainingWindows(Dataset):
         start = int(np.random.randint(self.lengths[record] - self.frames + 1))
         return self.records.read_window(record, start, self.frames)
 
+
 windows = TrainingWindows("./tracks")
 loader = DataLoader(
-    windows, batch_size=16, num_workers=8, pin_memory=True,
+    windows,
+    batch_size=16,
+    num_workers=8,
+    pin_memory=True,
     sampler=RandomSampler(windows, replacement=True, num_samples=16000),
 )
 ```

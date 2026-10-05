@@ -86,8 +86,8 @@ Canonical tables: [resolver.md](resolver.md). Processing always goes through `_r
 ```python
 @dataclass
 class Dir:
-    path: str | None   # local / FUSE mount path (identity, cache rewrite base)
-    url: str | None    # cloud URL used for FsProvider download/upload
+    path: str | None  # local / FUSE mount path (identity, cache rewrite base)
+    url: str | None  # cloud URL used for FsProvider download/upload
     data_connection_id: str | None  # temp creds for some Studio connections
 ```
 

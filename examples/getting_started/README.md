@@ -19,6 +19,7 @@ def random_images(index):
         "class": np.random.randint(10),
     }
 
+
 if __name__ == "__main__":
     optimize(
         fn=random_images,
@@ -49,17 +50,18 @@ Then, the Streaming Dataset can read the data directly from [AWS S3](https://aws
 from litdata import StreamingDataset, StreamingDataLoader
 
 # Remote path where full dataset is stored
-input_dir = 's3://my-bucket/my_optimized_dataset'
+input_dir = "s3://my-bucket/my_optimized_dataset"
 
 # Create the Streaming Dataset
 dataset = StreamingDataset(input_dir, shuffle=True)
 
 # Access any elements of the dataset
 sample = dataset[50]
-img = sample['image']
-cls = sample['class']
+img = sample["image"]
+cls = sample["class"]
 
 # Create dataLoader and iterate over it to train your AI models.
+
 
 # Custom collate function to handle the batch (Optional)
 def collate_fn(batch):

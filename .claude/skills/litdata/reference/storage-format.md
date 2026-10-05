@@ -230,11 +230,11 @@ ______________________________________________________________________
 
 ```python
 ChunkedIndex(
-    index,            # global sample index
-    chunk_index,      # which chunk file
+    index,  # global sample index
+    chunk_index,  # which chunk file
     chunk_size=None,
     chunk_indexes=None,  # optional list: chunks this worker may prefetch / keep
-    is_last_index=False, # signal PrepareChunksThread shutdown
+    is_last_index=False,  # signal PrepareChunksThread shutdown
 )
 ```
 

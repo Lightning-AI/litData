@@ -166,7 +166,7 @@ from PIL import Image
 import io
 
 dataset = StreamingRawDataset(
-    "s3://my-bucket/raw-images/",          # or gs://, azure://, /teamspace/s3_connections/..., local path
+    "s3://my-bucket/raw-images/",  # or gs://, azure://, /teamspace/s3_connections/..., local path
     transform=lambda b: Image.open(io.BytesIO(b)).convert("RGB"),  # optional — default is raw bytes
 )
 loader = DataLoader(dataset, batch_size=32, num_workers=8)
@@ -198,6 +198,7 @@ This step formats the dataset for fast loading by writing data in an efficient c
 import numpy as np
 import litdata as ld
 
+
 def random_images(index):
     # Replace with your files: Image(path="photo.jpg") or Image(bytes=...).
     # Wrappers pick the serializer (a caption string is not an image).
@@ -209,14 +210,15 @@ def random_images(index):
         "class": np.random.randint(10),
     }
 
+
 if __name__ == "__main__":
     # Exactly one of chunk_bytes or chunk_size
     ld.optimize(
-        fn=random_images,                   # the function applied to each input
-        inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
-        output_dir="fast_data",             # optimized data is stored here
-        num_workers=4,                      # the number of workers on the same machine
-        chunk_bytes="64MB"                  # default; see FAQ for larger samples
+        fn=random_images,  # the function applied to each input
+        inputs=list(range(1000)),  # the inputs to the function (here it's a list of numbers)
+        output_dir="fast_data",  # optimized data is stored here
+        num_workers=4,  # the number of workers on the same machine
+        chunk_bytes="64MB",  # default; see FAQ for larger samples
     )
 ```
 
@@ -235,11 +237,12 @@ Load the data by replacing the PyTorch Dataset and DataLoader with the Streaming
 import litdata as ld
 
 dataset = ld.StreamingDataset(
-    's3://my-bucket/fast_data',
+    "s3://my-bucket/fast_data",
     shuffle=True,
     drop_last=True,  # important for multi-GPU so every rank sees the same length
     seed=42,
 )
+
 
 # Custom collate function to handle the batch (optional)
 def collate_fn(batch):
@@ -260,8 +263,8 @@ for sample in dataloader:
 ld.optimize(fn=fn, inputs=inputs, output_dir="fast_data", chunk_bytes="64MB", key_fn=lambda s: s["id"])
 
 ds = ld.StreamingDataset("fast_data")
-sample = ds["entity-id"]          # str keys
-sample = ds.get_by_key(42)        # int entity keys; ds[42] is still positional
+sample = ds["entity-id"]  # str keys
+sample = ds.get_by_key(42)  # int entity keys; ds[42] is still positional
 
 with ld.dataset_update("fast_data") as update:  # local directory only
     update["entity-id"] = {"id": "entity-id", "x": 1}
@@ -296,15 +299,17 @@ from PIL import Image
 import litdata as ld
 
 # use a local or S3 folder
-input_dir = "my_large_images"     # or "s3://my-bucket/my_large_images"
+input_dir = "my_large_images"  # or "s3://my-bucket/my_large_images"
 output_dir = "my_resized_images"  # or "s3://my-bucket/my_resized_images"
 
 inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
 
+
 # resize the input image
 def resize_image(image_path, output_dir):
-  output_image_path = os.path.join(output_dir, os.path.basename(image_path))
-  Image.open(image_path).resize((224, 224)).save(output_image_path)
+    output_image_path = os.path.join(output_dir, os.path.basename(image_path))
+    Image.open(image_path).resize((224, 224)).save(output_image_path)
+
 
 ld.map(
     fn=resize_image,
@@ -478,9 +483,7 @@ import litdata as ld
 dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
 print("Sample", dataset[0])
 
-dataloader = ld.StreamingDataLoader(
-    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
-)
+dataloader = ld.StreamingDataLoader(dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn")
 for sample in dataloader:
     pass
 ```
@@ -562,13 +565,15 @@ from litdata import StreamingRawDataset
 from PIL import Image
 import io
 
+
 def to_image(data: bytes):
     return Image.open(io.BytesIO(data)).convert("RGB")
 
+
 dataset = StreamingRawDataset(
-    "s3://my-bucket/images/",   # also: gs://, azure://, /teamspace/s3_connections/..., local path
-    transform=to_image,         # optional; default yields raw bytes
-    storage_options={},         # optional cloud credentials / endpoint
+    "s3://my-bucket/images/",  # also: gs://, azure://, /teamspace/s3_connections/..., local path
+    transform=to_image,  # optional; default yields raw bytes
+    storage_options={},  # optional cloud credentials / endpoint
 )
 loader = DataLoader(dataset, batch_size=32, num_workers=8)
 
@@ -604,6 +609,7 @@ from torch.utils.data import DataLoader
 from litdata import StreamingRawDataset
 from litdata.raw.indexer import FileMetadata
 
+
 class SegmentationRawDataset(StreamingRawDataset):
     def setup(self, files: list[FileMetadata]) -> list[list[FileMetadata]]:
         # Pair img_001.jpg with img_001.png (mask) by stem
@@ -617,6 +623,7 @@ class SegmentationRawDataset(StreamingRawDataset):
             if "jpg" in parts and "png" in parts:
                 items.append([parts["jpg"], parts["png"]])
         return items
+
 
 dataset = SegmentationRawDataset(
     "s3://bucket/seg/",
@@ -693,12 +700,11 @@ Once you've optimized the dataset with LitData, stream it as follows:
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
 
-dataset = StreamingDataset('s3://my-bucket/my-data', shuffle=True)
+dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True)
 dataloader = StreamingDataLoader(dataset, batch_size=64)
 
 for batch in dataloader:
     process(batch)  # Replace with your data processing logic
-
 ```
 
 
@@ -714,7 +720,7 @@ storage_options = {
     "aws_secret_access_key": "your_secret_access_key",
 }
 
-dataset = StreamingDataset('s3://my-bucket/my-data', storage_options=storage_options)
+dataset = StreamingDataset("s3://my-bucket/my-data", storage_options=storage_options)
 ```
 
 Also, you can specify a custom cache directory when initializing your dataset. This is useful when you want to store the cache in a specific location.
@@ -722,7 +728,7 @@ Also, you can specify a custom cache directory when initializing your dataset. T
 from litdata import StreamingDataset
 
 # Initialize the StreamingDataset with the custom cache directory
-dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache")
+dataset = StreamingDataset("s3://my-bucket/my-data", cache_dir="/path/to/cache")
 ```
 
 Any local path, `s3://` / `gs://` / `r2://` / `azure://` / `hf://`, `local:` network drive, or Lightning `/teamspace/...` connection works — see [Resolve any path or cloud URL](#resolve-paths).
@@ -747,8 +753,10 @@ How you return images from `optimize` controls storage size and streaming speed.
 ```python
 import litdata as ld
 
+
 def load_image(path):
     return {"image": ld.Image(path=path, quality=95, format="jpeg"), "id": path}
+
 
 if __name__ == "__main__":
     ld.optimize(fn=load_image, inputs=list_of_paths, output_dir="fast_data", chunk_bytes="64MB", num_workers=8)
@@ -772,6 +780,7 @@ Pass custom serializers when **streaming** (and when using the lower-level `Cach
 from litdata import StreamingDataset
 from litdata.streaming.serializers import Serializer
 
+
 class MyTypeSerializer(Serializer):
     def serialize(self, item):
         return item.to_bytes(), None  # (bytes, optional metadata string)
@@ -781,6 +790,7 @@ class MyTypeSerializer(Serializer):
 
     def can_serialize(self, item) -> bool:
         return isinstance(item, MyType)
+
 
 dataset = StreamingDataset(
     "s3://bucket/data",
@@ -810,6 +820,7 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 
 from litdata import StreamingDataLoader, StreamingDataset, optimize
 
+
 def make_graph(i: int) -> Data:
     n = 8 + i % 5
     src = torch.randint(0, n, (12,), dtype=torch.long)
@@ -822,12 +833,14 @@ def make_graph(i: int) -> Data:
         num_nodes=n,
     )
 
+
 optimize(make_graph, inputs=list(range(1024)), output_dir="graphs", chunk_size=64)
 
 dataset = StreamingDataset("graphs")
 sample = dataset[0]  # Data when PyG is installed, else Graph
 loader = StreamingDataLoader(dataset, batch_size=32, shuffle=True)
 batch = next(iter(loader))  # DataBatch
+
 
 class Net(torch.nn.Module):
     def __init__(self):
@@ -845,6 +858,7 @@ class Net(torch.nn.Module):
 ```python
 from litdata import Graph, optimize
 
+
 def make_graph(i: int) -> Graph:
     n = 6
     return Graph(
@@ -853,6 +867,7 @@ def make_graph(i: int) -> Graph:
         y=torch.tensor(i % 2),
         data={"num_nodes": n},  # extra tensors/scalars; field kwargs override data=
     )
+
 
 optimize(make_graph, inputs=list(range(256)), output_dir="graphs")
 # later: sample.to_pyg()  if the stream returned Graph
@@ -867,15 +882,15 @@ from torch_geometric.data import HeteroData
 
 from litdata import StreamingDataLoader, StreamingDataset, optimize
 
+
 def make_hetero(i: int) -> HeteroData:
     data = HeteroData()
     data["paper"].x = torch.randn(8, 16)
     data["author"].x = torch.randn(4, 8)
-    data["author", "writes", "paper"].edge_index = torch.tensor(
-        [[0, 1, 2, 3], [0, 2, 4, 6]], dtype=torch.long
-    )
+    data["author", "writes", "paper"].edge_index = torch.tensor([[0, 1, 2, 3], [0, 2, 4, 6]], dtype=torch.long)
     data.y = torch.tensor(i % 3)
     return data
+
 
 optimize(make_hetero, inputs=list(range(512)), output_dir="hetero", chunk_size=32)
 
@@ -894,6 +909,7 @@ batch = next(iter(loader))  # HeteroDataBatch
 def make_row(i: int) -> dict:
     return {"id": i, "graph": make_graph(i)}
 
+
 optimize(make_row, inputs=list(range(1024)), output_dir="rows")
 loader = StreamingDataLoader(StreamingDataset("rows"), batch_size=8)
 batch = next(iter(loader))
@@ -907,9 +923,11 @@ batch = next(iter(loader))
 ```python
 # sampler = NeighborSampler(big_graph, num_neighbors=[10, 10])
 
+
 def sample_seed(seed: int) -> Data:
     out = sampler.sample_from_nodes(torch.tensor([seed]))
     return Data(x=out.x, edge_index=out.edge_index, y=out.y)
+
 
 optimize(sample_seed, inputs=train_seeds.tolist(), output_dir="subgraphs")
 ```
@@ -937,7 +955,7 @@ import litdata as ld
 
 # point to your MDS dataset stored locally or in the cloud
 
-mds_dataset_uri = "s3://my-bucket/my-mds-data" # or a local path
+mds_dataset_uri = "s3://my-bucket/my-mds-data"  # or a local path
 
 # LitData automatically detects and deserializes the MDS format
 
@@ -947,7 +965,7 @@ print("Sample", dataset[0])
 
 dataloader = ld.StreamingDataLoader(dataset, batch_size=4)
 for sample in dataloader:
-  pass
+    pass
 ```
 
 **How it works:**
@@ -981,14 +999,14 @@ Here you can see an illustration showing how the Streaming Dataset works with mu
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
 
-# For the training dataset, don't forget to enable shuffle and drop_last !!! 
-train_dataset = StreamingDataset('s3://my-bucket/my-train-data', shuffle=True, drop_last=True)
+# For the training dataset, don't forget to enable shuffle and drop_last !!!
+train_dataset = StreamingDataset("s3://my-bucket/my-train-data", shuffle=True, drop_last=True)
 train_dataloader = StreamingDataLoader(train_dataset, batch_size=64)
 
 for batch in train_dataloader:
     process(batch)  # Replace with your data processing logic
 
-val_dataset = StreamingDataset('s3://my-bucket/my-val-data', shuffle=False, drop_last=False)
+val_dataset = StreamingDataset("s3://my-bucket/my-val-data", shuffle=False, drop_last=False)
 val_dataloader = StreamingDataLoader(val_dataset, batch_size=64)
 
 for batch in val_dataloader:
@@ -1021,7 +1039,7 @@ train = StreamingDataset(
     "s3://my-bucket/train",
     shuffle=True,
     drop_last=True,  # keep every rank/worker at the same length (default True under DDP)
-    seed=42,         # default is 42; keep stable when resuming
+    seed=42,  # default is 42; keep stable when resuming
     item_shuffle_window=256,  # 0 / "full" = permute every item in the chunk
 )
 loader = StreamingDataLoader(train, batch_size=64, num_workers=8)
@@ -1123,30 +1141,32 @@ import os
 import litdata as ld
 
 # Read data from AWS S3 using boto3
-aws_storage_options={
-    "aws_access_key_id": os.environ['AWS_ACCESS_KEY_ID'],
-    "aws_secret_access_key": os.environ['AWS_SECRET_ACCESS_KEY'],
+aws_storage_options = {
+    "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
+    "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
 }
 # You can also pass the session options. (for boto3 only)
 aws_session_options = {
-  "profile_name": os.environ['AWS_PROFILE_NAME'],  # Required only for custom profiles
-  "region_name": os.environ['AWS_REGION_NAME'],    # Required only for custom regions
+    "profile_name": os.environ["AWS_PROFILE_NAME"],  # Required only for custom profiles
+    "region_name": os.environ["AWS_REGION_NAME"],  # Required only for custom regions
 }
-dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options)
+dataset = ld.StreamingDataset(
+    "s3://my-bucket/my-data", storage_options=aws_storage_options, session_options=aws_session_options
+)
 
 # Read Data from AWS S3 with Unsigned Request using boto3
-aws_storage_options={
-  "config": botocore.config.Config(
-        retries={"max_attempts": 1000, "mode": "adaptive"}, # Configure retries for S3 operations
-        signature_version=botocore.UNSIGNED, # Use unsigned requests
-  )
+aws_storage_options = {
+    "config": botocore.config.Config(
+        retries={"max_attempts": 1000, "mode": "adaptive"},  # Configure retries for S3 operations
+        signature_version=botocore.UNSIGNED,  # Use unsigned requests
+    )
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
-aws_storage_options={
-    "AWS_ACCESS_KEY_ID": os.environ['AWS_ACCESS_KEY_ID'],
-    "AWS_SECRET_ACCESS_KEY": os.environ['AWS_SECRET_ACCESS_KEY'],
-    "S3_ENDPOINT_URL": os.environ['AWS_ENDPOINT_URL'],  # Required only for custom endpoints
+aws_storage_options = {
+    "AWS_ACCESS_KEY_ID": os.environ["AWS_ACCESS_KEY_ID"],
+    "AWS_SECRET_ACCESS_KEY": os.environ["AWS_SECRET_ACCESS_KEY"],
+    "S3_ENDPOINT_URL": os.environ["AWS_ENDPOINT_URL"],  # Required only for custom endpoints
 }
 dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_storage_options)
 
@@ -1154,15 +1174,15 @@ dataset = ld.StreamingDataset("s3://my-bucket/my-data", storage_options=aws_stor
 
 
 # Read data from GCS
-gcp_storage_options={
-    "project": os.environ['PROJECT_ID'],
+gcp_storage_options = {
+    "project": os.environ["PROJECT_ID"],
 }
 dataset = ld.StreamingDataset("gs://my-bucket/my-data", storage_options=gcp_storage_options)
 
 # Read data from Azure
-azure_storage_options={
+azure_storage_options = {
     "account_url": f"https://{os.environ['AZURE_ACCOUNT_NAME']}.blob.core.windows.net",
-    "credential": os.environ['AZURE_ACCOUNT_ACCESS_KEY']
+    "credential": os.environ["AZURE_ACCOUNT_ACCESS_KEY"],
 }
 dataset = ld.StreamingDataset("azure://my-bucket/my-data", storage_options=azure_storage_options)
 ```
@@ -1187,14 +1207,13 @@ from litdata import StreamingDataset, StreamingDataLoader
 dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True)
 dataloader = StreamingDataLoader(dataset, num_workers=os.cpu_count(), batch_size=64)
 
-# Restore the dataLoader state if it exists
+# Restore the dataLoader state if it exists
 if os.path.isfile("dataloader_state.pt"):
     state_dict = torch.load("dataloader_state.pt")
     dataloader.load_state_dict(state_dict)
 
 # Iterate over the data
 for batch_idx, batch in enumerate(dataloader):
-
     # Store the state every 1000 batches
     if batch_idx % 1000 == 0:
         torch.save(dataloader.state_dict(), "dataloader_state.pt")
@@ -1221,6 +1240,7 @@ Local `output_dir` writes chunks in place. Remote inputs and outputs use the str
 import numpy as np
 import litdata as ld
 
+
 def random_images(index):
     array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
     return {
@@ -1229,15 +1249,16 @@ def random_images(index):
         "class": np.random.randint(10),
     }
 
+
 if __name__ == "__main__":
     # The optimize function writes data in an optimized format.
     ld.optimize(
-        fn=random_images,                   # the function applied to each input
-        inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
-        output_dir="fast_data",             # optimized data is stored here
-        num_workers=4,                      # The number of workers on the same machine
-        chunk_bytes="64MB" ,                 # size of each chunk
-        keep_data_ordered=False,             # default: shared queue (set True to keep input order)
+        fn=random_images,  # the function applied to each input
+        inputs=list(range(1000)),  # the inputs to the function (here it's a list of numbers)
+        output_dir="fast_data",  # optimized data is stored here
+        num_workers=4,  # The number of workers on the same machine
+        chunk_bytes="64MB",  # size of each chunk
+        keep_data_ordered=False,  # default: shared queue (set True to keep input order)
     )
 ```
 
@@ -1287,10 +1308,12 @@ from litdata.processing.data_processor import ALL_DONE
 import litdata as ld
 import time
 
+
 def yield_numbers():
     for i in range(1000):
         time.sleep(0.01)
         yield (i, i**2)
+
 
 def data_producer(q: Queue):
     for item in yield_numbers():
@@ -1298,8 +1321,10 @@ def data_producer(q: Queue):
 
     q.put(ALL_DONE)  # Sentinel value to signal completion
 
+
 def fn(index):
     return index  # Identity function for demo
+
 
 if __name__ == "__main__":
     q = Queue(maxsize=100)
@@ -1308,8 +1333,8 @@ if __name__ == "__main__":
     producer.start()
 
     ld.optimize(
-        fn=fn,                   # Function to process each item
-        queue=q,                 # 👈 Stream data from this queue
+        fn=fn,  # Function to process each item
+        queue=q,  # 👈 Stream data from this queue
         output_dir="fast_data",  # Where to store optimized data
         num_workers=2,
         chunk_size=100,
@@ -1342,6 +1367,7 @@ from litdata import optimize, TokensLoader
 from tokenizer import Tokenizer
 from functools import partial
 
+
 # 1. Define a function to convert the text within the jsonl files into tokens
 def tokenize_fn(filepath, tokenizer=None):
     with zstd.open(open(filepath, "rb"), "rt", encoding="utf-8") as f:
@@ -1352,6 +1378,7 @@ def tokenize_fn(filepath, tokenizer=None):
             text_ids = tokenizer.encode(text, bos=False, eos=True)
             yield text_ids
 
+
 if __name__ == "__main__":
     # 2. Generate the inputs (we are going to optimize all the compressed json files from SlimPajama dataset )
     input_dir = "./slimpajama-raw"
@@ -1359,11 +1386,13 @@ if __name__ == "__main__":
 
     # 3. Store the optimized data wherever you want under "/teamspace/datasets" or "/teamspace/s3_connections"
     outputs = optimize(
-        fn=partial(tokenize_fn, tokenizer=Tokenizer(f"{input_dir}/checkpoints/Llama-2-7b-hf")), # Note: You can use HF tokenizer or any others
+        fn=partial(
+            tokenize_fn, tokenizer=Tokenizer(f"{input_dir}/checkpoints/Llama-2-7b-hf")
+        ),  # Note: You can use HF tokenizer or any others
         inputs=inputs,
         output_dir="./slimpajama-optimized",
         chunk_size=(2049 * 8012),
-        # This is important to inform LitData that we are encoding contiguous 1D array (tokens). 
+        # This is important to inform LitData that we are encoding contiguous 1D array (tokens).
         # LitData skips storing metadata for each sample e.g all the tokens are concatenated to form one large tensor.
         item_loader=TokensLoader(),
     )
@@ -1376,10 +1405,10 @@ from tqdm import tqdm
 
 # Increase by one because we need the next word as well
 dataset = StreamingDataset(
-  input_dir=f"./slimpajama-optimized/train",
-  item_loader=TokensLoader(block_size=2048 + 1),
-  shuffle=True,
-  drop_last=True,
+    input_dir=f"./slimpajama-optimized/train",
+    item_loader=TokensLoader(block_size=2048 + 1),
+    shuffle=True,
+    drop_last=True,
 )
 
 train_dataloader = StreamingDataLoader(dataset, batch_size=8, pin_memory=True, num_workers=os.cpu_count())
@@ -1401,23 +1430,19 @@ Sometimes, you have bad data that you don't want to include in the optimized dat
 ```python
 from litdata import optimize, StreamingDataset
 
+
 def should_keep(index) -> bool:
-  # Replace with your own logic
-  return index % 2 == 0
+    # Replace with your own logic
+    return index % 2 == 0
 
 
 def fn(data):
     if should_keep(data):
         yield data
 
+
 if __name__ == "__main__":
-    optimize(
-        fn=fn,
-        inputs=list(range(1000)),
-        output_dir="only_even_index_optimized",
-        chunk_bytes="64MB",
-        num_workers=1
-    )
+    optimize(fn=fn, inputs=list(range(1000)), output_dir="only_even_index_optimized", chunk_bytes="64MB", num_workers=1)
 
     dataset = StreamingDataset("only_even_index_optimized")
     data = list(dataset)
@@ -1430,11 +1455,13 @@ You can even use try/expect.
 ```python
 from litdata import optimize, StreamingDataset
 
+
 def fn(data):
     try:
-        yield 1 / data 
+        yield 1 / data
     except:
         pass
+
 
 if __name__ == "__main__":
     optimize(
@@ -1442,14 +1469,14 @@ if __name__ == "__main__":
         inputs=[0, 0, 0, 1, 2, 4, 0],
         output_dir="only_defined_ratio_optimized",
         chunk_bytes="64MB",
-        num_workers=1
+        num_workers=1,
     )
 
     dataset = StreamingDataset("only_defined_ratio_optimized")
     data = list(dataset)
-    # The 0 are filtered out as they raise a division by zero 
+    # The 0 are filtered out as they raise a division by zero
     print(data)
-    # [1.0, 0.5, 0.25] 
+    # [1.0, 0.5, 0.25]
 ```
 </details>
 
@@ -1469,13 +1496,13 @@ import os
 train_datasets = [
     StreamingDataset(
         input_dir="s3://tinyllama-template/slimpajama/train/",
-        item_loader=TokensLoader(block_size=2048 + 1), # Optimized loader for tokens used by LLMs
+        item_loader=TokensLoader(block_size=2048 + 1),  # Optimized loader for tokens used by LLMs
         shuffle=True,
         drop_last=True,
     ),
     StreamingDataset(
         input_dir="s3://tinyllama-template/starcoder/",
-        item_loader=TokensLoader(block_size=2048 + 1), # Optimized loader for tokens used by LLMs
+        item_loader=TokensLoader(block_size=2048 + 1),  # Optimized loader for tokens used by LLMs
         shuffle=True,
         drop_last=True,
     ),
@@ -1557,6 +1584,7 @@ def transform(samples: Tuple[Any]):
     sample_1, sample_2 = samples  # as many samples as wrapped datasets
     return sample_1 + sample_2  # example transformation
 
+
 parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
 
 dataloader = StreamingDataLoader(parallel_dataset)
@@ -1572,6 +1600,7 @@ def transform(samples: Tuple[Any], rngs: Dict[str, Any]):
     sample_1, sample_2 = samples  # as many samples as wrapped datasets
     rng = rngs["random"]  # "random", "numpy" and "torch" keys available
     return rng.random() * sample_1 + rng.random() * sample_2  # example transformation
+
 
 parallel_dataset = ParallelStreamingDataset([dset_1, dset_2], transform=transform)
 ```
@@ -1630,7 +1659,7 @@ if __name__ == "__main__":
     for out_dir in out_dirs:
         optimize(fn=random_images, inputs=list(range(250)), output_dir=out_dir, num_workers=4, chunk_bytes="64MB")
 
-    merged_out_dir = "merged_fast_data" # or "s3://my-bucket/merged_fast_data"
+    merged_out_dir = "merged_fast_data"  # or "s3://my-bucket/merged_fast_data"
     merge_datasets(input_dirs=out_dirs, output_dir=merged_out_dir)
 
     dataset = StreamingDataset(merged_out_dir)
@@ -1659,18 +1688,21 @@ Transform datasets on-the-fly while streaming them, allowing for efficient data 
 
 ```python
 # Define a simple transform function
-torch_transform = transforms.Compose([
-  transforms.Resize((256, 256)),       # Resize to 256x256
-  transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
-  transforms.Normalize(                # Normalize using ImageNet stats
-      mean=[0.485, 0.456, 0.406], 
-      std=[0.229, 0.224, 0.225]
-  )
-])
+torch_transform = transforms.Compose(
+    [
+        transforms.Resize((256, 256)),  # Resize to 256x256
+        transforms.ToTensor(),  # Convert to PyTorch tensor (C x H x W)
+        transforms.Normalize(  # Normalize using ImageNet stats
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        ),
+    ]
+)
+
 
 def transform_fn(x, *args, **kwargs):
     """Define your transform function."""
     return torch_transform(x)  # Apply the transform to the input image
+
 
 # Create dataset with appropriate configuration
 dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=[transform_fn])
@@ -1680,24 +1712,25 @@ Or, you can create a subclass of `StreamingDataset` and override its `transform`
 
 ```python
 class StreamingDatasetWithTransform(StreamingDataset):
-        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+    """A custom dataset class that inherits from StreamingDataset and applies a transform."""
 
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-            self.torch_transform = transforms.Compose([
-                transforms.Resize((256, 256)),       # Resize to 256x256
-                transforms.ToTensor(),               # Convert to PyTorch tensor (C x H x W)
-                transforms.Normalize(                # Normalize using ImageNet stats
-                    mean=[0.485, 0.456, 0.406], 
-                    std=[0.229, 0.224, 0.225]
-                )
-            ])
+        self.torch_transform = transforms.Compose(
+            [
+                transforms.Resize((256, 256)),  # Resize to 256x256
+                transforms.ToTensor(),  # Convert to PyTorch tensor (C x H x W)
+                transforms.Normalize(  # Normalize using ImageNet stats
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
 
-        # Define your transform method
-        def transform(self, x, *args, **kwargs):
-            """A simple transform function."""
-            return self.torch_transform(x)
+    # Define your transform method
+    def transform(self, x, *args, **kwargs):
+        """A simple transform function."""
+        return self.torch_transform(x)
 
 
 dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=shuffle)
@@ -1715,21 +1748,21 @@ Split a dataset into train, val, test splits with `train_test_split`.
 ```python
 from litdata import StreamingDataset, train_test_split
 
-dataset = StreamingDataset("s3://my-bucket/my-data") # data are stored in the cloud
+dataset = StreamingDataset("s3://my-bucket/my-data")  # data are stored in the cloud
 
-print(len(dataset)) # display the length of your data
-# out: 100,000
+print(len(dataset))  # display the length of your data
+# out: 100,000
 
 train_dataset, val_dataset, test_dataset = train_test_split(dataset, splits=[0.3, 0.2, 0.5])
 
 print(train_dataset)
-# out: 30,000
+# out: 30,000
 
 print(val_dataset)
-# out: 20,000
+# out: 20,000
 
 print(test_dataset)
-# out: 50,000
+# out: 50,000
 ```
 
 Or pick exact indices with `StreamingDataset.subset`:
@@ -1751,10 +1784,10 @@ Work on a smaller, manageable portion of your data to save time and resources.
 ```python
 from litdata import StreamingDataset, train_test_split
 
-dataset = StreamingDataset("s3://my-bucket/my-data", subsample=0.01) # data are stored in the cloud
+dataset = StreamingDataset("s3://my-bucket/my-data", subsample=0.01)  # data are stored in the cloud
 
-print(len(dataset)) # display the length of your data
-# out: 1000
+print(len(dataset))  # display the length of your data
+# out: 1000
 
 # or a list / slice of global indices
 small = dataset.subset([0, 10, 20])
@@ -1774,8 +1807,8 @@ from litdata import StreamingDataset
 
 dataset = StreamingDataset("s3://my-bucket/my-data", subsample=2.5, shuffle=True)
 
-print(len(dataset)) # display the length of your data
-# out: 250000
+print(len(dataset))  # display the length of your data
+# out: 250000
 ```
 
 </details>
@@ -1791,8 +1824,10 @@ LitData optimized datasets are assumed to be immutable. However, you can make th
 ```python
 from litdata import optimize, StreamingDataset
 
+
 def compress(index):
     return index, index**2
+
 
 if __name__ == "__main__":
     # Add some data
@@ -1853,9 +1888,9 @@ import litdata as ld
 
 ld.index_parquet_dataset(
     "s3://my-bucket/my-parquet-data",  # local path, s3://, gs://, or hf://
-    cache_dir=None,                   # see table below
-    storage_options={},               # cloud credentials / endpoints
-    num_workers=4,                    # parallel metadata reads
+    cache_dir=None,  # see table below
+    storage_options={},  # cloud credentials / endpoints
+    num_workers=4,  # parallel metadata reads
 )
 ```
 
@@ -1918,9 +1953,11 @@ Import: `from litdata.streaming.item_loader import ParquetLoader` (not re-export
 from litdata import map
 from litdata.processing.readers import ParquetReader
 
+
 def process(pq_file, output_dir):
     # pq_file is a pyarrow.parquet.ParquetFile
     ...
+
 
 map(
     fn=process,
@@ -1943,8 +1980,10 @@ Reduce your data footprint by using advanced compression algorithms.
 ```python
 import litdata as ld
 
+
 def compress(index):
     return index, index**2
+
 
 if __name__ == "__main__":
     # Add some data
@@ -1954,7 +1993,7 @@ if __name__ == "__main__":
         output_dir="./my_optimized_dataset",
         chunk_bytes="64MB",
         num_workers=1,
-        compression="zstd"
+        compression="zstd",
     )
 ```
 
@@ -1978,11 +2017,11 @@ Look at specific parts of a large dataset without downloading the whole thing or
 ```python
 from litdata import StreamingDataset
 
-dataset = StreamingDataset("s3://my-bucket/my-data") # data are stored in the cloud
+dataset = StreamingDataset("s3://my-bucket/my-data")  # data are stored in the cloud
 
-print(len(dataset)) # display the length of your data
+print(len(dataset))  # display the length of your data
 
-print(dataset[42]) # show the 42th element of the dataset
+print(dataset[42])  # show the 42th element of the dataset
 ```
 
 </details>
@@ -1999,11 +2038,12 @@ Subclass the `StreamingDataset` and override its `__getitem__` method to add any
 from litdata import StreamingDataset, StreamingDataLoader
 import torchvision.transforms.v2.functional as F
 
-class ImagenetStreamingDataset(StreamingDataset):
 
+class ImagenetStreamingDataset(StreamingDataset):
     def __getitem__(self, index):
         image = super().__getitem__(index)
         return F.resize(image, (224, 224))
+
 
 dataset = ImagenetStreamingDataset(...)
 dataloader = StreamingDataLoader(dataset, batch_size=4)
@@ -2040,9 +2080,9 @@ loader = StreamingDataLoader(
     dataset,
     batch_size=64,
     num_workers=4,
-    profile_batches=20,          # record this many batches (int), or True for the whole run
-    profile_skip_batches=5,      # warm up / skip cold-start batches before recording
-    profile_dir="./profiles",    # where to write result.json (default: cwd)
+    profile_batches=20,  # record this many batches (int), or True for the whole run
+    profile_skip_batches=5,  # warm up / skip cold-start batches before recording
+    profile_dir="./profiles",  # where to write result.json (default: cwd)
 )
 
 for batch in loader:
@@ -2118,6 +2158,7 @@ from litdata import optimize
 from tokenizer import Tokenizer
 from functools import partial
 
+
 # 1. Define a function to convert the text within the parquet files into tokens
 def tokenize_fn(filepath, tokenizer=None):
     parquet_file = pq.ParquetFile(filepath)
@@ -2126,16 +2167,19 @@ def tokenize_fn(filepath, tokenizer=None):
         for text in batch.to_pandas()["content"]:
             yield tokenizer.encode(text, bos=False, eos=True)
 
+
 # 2. Generate the inputs
 input_dir = "/teamspace/s3_connections/tinyllama-template"
 inputs = [str(file) for file in Path(f"{input_dir}/starcoderdata").rglob("*.parquet")]
 
 # 3. Store the optimized data wherever you want under "/teamspace/datasets" or "/teamspace/s3_connections"
 outputs = optimize(
-    fn=partial(tokenize_fn, tokenizer=Tokenizer(f"{input_dir}/checkpoints/Llama-2-7b-hf")), # Note: Use HF tokenizer or any others
+    fn=partial(
+        tokenize_fn, tokenizer=Tokenizer(f"{input_dir}/checkpoints/Llama-2-7b-hf")
+    ),  # Note: Use HF tokenizer or any others
     inputs=inputs,
     output_dir="/teamspace/datasets/starcoderdata",
-    chunk_size=(2049 * 8012), # Number of tokens to store by chunks. This is roughly 64MB of tokens per chunk.
+    chunk_size=(2049 * 8012),  # Number of tokens to store by chunks. This is roughly 64MB of tokens per chunk.
 )
 ```
 
@@ -2369,17 +2413,19 @@ Outside Studio, passing `num_nodes` / `machine` raises an error (create a Studio
 ```python
 from litdata import optimize, Machine
 
+
 def compress(index):
-    return (index, index ** 2)
+    return (index, index**2)
+
 
 if __name__ == "__main__":
     optimize(
         fn=compress,
         inputs=list(range(100)),
-        num_workers=8,              # processes per machine
+        num_workers=8,  # processes per machine
         output_dir="/teamspace/s3_connections/my-data/optimized-v1",  # durable bucket (recommended)
         chunk_bytes="64MB",
-        num_nodes=32,               # machines in the job
+        num_nodes=32,  # machines in the job
         machine=Machine.DATA_PREP,  # or omit to use the current Studio machine type
     )
 ```
@@ -2422,8 +2468,10 @@ from litdata.utilities.encryption import FernetEncryption
 fernet = FernetEncryption(password="your_secure_password", level="sample")  # or level="chunk"
 data_dir = "s3://my-bucket/optimized_data"
 
+
 def fn(index):
     return {"index": index, "value": index**2}
+
 
 if __name__ == "__main__":
     optimize(
@@ -2570,9 +2618,7 @@ By default LitData caches downloaded chunks under `~/.lightning/chunks` (overrid
 from litdata import StreamingDataset
 from litdata.streaming.resolver import Dir
 
-dataset = StreamingDataset(
-    Dir(path="/fast-ssd/cache/run-1", url="s3://my-bucket/fast_data")
-)
+dataset = StreamingDataset(Dir(path="/fast-ssd/cache/run-1", url="s3://my-bucket/fast_data"))
 # Equivalent:
 dataset = StreamingDataset("s3://my-bucket/fast_data", cache_dir="/fast-ssd/cache/run-1")
 ```
@@ -2621,10 +2667,12 @@ dataset = StreamingDataset("/teamspace/s3_connections/my-data-1/fast_data", shuf
 # Stream raw files from a connection
 raw = StreamingRawDataset("/teamspace/s3_connections/my-bucket-1/raw")
 
+
 # Optimize *into* a connection — chunks upload straight to the bucket
 def should_keep(data):
     if data % 2 == 0:
         yield data
+
 
 if __name__ == "__main__":
     optimize(
@@ -2711,9 +2759,11 @@ from PIL import Image
 input_dir = "my_large_images"  # or s3://...
 inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
 
+
 def resize_image(image_path, output_dir):
     output_image_path = os.path.join(output_dir, os.path.basename(image_path))
     Image.open(image_path).resize((224, 224)).save(output_image_path)
+
 
 if __name__ == "__main__":
     map(
