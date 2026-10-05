@@ -64,6 +64,8 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
       # Supply-chain guard: skip PyPI releases newer than this. See https://docs.astral.sh/uv/reference/settings/#exclude-newer
       UV_EXCLUDE_NEWER: "2 days"
+      # macOS 26 system Pythons are slow on hostname lookup (gloo init times out); use uv's builds
+      UV_PYTHON_PREFERENCE: ${{ startsWith(matrix.os, 'macos') && 'only-managed' || 'managed' }}
 
     steps:
       # FFmpeg is required for Video Deserializer tests
