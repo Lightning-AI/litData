@@ -306,9 +306,11 @@ utilities/env.py            _DistributedEnv  _is_in_map_or_optimize
 ```python
 import litdata as ld
 
+
 def fn(path):
     # read local cached path when downloaders ran; return sample pytree
     ...
+
 
 if __name__ == "__main__":
     ld.optimize(
@@ -318,7 +320,7 @@ if __name__ == "__main__":
         output_dir="/teamspace/s3_connections/my-opt/v1",  # durable, shared
         chunk_bytes="64MB",
         num_workers=8,
-        num_nodes=4,                 # Studio only
+        num_nodes=4,  # Studio only
         # machine=Machine.DATA_PREP,
         num_downloaders=2,
         num_uploaders=1,

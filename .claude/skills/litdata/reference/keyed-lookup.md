@@ -28,6 +28,7 @@ Backfill a dataset that was optimized without `key_fn`:
 
 ```python
 from litdata import build_keys_index
+
 build_keys_index("fast_data", key_fn=lambda sample: sample["id"], overwrite=False)
 ```
 
@@ -37,8 +38,8 @@ build_keys_index("fast_data", key_fn=lambda sample: sample["id"], overwrite=Fals
 
 ```python
 ds = ld.StreamingDataset("s3://bucket/fast_data")  # or local
-sample = ds["entity-id"]           # str key
-sample = ds.get_by_key(42)         # int entity key
+sample = ds["entity-id"]  # str key
+sample = ds.get_by_key(42)  # int entity key
 ```
 
 Remote: `KeyIndex` uses Polars `scan_parquet` + predicate pushdown (does not download the whole dataset). Missing sidecar → `KeyError` mentioning `keys/`.
