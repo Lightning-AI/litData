@@ -41,19 +41,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "macos-14", "windows-2022"]
+        # Runner images: https://github.com/actions/runner-images
+        os: ["ubuntu-24.04", "macos-26", "windows-2025"]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         exclude:
-          - { os: "windows-2022", python-version: "3.13" }
-          - { os: "windows-2022", python-version: "3.14" }
+          - { os: "windows-2025", python-version: "3.13" }
+          - { os: "windows-2025", python-version: "3.14" }
         # every combination tests the `latest` PyTorch from .github/torch-support.json; these entries
         # merge into existing combinations (they add no jobs), switching two of them to `previous` and
         # to the declared `minimum` — the floor sits on 3.10 because old torch has no newer wheels
         include:
-          - os: "ubuntu-22.04"
+          - os: "ubuntu-24.04"
             python-version: "3.12"
             torch-spec: "${{ needs.torch-support.outputs.previous_spec }}"
-          - os: "ubuntu-22.04"
+          - os: "ubuntu-24.04"
             python-version: "3.10"
             torch-spec: "${{ needs.torch-support.outputs.minimum_spec }}"
 
@@ -63,6 +64,8 @@ jobs:
       UV_TORCH_BACKEND: "cpu"
       # Supply-chain guard: skip PyPI releases newer than this. See https://docs.astral.sh/uv/reference/settings/#exclude-newer
       UV_EXCLUDE_NEWER: "2 days"
+      # macOS 26 system Pythons are slow on hostname lookup (gloo init times out); use uv's builds
+      UV_PYTHON_PREFERENCE: ${{ startsWith(matrix.os, 'macos') && 'only-managed' || 'managed' }}
 
     steps:
       # FFmpeg is required for Video Deserializer tests
