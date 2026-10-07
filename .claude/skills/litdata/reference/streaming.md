@@ -114,27 +114,29 @@ Both subclass `_BaseStreamingDatasetWrapper` (`utilities/base.py:27`) which fans
 ```python
 # Stream optimized data (README:328)
 from litdata import StreamingDataset, StreamingDataLoader
-dataset = StreamingDataset('s3://my-bucket/my-data', shuffle=True, drop_last=True)
+
+dataset = StreamingDataset("s3://my-bucket/my-data", shuffle=True, drop_last=True)
 dataloader = StreamingDataLoader(dataset, batch_size=64)
 for batch in dataloader:
     ...
 
 # Custom S3-compatible endpoint (README:342)
-dataset = StreamingDataset('s3://my-bucket/my-data', storage_options={
-    "endpoint_url": "...", "aws_access_key_id": "...", "aws_secret_access_key": "..."})
+dataset = StreamingDataset(
+    "s3://my-bucket/my-data",
+    storage_options={"endpoint_url": "...", "aws_access_key_id": "...", "aws_secret_access_key": "..."},
+)
 
 # Custom cache dir + cache cap (default None = 75% of free disk; or 0.90 / "100G")
-dataset = StreamingDataset('s3://my-bucket/my-data', cache_dir="/path/to/cache",
-                           max_cache_size="50GB")
+dataset = StreamingDataset("s3://my-bucket/my-data", cache_dir="/path/to/cache", max_cache_size="50GB")
 
 # Combine datasets with weights (README:846)
 from litdata import CombinedStreamingDataset
-combined = CombinedStreamingDataset(datasets=[ds1, ds2], weights=(0.5, 0.5),
-                                    iterate_over_all=False)
+
+combined = CombinedStreamingDataset(datasets=[ds1, ds2], weights=(0.5, 0.5), iterate_over_all=False)
 
 # Pause & resume (README:573) — StreamingDataLoader exposes state_dict()/load_state_dict()
-state = dataloader.state_dict()          # in the main process
-dataloader.load_state_dict(state)        # resume; workers/world_size may change (elastic)
+state = dataloader.state_dict()  # in the main process
+dataloader.load_state_dict(state)  # resume; workers/world_size may change (elastic)
 ```
 
 README feature sections (from `grep -n '<summary>' README.md`): multi-GPU/multi-node (483), multiple providers (515), pause/resume (573), combine (846), parallel streaming (918), cycle (968), subsets (1115), parquet (1192), compression (1251), on-demand access (1284), transforms (1302), cache limits (1386).

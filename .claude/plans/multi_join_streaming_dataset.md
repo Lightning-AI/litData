@@ -236,7 +236,7 @@ join_optimize(
 Callables are accepted as shorthand and normalized to `TableBuild` internally:
 
 ```python
-tables={
+tables = {
     "images": build_images,
     "labels": build_labels,
 }

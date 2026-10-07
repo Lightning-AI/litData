@@ -35,18 +35,20 @@ ______________________________________________________________________
 ```python
 import litdata as ld
 
+
 def fn(path):
     # Typed wrapper picks the image serializer (a caption is not a filepath).
     # quality/format encode JPEG — not uncompressed PIL RAW. See §3.
     return {"image": ld.Image(path=path, quality=95, format="jpeg"), "path": path}
 
+
 if __name__ == "__main__":  # required for multiprocessing
     ld.optimize(
         fn=fn,
         inputs=list_of_paths,
-        output_dir="fast_data",       # local, s3://, gs://, r2://, azure://, /teamspace/...
+        output_dir="fast_data",  # local, s3://, gs://, r2://, azure://, /teamspace/...
         num_workers=4,
-        chunk_bytes="64MB",           # exactly one of chunk_bytes | chunk_size
+        chunk_bytes="64MB",  # exactly one of chunk_bytes | chunk_size
     )
 
 train = ld.StreamingDataset("s3://bucket/fast_data", shuffle=True, drop_last=True, seed=42)
@@ -63,24 +65,37 @@ ______________________________________________________________________
 
 ```python
 from litdata import (
-    Audio, Video, Image, Jpeg, JpegArray, Pil, Tiff, File, Mesh, Pdf, Nifti,
-    Tensor, Text, Graph, list_media_folder,
+    Audio,
+    Video,
+    Image,
+    Jpeg,
+    JpegArray,
+    Pil,
+    Tiff,
+    File,
+    Mesh,
+    Pdf,
+    Nifti,
+    Tensor,
+    Text,
+    Graph,
+    list_media_folder,
 )
 
 items = list_media_folder("data/images", kind="image")  # {path, label} class folders
 # kinds: text, image, video, audio, mesh, pdf, nifti
 
-Text(path=txt)                           # or bytes= / text="caption" → stream str
-Audio(path=wav)                          # or array= + sampling_rate=
-Video(path=mp4)                          # or array= + fps=
+Text(path=txt)  # or bytes= / text="caption" → stream str
+Audio(path=wav)  # or array= + sampling_rate=
+Video(path=mp4)  # or array= + fps=
 Image(path=jpg, quality=95, format="jpeg")
 Image(array=hwc, quality=95, format="jpeg", mode="RGB")
 Jpeg(array=hwc, quality=95)
-File(path=blob)                          # stream raw bytes
+File(path=blob)  # stream raw bytes
 Nifti(array=volume, affine=np.eye(4))
 Mesh(mesh=trimesh_obj, file_type="glb")
-Tensor(array=feat)                       # N-D tensor. 1-D array= is TokensLoader
-Graph(x=x, edge_index=edge_index, y=y)   # or pass PyG Data / HeteroData
+Tensor(array=feat)  # N-D tensor. 1-D array= is TokensLoader
+Graph(x=x, edge_index=edge_index, y=y)  # or pass PyG Data / HeteroData
 ```
 
 Path-only / `bytes=` → store file bytes. Bare `*.jpg` / `*.png` / `*.wav` paths are also claimed so stream returns media, not a string. **Bare `.txt` / `.npy` / `.bin` strings pickle the path** — wrap with `Text` / `File` or load the array. Decode for images is torchvision bytes→tensor (PIL only if JPEG EXIF is present). `array=` / `image=` / `quality` / `format` / `mode` → encode.
@@ -139,6 +154,7 @@ ______________________________________________________________________
 
 ```python
 from litdata.streaming.resolver import Dir
+
 StreamingDataset("s3://bucket/data")
 StreamingDataset("/teamspace/s3_connections/my-data/optimized")  # Studio: direct S3 (not FUSE)
 StreamingDataset("/teamspace/lightning_storage/team-store/shards")  # Studio: direct R2
@@ -208,10 +224,10 @@ Use `StreamingDataLoader` (not plain `DataLoader`) for optimized / combined / pa
 StreamingDataLoader(
     dataset,
     batch_size=64,
-    num_workers=4,                 # required (>=1)
-    profile_batches=20,            # int = N batches; True = whole epoch; False = off
-    profile_skip_batches=5,        # warm-up batches before recording
-    profile_dir="./profiles",      # writes result.json (default cwd; overwrites)
+    num_workers=4,  # required (>=1)
+    profile_batches=20,  # int = N batches; True = whole epoch; False = off
+    profile_skip_batches=5,  # warm-up batches before recording
+    profile_dir="./profiles",  # writes result.json (default cwd; overwrites)
 )
 ```
 
@@ -233,7 +249,7 @@ StreamingDataLoader(
     batch_size=64,
     num_workers=4,
     profile_cprofile=True,
-    profile_dir="./profiles",    # cprofile_main.prof + cprofile_worker0.prof (+ .txt)
+    profile_dir="./profiles",  # cprofile_main.prof + cprofile_worker0.prof (+ .txt)
 )
 ```
 
@@ -349,6 +365,7 @@ Internals / env table → [processing.md](processing.md) (Multi-node launch). St
 
 ```python
 from litdata import walk
+
 for root, dirs, files in walk("/teamspace/s3_connections/data/raw", max_workers=32):
     ...
 ```
@@ -398,8 +415,8 @@ ds = StreamingRawDataset(
     "s3://bucket/images/",  # gs://, azure://, /teamspace/s3_connections/..., local
     # omit transform → each item is raw bytes; or:
     transform=lambda b: Image.open(io.BytesIO(b)).convert("RGB"),
-    cache_files=False,       # True → keep downloaded files under cache_dir
-    recompute_index=False,   # True after remote tree changes
+    cache_files=False,  # True → keep downloaded files under cache_dir
+    recompute_index=False,  # True after remote tree changes
     storage_options={},
 )
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
@@ -461,7 +478,9 @@ Deps: `pip install 'litdata[extras]'` (+ `s3fs` / `gcsfs` / `huggingface_hub`). 
 
 ```python
 ld.index_parquet_dataset(uri, cache_dir=None, storage_options={}, num_workers=4)
-cache = ld.index_hf_dataset("hf://datasets/org/name/data")  # persists {cache}/hf-index/<hash>/index.json; reused next time
+cache = ld.index_hf_dataset(
+    "hf://datasets/org/name/data"
+)  # persists {cache}/hf-index/<hash>/index.json; reused next time
 ld.optimize_hf("org/name", output_dir="opt", split="train")  # index → persist parquet → 64MB chunks
 ```
 
@@ -514,9 +533,11 @@ ______________________________________________________________________
 
 ```python
 CombinedStreamingDataset(
-    [ds_a, ds_b], seed=42, weights=(0.7, 0.3),
+    [ds_a, ds_b],
+    seed=42,
+    weights=(0.7, 0.3),
     iterate_over_all=False,
-    batching_method="stratified",     # or "per_stream" (one source per batch)
+    batching_method="stratified",  # or "per_stream" (one source per batch)
     force_override_state_dict=False,
 )
 ```

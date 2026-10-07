@@ -143,24 +143,30 @@ input_dir → FileIndexer (index.json.zstd) → setup(files) → items
 import numpy as np
 import litdata as ld
 
+
 def fn(index):
     array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
     return {"index": index, "image": ld.Image(array=array, quality=95, format="jpeg"), "class": 0}
 
+
 if __name__ == "__main__":
-    ld.optimize(fn=fn, inputs=list(range(1000)), output_dir="fast_data",
-                num_workers=4, chunk_bytes="64MB")
+    ld.optimize(fn=fn, inputs=list(range(1000)), output_dir="fast_data", num_workers=4, chunk_bytes="64MB")
 
 # Map: transform files in parallel, write to output_dir (README:205)
 import os, litdata as ld
 from PIL import Image
+
+
 def resize_image(image_path, output_dir):
     out = os.path.join(output_dir, os.path.basename(image_path))
     Image.open(image_path).resize((224, 224)).save(out)
+
+
 ld.map(fn=resize_image, inputs=inputs, output_dir="output_dir")
 
 # Encrypt at sample level (README:1491)
 from litdata.utilities.encryption import FernetEncryption
+
 enc = FernetEncryption(password="secret", level="sample")
 ld.optimize(fn=fn, inputs=..., output_dir="enc_data", chunk_bytes="64MB", encryption=enc)
 ```

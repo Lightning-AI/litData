@@ -10,10 +10,10 @@ from litdata import StreamingDataset, StreamingDataLoader
 loader = StreamingDataLoader(
     StreamingDataset("s3://bucket/data"),
     batch_size=64,
-    num_workers=4,              # required
-    profile_batches=20,         # or True for full iterator
-    profile_skip_batches=5,     # skip cold batches
-    profile_dir="./profiles",   # → profiles/result.json
+    num_workers=4,  # required
+    profile_batches=20,  # or True for full iterator
+    profile_skip_batches=5,  # skip cold batches
+    profile_dir="./profiles",  # → profiles/result.json
 )
 ```
 
@@ -33,7 +33,7 @@ loader = StreamingDataLoader(
     batch_size=64,
     num_workers=4,
     profile_cprofile=True,
-    profile_dir="./profiles",   # → cprofile_main.prof + cprofile_worker0.prof
+    profile_dir="./profiles",  # → cprofile_main.prof + cprofile_worker0.prof
 )
 ```
 
@@ -47,8 +47,9 @@ loader = StreamingDataLoader(
 Normal `breakpoint()` doesn't work in DataLoader or `optimize`/`map` worker subprocesses (no stdin). Use LitData's multiprocessing-safe pdb, which reopens `sys.stdin` under a lock (`utilities/breakpoint.py:33`, exported as `litdata.breakpoint`):
 
 ```python
-from litdata.utilities.breakpoint import breakpoint   # or: import litdata; litdata.breakpoint()
-breakpoint()   # works inside a worker
+from litdata.utilities.breakpoint import breakpoint  # or: import litdata; litdata.breakpoint()
+
+breakpoint()  # works inside a worker
 ```
 
 Run with `num_workers=0` first when you can — it keeps everything in the main process so a plain debugger works.

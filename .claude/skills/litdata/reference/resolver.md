@@ -5,8 +5,8 @@ LitData does **not** require callers to know whether a dataset is local, S3, GCS
 ```python
 @dataclass
 class Dir:
-    path: str | None = None              # local filesystem path (cache identity / local read)
-    url: str | None = None               # remote scheme URL used for download/upload
+    path: str | None = None  # local filesystem path (cache identity / local read)
+    url: str | None = None  # remote scheme URL used for download/upload
     data_connection_id: str | None = None  # Lightning temp credentials for some connections
 ```
 
@@ -106,9 +106,7 @@ When the local cache directory and the remote dataset URL must differ:
 from litdata.streaming.resolver import Dir
 from litdata import StreamingDataset
 
-dataset = StreamingDataset(
-    Dir(path="/fast-ssd/cache/my-run", url="s3://bucket/optimized-dataset")
-)
+dataset = StreamingDataset(Dir(path="/fast-ssd/cache/my-run", url="s3://bucket/optimized-dataset"))
 # Or equivalently:
 StreamingDataset("s3://bucket/optimized-dataset", cache_dir="/fast-ssd/cache/my-run")
 ```
