@@ -2696,3 +2696,27 @@ def test_studio_lightning_storage_shared_node_queue(tmpdir):
         assert names == {f"{i:02d}.bin" for i in range(len(sizes))}
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_optimize_preserves_the_callers_random_state(tmpdir, seed):
+    """`optimize` runs in the caller's process, so it must not reseed the caller's generators (#944)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    expected = (random.random(), np.random.rand(), torch.rand(1).item())
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    functions.optimize(
+        fn=_identity_optimize_fn,
+        inputs=list(range(4)),
+        output_dir=os.path.join(tmpdir, f"optimized-{seed}"),
+        chunk_bytes="1MB",
+        num_workers=0,
+    )
+
+    # Without the fix the draw after `optimize` is the one for `random_seed`, not for `seed`.
+    assert (random.random(), np.random.rand(), torch.rand(1).item()) == pytest.approx(expected)

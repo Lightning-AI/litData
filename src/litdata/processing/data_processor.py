@@ -1946,15 +1946,32 @@ class DataProcessor:
             # clean up checkpoints if not using checkpoints
             self._cleanup_checkpoints()
 
-        t0 = time()
-        os.environ["DATA_OPTIMIZER_NUM_WORKERS"] = str(self.num_workers)
-        if self.verbose:
-            print(f"Setup started with fast_dev_run={self.fast_dev_run}.")
+        # `optimize` runs in the caller's process, so the seeding below must not outlive it: seed for the
+        # duration of the work only and hand the caller's own global states back untouched (#944).
+        random_state = random.getstate()
+        np_random_state = np.random.get_state()
+        torch_random_state = torch.random.get_rng_state()
+        cuda_random_states = torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None
 
         # Force random seed to be fixed
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
+        try:
+            self._run(data_recipe)
+        finally:
+            random.setstate(random_state)
+            np.random.set_state(np_random_state)
+            torch.random.set_rng_state(torch_random_state)
+            if cuda_random_states is not None:
+                torch.cuda.set_rng_state_all(cuda_random_states)
+
+    def _run(self, data_recipe: DataRecipe) -> None:
+        """Do the work of :meth:`run`, with the global random generators already seeded."""
+        t0 = time()
+        os.environ["DATA_OPTIMIZER_NUM_WORKERS"] = str(self.num_workers)
+        if self.verbose:
+            print(f"Setup started with fast_dev_run={self.fast_dev_run}.")
 
         # Call the setup method of the user
         user_items: list[Any] | StreamingDataLoader | Queue = data_recipe.prepare_structure(
