@@ -1,5 +1,4 @@
 import os
-import shutil
 import signal
 import sys
 import threading
@@ -14,7 +13,6 @@ from litdata import CombinedStreamingDataset, StreamingDataset
 from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
-from litdata.utilities.dataset_utilities import get_default_cache_dir
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -23,6 +21,25 @@ def teardown_process_group():
     yield
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache_dirs(tmp_path_factory, monkeypatch):
+    """Isolate cache directories for each test to prevent cross-test interference.
+
+    ``optimize()`` clears optimizer cache directories, while streaming and Hugging Face
+    index caches live under ``get_default_cache_dir()``. Without isolation, concurrent
+    tests can delete or overwrite each other's cache files.
+
+    Use environment variables rather than module attributes so spawned worker
+    processes inherit the isolated cache configuration.
+    """
+    root = tmp_path_factory.mktemp("litdata-cache")
+
+    monkeypatch.setenv("LITDATA_CACHE_DIR", str(root / "litdata-cache" / "chunks"))
+    monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(root / "optimizer-chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(root / "optimizer-data"))
 
 
 @pytest.fixture(autouse=True)
@@ -172,21 +189,6 @@ def _thread_police():
             raise AssertionError(f"Test left zombie thread: {thread}")
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items):
-    """Force tests sharing the global default cache dir onto the same xdist worker.
-
-    Why: ``clean_pq_index_cache`` shutil.rmtree's ``~/.lightning/chunks`` on setup/teardown.
-    Under ``pytest -n>1`` two such tests on different workers race, deleting each other's
-    chunks mid-iteration. Requires the runner to pass ``--dist=loadgroup``. Must run with
-    ``tryfirst=True`` so the marker is in place before xdist's own hook reads it and
-    appends the ``@group`` nodeid suffix that LoadGroupScheduling uses for routing.
-    """
-    for item in items:
-        if "clean_pq_index_cache" in getattr(item, "fixturenames", ()):
-            item.add_marker(pytest.mark.xdist_group("hf_default_cache"))
-
-
 # ==== fixtures for parquet ====
 @pytest.fixture
 def pq_data():
@@ -210,21 +212,6 @@ def write_pq_data(pq_data, tmp_path):
             df = pl.DataFrame(pq_data)
             file_path = os.path.join(tmp_path, "pq-dataset", f"tmp-{i}.parquet")
             df.write_parquet(file_path)
-
-
-@pytest.fixture
-def clean_pq_index_cache():
-    """Ensures the PQ index cache is cleared before and after the test."""
-    cache_path = os.path.join(get_default_cache_dir())
-
-    # Cleanup before the test
-    if os.path.exists(cache_path):
-        shutil.rmtree(cache_path, ignore_errors=True)
-
-    yield
-
-    if os.path.exists(cache_path):
-        shutil.rmtree(cache_path, ignore_errors=True)
 
 
 @pytest.fixture

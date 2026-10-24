@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME, _LITDATA_CACHE_DIR
+from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, TokensLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
@@ -306,8 +306,11 @@ def get_default_cache_dir() -> str:
     Returns:
         str: The resolved default cache root directory.
     """
-    if _LITDATA_CACHE_DIR is not None:
-        return _LITDATA_CACHE_DIR
+    # Read lazily so changes to the environment variable after import are honored.
+    # Useful in tests that modify the variable via monkeypatch.
+    litdata_cache_dir = os.getenv("LITDATA_CACHE_DIR")
+    if litdata_cache_dir is not None:
+        return litdata_cache_dir
     is_lightning_cloud = "LIGHTNING_CLUSTER_ID" in os.environ and "LIGHTNING_CLOUD_PROJECT_ID" in os.environ
     return _DEFAULT_LIGHTNING_CACHE_DIR if is_lightning_cloud else _DEFAULT_CACHE_DIR
 
