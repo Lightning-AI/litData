@@ -552,8 +552,8 @@ Use it when you want to train or prototype on JPEGs, masks, audio, JSONL, etc. *
 ### Install (cloud)
 
 ```bash
-pip install "litdata[extra]" s3fs    # Amazon S3
-pip install "litdata[extra]" gcsfs  # Google Cloud Storage
+pip install "litdata[extras]" s3fs   # Amazon S3
+pip install "litdata[extras]" gcsfs  # Google Cloud Storage
 # Azure / Studio connections: see Paths & cloud URLs
 ```
 

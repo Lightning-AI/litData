@@ -2,7 +2,7 @@
 
 Become productive immediately. Narrative docs: repo `README.md`. Internals: [streaming.md](streaming.md), [processing.md](processing.md), [cache-and-chunk-lifecycle.md](cache-and-chunk-lifecycle.md), [storage-format.md](storage-format.md).
 
-Install: `pip install litdata` · extras: `pip install 'litdata[extras]'` (README also uses `litdata[extra]` + `s3fs` / `gcsfs` / `huggingface_hub` for specific features).
+Install: `pip install litdata` · extras: `pip install 'litdata[extras]'` (add `s3fs`, `gcsfs`, or `huggingface_hub` for the corresponding storage backend).
 
 ______________________________________________________________________
 

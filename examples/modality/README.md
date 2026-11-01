@@ -8,6 +8,6 @@ python examples/modality/numpy_array.py
 python examples/modality/parquet.py
 ```
 
-Audio and video need torchcodec (`pip install "litdata[extra]"`). Mesh, Pdf, Nifti, and Tiff need trimesh, pdfplumber, nibabel, and tifffile. Parquet needs pyarrow (and Polars for `ParquetLoader`).
+Audio and video need torchcodec (`pip install torchcodec`), which is not included in `litdata[extras]`. Mesh, Pdf, Nifti, and Tiff need trimesh, pdfplumber, nibabel, and tifffile. Parquet needs pyarrow (and Polars for `ParquetLoader`).
 
 `optimize.py` / `stream.py` write several types in one sample. PyG details: [README — PyG graphs](../../README.md#pyg-graphs).

@@ -1,6 +1,6 @@
 """Audio: wrap WAV files on disk, stream array + sampling rate.
 
-Needs torchcodec to decode (included in litdata[extra] on Linux/macOS).
+Needs torchcodec to decode (install separately with ``pip install torchcodec``).
 Decoders do not stack — collate to a list, or decode in collate_fn.
 """
 
