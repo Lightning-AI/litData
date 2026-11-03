@@ -110,7 +110,7 @@ pip install litdata
 ```
 
 <!-- torch-support -->
-LitData supports the two most recent PyTorch minor releases, currently **2.14** and **2.13**; and
+LitData supports the two most recent PyTorch minor releases, currently **2.15** and **2.14**; and
 requires **PyTorch 2.4 or newer**. CI exercises all three. Those versions are declared in
 [`.github/torch-support.json`](.github/torch-support.json), which drives the CI matrix.
 
