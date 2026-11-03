@@ -961,7 +961,8 @@ class PyTreeLoader(BaseItemLoader):
             header = self._resolve_framed_header(chunk_index, blob)
             if header is not None:
                 return self._fill_framed_window(blob, chunk_index, table_idx, header)
-            return _BATCH_SKIP
+            # Arrow-footer chunks leave per-item byte ranges empty; rows live only in the footer.
+            return self._try_arrow_footer_rows(blob, chunk_index, table_idx)
         return self._fill_decode_window_path(chunk_index, chunk_filepath, table_idx, batch_rows)
 
     def _clear_arrow_footer(self) -> None:
