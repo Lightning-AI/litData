@@ -83,4 +83,4 @@ jobs:
           - [ ] Open a PR with the changes
 
           ---
-          *This issue was automatically created by [\`torch-policy.yml\`](.github/workflows/torch-policy.yml).*"
+          *This issue was automatically created by [\`torch-policy.yml\`](https://github.com/Lightning-AI/litData/blob/main/.github/workflows/torch-policy.yml).*"
