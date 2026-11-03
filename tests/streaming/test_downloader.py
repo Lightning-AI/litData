@@ -1,7 +1,7 @@
 import contextlib
 import io
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -843,7 +843,7 @@ def test_obstore_credential_provider_reports_the_client_refresh_time():
     It caches what the provider hands back until ``expires_at``, so a guess that outlives
     credentials read off a warm client leaves it signing with ones already dead.
     """
-    rolls_over_at = datetime.now(timezone.utc) + timedelta(minutes=4)
+    rolls_over_at = datetime.now(UTC) + timedelta(minutes=4)
 
     s3_client = MagicMock()
     s3_client.next_refresh_time.return_value = rolls_over_at
