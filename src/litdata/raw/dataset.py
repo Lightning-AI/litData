@@ -1592,7 +1592,7 @@ class StreamingRawDataset(Dataset):
                 else:
                     # One wait_for for the whole batch — hang protection without per-item tax.
                     fetched = await asyncio.wait_for(asyncio.gather(*tasks), timeout=budget)
-            except (TimeoutError, asyncio.TimeoutError) as exc:
+            except TimeoutError as exc:
                 # Plain gather (download_timeout=0): item-level TimeoutError — do not rewrite.
                 if budget is None:
                     raise
