@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Fix `len(StreamingDataLoader)` undercounting per-worker partial batches with whole-chunk window shuffling. ([#939](https://github.com/Lightning-AI/litData/pull/939))
 
+### Fixed
+
+- Fix `len(StreamingDataLoader)` undercounting per-worker partial batches with whole-chunk window shuffling. ([#939](https://github.com/Lightning-AI/litData/pull/939))
+
+### Added
+
+- `CombinedStreamingDataset(max_cache_size=..., cache_allocation=...)`: an optional total cache budget shared across all child datasets, split by sampling weight (`cache_allocation="proportional"`, default) or evenly (`"equal"`) when iteration starts. `None` (default) leaves each child's `max_cache_size` unchanged. Fractional budgets resolve against the child's actual cache filesystem, and a positively weighted dataset whose share rounds to zero is clamped to a 1-byte minimum within the total. ([#790](https://github.com/Lightning-AI/litData/issues/790))
+
 ## [0.2.76] - 2026-09-30
 
 ### Added

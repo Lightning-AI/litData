@@ -11,7 +11,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+import os
 import random
+import shutil
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from typing import Any, Literal
@@ -23,7 +26,11 @@ from litdata.utilities.base import (
     __SAMPLES_KEY__,
     _BaseStreamingDatasetWrapper,
 )
+from litdata.utilities.dataset_utilities import get_default_cache_dir
 from litdata.utilities.env import _WorkerEnv
+from litdata.utilities.format import _human_readable_bytes, _probe_existing_dir, _resolve_max_cache_size
+
+logger = logging.getLogger("litdata.streaming.combined")
 
 
 class BatchingMethod:
@@ -32,6 +39,130 @@ class BatchingMethod:
 
 
 BatchingMethodType = Literal["stratified", "per_stream"]
+
+CacheAllocationType = Literal["equal", "proportional"]
+
+_CACHE_ALLOCATION_CHOICES = ("equal", "proportional")
+
+# Warn when a distributed per-dataset budget gets too small to be useful.
+_MIN_RECOMMENDED_CACHE_SIZE = 25 * 1024**3
+
+
+def _free_disk_bytes(path: str) -> int:
+    """Free bytes on the filesystem holding ``path``; 0 when it cannot be probed (treated as most constrained)."""
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return 0
+
+
+def _allocate_cache_budgets(
+    datasets: list[StreamingDataset],
+    weights: Sequence[float | None],
+    max_cache_size: int | float | str | None,
+    cache_allocation: CacheAllocationType,
+) -> list[int | None]:
+    """Distribute a total cache budget across the child datasets.
+
+    Returns one budget per dataset; ``None`` means "leave this dataset's ``max_cache_size`` untouched".
+    """
+    if max_cache_size is None:
+        return [None] * len(datasets)
+
+    # Resolve each child's actual cache location before probing free space: children that omit
+    # `cache_dir` resolve litData's default cache location, and children caching on different
+    # filesystems make the budget resolution most constrained (smallest free space).
+    cache_dirs = [
+        dataset.cache_dir.path or get_default_cache_dir()
+        for dataset in datasets
+        if isinstance(dataset, StreamingDataset)
+    ]
+    resolved_dirs = [_probe_existing_dir(path) for path in cache_dirs]
+    if resolved_dirs:
+        st_devs = {os.stat(path).st_dev for path in resolved_dirs}
+        if len(st_devs) > 1:
+            logger.warning(
+                "The child datasets cache on %d different filesystems; the combined budget is resolved "
+                "against the one with the least free space to stay bounded on all of them.",
+                len(st_devs),
+            )
+        probe = min(resolved_dirs, key=_free_disk_bytes)
+    else:
+        probe = get_default_cache_dir()
+    total_budget = _resolve_max_cache_size(max_cache_size, probe)
+
+    if os.getenv("MAX_CACHE_SIZE"):
+        logger.warning(
+            "The MAX_CACHE_SIZE environment variable is set; it takes precedence over the "
+            "`CombinedStreamingDataset(max_cache_size=...)` budget when each child dataset resolves its cache size."
+        )
+
+    num_datasets = len(datasets)
+    if cache_allocation == "equal":
+        base = total_budget // num_datasets
+        remainder = total_budget - base * num_datasets
+        per_dataset_budgets: list[int | None] = [base + (1 if i < remainder else 0) for i in range(num_datasets)]
+    else:
+        normalized_weights = [0.0 if w is None else w for w in weights]
+        total_weight = sum(normalized_weights)
+        assert total_weight > 0
+        positive = [i for i, w in enumerate(normalized_weights) if w > 0]
+        # Every positively weighted dataset must stay bounded, so it needs at least one byte.
+        # An insufficient combined budget cannot honor that without exceeding the total.
+        if total_budget < len(positive):
+            raise ValueError(
+                f"`max_cache_size` ({total_budget} bytes) is too small to allocate at least 1 byte to each of the "
+                f"{len(positive)} positively weighted child datasets. Increase "
+                "`CombinedStreamingDataset(max_cache_size=...)`."
+            )
+        exact = [0.0 if w == 0 else total_budget * (w / total_weight) for w in normalized_weights]
+        per_dataset_budgets = [None if w == 0 else int(e) for w, e in zip(normalized_weights, exact)]
+        # Hand the integer-rounding leftover to the largest fractional remainders (ties: lower index first).
+        remaining = total_budget - sum(b for b in per_dataset_budgets if isinstance(b, int))
+        for i in sorted(positive, key=lambda idx: exact[idx] - int(exact[idx]), reverse=True)[:remaining]:
+            budget_i = per_dataset_budgets[i]
+            assert isinstance(budget_i, int)
+            per_dataset_budgets[i] = budget_i + 1
+        # Positive weights that still round to zero must not bypass the combined limit: fund a 1-byte
+        # minimum by taking from the largest allocation (which the budget guard above guarantees is >1).
+        for i in positive:
+            if per_dataset_budgets[i] != 0:
+                continue
+            donor = max(positive, key=lambda idx: per_dataset_budgets[idx] or 0)
+            donor_budget = per_dataset_budgets[donor]
+            assert isinstance(donor_budget, int)
+            assert donor_budget > 1
+            per_dataset_budgets[donor] = donor_budget - 1
+            per_dataset_budgets[i] = 1
+            logger.warning(
+                "The cache budget allocated to dataset %i rounds to zero for a positive sampling weight; "
+                "it is clamped to the 1-byte minimum within the total budget. Consider increasing "
+                "`CombinedStreamingDataset(max_cache_size=...)`.",
+                i,
+            )
+        for i, weight in enumerate(normalized_weights):
+            if weight == 0:
+                logger.warning(
+                    "Dataset %i has zero sampling weight and is never sampled; it keeps its own `max_cache_size` "
+                    "and bypasses the combined budget.",
+                    i,
+                )
+
+    for i, (dataset, budget) in enumerate(zip(datasets, per_dataset_budgets)):
+        if not isinstance(dataset, StreamingDataset) or not budget:
+            # Skip stub datasets and never assign a falsy (0) budget: eviction is
+            # disabled when `max_cache_size` is falsy in `PrepareChunksThread`.
+            per_dataset_budgets[i] = None
+        elif budget < _MIN_RECOMMENDED_CACHE_SIZE:
+            logger.warning(
+                "The `max_cache_size` allocated to a combined child dataset is %s (less than 25GB). "
+                "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
+                "`num_workers * max_pre_download * chunk_size` (often 5-12GB). "
+                "Consider increasing `CombinedStreamingDataset(max_cache_size=...)` to avoid eviction thrash.",
+                _human_readable_bytes(budget),
+            )
+
+    return per_dataset_budgets
 
 
 class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
@@ -54,6 +185,8 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
         iterate_over_all: bool = True,
         batching_method: BatchingMethodType = "stratified",
         force_override_state_dict: bool = False,
+        max_cache_size: int | float | str | None = None,
+        cache_allocation: CacheAllocationType = "proportional",
     ) -> None:
         """Enable to stream data from multiple StreamingDataset with the sampling ratio of your choice.
 
@@ -67,15 +200,30 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
                 batches will include samples from all datasets. On the other hand, when batching_method is "per_stream",
                 batches will consist of samples from a single dataset,  which is selected randomly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
+            max_cache_size: Optional total cache budget shared by all the child datasets. ``None`` (default) leaves the
+                per-dataset ``StreamingDataset.max_cache_size`` untouched. Otherwise, the resolved budget is split
+                across the child datasets and assigned to their ``max_cache_size`` before iteration starts. Accepts a
+                number of bytes (``int``), a size such as ``"100GB"``, or a fraction of free disk such as ``0.90``.
+            cache_allocation: How to split ``max_cache_size`` across the child datasets: ``"proportional"`` (default)
+                allocates each dataset a share of the budget matching its sampling weight; ``"equal"`` splits the
+                budget evenly. Ignored when ``max_cache_size`` is ``None``.
 
         """
         self._check_datasets(datasets)
+
+        if cache_allocation not in _CACHE_ALLOCATION_CHOICES:
+            raise ValueError(
+                f"Invalid `cache_allocation` {cache_allocation!r}. "
+                f"Expected one of: {', '.join(_CACHE_ALLOCATION_CHOICES)}."
+            )
 
         self._seed = seed
         self._datasets = datasets
         self._weights = weights
         self._iterate_over_all = iterate_over_all
         self._force_override_state_dict = force_override_state_dict
+        self._max_cache_size = max_cache_size
+        self._cache_allocation: CacheAllocationType = cache_allocation
 
         if iterate_over_all and weights:
             raise ValueError(
@@ -129,6 +277,13 @@ class CombinedStreamingDataset(_BaseStreamingDatasetWrapper):
 
     def __iter__(self) -> Iterator[Any]:
         assert self._weights
+
+        # Distribute the optional combined-level cache budget across the child datasets
+        # before their iterators (and caches) are created.
+        budgets = _allocate_cache_budgets(self._datasets, self._weights, self._max_cache_size, self._cache_allocation)
+        for dataset, budget in zip(self._datasets, budgets):
+            if budget is not None:
+                dataset.max_cache_size = budget
 
         worker_env = _WorkerEnv.detect()
 
