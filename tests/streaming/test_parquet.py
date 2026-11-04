@@ -129,6 +129,8 @@ def test_optimize_hf(tmp_path, write_pq_data, monkeypatch):
     monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/name")
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: files)
     out = tmp_path / "imdb-opt"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
     returned = optimize_hf("org/name", output_dir=str(out), chunk_size=10, num_workers=1)
     assert returned == str(out)
     ds = StreamingDataset(str(out))
@@ -289,6 +291,8 @@ def test_optimize_hf_media_bytes_stay_arrow_binary(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)])
     out = tmp_path / "media-opt"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
     optimize_hf("org/media", output_dir=str(out), chunk_size=10, num_workers=1, compression="zstd")
     ds = StreamingDataset(str(out))
     assert len(ds) == 2
@@ -329,6 +333,8 @@ def test_optimize_hf_variable_length_lists(tmp_path, monkeypatch):
     monkeypatch.setattr("litdata.utilities.hf_dataset.resolve_hf_dataset_url", lambda *a, **k: "hf://datasets/org/qa")
     monkeypatch.setattr("litdata.utilities.hf_dataset._prepare_optimize_inputs", lambda *a, **k: [str(pq_path)])
     out = tmp_path / "qa-opt"
+    monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(tmp_path / "chunks"))
+    monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(tmp_path / "data"))
     optimize_hf("org/qa", output_dir=str(out), chunk_size=10, num_workers=1)
     ds = StreamingDataset(str(out))
     assert len(ds) == 3
