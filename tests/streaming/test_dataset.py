@@ -1919,3 +1919,93 @@ def test_dataset_transform_inheritance(tmpdir, shuffle):
     # Verify that the transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i * 2, f"Expected {i * 2}, got {item}"
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_transform_slice(tmpdir, shuffle):
+    """Slice access should apply the same transform as integer indexing and iteration."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    def transform_fn(x, *args, **kwargs):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=shuffle, transform=transform_fn)
+
+    # Integer indexing already transformed; compare slice access against indexed items.
+    expected = [dataset[i] for i in range(len(dataset))]
+    assert dataset[:] == expected
+    assert dataset[10:20] == expected[10:20]
+    assert dataset[15:40:5] == expected[15:40:5]
+    assert dataset[-10:] == expected[-10:]
+
+
+@pytest.mark.parametrize("shuffle", [True, False])
+def test_dataset_multiple_transform_slice(tmpdir, shuffle):
+    """List transforms should be applied per item for slices as well."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    def transform_fn_1(x):
+        """A simple transform function that doubles the input."""
+        return x * 2
+
+    def transform_fn_2(x, extra_num):
+        """A simple transform function that adds one to the input."""
+        return x + extra_num
+
+    dataset = StreamingDataset(
+        data_dir,
+        cache_dir=str(cache_dir),
+        shuffle=shuffle,
+        transform=[transform_fn_1, partial(transform_fn_2, extra_num=100)],
+    )
+
+    expected_all = [dataset[i] for i in range(len(dataset))]
+    assert dataset[:] == expected_all
+    assert dataset[20:60] == expected_all[20:60]
+
+
+def test_dataset_transform_inheritance_slice(tmpdir):
+    """Subclasses overriding the transform method should keep working through slice access."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    data_dir = os.path.join(tmpdir, "data_dir")
+    os.makedirs(cache_dir)
+    os.makedirs(data_dir)
+
+    cache = Cache(str(data_dir), chunk_size=20)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    class StreamingDatasetWithTransform(StreamingDataset):
+        """A custom dataset class that inherits from StreamingDataset and applies a transform."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def transform(self, x, *args, **kwargs):
+            """A simple transform function that doubles the input."""
+            return x * 2
+
+    dataset = StreamingDatasetWithTransform(data_dir, cache_dir=str(cache_dir), shuffle=False)
+    assert dataset[:] == [i * 2 for i in range(100)]
+    assert dataset[10:20] == [i * 2 for i in range(10, 20)]
