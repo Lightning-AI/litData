@@ -44,8 +44,8 @@ def train_test_split(
     if not all(0 <= _f <= 1 for _f in splits):
         raise ValueError("Each Split should be a float with each value in [0,1].")
 
-    if sum(splits) > 1:
-        raise ValueError("Splits' sum must be less than 1.")
+    if sum(splits) > 1 and not np.isclose(sum(splits), 1.0):
+        raise ValueError("Splits' sum must be less than or equal to 1.")
 
     # we need subsampled chunk filenames, original chunk file, and subsampled_roi
 
