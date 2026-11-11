@@ -668,6 +668,7 @@ class _StreamingMultiProcessingDataLoaderIter(_MultiProcessingDataLoaderIter):
                 self._try_put_index()
                 break
             wait_for_ram_budget(need_bytes=getattr(self._loader, "_ram_batch_bytes", 1))
+            self._ram_force_one_refill = True
             self._try_put_index()
         return super()._next_data()
 
