@@ -60,7 +60,7 @@
 
 &nbsp;
 
-<a target="_blank" href="https://lightning.ai/docs/overview/optimize-data/optimize-datasets">
+<a target="_blank" href="https://lightning.ai/docs/litdata/quick-start">
   <img src="https://pl-bolts-doc-images.s3.us-east-2.amazonaws.com/app-2/get-started-badge.svg" height="36px" alt="Get started"/>
 </a>
 
@@ -110,7 +110,7 @@ pip install litdata
 ```
 
 <!-- torch-support -->
-LitData supports the two most recent PyTorch minor releases, currently **2.14** and **2.13**; and
+LitData supports the two most recent PyTorch minor releases, currently **2.15** and **2.14**; and
 requires **PyTorch 2.4 or newer**. CI exercises all three. Those versions are declared in
 [`.github/torch-support.json`](.github/torch-support.json), which drives the CI matrix.
 
@@ -2885,7 +2885,7 @@ Speed to stream Imagenet 1.2M from AWS S3:
   <summary> Benchmark details</summary>
 &nbsp;
 
-- [Imagenet-1.2M dataset](https://www.image-net.org/) contains `1,281,167 images`.
+- [Imagenet-1.2M dataset](https://arxiv.org/abs/1409.0575) contains `1,281,167 images`.
 - To align with other benchmarks, we measured the streaming speed (`images per second`) loaded from [AWS S3](https://aws.amazon.com/s3/) for several frameworks.
 
 </details>

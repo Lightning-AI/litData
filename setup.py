@@ -75,7 +75,7 @@ setup(
     package_data={"litdata.utilities": ["_nfs_direct_io.c"]},
     zip_safe=False,
     keywords=["deep learning", "pytorch", "AI", "streaming", "cloud", "data processing"],
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     setup_requires=["wheel"],
     install_requires=_load_requirements(),
     extras_require=_prepare_extras(),
@@ -99,7 +99,6 @@ setup(
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",

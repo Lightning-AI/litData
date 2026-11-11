@@ -4,7 +4,7 @@ Full reference: `CONTRIBUTING.md`. This is the fast path.
 
 ## Environment setup
 
-Requires Python ≥ 3.10 and `make`. LitData uses `uv` for installs.
+Requires Python ≥ 3.11 and `make`. LitData uses `uv` for installs.
 
 Optional — install the LitData agent skill in another checkout/tooling:
 
@@ -57,7 +57,7 @@ pytest tests/path/test_x.py::test_name -v --capture=no    # see testing.md
 
 ## Style rules enforced (`pyproject.toml [tool.ruff]`)
 
-- `line-length = 120`, `target-version = "py310"`.
+- `line-length = 120`, `target-version = "py311"`.
 - Rule sets: `E, F, W`, `S` (bandit), `UP` (pyupgrade), `I` (isort), `C4`, `D` (pydocstyle, **Google convention**), `PT`, `RET`, `SIM`, `NPY201`, `RUF100`. Max mccabe complexity 10.
 - `assert` allowed (`S101` ignored). Docstring rules `D1xx` relaxed in `src/**`, `tests/**`, `examples/**`.
 - `src/litdata/debugger.py` and `utilities/_pytree.py` fully excluded from ruff; several files excluded from mypy (`[tool.mypy] exclude`).
@@ -67,7 +67,7 @@ pytest tests/path/test_x.py::test_name -v --capture=no    # see testing.md
 
 **`ci-testing.yml`** — job `pytester` (matrix, `fail-fast: false`):
 
-- OS: `ubuntu-22.04`, `macos-14`, `windows-2022`. Python: `3.10–3.14` (windows excludes 3.13/3.14).
+- OS: `ubuntu-22.04`, `macos-14`, `windows-2022`. Python: `3.11–3.14` (windows excludes 3.13/3.14).
 - Two phases: fast tests parallel (`pytest tests --ignore=tests/processing --ignore=tests/raw -n 2 --dist=loadgroup ...`), then processing/raw sequential. `--dist=loadgroup` is **required** (see testing.md).
 - `--timeout=120` per test; FFmpeg installed for video tests; `UV_TORCH_BACKEND=cpu`.
 - `testing-guardian` job is the required gate — fails the PR if any leg fails.

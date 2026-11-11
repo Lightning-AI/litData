@@ -32,7 +32,7 @@ Alternatively, you can share a fully reproducible [Lightning Studio](https://lig
 
 1. Create a [Studio](https://lightning.ai/studios).
 2. Reproduce the issue in the Studio.
-3. [Publish the Studio](https://lightning.ai/docs/overview/studios/publishing#how-to-publish).
+3. [Publish the Studio](https://lightning.ai/docs/platform/build/ai-studio/publishing#how-to-publish).
 4. Paste the Studio link here.
 
 ### Expected behavior

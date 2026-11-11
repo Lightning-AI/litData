@@ -1,7 +1,7 @@
 import logging
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import sleep, time
 from unittest import mock
 
@@ -1128,7 +1128,7 @@ def test_reported_expiry_parses_every_form_the_control_plane_emits(reported):
     An STS expiry lands on a whole second and arrives bare; R2's is derived from a wall
     clock and arrives with nanoseconds, which `fromisoformat` will not take.
     """
-    assert client._parse_reported_expiry(reported) == datetime(2026, 9, 2, 17, 30, tzinfo=timezone.utc).timestamp()
+    assert client._parse_reported_expiry(reported) == datetime(2026, 9, 2, 17, 30, tzinfo=UTC).timestamp()
 
 
 @pytest.mark.parametrize("reported", [None, "", "   ", "whenever", 1788370200])
@@ -1171,7 +1171,7 @@ def test_already_expired_credentials_are_never_reused():
 
 def _rfc3339(timestamp):
     """Format a unix timestamp the way the control plane reports ``expiresAt``."""
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_cached_credentials_are_refetched_on_the_reported_expiry(monkeypatch):
