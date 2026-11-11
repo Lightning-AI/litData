@@ -99,6 +99,11 @@ def _allocate_cache_budgets(
 
     num_datasets = len(datasets)
     if cache_allocation == "equal":
+        if total_budget < num_datasets:
+            raise ValueError(
+                f"`max_cache_size` ({total_budget} bytes) is too small to allocate at least 1 byte to each of the "
+                f"{num_datasets} child datasets. Increase `CombinedStreamingDataset(max_cache_size=...)`."
+            )
         base = total_budget // num_datasets
         remainder = total_budget - base * num_datasets
         per_dataset_budgets: list[int | None] = [base + (1 if i < remainder else 0) for i in range(num_datasets)]

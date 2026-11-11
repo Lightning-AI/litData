@@ -1224,14 +1224,20 @@ def test_combined_mixed_cache_dirs_resolve_against_most_constrained(tmpdir, monk
     assert [d.max_cache_size for d in datasets] == [int(default_free * 0.90) // 2] * 2
 
 
-def test_combined_insufficient_budget_for_positive_weights_raises(tmpdir):
+@pytest.mark.parametrize("cache_allocation", ["equal", "proportional"])
+def test_combined_insufficient_budget_for_positive_weights_raises(tmpdir, cache_allocation):
     """A combined budget too small to give every positively weighted dataset 1 byte is rejected."""
     data_dir_1 = _seed_chunked_dataset(os.path.join(tmpdir, "data_1"), n_items=8)
     data_dir_2 = _seed_chunked_dataset(os.path.join(tmpdir, "data_2"), n_items=8, offset=10)
 
     datasets = [StreamingDataset(input_dir=data_dir_1), StreamingDataset(input_dir=data_dir_2)]
     combined = CombinedStreamingDataset(
-        datasets=datasets, seed=12345, iterate_over_all=False, weights=(0.5, 0.5), max_cache_size=1
+        datasets=datasets,
+        seed=12345,
+        iterate_over_all=False,
+        weights=(0.5, 0.5),
+        max_cache_size=1,
+        cache_allocation=cache_allocation,
     )
     with pytest.raises(ValueError, match="too small"):
         next(iter(combined), None)
