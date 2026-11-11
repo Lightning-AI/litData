@@ -103,11 +103,7 @@ jobs:
         run: uv pip uninstall torchcodec
 
       - name: Run fast tests in parallel
-        run: |
-          pytest tests \
-              --ignore=tests/processing \
-              --ignore=tests/raw \
-              -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+        run: bash .github/scripts/run-fast-tests.sh
 
       - name: Run processing tests sequentially
         run: |
