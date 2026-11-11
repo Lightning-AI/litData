@@ -2721,3 +2721,94 @@ def test_studio_lightning_storage_shared_node_queue(tmpdir):
         assert names == {f"{i:02d}.bin" for i in range(len(sizes))}
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_optimize_preserves_the_callers_random_state(tmpdir, seed):
+    """`optimize` runs in the caller's process, so it must not reseed the caller's generators."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    expected = (random.random(), np.random.rand(), torch.rand(1).item())  # noqa: S311
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    functions.optimize(
+        fn=_identity_optimize_fn,
+        inputs=list(range(4)),
+        output_dir=os.path.join(tmpdir, f"optimized-{seed}"),
+        chunk_bytes="1MB",
+        num_workers=0,
+    )
+
+    # Without the fix the draw after `optimize` is the one for `random_seed`, not for `seed`.
+    assert (random.random(), np.random.rand(), torch.rand(1).item()) == pytest.approx(expected)  # noqa: S311
+
+
+def test_optimize_does_not_seed_the_global_generators(tmpdir, monkeypatch):
+    """Only the worker shuffle needs randomness, and it uses a local generator.
+
+    Seeding torch globally would also queue a seed for CUDA / MPS / XPU, which torch applies lazily on first use, so
+    ``optimize`` must not call any of the global seeders.
+    """
+    for target in ("random.seed", "numpy.random.seed", "torch.manual_seed"):
+        monkeypatch.setattr(target, mock.MagicMock(side_effect=AssertionError(f"{target} was called")))
+
+    functions.optimize(
+        fn=_identity_optimize_fn,
+        inputs=list(range(4)),
+        output_dir=os.path.join(tmpdir, "optimized"),
+        chunk_bytes="1MB",
+        num_workers=0,
+        random_seed=7,
+    )
+
+
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weights", "file_sizes"])
+def test_weighted_shuffle_uses_local_rng(tmpdir, monkeypatch, use_weights):
+    """Both weighted branches shuffle with a local generator seeded by ``random_seed``."""
+    input_dir = os.path.join(tmpdir, "inputs")
+    os.makedirs(input_dir)
+    inputs = []
+    for i in range(8):
+        path = os.path.join(input_dir, f"{i}.bin")
+        with open(path, "wb") as f:
+            f.write(b"x" * (i + 1))
+        inputs.append(path)
+
+    class _StopAfterMapping(Exception):
+        pass
+
+    calls = []
+
+    def spy(**kwargs):
+        calls.append((kwargs.get("rng"), _map_items_to_workers_weighted(**kwargs)))
+        raise _StopAfterMapping
+
+    monkeypatch.setattr(data_processor_module, "_map_items_to_workers_weighted", spy)
+
+    for seed in (0, 1):
+        np.random.seed(seed)
+        expected = np.random.rand()
+        np.random.seed(seed)
+
+        data_processor = DataProcessor(
+            input_dir=input_dir,
+            num_workers=2,
+            keep_data_ordered=True,
+            random_seed=7,
+            weights=list(range(1, 9)) if use_weights else None,
+            verbose=False,
+        )
+        with pytest.raises(_StopAfterMapping):
+            data_processor.run(LambdaMapRecipe(_map_copy_fn, inputs))
+
+        assert np.random.rand() == pytest.approx(expected)
+
+    (rng_0, items_0), (rng_1, items_1) = calls
+    assert isinstance(rng_0, np.random.RandomState)
+    assert isinstance(rng_1, np.random.RandomState)
+    # Same ``random_seed`` -> same shuffle, whatever the caller seeded.
+    assert items_0 == items_1
