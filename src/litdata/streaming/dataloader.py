@@ -964,9 +964,10 @@ class StreamingDataLoader(DataLoader):
         if not state_dict:
             return False
 
+        batch_size = self.batch_size or 1
         if isinstance(self.dataset, StreamingDataset):
             current_signature = _streaming_dataset_signature(
-                self.dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size)
+                self.dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=batch_size)
             )
             saved_signature = _streaming_dataset_signature(state_dict)
             return current_signature != saved_signature
@@ -987,7 +988,7 @@ class StreamingDataLoader(DataLoader):
 
             current_signatures = [
                 _streaming_dataset_signature(
-                    dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=self.batch_size)
+                    dataset.state_dict(num_samples_yielded=0, num_workers=self.num_workers, batch_size=batch_size)
                 )
                 for dataset in self.dataset._datasets
             ]
