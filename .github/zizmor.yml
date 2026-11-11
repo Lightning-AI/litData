@@ -1,0 +1,5 @@
+rules:
+  archived-uses:
+    ignore:
+      # pre-commit/mirrors-prettier is archived; keep it until a replacement is chosen
+      - .pre-commit-config.yaml
