@@ -8,6 +8,10 @@ on: # Trigger the workflow on push or pull request, but only for the main branch
     branches: [main]
     paths:
       - ".github/workflows/release-pypi.yml"
+      - "MANIFEST.in"
+      - "setup.py"
+      - "requirements.txt"
+      - "requirements/**"
   release:
     types: [published]
 
@@ -24,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -U -q build twine
+          pip install -U -q build twine pkginfo
           pip list
 
       - name: Build package
@@ -32,6 +36,10 @@ jobs:
 
       - name: Check package
         run: twine check dist/* --strict
+
+      # extras come from requirements/*.txt, which MANIFEST.in must include in the sdist
+      - name: Check wheel declares extras
+        run: pkginfo -f provides_extras dist/*.whl | grep -q "'extras'"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
