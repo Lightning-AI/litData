@@ -40,7 +40,7 @@ def test_train_test_split_floating_point_tolerance(tmpdir):
 
     my_streaming_dataset = StreamingDataset(input_dir=str(tmpdir))
     # Splits whose floating point sum slightly exceeds 1.0 (e.g. 1.0000000000000002)
-    splits = [0.20431995986005078, 0.449058269541666, 0.34662177059828336]
+    splits = [0.1, 0.2, 0.7000000000000002]
     assert sum(splits) > 1.0
     train_ds, val_ds, test_ds = train_test_split(my_streaming_dataset, splits=splits)
     assert len(train_ds) + len(val_ds) + len(test_ds) <= len(my_streaming_dataset)
@@ -48,6 +48,10 @@ def test_train_test_split_floating_point_tolerance(tmpdir):
     # Truly invalid splits exceeding 1 should still raise
     with pytest.raises(ValueError, match="Splits' sum must be less than or equal to 1"):
         train_test_split(my_streaming_dataset, splits=[0.6, 0.5])
+
+    with pytest.raises(ValueError, match="Splits' sum must be less than or equal to 1"):
+        train_test_split(my_streaming_dataset, splits=[0.5, 0.500001])
+
 
 @pytest.mark.parametrize(
     "compression",
