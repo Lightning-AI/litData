@@ -50,7 +50,7 @@ from litdata.streaming.framed_zstd import (
     parse_compression_level,
     parse_framed_header,
 )
-from litdata.streaming.posix_fast import advise_willneed, madvise_mmap, posix_page_bytes
+from litdata.streaming.posix_fast import advise_willneed, madvise_mmap, madvise_mmap_dontneed, posix_page_bytes
 from litdata.streaming.serializers import JsonLeaf, Serializer
 from litdata.utilities._pytree import SUPPORTED_NODES, PyTree, TreeSpec, tree_unflatten
 from litdata.utilities.encryption import Encryption, EncryptionLevel
@@ -510,6 +510,10 @@ class BaseItemLoader(ABC):
         """Enable in-place parallel-FS reads (Vast/NFS). Default loaders ignore this."""
         del keep, willneed
 
+    def set_willneed(self, willneed: bool) -> None:
+        """Toggle ``posix_fadvise(WILLNEED)`` on prefetched chunks. Default loaders ignore this."""
+        del willneed
+
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         """Advise and mmap ``chunk_filepath`` without making it the current item (POSIX-fast)."""
         self.pre_load_chunk(chunk_index, chunk_filepath)
@@ -727,6 +731,10 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap_keep = max(1, keep) if enabled else 1
         self._page_bytes = posix_page_bytes() if enabled else 0
         self._clear_item_page()
+        self._evict_mapped_chunks()
+
+    def set_willneed(self, willneed: bool) -> None:
+        self._posix_willneed = willneed
 
     def _clear_item_page(self) -> None:
         self._page = None
@@ -757,7 +765,7 @@ class PyTreeLoader(BaseItemLoader):
         # Called from PrepareChunksThread. Only advise the page cache — do not
         # mutate mmap state here (the reader thread owns ``_mapped``).
         del chunk_index
-        if os.path.isfile(chunk_filepath) and (self._posix_willneed or not self._posix_fast):
+        if os.path.isfile(chunk_filepath) and self._posix_willneed:
             advise_willneed(chunk_filepath)
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
@@ -1316,6 +1324,7 @@ class PyTreeLoader(BaseItemLoader):
             with contextlib.suppress(OSError):
                 handle.close()
         self._framed_meta.pop(chunk_index, None)
+        madvise_mmap_dontneed(chunk_mmap)
         with contextlib.suppress(BufferError, ValueError, OSError):
             chunk_mmap.close()
 
@@ -1557,6 +1566,10 @@ class TokensLoader(BaseItemLoader):
         self._posix_fast = enabled
         self._posix_willneed = willneed
         self._mmap_keep = max(1, keep) if enabled else 1
+        self._evict_token_mmaps()
+
+    def set_willneed(self, willneed: bool) -> None:
+        self._posix_willneed = willneed
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
         """Page-cache hint only. Mapping every upcoming chunk leaked fds (CI EMFILE)."""
@@ -1575,6 +1588,7 @@ class TokensLoader(BaseItemLoader):
             buf = self._buffers.pop(old_idx, None)
             del buf
             mm = self._mmaps.pop(old_idx)
+            madvise_mmap_dontneed(mm)
             with contextlib.suppress(BufferError, ValueError, OSError):
                 mm._mmap.close()
             self._counter.pop(old_idx, None)

@@ -1,5 +1,7 @@
 import os
 import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -307,6 +309,59 @@ def test_dataloader_no_workers(tmpdir):
     assert len(dataset) == 1000
     assert len(dataloader) == 1000
     assert len(dataset) == 1000
+
+
+def test_streaming_dataloader_keeps_requested_workers(tmpdir, monkeypatch):
+    cache = Cache(input_dir=str(tmpdir), chunk_size=10)
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    dataset.posix_fast = None
+    loader = StreamingDataLoader(dataset, num_workers=8, batch_size=1)
+    assert loader.num_workers == 8
+
+
+def test_streaming_dataloader_caps_prefetch_factor(tmpdir, monkeypatch):
+    cache = Cache(input_dir=str(tmpdir), chunk_size=10)
+    for i in range(20):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+    dataset = StreamingDataset(str(tmpdir))
+    monkeypatch.setattr("litdata.streaming.dataloader.ram_prefetch_factor", lambda requested, **_kw: 1)
+    loader = StreamingDataLoader(dataset, num_workers=4, batch_size=1, prefetch_factor=8)
+    assert loader._prefetch_factor == 1
+
+
+def test_ram_ceiling_disabled_still_refills_drained_queue(monkeypatch):
+    iterator_type = streaming_dataloader_module._StreamingMultiProcessingDataLoaderIter
+    iterator = object.__new__(iterator_type)
+    iterator._loader = SimpleNamespace(restore=False, _ram_batch_bytes=1)
+    iterator._ram_schedule_paused = True
+    iterator._rcvd_idx = iterator._send_idx = iterator._tasks_outstanding = 0
+    iterator._prefetch_factor = iterator._num_workers = 1
+    iterator._shutdown = False
+    iterator._cprofile = None
+    iterator._indexes = []
+
+    monkeypatch.setenv("LITDATA_RAM_WAIT_TIMEOUT", "0")
+    monkeypatch.setattr(streaming_dataloader_module, "ram_pressure_fraction", lambda: 1.0)
+    wait = Mock(side_effect=[0, AssertionError("The disabled RAM ceiling stalled queue refill")])
+    monkeypatch.setattr(streaming_dataloader_module, "wait_for_ram_budget", wait)
+    base_type = streaming_dataloader_module._MultiProcessingDataLoaderIter
+
+    def refill(self):
+        self._send_idx += 1
+
+    monkeypatch.setattr(base_type, "_try_put_index", refill)
+    monkeypatch.setattr(base_type, "_next_data", lambda self: "batch")
+    monkeypatch.setattr(iterator_type, "_shutdown_workers", lambda self: None)
+
+    assert iterator._next_data() == "batch"
+    wait.assert_called_once_with(need_bytes=1)
+    assert iterator._send_idx == 1
 
 
 @pytest.mark.timeout(180)

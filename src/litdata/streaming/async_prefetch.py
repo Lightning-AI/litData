@@ -41,6 +41,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from litdata.streaming.downloader import Downloader, obstore_usable
+from litdata.streaming.posix_fast import ram_prefetch_keep
 
 if TYPE_CHECKING:
     from litdata.streaming.config import ChunksConfig
@@ -119,11 +120,16 @@ def adaptive_pre_download(
     *,
     remote_dir: str | None = None,
     chunks: list | None = None,
+    num_readers: int | None = None,
+    ram_bytes: int | None = None,
 ) -> int:
-    """Floor for async gather, then raise toward unique remote objects within a RAM budget.
+    """Floor for async gather, then raise toward unique remote objects within RAM.
 
     A 36-chunk minipile / 53-chunk food101 scan stalls when only 4–8 slots are
-    in flight. Cap at ``n_chunks`` and ~3GB so 256MB objects stay around 12.
+    in flight. Cap at ``n_chunks`` and ~3GB so 256MB objects stay around 12,
+    then shrink further so ``readers × keep × chunk`` fits
+    ``LITDATA_POSIX_RAM_FRACTION`` of ``MemAvailable`` (SSH/OS headroom).
+    Floor 2: ``max_pre_download == 1`` deadlocks delete-when-processed.
     """
     base = apply_async_pre_download_floor(max_pre_download, remote_dir=remote_dir)
     if not remote_dir or not chunks:
@@ -135,8 +141,16 @@ def adaptive_pre_download(
     mean_b = total / n if n else 0
     if mean_b <= 0:
         return min(n, max(base, 8))
-    by_ram = max(1, int(_PREFETCH_RAM_BUDGET // mean_b))
-    return min(n, _MAX_ADAPTIVE_PRE_DOWNLOAD, max(base, by_ram))
+    by_fixed = max(1, int(_PREFETCH_RAM_BUDGET // mean_b))
+    raised = min(n, _MAX_ADAPTIVE_PRE_DOWNLOAD, max(base, by_fixed))
+    readers = max(1, num_readers or 1)
+    return ram_prefetch_keep(
+        keep=raised,
+        chunk_bytes=int(mean_b),
+        num_readers=readers,
+        ram_bytes=ram_bytes,
+        min_keep=2,
+    )
 
 
 def downloader_supports_aupload(downloader: Downloader | None) -> bool:
