@@ -1,9 +1,10 @@
-torch
+torch >=2.4.0  # minimum supported, see .github/torch-support.json
 torchvision
 lightning-utilities
 filelock
 numpy
 boto3
 requests
+urllib3 >=1.26  # Retry(allowed_methods=...) in streaming/client.py
 tifffile
 obstore

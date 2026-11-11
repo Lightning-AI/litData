@@ -1,0 +1,71 @@
+dataset:
+  # Same strings as StreamingDataset(input_dir=...).
+  index: /tmp/imagenet_spec
+  chunks_dir: null # default: directory that contains index.json
+  compression: none # inferred from filenames
+  resolved:
+    path: "/tmp/imagenet_spec"
+    url: ""
+    data_connection_id: ""
+    index_json: "/tmp/imagenet_spec/index.json"
+  # index.json: 2347 chunks, 1281167 items, 157429800960 bytes
+
+cluster:
+  nodes: 1
+  devices_per_node: 8 # GPUs/ranks per node
+  epochs: 1
+  shuffle: true
+  seed: 42
+  time_per_sample_s: 0.001 # device/GPU time per sample once tensors are ready
+  cpu:
+    decompress_ns_per_byte: 2.0 # 0 = skip (Mosaic-compatible: all process in time_per_sample_s)
+    deserialize_us_per_sample: 1500 # JPEG decode-ish; calibrate from Litracer
+    decompress_workers: 4
+    jitter: lognormal # none | lognormal
+    jitter_sigma: 0.35 # log-space std; p90/p50 ≈ exp(1.28*sigma)
+    calibrate_file: null
+  dataloader:
+    num_workers: 8
+    batch_size: 256
+    prefetch_factor: 2 # batches queued per worker (PyTorch)
+    persistent_workers: false
+    drop_last: true
+
+cache:
+  max_bytes: 200GiB # stream_imagenet.py default max_cache_size
+  max_pre_download: 4 # chunks ahead per worker (not batches)
+  keep_compressed: false
+
+optimize:
+  chunk_bytes: 64MiB # hypothetical pack for tuner (does not rewrite data)
+  use_headers: true
+
+network:
+  bandwidth_bps: 1Gbps # per node
+  rtt_ms: 20
+  max_concurrent_gets: 16
+  extra_latency_ms: 0
+  jitter_ms: 0
+
+rate_limit:
+  enabled: true
+  requests_per_sec: 3500 # cluster-wide token bucket
+  burst: 1000
+  retry_after_s: 1.0
+  max_retries: 8
+  backoff: exponential # none | exponential
+  backoff_base_s: 0.2
+  bytes_per_sec: 0 # 0 = unlimited aggregate
+
+tuner:
+  metric: samples_per_sec # samples_per_sec | stall_frac | time_to_first_batch
+  max_trials: 64
+  search:
+    optimize.chunk_bytes: [16MiB, 32MiB, 64MiB, 128MiB]
+    cache.max_pre_download: [2, 4, 8]
+    cache.max_bytes: [4GiB, 8GiB, 16GiB]
+    cluster.dataloader.num_workers: [2, 4, 8]
+    cluster.dataloader.prefetch_factor: [2, 4]
+    cluster.dataloader.batch_size: [64, 128, 256]
+    network.max_concurrent_gets: [8, 16, 32]
+    rate_limit.requests_per_sec: [500, 1500, 3500]

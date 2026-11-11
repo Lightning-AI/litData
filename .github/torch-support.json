@@ -1,0 +1,6 @@
+{
+  "_comment": "PyTorch support policy. Source of truth for the CI matrix; kept in step with the README and the torch lower bound in requirements.txt by .github/scripts/torch_support.py. Refreshed by .github/workflows/torch-policy.yml.",
+  "latest": "2.14",
+  "previous": "2.13",
+  "minimum": "2.4.0"
+}

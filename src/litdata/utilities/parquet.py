@@ -14,6 +14,11 @@ from urllib import parse
 from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.env import _DistributedEnv
+from litdata.utilities.hf_fs import get_hf_filesystem, hf_relative_name, list_hf_parquet_files, open_hf_parquet
+
+# Re-export for tests / callers that imported the private helpers.
+_hf_relative_name = hf_relative_name
+_list_hf_parquet_files = list_hf_parquet_files
 
 
 class ParquetDir(ABC):
@@ -21,9 +26,12 @@ class ParquetDir(ABC):
         self,
         dir_path: str | Dir | None,
         cache_path: str | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
+        if storage_options is None:
+            storage_options = {}
+
         self.dir = _resolve_dir(dir_path)
         self.cache_path = cache_path
         self.storage_options = storage_options
@@ -75,7 +83,7 @@ class LocalParquetDir(ParquetDir):
         self,
         dir_path: str | Dir | None,
         cache_path: str | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
         if not _PYARROW_AVAILABLE:
@@ -147,7 +155,7 @@ class CloudParquetDir(ParquetDir):
         for provider in _CLOUD_PROVIDER:
             if self.dir.url.startswith(provider):
                 # Initialize the cloud filesystem
-                self.fs = fsspec.filesystem(provider, *self.storage_options)
+                self.fs = fsspec.filesystem(provider, **self.storage_options)
                 print(f"using provider: {provider}")
                 break
 
@@ -242,29 +250,27 @@ class HFParquetDir(ParquetDir):
         assert self.dir.url.startswith("hf"), "Dir url must start with 'hf://'."
         assert self.cache_path is not None, "Cache path is not set."
 
-        # List all files and directories in the top-level of the specified directory
-        from huggingface_hub import HfFileSystem
-
-        self.fs = HfFileSystem()
-
-        for _f in self.fs.ls(self.dir.url, detail=True):
-            if isinstance(_f, dict) and _f["name"].endswith(".parquet"):
-                self.files.append(_f)
+        self.fs = get_hf_filesystem(self.storage_options)
+        self.files = list_hf_parquet_files(self.fs, self.dir.url)
 
     def task(self, _file: dict) -> dict[str, Any]:
         """Extract metadata from a Parquet file on Hugging Face Hub without downloading the entire file."""
         import pyarrow.parquet as pq
 
         # Validate inputs
-        if not isinstance(_file, dict) or "name" not in _file or "size" not in _file:
+        if not isinstance(_file, dict) or "name" not in _file:
             raise ValueError(f"Invalid file object: {_file}")
 
         assert _file["name"].endswith(".parquet")
+        assert self.dir.url is not None
 
-        file_name = os.path.basename(_file["name"])
-        file_size = _file["size"]
+        file_name = hf_relative_name(self.dir.url, _file["name"])
+        file_size = _file.get("size")
 
-        with self.fs.open(_file["name"], "rb") as f:
+        with open_hf_parquet(self.fs, _file["name"]) as f:
+            if not file_size:
+                f.seek(0, 2)
+                file_size = f.tell()
             # Read footer size (last 8 bytes: 4 for footer size + 4 for magic number)
             f.seek(file_size - 8)
             footer_size = int.from_bytes(f.read(4), "little")
@@ -301,7 +307,7 @@ class HFParquetDir(ParquetDir):
 def get_parquet_indexer_cls(
     dir_path: str,
     cache_path: str | None = None,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     num_workers: int = 4,
 ) -> ParquetDir:
     """Get the appropriate ParquetDir class based on the directory path scheme.
@@ -323,7 +329,12 @@ def get_parquet_indexer_cls(
 
     obj = parse.urlparse(dir_path)
 
-    if obj.scheme in ("local", ""):
+    # On Windows, paths like "C:\\Users\\..." parse with scheme='c'. A single-letter
+    # scheme is never a valid URI scheme (RFC 3986 requires >=2 chars) so treat it
+    # as a Windows drive letter and dispatch to LocalParquetDir.
+    is_windows_drive = len(obj.scheme) == 1 and obj.scheme.isalpha()
+
+    if obj.scheme in ("local", "") or is_windows_drive:
         return LocalParquetDir(*args)
     if obj.scheme in ("gs", "s3"):
         return CloudParquetDir(*args)

@@ -14,6 +14,7 @@
 import io
 import json
 import os
+import re
 import tempfile
 import urllib
 from collections.abc import Callable
@@ -25,75 +26,6 @@ from urllib import parse
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
 from litdata.streaming.cache import Dir
 from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provider
-
-
-#! TODO: Not sure what this function is used for.
-def _create_dataset(
-    input_dir: str | None,
-    storage_dir: str,
-    dataset_type: Any,
-    empty: bool | None = None,
-    size: int | None = None,
-    num_bytes: str | None = None,
-    data_format: str | tuple[str] | None = None,
-    compression: str | None = None,
-    num_chunks: int | None = None,
-    num_bytes_per_chunk: list[int] | None = None,
-    name: str | None = None,
-    version: int | None = None,
-) -> None:
-    """Create a dataset with metadata information about its source and destination using the Lightning SDK.
-
-    This function will be called only when:
-        - you're on last node (num_nodes == node_rank + 1)
-        - `output_dir.url` and `output_dir.path` are defined
-        - You're using Lightning Studio
-    """
-    project_id = os.getenv("LIGHTNING_CLOUD_PROJECT_ID", None)
-    cluster_id = os.getenv("LIGHTNING_CLUSTER_ID", None)
-    user_id = os.getenv("LIGHTNING_USER_ID", None)
-    studio_id = os.getenv("LIGHTNING_CLOUD_SPACE_ID", None)
-    lightning_app_id = os.getenv("LIGHTNING_CLOUD_APP_ID", None)
-
-    if project_id is None:
-        return
-
-    if not storage_dir:
-        raise ValueError("The storage_dir should be defined.")
-
-    from lightning_sdk.lightning_cloud.openapi import ProjectIdDatasetsBody
-    from lightning_sdk.lightning_cloud.openapi.rest import ApiException
-    from lightning_sdk.lightning_cloud.rest_client import LightningClient
-
-    client = LightningClient(retry=False)
-
-    try:
-        client.dataset_service_create_dataset(
-            body=ProjectIdDatasetsBody(
-                cloud_space_id=studio_id if lightning_app_id is None else None,
-                cluster_id=cluster_id,
-                creator_id=user_id,
-                empty=empty,
-                input_dir=input_dir,
-                lightning_app_id=lightning_app_id,
-                name=name,
-                size=size,
-                num_bytes=num_bytes,
-                data_format=str(data_format) if data_format else data_format,
-                compression=compression,
-                num_chunks=num_chunks,
-                num_bytes_per_chunk=num_bytes_per_chunk,
-                storage_dir=storage_dir,
-                type=dataset_type,
-                version=version,
-            ),
-            project_id=project_id,
-        )
-    except ApiException as ex:
-        if "already exists" in str(ex.body):
-            pass
-        else:
-            raise ex
 
 
 def get_worker_rank() -> str | None:
@@ -260,6 +192,9 @@ def extract_rank_and_index_from_filename(chunk_filename: str) -> tuple[int, int]
     return rank, index
 
 
+_CHECKPOINT_UUID_PATTERN = re.compile(r"^(.*checkpoint-\d+)-[0-9a-fA-F]{32}\.json$")
+
+
 def remove_uuid_from_filename(filepath: str) -> str:
     """Remove the unique id from the filepath. Expects the filepath to be in the format
     `checkpoint-<rank>-<uuid>.json`.
@@ -268,11 +203,14 @@ def remove_uuid_from_filename(filepath: str) -> str:
         -> `checkpoint-0.json`
 
     """
-    if not filepath.__contains__(".checkpoints"):
+    if ".checkpoints" not in filepath:
         return filepath
 
-    # uuid is of 32 characters, '.json' is 5 characters and '-' is 1 character
-    return filepath[:-38] + ".json"
+    match = _CHECKPOINT_UUID_PATTERN.match(filepath)
+    if match:
+        return match.group(1) + ".json"
+
+    return filepath
 
 
 def construct_storage_options(storage_options: dict[str, Any], input_dir: Dir) -> dict[str, Any]:

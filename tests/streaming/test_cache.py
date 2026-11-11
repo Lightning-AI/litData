@@ -42,6 +42,19 @@ _PIL_AVAILABLE = RequirementCache("PIL")
 _LIGHTNING_AVAILABLE = RequirementCache("lightning")
 
 
+def _image_arrays(original_path, cached_image):
+    """Bare ``*.jpeg`` paths now stream as tensors; compare with the same decoder."""
+    if isinstance(cached_image, torch.Tensor):
+        from litdata.streaming.serializers import ImageSerializer
+
+        with open(original_path, "rb") as handle:
+            return ImageSerializer().deserialize(handle.read()), cached_image
+    from PIL import Image
+    from torchvision.transforms import PILToTensor
+
+    return PILToTensor()(Image.open(original_path)), PILToTensor()(Image.open(cached_image))
+
+
 class ImageDataset(Dataset):
     def __init__(self, tmpdir, cache, size, num_classes):
         from PIL import Image
@@ -69,9 +82,6 @@ class ImageDataset(Dataset):
 
 
 def _cache_for_image_dataset(num_workers, tmpdir, fabric=None):
-    from PIL import Image
-    from torchvision.transforms import PILToTensor
-
     dataset_size = 85
 
     cache_dir = os.path.join(tmpdir, "cache")
@@ -94,8 +104,7 @@ def _cache_for_image_dataset(num_workers, tmpdir, fabric=None):
         cached_data = dataset[i]
         original_data = dataset.data[i]
         assert cached_data["class"] == original_data["class"]
-        original_array = PILToTensor()(Image.open(original_data["image"]))
-        cached_array = PILToTensor()(Image.open(cached_data["image"]))
+        original_array, cached_array = _image_arrays(original_data["image"], cached_data["image"])
         assert torch.equal(original_array, cached_array)
 
     if distributed_env.world_size == 1:
@@ -129,8 +138,7 @@ def _cache_for_image_dataset(num_workers, tmpdir, fabric=None):
         cached_data = streaming_dataset[i]
         original_data = dataset.data[i]
         assert cached_data["class"] == original_data["class"]
-        original_array = PILToTensor()(Image.open(original_data["image"]))
-        cached_array = PILToTensor()(Image.open(cached_data["image"]))
+        original_array, cached_array = _image_arrays(original_data["image"], cached_data["image"])
         assert torch.equal(original_array, cached_array)
 
     streaming_dataset_iter = iter(streaming_dataset)

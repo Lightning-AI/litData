@@ -1,8 +1,10 @@
 pillow
 viztracer
+orjson  # optional Rust JSON for nested / legacy json leaves
 pyarrow
 tqdm
-lightning-sdk==2025.9.30 # Must be pinned to ensure compatibility
+lightning-sdk==2026.2.6 # Must be pinned to ensure compatibility
 google-cloud-storage
 polars
 fsspec
+uvloop; sys_platform != "win32"  # optional faster asyncio loop for StreamingRawDataset

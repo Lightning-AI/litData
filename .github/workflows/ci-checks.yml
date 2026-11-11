@@ -12,35 +12,35 @@ concurrency:
 
 jobs:
   check-typing:
-    uses: Lightning-AI/utilities/.github/workflows/check-typing.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-typing.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       actions-ref: main
 
   check-schema:
-    uses: Lightning-AI/utilities/.github/workflows/check-schema.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-schema.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       azure-dir: ""
 
   check-package:
-    uses: Lightning-AI/utilities/.github/workflows/check-package.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-package.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       actions-ref: main
       import-name: "litdata"
       artifact-name: dist-packages-${{ github.sha }}
       testing-matrix: |
         {
-          "os": ["ubuntu-latest", "macos-14", "windows-latest"],
+          "os": ["ubuntu-24.04", "macos-26", "windows-2025"],
           "python-version": ["3.10", "3.11"]
         }
 
   check-docs:
-    uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       requirements-file: "requirements/docs.txt"
       python-version: "3.10"
 
   check-md-links:
-    uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@main
+    uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       config-file: ".github/markdown-links-config.json"
       base-branch: "main"

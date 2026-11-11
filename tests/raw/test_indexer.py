@@ -5,7 +5,13 @@ import pytest
 
 from litdata import StreamingRawDataset
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14
-from litdata.raw.indexer import _INDEX_FILENAME, FileIndexer, FileMetadata
+from litdata.raw.indexer import (
+    _INDEX_FILENAME,
+    FileIndexer,
+    FileMetadata,
+    _is_windows_drive_scheme,
+    _validate_input_dir_scheme,
+)
 
 
 def test_file_metadata():
@@ -200,6 +206,27 @@ def test_discover_files_unsupported_scheme():
         indexer.discover_files("http://unsupported/path", {})
 
 
+def test_windows_drive_scheme_treated_as_local():
+    r"""urlparse('C:\\\\Users\\\\...') yields scheme='c'; treat as local, not remote."""
+    assert _is_windows_drive_scheme("c")
+    assert _is_windows_drive_scheme("C")
+    assert not _is_windows_drive_scheme("s3")
+    assert not _is_windows_drive_scheme("ftp")
+    assert not _is_windows_drive_scheme("")
+
+    # Same classification urlparse uses for Windows absolute paths (also on Linux).
+    _validate_input_dir_scheme(r"C:\Users\test\dataset")
+    _validate_input_dir_scheme("C:/Users/test/dataset")
+
+    with pytest.raises(ValueError, match="Unsupported input directory scheme: `ftp`"):
+        _validate_input_dir_scheme("ftp://unsupported/path")
+
+    indexer = FileIndexer()
+    with patch.object(indexer, "_discover_local_files", return_value=[]) as mock_local:
+        indexer.discover_files(r"C:\Users\test\dataset", {})
+        mock_local.assert_called_once_with(r"C:\Users\test\dataset")
+
+
 @patch("litdata.raw.indexer.BaseIndexer._upload_to_cloud")
 @patch("litdata.raw.indexer.BaseIndexer._download_from_cloud", side_effect=FileNotFoundError)
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
@@ -315,6 +342,73 @@ def test_recompute_index_excludes_index_file(tmp_path):
     assert len(files) == 2
     for f in files:
         assert _INDEX_FILENAME not in f.path
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_save_index_file_atomic_publish(tmp_path):
+    """_save_index_file writes via tmp + os.replace (no direct open of final path)."""
+    import os
+    from unittest.mock import patch
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    index_path = cache_dir / _INDEX_FILENAME
+    indexer = FileIndexer()
+    files = [FileMetadata(str(tmp_path / "a.bin"), 10)]
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def tracking_replace(src, dst):
+        replace_calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    with patch("os.replace", side_effect=tracking_replace):
+        indexer._save_index_file(str(index_path), files, str(tmp_path))
+
+    assert index_path.exists()
+    assert len(replace_calls) == 1
+    src, dst = replace_calls[0]
+    assert src.endswith(f".tmp.{os.getpid()}")
+    assert dst == str(index_path)
+    assert indexer._load_index_file(str(index_path)) == files
+    # No leftover tmp beside the final index.
+    assert list(cache_dir.glob(f"{_INDEX_FILENAME}.tmp.*")) == []
+
+
+@pytest.mark.skipif(condition=sys.platform == "win32", reason="Not supported on windows")
+def test_download_from_cloud_atomic_publish(tmp_path):
+    """_download_from_cloud stages to tmp then os.replace into the final path."""
+    import os
+    from unittest.mock import MagicMock, patch
+
+    local_path = tmp_path / "cache" / _INDEX_FILENAME
+    local_path.parent.mkdir()
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def tracking_replace(src, dst):
+        replace_calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    def fake_get(remote, dest):
+        with open(dest, "wb") as f:
+            f.write(b"index-bytes")
+
+    mock_fs = MagicMock()
+    mock_fs.get.side_effect = fake_get
+    indexer = FileIndexer()
+    with (
+        patch("fsspec.filesystem", return_value=mock_fs),
+        patch("os.replace", side_effect=tracking_replace),
+    ):
+        indexer._download_from_cloud("s3://bucket/index.json.zstd", str(local_path), {})
+
+    assert local_path.read_bytes() == b"index-bytes"
+    assert len(replace_calls) == 1
+    src, dst = replace_calls[0]
+    assert src.endswith(f".tmp.{os.getpid()}")
+    assert dst == str(local_path)
+    assert list(local_path.parent.glob(f"{_INDEX_FILENAME}.tmp.*")) == []
 
 
 def test_load_index_file_handles_corrupted_zstd(tmp_path):

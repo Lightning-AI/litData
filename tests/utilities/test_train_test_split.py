@@ -148,3 +148,20 @@ def test_train_test_split_with_shuffle_parameter(tmpdir, compression):
     assert shuffled_combined != no_shuffle_combined
 
     assert no_shuffle_combined == my_streaming_dataset.subsampled_files
+
+
+def test_streaming_dataset_subset(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(50):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    ds = StreamingDataset(input_dir=str(tmpdir))
+    sub = ds.subset([0, 1, 2, 10, 49])
+    assert [sub[i] for i in range(len(sub))] == [0, 1, 2, 10, 49]
+
+    sliced = ds.subset(slice(5, 15))
+    assert len(sliced) == 10
+    assert sliced[0] == 5
+    assert sliced[9] == 14

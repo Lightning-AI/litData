@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -15,6 +16,9 @@ from litdata.streaming.downloader import (
     LocalDownloaderWithCache,
     R2Downloader,
     S3Downloader,
+    _indexed_object_bytes,
+    _obstore_credential_provider,
+    _range_parts,
     get_downloader,
     register_downloader,
     shutil,
@@ -25,6 +29,23 @@ from litdata.streaming.downloader import (
 class DummyDownloader(Downloader):
     def download_file(self, remote_path: str, local_path: str) -> None:
         pass
+
+
+def test_range_parts_and_indexed_bytes():
+    assert _range_parts(8 * 1024 * 1024) is None
+    parts = _range_parts(64 * 1024 * 1024)
+    assert parts is not None
+    starts, lengths = parts
+    assert len(starts) == 4
+    assert sum(lengths) == 64 * 1024 * 1024
+    assert starts[0] == 0
+    big = _range_parts(256 * 1024 * 1024)
+    assert big is not None
+    assert len(big[0]) == 8
+    assert sum(big[1]) == 256 * 1024 * 1024
+    chunks = [{"filename": "chunk-0-1.bin", "chunk_bytes": 64 * 1024 * 1024}]
+    assert _indexed_object_bytes(chunks, "/data/chunk-0-1.bin") == 64 * 1024 * 1024
+    assert _indexed_object_bytes(chunks, "missing.bin") == 0
 
 
 def test_register_downloader():
@@ -51,24 +72,37 @@ def test_get_downloader(tmpdir):
     unregister_downloader("dummy://")
 
 
+def _write_download_target(*args, **kwargs):
+    """Side effect for mocked cloud downloads that write to a local path argument."""
+    # boto: (bucket, key, filename, ...); gcp blob: (filename,)
+    path = args[2] if len(args) >= 3 else args[0]
+    with open(path, "wb") as f:
+        f.write(b"ok")
+
+
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_fast(r2_client_mock, tmpdir):
+def test_r2_downloader_fast(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     # Mock the R2Client
     r2_client_instance = MagicMock()
     r2_client_mock.return_value = r2_client_instance
 
     # Mock the download_file method to avoid credential errors
-    r2_client_instance.client.download_file = MagicMock()
+    r2_client_instance.client.download_file = MagicMock(side_effect=_write_download_target)
 
     downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
-    downloader.download_file("r2://random_bucket/a.txt", os.path.join(tmpdir, "a.txt"))
+    local_filepath = os.path.join(tmpdir, "a.txt")
+    downloader.download_file("r2://random_bucket/a.txt", local_filepath)
 
-    # Verify R2Client download_file was called
+    # Verify R2Client download_file was called and the final path was published atomically
     r2_client_instance.client.download_file.assert_called_once()
+    assert os.path.exists(local_filepath)
+    assert r2_client_instance.client.download_file.call_args.args[2].startswith(local_filepath + ".tmp.")
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
+def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     storage_options = {"data_connection_id": "test_connection_id"}
 
     # Mock the R2Client
@@ -76,7 +110,7 @@ def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
     r2_client_mock.return_value = r2_client_instance
 
     # Mock the download_file method to avoid credential errors
-    r2_client_instance.client.download_file = MagicMock()
+    r2_client_instance.client.download_file = MagicMock(side_effect=_write_download_target)
 
     # Initialize the R2Downloader with storage options
     downloader = R2Downloader("r2://random_bucket", str(tmpdir), [], storage_options)
@@ -94,7 +128,8 @@ def test_r2_downloader_with_storage_options(r2_client_mock, tmpdir):
 
 
 @mock.patch("litdata.streaming.downloader.R2Client")
-def test_r2_downloader_error_handling(r2_client_mock, tmpdir):
+def test_r2_downloader_error_handling(r2_client_mock, tmpdir, monkeypatch):
+    monkeypatch.setattr("litdata.streaming.downloader._OBSTORE_AVAILABLE", False)
     # Mock the R2Client to raise an exception
     r2_client_instance = MagicMock()
     r2_client_mock.return_value = r2_client_instance
@@ -116,13 +151,86 @@ def test_r2_downloader_error_handling(r2_client_mock, tmpdir):
     r2_client_instance.client.download_file.assert_called_once()
 
 
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_downloader_download_bytes_reuses_client(r2_client_mock, tmpdir):
+    r2_client_instance = MagicMock()
+    r2_client_mock.return_value = r2_client_instance
+
+    body = MagicMock()
+    body.read.return_value = b"hello"
+    r2_client_instance.client.get_object.return_value = {"Body": body}
+
+    downloader = R2Downloader("r2://random_bucket", str(tmpdir), [])
+
+    assert downloader.download_bytes("r2://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("r2://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    r2_client_mock.assert_called_once_with(storage_options={}, session_options={})
+    assert r2_client_instance.client.get_object.call_args_list == [
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=0-4"),
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=5-9"),
+    ]
+
+
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_downloader_download_bytes_reuses_client(s3_client_mock, tmpdir):
+    s3_client_instance = MagicMock()
+    s3_client_mock.return_value = s3_client_instance
+
+    body = MagicMock()
+    body.read.return_value = b"hello"
+    s3_client_instance.client.get_object.return_value = {"Body": body}
+
+    downloader = S3Downloader("s3://random_bucket", str(tmpdir), [])
+    # __init__ already creates _client; download_bytes must not recreate it.
+    assert hasattr(downloader, "_client")
+    client_id = id(downloader._client)
+
+    assert downloader.download_bytes("s3://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("s3://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    assert id(downloader._client) == client_id
+    s3_client_mock.assert_called_once_with(storage_options={}, session_options={})
+    assert s3_client_instance.client.get_object.call_args_list == [
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=0-4"),
+        mock.call(Bucket="random_bucket", Key="a.txt", Range="bytes=5-9"),
+    ]
+
+
+@mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
+def test_gcp_downloader_download_bytes_reuses_client(tmpdir, google_mock):
+    mock_client = MagicMock()
+    mock_bucket = MagicMock()
+    mock_blob = MagicMock()
+    mock_blob.download_as_bytes.return_value = b"hello"
+
+    google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
+    mock_client.bucket = MagicMock(return_value=mock_bucket)
+    mock_bucket.blob = MagicMock(return_value=mock_blob)
+
+    downloader = GCPDownloader("gs://random_bucket", str(tmpdir), [], {"project": "p"})
+    assert downloader.download_bytes("gs://random_bucket/a.txt", 0, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+    assert downloader.download_bytes("gs://random_bucket/a.txt", 5, 5, os.path.join(tmpdir, "a.txt")) == b"hello"
+
+    google_mock.cloud.storage.Client.assert_called_once_with(project="p")
+    assert mock_blob.download_as_bytes.call_args_list == [
+        mock.call(start=0, end=4),
+        mock.call(start=5, end=9),
+    ]
+
+
 @mock.patch("litdata.streaming.downloader._GOOGLE_STORAGE_AVAILABLE", True)
 def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     # Create mock objects
     mock_client = MagicMock()
     mock_bucket = MagicMock()
     mock_blob = MagicMock()
-    mock_blob.download_to_filename = MagicMock()
+
+    def _write_ok(path: str) -> None:
+        with open(path, "wb") as f:
+            f.write(b"ok")
+
+    mock_blob.download_to_filename = MagicMock(side_effect=_write_ok)
 
     # Patch the storage client to return the mock client
     google_mock.cloud.storage.Client = MagicMock(return_value=mock_client)
@@ -141,7 +249,8 @@ def test_gcp_downloader(tmpdir, monkeypatch, google_mock):
     google_mock.cloud.storage.Client.assert_called_with(**storage_options)
     mock_client.bucket.assert_called_with("random_bucket")
     mock_bucket.blob.assert_called_with("a.txt")
-    mock_blob.download_to_filename.assert_called_with(local_filepath)
+    assert mock_blob.download_to_filename.call_args.args[0].startswith(local_filepath + ".tmp.")
+    assert os.path.exists(local_filepath)
 
 
 @mock.patch("litdata.streaming.downloader._AZURE_STORAGE_AVAILABLE", True)
@@ -175,13 +284,13 @@ def test_download_with_cache(tmpdir, monkeypatch):
     try:
         local_downloader = LocalDownloaderWithCache(tmpdir, tmpdir, [])
         shutil_mock = MagicMock()
-        os_mock = MagicMock()
+        replace_mock = MagicMock()
         monkeypatch.setattr(shutil, "copy", shutil_mock)
-        monkeypatch.setattr(os, "rename", os_mock)
+        monkeypatch.setattr(os, "replace", replace_mock)
 
         local_downloader.download_file("local:a.txt", os.path.join(tmpdir, "a.txt"))
         shutil_mock.assert_called()
-        os_mock.assert_called()
+        replace_mock.assert_called()
     finally:
         os.remove("a.txt")
 
@@ -219,6 +328,24 @@ def test_hf_downloader(tmpdir, huggingface_hub_mock):
 
     # Verify that hf_hub_download was not called
     mock_hf_hub_download.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
+def test_hf_downloader_revision(tmpdir, huggingface_hub_mock):
+    mock_hf_hub_download = MagicMock(return_value=os.path.join(tmpdir, "0000.parquet"))
+    huggingface_hub_mock.hf_hub_download = mock_hf_hub_download
+    downloader = HFDownloader("hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet", tmpdir, [], {})
+    local_filepath = os.path.join(tmpdir, "default", "train", "0000.parquet")
+    downloader.download_file(
+        "hf://datasets/yahma/alpaca-cleaned@refs/convert/parquet/default/train/0000.parquet",
+        local_filepath,
+    )
+    kwargs = huggingface_hub_mock.hf_hub_download.call_args.kwargs
+    args = huggingface_hub_mock.hf_hub_download.call_args.args
+    assert args[0] == "yahma/alpaca-cleaned"
+    assert args[1] == "default/train/0000.parquet"
+    assert kwargs["revision"] == "refs/convert/parquet"
+    assert kwargs["repo_type"] == "dataset"
 
 
 # Test cases for download_fileobj method
@@ -346,3 +473,529 @@ async def test_azure_downloader_adownload_fileobj(obstore_mock):
         assert isinstance(result, bytes)
         for chunk in stream_mock:
             assert chunk in result
+
+
+class _AsyncChunkStream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    def __aiter__(self) -> "_AsyncChunkStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_s3_adownload_file_streams_chunks_to_disk(obstore_mock, tmpdir):
+    with mock.patch("litdata.streaming.downloader.S3Downloader._get_store") as get_store_mock:
+        get_store_mock.return_value = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.bytes_async = mock.AsyncMock(side_effect=AssertionError("use stream, not bytes_async"))
+        resp_mock.stream = lambda min_chunk_size=None: _AsyncChunkStream([b"chunk1", b"chunk2"])
+        obstore_mock.get_async = mock.AsyncMock(return_value=resp_mock)
+        dest = os.path.join(str(tmpdir), "out.bin")
+        downloader = S3Downloader("s3://bucket", "", [])
+        await downloader.adownload_file("s3://bucket/file.txt", dest)
+        with open(dest, "rb") as f:
+            assert f.read() == b"chunk1chunk2"
+        resp_mock.bytes_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+@mock.patch("litdata.streaming.downloader._OBSTORE_AVAILABLE", True)
+async def test_s3_aupload_file_uses_put_async(obstore_mock, tmpdir):
+    src = os.path.join(str(tmpdir), "in.bin")
+    with open(src, "wb") as handle:
+        handle.write(b"payload")
+    with mock.patch("litdata.streaming.downloader.S3Downloader._get_store") as get_store_mock:
+        store = MagicMock()
+        get_store_mock.return_value = store
+        obstore_mock.put_async = mock.AsyncMock()
+        downloader = S3Downloader("s3://bucket", "", [])
+        await downloader.aupload_file(src, "s3://bucket/file.txt")
+        obstore_mock.put_async.assert_awaited()
+        args, _kwargs = obstore_mock.put_async.await_args
+        assert args[0] is store
+        assert args[1] == "file.txt"
+        streamed = b"".join([chunk async for chunk in args[2]])
+        assert streamed == b"payload"
+
+
+@pytest.mark.asyncio
+async def test_obstore_aiter_file_chunks_matches_download_chunk_size(tmpdir, monkeypatch):
+    from litdata.streaming.downloader import _obstore_aiter_file_chunks
+
+    monkeypatch.setenv("LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB", "1")
+    src = os.path.join(str(tmpdir), "in.bin")
+    payload = b"a" * (1024 * 1024 + 10)
+    with open(src, "wb") as handle:
+        handle.write(payload)
+    chunks = [chunk async for chunk in _obstore_aiter_file_chunks(src)]
+    assert [len(chunk) for chunk in chunks] == [1024 * 1024, 10]
+    assert b"".join(chunks) == payload
+
+
+def test_write_obstore_chunk_bytes_like_and_bytes_fallback():
+    from litdata.streaming.downloader import _write_obstore_chunk
+
+    fileobj = io.BytesIO()
+    _write_obstore_chunk(fileobj, b"ab")
+    _write_obstore_chunk(fileobj, bytearray(b"cd"))
+    _write_obstore_chunk(fileobj, memoryview(b"ef"))
+
+    class OnlyBytes:
+        def __bytes__(self) -> bytes:
+            return b"gh"
+
+    _write_obstore_chunk(fileobj, OnlyBytes())
+    assert fileobj.getvalue() == b"abcdefgh"
+
+
+def _fake_boto_s3_client(access_key="AKIATEST", secret_key="", token="", endpoint=None, region="us-east-1"):
+    frozen = MagicMock()
+    frozen.access_key = access_key
+    frozen.secret_key = secret_key or "test-secret"
+    frozen.token = token or "tok"
+    creds = MagicMock()
+    creds.get_frozen_credentials.return_value = frozen
+    client = MagicMock()
+    client._get_credentials.return_value = creds
+    client.meta.endpoint_url = endpoint
+    client.meta.region_name = region
+    client.meta.config.s3 = {}
+    return client
+
+
+def test_build_obstore_s3_store_does_not_pass_data_connection_id_to_session(monkeypatch):
+    """storage_options['data_connection_id'] must not be forwarded to boto3.Session (async prefetch crash)."""
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured: dict = {}
+
+    def fake_s3store(bucket, **kwargs):
+        captured["bucket"] = bucket
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_s3store)
+
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(
+        endpoint="https://abc.r2.cloudflarestorage.com",
+        region="auto",
+    )
+    store = _build_obstore_s3_store("my-bucket", wrapper)
+    assert store is not None
+    assert captured["bucket"] == "my-bucket"
+    config = captured["kwargs"]["config"]
+    assert config["endpoint"] == "https://abc.r2.cloudflarestorage.com"
+    assert config["region"] == "auto"
+    assert config["virtual_hosted_style_request"] is False
+    assert "data_connection_id" not in config
+    creds = captured["kwargs"]["credential_provider"]()
+    assert creds["access_key_id"] == "AKIATEST"
+    assert creds["secret_access_key"] == "test-secret"
+    assert creds["token"] == "tok"
+
+
+def test_build_obstore_s3_store_keeps_virtual_host_for_aws(monkeypatch):
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured: dict = {}
+
+    def fake_s3store(bucket, **kwargs):
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_s3store)
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(endpoint="https://s3.us-west-2.amazonaws.com", region="us-west-2")
+    _build_obstore_s3_store("bucket", wrapper)
+    config = captured["kwargs"]["config"]
+    assert "virtual_hosted_style_request" not in config
+    assert config["endpoint"] == "https://s3.us-west-2.amazonaws.com"
+
+
+def test_s3_get_store_uses_s3_client_not_raw_storage_options(monkeypatch, tmpdir):
+    """S3Downloader._get_store must go through S3Client so data_connection_id is not passed to Session."""
+    from litdata.streaming import downloader as downloader_mod
+
+    fake_store = MagicMock()
+    monkeypatch.setattr(downloader_mod, "_build_obstore_s3_store", lambda bucket, client: fake_store)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+
+    storage_options = {"data_connection_id": "conn-1", "endpoint_url": "https://custom.example"}
+    dl = S3Downloader("s3://bucket", str(tmpdir), [], storage_options)
+    store = dl._get_store("bucket")
+    assert store is fake_store
+    # Second call reuses the cached store.
+    assert dl._get_store("bucket") is fake_store
+
+
+def test_r2_get_store_uses_r2_client_not_raw_storage_options(monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    fake_store = MagicMock()
+    monkeypatch.setattr(downloader_mod, "_build_obstore_s3_store", lambda bucket, client: fake_store)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+
+    storage_options = {"data_connection_id": "conn-r2"}
+    dl = R2Downloader("r2://bucket", str(tmpdir), [], storage_options)
+    assert dl._get_store("bucket") is fake_store
+
+
+def test_obstore_usable_false_after_parent_init(monkeypatch):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+    assert downloader_mod.obstore_usable() is False
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+    assert downloader_mod.obstore_usable() is True
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid())
+    assert downloader_mod.obstore_usable() is True
+
+
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_index_download_does_not_start_obstore(s3_client_mock, monkeypatch, tmpdir):
+    """Parent index fetch must not start tokio, so forked workers can lazy-init obstore."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("index.json must not start obstore"))
+    monkeypatch.setattr(S3Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    s3_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = S3Downloader("s3://bucket/data", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "index.json")
+    downloader.download_file("s3://bucket/data/index.json", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+    assert downloader_mod._OBSTORE_INIT_PID is None
+
+
+@mock.patch("litdata.streaming.downloader.S3Client")
+def test_s3_download_file_falls_back_to_boto3_after_fork(s3_client_mock, monkeypatch, tmpdir):
+    """Parent already initialized obstore; forked workers must use boto3 or GETs hang."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("obstore must not run after fork"))
+    monkeypatch.setattr(S3Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    s3_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "chunk.bin")
+    downloader.download_file("s3://bucket/chunk.bin", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+
+
+def test_s3_get_store_raises_after_fork(monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    downloader._store = MagicMock()
+    downloader._store_pid = os.getpid() + 1
+    with pytest.raises(RuntimeError, match="fork-safe"):
+        downloader._get_store("bucket")
+    assert not hasattr(downloader, "_store")
+
+
+def test_s3_downloader_pickle_drops_obstore_store(tmpdir):
+    import pickle
+
+    downloader = S3Downloader("s3://bucket", str(tmpdir), [])
+    downloader._store = MagicMock()
+    downloader._store_pid = os.getpid()
+    restored = pickle.loads(pickle.dumps(downloader))  # noqa: S301
+    assert not hasattr(restored, "_store")
+    assert not hasattr(restored, "_store_pid")
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_index_download_does_not_start_obstore(r2_client_mock, monkeypatch, tmpdir):
+    """Parent index fetch must not start tokio, so forked workers can lazy-init obstore."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("index.json must not start obstore"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = R2Downloader("r2://bucket/data", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "index.json")
+    downloader.download_file("r2://bucket/data/index.json", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+    assert downloader_mod._OBSTORE_INIT_PID is None
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_download_file_falls_back_to_boto3_after_fork(r2_client_mock, monkeypatch, tmpdir):
+    """Parent already initialized obstore; forked workers must use boto3 or GETs hang."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", os.getpid() + 1)
+
+    get_store = mock.MagicMock(side_effect=AssertionError("obstore must not run after fork"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.download_file = MagicMock(side_effect=_write_download_target)
+
+    downloader = R2Downloader("r2://bucket", str(tmpdir), [])
+    local_filepath = os.path.join(tmpdir, "chunk.bin")
+    downloader.download_file("r2://bucket/chunk.bin", local_filepath)
+
+    assert os.path.exists(local_filepath)
+    client.client.download_file.assert_called_once()
+    get_store.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_chunk_download_uses_obstore(r2_client_mock, monkeypatch, tmpdir):
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_INIT_PID", None)
+
+    resp = MagicMock()
+    resp.stream = MagicMock(return_value=iter([b"chunk-bytes"]))
+    obs = MagicMock()
+    obs.get.return_value = resp
+    monkeypatch.setitem(__import__("sys").modules, "obstore", obs)
+    monkeypatch.setattr(R2Downloader, "_get_store", MagicMock(return_value="store"))
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+
+    dest = os.path.join(tmpdir, "chunk.bin")
+    R2Downloader("r2://bucket", str(tmpdir), []).download_file("r2://bucket/chunk.bin", dest)
+
+    assert os.path.exists(dest)
+    with open(dest, "rb") as handle:
+        assert handle.read() == b"chunk-bytes"
+    obs.get.assert_called_once()
+    client.client.download_file.assert_not_called()
+
+
+@mock.patch("litdata.streaming.downloader.R2Client")
+def test_r2_tiny_chunk_uses_get_object(r2_client_mock, monkeypatch, tmpdir):
+    """Sub-8MB indexed chunks skip TransferManager/obstore (sst2-sized TTFB)."""
+    from litdata.streaming import downloader as downloader_mod
+
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", True)
+    get_store = mock.MagicMock(side_effect=AssertionError("tiny chunk must not start obstore"))
+    monkeypatch.setattr(R2Downloader, "_get_store", get_store)
+
+    client = MagicMock()
+    r2_client_mock.return_value = client
+    client.client.get_object.return_value = {"Body": io.BytesIO(b"tiny-bytes")}
+
+    dest = os.path.join(tmpdir, "chunk-0-0.zstd.bin")
+    chunks = [{"filename": "chunk-0-0.zstd.bin", "chunk_bytes": 940000, "chunk_size": 6920}]
+    R2Downloader("r2://bucket", str(tmpdir), chunks).download_file("r2://bucket/chunk-0-0.zstd.bin", dest)
+
+    assert os.path.exists(dest)
+    with open(dest, "rb") as handle:
+        assert handle.read() == b"tiny-bytes"
+    client.client.get_object.assert_called_once_with(Bucket="bucket", Key="chunk-0-0.zstd.bin")
+    client.client.download_file.assert_not_called()
+    get_store.assert_not_called()
+
+
+def test_obstore_credential_provider_reports_the_client_refresh_time():
+    """Obstore must be told when the client rolls over, not a flat guess from now.
+
+    It caches what the provider hands back until ``expires_at``, so a guess that outlives
+    credentials read off a warm client leaves it signing with ones already dead.
+    """
+    rolls_over_at = datetime.now(timezone.utc) + timedelta(minutes=4)
+
+    s3_client = MagicMock()
+    s3_client.next_refresh_time.return_value = rolls_over_at
+    frozen = s3_client.client._get_credentials.return_value.get_frozen_credentials.return_value
+    frozen.access_key = "AKIATEST"
+    frozen.secret_key = "secret"
+    frozen.token = "token"
+
+    credentials = _obstore_credential_provider(s3_client)()
+
+    assert credentials["access_key_id"] == "AKIATEST"
+    assert credentials["expires_at"] == rolls_over_at
+    s3_client.next_refresh_time.assert_called_once_with()
+
+
+def test_obstore_credential_provider_rejects_incomplete_credentials():
+    s3_client = MagicMock()
+    frozen = s3_client.client._get_credentials.return_value.get_frozen_credentials.return_value
+    frozen.access_key = None
+    frozen.secret_key = "secret"
+
+    with pytest.raises(ValueError, match="incomplete credentials"):
+        _obstore_credential_provider(s3_client)()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_range_response_body_is_closed_even_on_failure(cls, scheme, tmp_path):
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    body = MagicMock()
+    downloader._client = MagicMock()
+    downloader._client.client.get_object.return_value = {"Body": body}
+    body.read.side_effect = OSError("interrupted body")
+    with pytest.raises(OSError, match="interrupted body"):
+        downloader.download_bytes(f"{scheme}://bucket/data", 2, 3, str(tmp_path / "scratch"))
+    body.close.assert_called_once()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_async_native_range_validation_and_cancellation(cls, scheme, tmp_path, monkeypatch, obstore_mock):
+    import asyncio
+
+    import litdata.streaming.downloader as mod
+
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    store = MagicMock()
+    monkeypatch.setattr(downloader, "_get_store", MagicMock(return_value=store))
+    monkeypatch.setattr(mod, "_OBSTORE_AVAILABLE", True)
+    monkeypatch.setattr(mod, "obstore_usable", lambda: True)
+    obstore_mock.get_range_async = mock.AsyncMock(return_value=b"abc")
+    path = f"{scheme}://bucket/data"
+    scratch = str(tmp_path / "scratch")
+
+    async def run():
+        assert await downloader.adownload_bytes(path, 2, 3, scratch) == b"abc"
+        obstore_mock.get_range_async.assert_awaited_once_with(store, "data", start=2, length=3)
+        assert await downloader.adownload_bytes(path, 0, 0, scratch) == b""
+        assert obstore_mock.get_range_async.await_count == 1
+        for offset, length in [(-1, 3), (0, -1)]:
+            with pytest.raises(ValueError, match="non-negative"):
+                await downloader.adownload_bytes(path, offset, length, scratch)
+        with pytest.raises(ValueError, match="scheme"):
+            await downloader.adownload_bytes("gs://bucket/data", 0, 3, scratch)
+        obstore_mock.get_range_async.return_value = b"ab"
+        with pytest.raises(OSError, match="Short range read"):
+            await downloader.adownload_bytes(path, 2, 3, scratch)
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def stalled(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        obstore_mock.get_range_async.side_effect = stalled
+        task = asyncio.create_task(downloader.adownload_bytes(path, 2, 3, scratch))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stopped.is_set()
+
+    asyncio.run(run())
+    assert not (tmp_path / "scratch").exists()
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+@pytest.mark.parametrize("native_available", [False, True])
+def test_async_range_falls_back_without_native_or_after_fork(cls, scheme, native_available, monkeypatch, tmp_path):
+    import asyncio
+
+    import litdata.streaming.downloader as mod
+
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    monkeypatch.setattr(mod, "_OBSTORE_AVAILABLE", native_available)
+    monkeypatch.setattr(mod, "obstore_usable", lambda: False)
+    downloader._get_store = MagicMock(side_effect=AssertionError("must not initialize native runtime"))
+    downloader._client = MagicMock()
+    body = io.BytesIO(b"abc")
+    sdk = downloader._client.client
+    sdk.get_object.return_value = {"Body": body}
+    assert asyncio.run(downloader.adownload_bytes(f"{scheme}://bucket/data", 2, 3, "unused")) == b"abc"
+    sdk.get_object.assert_called_once_with(Bucket="bucket", Key="data", Range="bytes=2-4")
+    assert body.closed
+
+
+def test_async_range_base_fallback_validates_and_caches(tmp_path):
+    import asyncio
+
+    class CopyDownloader(Downloader):
+        def download_file(self, remote_path, local_path):
+            with open(local_path, "wb") as handle:
+                handle.write(b"012345")
+
+    downloader = CopyDownloader("custom://bucket", str(tmp_path), [])
+    target = str(tmp_path / "cached")
+    assert asyncio.run(downloader.adownload_bytes("custom://bucket/data", 2, 3, target)) == b"234"
+    with pytest.raises(OSError, match="Short range read"):
+        asyncio.run(downloader.adownload_bytes("custom://bucket/data", 5, 2, target))
+
+
+@pytest.mark.parametrize(("cls", "scheme"), [(S3Downloader, "s3"), (R2Downloader, "r2")])
+def test_sync_range_validates_and_closes_short_responses(cls, scheme, tmp_path):
+    downloader = cls(f"{scheme}://bucket", str(tmp_path), [])
+    downloader._client = MagicMock()
+    sdk = downloader._client.client
+    path = f"{scheme}://bucket/data"
+    assert downloader.download_bytes(path, 0, 0, "unused") == b""
+    with pytest.raises(ValueError, match="non-negative"):
+        downloader.download_bytes(path, -1, 2, "unused")
+    sdk.get_object.assert_not_called()
+    body = io.BytesIO(b"ab")
+    sdk.get_object.return_value = {"Body": body}
+    with pytest.raises(OSError, match="Short range read"):
+        downloader.download_bytes(path, 0, 3, "unused")
+    assert body.closed
+
+
+def test_native_ranges_preserve_s3_acceleration(monkeypatch):
+    from litdata.streaming.downloader import _build_obstore_s3_store
+
+    captured = {}
+
+    def fake_store(bucket, **kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr("obstore.store.S3Store", fake_store)
+    wrapper = MagicMock()
+    wrapper.client = _fake_boto_s3_client(endpoint="https://s3.us-west-2.amazonaws.com", region="us-west-2")
+    wrapper.client.meta.config.s3 = {"use_accelerate_endpoint": True}
+    _build_obstore_s3_store("bucket", wrapper)
+    assert captured["config"]["endpoint"] == "https://bucket.s3-accelerate.amazonaws.com"
+    assert captured["config"]["virtual_hosted_style_request"] is True

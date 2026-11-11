@@ -120,3 +120,5 @@ status.json
 
 # use the below name for your optimize dataset directory for examples
 example_optimize_dataset
+
+uv.lock

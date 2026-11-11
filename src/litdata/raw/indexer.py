@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import json
 import logging
 import os
@@ -26,6 +27,29 @@ from litdata.constants import _FSSPEC_AVAILABLE, _PYTHON_GREATER_EQUAL_3_14, _TQ
 logger = logging.getLogger(__name__)
 _SUPPORTED_PROVIDERS = ("s3", "gs", "azure")
 _INDEX_FILENAME = "index.json.zstd"
+# Warn once per process when remote index upload is denied (read-only creds).
+_UPLOAD_DENIED_WARNED_PIDS: set[int] = set()
+
+
+def _is_windows_drive_scheme(scheme: str) -> bool:
+    r"""True when ``urlparse`` mistook a Windows drive letter for a URI scheme.
+
+    Paths like ``C:\\Users\\...`` parse with ``scheme='c'``. A single-letter scheme is
+    never a valid URI scheme (RFC 3986 requires >=2 chars), so treat it as local.
+    """
+    return len(scheme) == 1 and scheme.isalpha()
+
+
+def _validate_input_dir_scheme(input_dir: str) -> None:
+    """Raise if ``input_dir`` uses an unsupported remote scheme.
+
+    Local paths (including Windows drive letters) are allowed.
+    """
+    scheme = urlparse(input_dir).scheme
+    if scheme and not _is_windows_drive_scheme(scheme) and scheme not in _SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"Unsupported input directory scheme: `{scheme}`. Supported schemes are: {_SUPPORTED_PROVIDERS}"
+        )
 
 
 @dataclass
@@ -80,12 +104,7 @@ class BaseIndexer(ABC):
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
 
-        parsed_url = urlparse(input_dir)
-        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
-                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
-            )
+        _validate_input_dir_scheme(input_dir)
 
         if not recompute_index:
             files = self._load_index_from_cache(input_dir, cache_dir, storage_options)
@@ -125,7 +144,13 @@ class BaseIndexer(ABC):
     def _build_and_cache_index(
         self, input_dir: str, cache_dir: str, storage_options: dict[str, Any] | None
     ) -> list[FileMetadata]:
-        """Builds a new index and caches it locally and remotely."""
+        """Build a new index and cache it locally and remotely.
+
+        By default the index is also uploaded into the dataset's input bucket
+        (``input_dir/index.json.zstd``). That requires write credentials on the
+        source bucket; read-only credentials log a warning and continue with the
+        local cache only.
+        """
         local_index_path = Path(cache_dir) / _INDEX_FILENAME
         logger.info(f"Building index for {input_dir} at {local_index_path}")
         files = self.discover_files(input_dir, storage_options)
@@ -134,13 +159,22 @@ class BaseIndexer(ABC):
 
         self._save_index_file(str(local_index_path), files, input_dir)
 
-        # Upload to remote cache
+        # Upload to remote cache (source bucket by default — needs write creds).
         remote_index_path = os.path.join(input_dir, _INDEX_FILENAME)
         try:
             self._upload_to_cloud(str(local_index_path), remote_index_path, storage_options)
             logger.info(f"Uploaded index to remote cache: {remote_index_path}")
         except Exception as e:
-            logger.warning(f"Failed to upload index to remote cache: {e}")
+            pid = os.getpid()
+            if pid not in _UPLOAD_DENIED_WARNED_PIDS:
+                _UPLOAD_DENIED_WARNED_PIDS.add(pid)
+                logger.warning(
+                    "Failed to upload index to remote cache (continuing with local index; "
+                    "further upload failures in this process are silent): %s",
+                    e,
+                )
+            else:
+                logger.info("Failed to upload index to remote cache: %s", e)
 
         logger.info(f"Built index with {len(files)} files from {input_dir} at {local_index_path}")
         return files
@@ -164,7 +198,7 @@ class BaseIndexer(ABC):
             return None
 
     def _save_index_file(self, index_path: str, files: list[FileMetadata], source: str) -> None:
-        """Encodes and saves an index file."""
+        """Encode and atomically publish an index file (tmp + ``os.replace``)."""
         if _PYTHON_GREATER_EQUAL_3_14:
             from compression import zstd
             from compression.zstd import ZstdError
@@ -172,16 +206,22 @@ class BaseIndexer(ABC):
             import zstd
             from zstd import Error as ZstdError
 
+        tmp_path = f"{index_path}.tmp.{os.getpid()}"
         try:
             metadata = {
                 "source": source,
                 "files": [file.to_dict() for file in files],
                 "created_at": time.time(),
             }
-            with open(index_path, "wb") as f:
+            os.makedirs(os.path.dirname(index_path) or ".", exist_ok=True)
+            with open(tmp_path, "wb") as f:
                 f.write(zstd.compress(json.dumps(metadata).encode("utf-8")))
+            os.replace(tmp_path, index_path)
         except (OSError, ZstdError) as e:
             logger.warning(f"Error caching index to {index_path}: {e}")
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
 
     def _download_from_cloud(
         self,
@@ -189,14 +229,21 @@ class BaseIndexer(ABC):
         local_path: str,
         storage_options: dict[str, Any] | None,
     ) -> None:
-        """Downloads a file from cloud storage."""
+        """Download a file from cloud storage via tmp + ``os.replace`` (atomic publish)."""
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(str(_FSSPEC_AVAILABLE))
         import fsspec
 
         parsed_url = urlparse(remote_path)
         fs = fsspec.filesystem(parsed_url.scheme, **(storage_options or {}))
-        fs.get(remote_path, local_path)
+        tmp_path = f"{local_path}.tmp.{os.getpid()}"
+        try:
+            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+            fs.get(remote_path, tmp_path)
+            os.replace(tmp_path, local_path)
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
 
     def _upload_to_cloud(
         self,
@@ -227,13 +274,10 @@ class FileIndexer(BaseIndexer):
 
     def discover_files(self, input_dir: str, storage_options: dict[str, Any] | None) -> list[FileMetadata]:
         """Discover dataset files and return their metadata."""
-        parsed_url = urlparse(input_dir)
-        if parsed_url.scheme and parsed_url.scheme not in _SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported input directory scheme: `{parsed_url.scheme}`. "
-                f"Supported schemes are: {_SUPPORTED_PROVIDERS}"
-            )
+        _validate_input_dir_scheme(input_dir)
 
+        parsed_url = urlparse(input_dir)
+        # Windows drive letters parse as single-letter schemes; treat those as local.
         if parsed_url.scheme in _SUPPORTED_PROVIDERS:  # Cloud storage
             return self._discover_cloud_files(input_dir, storage_options)
 

@@ -94,6 +94,16 @@ from typing import (
 
 from litdata.constants import _PIL_AVAILABLE
 
+if _PIL_AVAILABLE:
+    from PIL.JpegImagePlugin import JpegImageFile as _JpegImageFile
+else:
+    _JpegImageFile = None  # type: ignore[misc, assignment]
+
+# Scalars and buffers that dominate StreamingDataset samples. Skip namedtuple / JPEG probes.
+_FAST_LEAF_TYPES: FrozenSet[type] = frozenset(
+    {int, float, str, bool, bytes, bytearray, type(None), complex},
+)
+
 __all__ = [
     "PyTree",
     "Context",
@@ -685,21 +695,30 @@ def _is_namedtuple_instance(tree: Any) -> bool:
     return all(type(entry) == str for entry in fields)
 
 def _is_jpeg_array(tree: Any) -> bool:
-    """Check if the tree is a list of jpeg images."""
-    if not _PIL_AVAILABLE:
-            return False
+    """True when ``tree`` is a non-empty list/tuple of PIL JPEG images."""
+    typ = type(tree)
+    if typ is not list and typ is not tuple:
+        return False
+    if not tree or _JpegImageFile is None:
+        return False
+    return all(isinstance(x, _JpegImageFile) for x in tree)
 
-    from PIL.JpegImagePlugin import JpegImageFile
-    return isinstance(tree, (List,Tuple)) and bool(tree) and all(isinstance(x, JpegImageFile) for x in tree)
 
 def _get_node_type(tree: Any) -> Any:
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        return typ
+    # Registered containers: namedtuple instances are a *subclass* of tuple, so
+    # ``type(point) is tuple`` is never true — only probe JPEG lists/tuples here.
+    if typ in SUPPORTED_NODES:
+        if (typ is list or typ is tuple) and _is_jpeg_array(tree):
+            return "jpeg_array"
+        return typ
     if _is_namedtuple_instance(tree):
         return namedtuple
-
     if _is_jpeg_array(tree):
         return "jpeg_array"
-
-    return type(tree)
+    return typ
 
 
 # A leaf is defined as anything that is not a Node.
@@ -868,11 +887,17 @@ def _tree_flatten_helper(
     leaves: List[Any],
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> TreeSpec:
-    if _is_leaf(tree, is_leaf=is_leaf):
+    if is_leaf is not None and is_leaf(tree):
         leaves.append(tree)
         return _LEAF_SPEC
-
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        leaves.append(tree)
+        return _LEAF_SPEC
     node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        leaves.append(tree)
+        return _LEAF_SPEC
     flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
     child_pytrees, context = flatten_fn(tree)
 
@@ -911,16 +936,47 @@ def tree_iter(
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> Iterable[Any]:
     """Get an iterator over the leaves of a pytree."""
-    if _is_leaf(tree, is_leaf=is_leaf):
+    if is_leaf is not None and is_leaf(tree):
         yield tree
-    else:
-        node_type = _get_node_type(tree)
-        flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
-        child_pytrees, _ = flatten_fn(tree)
+        return
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        yield tree
+        return
+    node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        yield tree
+        return
+    flatten_fn = SUPPORTED_NODES[node_type].flatten_fn
+    child_pytrees, _context = flatten_fn(tree)
+    for child in child_pytrees:
+        yield from tree_iter(child, is_leaf=is_leaf)
 
-        # Recursively flatten the children
-        for child in child_pytrees:
-            yield from tree_iter(child, is_leaf=is_leaf)
+
+def _collect_leaves(tree: PyTree, leaves: List[Any]) -> None:
+    """Append leaves to ``leaves`` without generator overhead (writer hot path)."""
+    typ = type(tree)
+    if typ in _FAST_LEAF_TYPES:
+        leaves.append(tree)
+        return
+    if typ is dict:
+        for value in tree.values():
+            _collect_leaves(value, leaves)
+        return
+    if typ is list or typ is tuple:
+        if _is_jpeg_array(tree):
+            leaves.append(tree)
+            return
+        for value in tree:
+            _collect_leaves(value, leaves)
+        return
+    node_type = _get_node_type(tree)
+    if node_type not in SUPPORTED_NODES:
+        leaves.append(tree)
+        return
+    child_pytrees, _context = SUPPORTED_NODES[node_type].flatten_fn(tree)
+    for child in child_pytrees:
+        _collect_leaves(child, leaves)
 
 
 def tree_leaves(
@@ -928,7 +984,11 @@ def tree_leaves(
     is_leaf: Optional[Callable[[PyTree], bool]] = None,
 ) -> List[Any]:
     """Get a list of leaves of a pytree."""
-    return list(tree_iter(tree, is_leaf=is_leaf))
+    if is_leaf is not None:
+        return list(tree_iter(tree, is_leaf=is_leaf))
+    leaves: List[Any] = []
+    _collect_leaves(tree, leaves)
+    return leaves
 
 
 def tree_structure(

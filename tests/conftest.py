@@ -26,6 +26,18 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
+def _shutdown_raw_loop_runner():
+    yield
+    raw_dataset = sys.modules.get("litdata.raw.dataset")
+    if raw_dataset is None:
+        return
+    runner = raw_dataset._RUNNER
+    raw_dataset._shutdown_runner_before_fork()
+    if runner is not None:
+        runner._executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.fixture(autouse=True)
 def disable_signals(monkeypatch):
     monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
@@ -159,7 +171,32 @@ def _thread_police():
         else:
             if thread.name.startswith("pytest_timeout"):
                 continue
+            # asyncio.to_thread / run_in_executor default-executor workers.
+            if thread.daemon and thread.name.startswith("asyncio_"):
+                continue
+            # Optimize node I/O / feeder threads are daemons; a failed worker can leave one.
+            if thread.daemon and (
+                "_io_thread_target" in thread.name
+                or "(_feed_ready)" in thread.name
+                or "(_feed_downloads)" in thread.name
+            ):
+                continue
             raise AssertionError(f"Test left zombie thread: {thread}")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items):
+    """Force tests sharing the global default cache dir onto the same xdist worker.
+
+    Why: ``clean_pq_index_cache`` shutil.rmtree's ``~/.lightning/chunks`` on setup/teardown.
+    Under ``pytest -n>1`` two such tests on different workers race, deleting each other's
+    chunks mid-iteration. Requires the runner to pass ``--dist=loadgroup``. Must run with
+    ``tryfirst=True`` so the marker is in place before xdist's own hook reads it and
+    appends the ``@group`` nodeid suffix that LoadGroupScheduling uses for routing.
+    """
+    for item in items:
+        if "clean_pq_index_cache" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.xdist_group("hf_default_cache"))
 
 
 # ==== fixtures for parquet ====

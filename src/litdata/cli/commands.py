@@ -13,9 +13,9 @@
 
 from argparse import _SubParsersAction
 
+from litdata.cli import LitFormatter
 from litdata.cli.handler.cache import clear_cache, show_cache_path
 from litdata.cli.handler.optimize import optimize_dataset
-from litdata.cli.parser import LitFormatter
 
 
 def register_cache_subcommand(subparser: _SubParsersAction) -> None:

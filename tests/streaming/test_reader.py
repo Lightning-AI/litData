@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+from threading import Event, Thread
 from time import sleep
 from unittest import mock
 
@@ -208,6 +209,116 @@ def test_prepare_chunks_thread_eviction(tmpdir, monkeypatch):
     assert thread._has_exited
 
 
+def test_force_download_skips_complete_chunk(tmpdir):
+    """A queued force-download must not delete a chunk that is already complete on disk."""
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    remote_dir = os.path.join(tmpdir, "remote_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    cache = Cache(input_dir=Dir(path=cache_dir, url=remote_dir), chunk_size=2, max_cache_size=28020)
+    for i in range(10):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    shutil.copytree(cache_dir, remote_dir, dirs_exist_ok=True)
+
+    cache._reader._try_load_config()
+
+    thread = PrepareChunksThread(
+        cache._reader.config,
+        item_loader=PyTreeLoader(),
+        distributed_env=_DistributedEnv(1, 1, 1),
+        max_pre_download=2,
+        max_cache_size=28020,
+    )
+
+    chunk_filepath, _, filesize_bytes = thread._config[ChunkedIndex(index=-1, chunk_index=0)]
+    assert os.path.exists(chunk_filepath)
+    assert os.stat(chunk_filepath).st_size >= filesize_bytes
+    pre_inode = os.stat(chunk_filepath).st_ino
+
+    # Item loader timed out waiting and queued a force-download. The chunk is
+    # actually already on disk by the time the prepare-chunks thread services
+    # the queue.
+    thread._force_download_queue.put(0)
+    thread._force_download()
+
+    assert os.path.exists(chunk_filepath), "force-download deleted a fully-downloaded chunk"
+    assert os.stat(chunk_filepath).st_ino == pre_inode, "force-download replaced a complete chunk file"
+
+
+def test_force_download_defers_when_download_lock_held(tmpdir):
+    """Force-download must defer when another worker is actively downloading the chunk.
+
+    Probes `<compressed_chunk>.lock` with timeout=0; if held, another worker is mid-download
+    and force_download should bail out rather than racing into a destructive delete.
+    """
+    from filelock import FileLock
+
+    cache_dir = os.path.join(tmpdir, "cache_dir")
+    remote_dir = os.path.join(tmpdir, "remote_dir")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    cache = Cache(input_dir=Dir(path=cache_dir, url=remote_dir), chunk_size=2, max_cache_size=28020)
+    for i in range(10):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    shutil.copytree(cache_dir, remote_dir, dirs_exist_ok=True)
+    cache._reader._try_load_config()
+
+    thread = PrepareChunksThread(
+        cache._reader.config,
+        item_loader=PyTreeLoader(),
+        distributed_env=_DistributedEnv(1, 1, 1),
+        max_pre_download=2,
+        max_cache_size=28020,
+    )
+
+    chunk_filepath, _, filesize_bytes = thread._config[ChunkedIndex(index=-1, chunk_index=0)]
+    # Truncate the chunk to look partial — without the lock-held probe, _force_download
+    # would happily delete and redownload this.
+    with open(chunk_filepath, "r+b") as f:
+        f.truncate(filesize_bytes // 2)
+    assert os.stat(chunk_filepath).st_size < filesize_bytes
+    pre_inode = os.stat(chunk_filepath).st_ino
+
+    # Hold the downloader's lock from a separate thread to simulate another worker
+    # actively downloading the chunk.
+    download_lock_path = thread._config.download_filepath(0) + ".lock"
+    holder_acquired = Event()
+    holder_release = Event()
+
+    def hold_lock():
+        with FileLock(download_lock_path, timeout=5):
+            holder_acquired.set()
+            holder_release.wait(timeout=5)
+
+    holder = Thread(target=hold_lock, daemon=True)
+    holder.start()
+    assert holder_acquired.wait(timeout=5), "test holder thread failed to acquire the lock"
+
+    try:
+        thread._force_download_queue.put(0)
+        thread._force_download()
+
+        # Lock was held => we should have deferred, leaving the (partial) file untouched.
+        assert os.path.exists(chunk_filepath), (
+            "force-download deleted the chunk while another worker held the download lock"
+        )
+        assert os.stat(chunk_filepath).st_ino == pre_inode, (
+            "force-download replaced the chunk while another worker held the download lock"
+        )
+        assert os.stat(chunk_filepath).st_size < filesize_bytes, (
+            "force-download redownloaded the chunk while another worker held the download lock"
+        )
+    finally:
+        holder_release.set()
+        holder.join(timeout=5)
+
+
 @pytest.mark.parametrize("on_demand_bytes", [True, False])
 def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
     monkeypatch.setattr(reader, "_LONG_DEFAULT_TIMEOUT", 0.1)
@@ -226,3 +337,46 @@ def test_reader_read_bytes(tmpdir, monkeypatch, on_demand_bytes):
         idx = ChunkedIndex(*cache._get_chunk_index_from_index(i), is_last_index=i == 24)
         item = cache._reader.read(idx)
         assert item == i
+
+
+def test_prepare_chunks_thread_stores_crash_for_waiters(monkeypatch, tmpdir, capsys, caplog):
+    """A download exception must be stored on the thread instead of dying silently."""
+    from litdata.debugger import CAT_CRASH, _set_active_categories
+
+    cache_dir = str(tmpdir / "cache")
+    os.makedirs(cache_dir)
+    config = mock.MagicMock()
+    config.num_bytes = 1024
+    config._cache_dir = cache_dir
+    config._remote_dir = "s3://bucket/data"
+    item_loader = mock.MagicMock()
+    env = _DistributedEnv(1, 0, 1)
+
+    thread = PrepareChunksThread(config, item_loader, env, max_cache_size=10_000, max_pre_download=2, rank=0)
+
+    def boom() -> None:
+        raise TypeError("Session.__init__() got an unexpected keyword argument 'data_connection_id'")
+
+    thread._run_loop = boom  # type: ignore[method-assign]
+    _set_active_categories(frozenset({CAT_CRASH}))
+    try:
+        with caplog.at_level("DEBUG", logger="litdata"):
+            thread.run()
+    finally:
+        _set_active_categories(frozenset())
+
+    err = thread.prefetch_error()
+    assert isinstance(err, TypeError)
+    assert "data_connection_id" in str(err)
+    assert not thread.is_alive()
+
+    logged = capsys.readouterr().err
+    assert "PrepareChunksThread CRASHED" in logged
+    assert "rank=0" in logged
+    assert "data_connection_id" in logged
+    assert "Traceback (most recent call last)" in logged
+
+    tracer_msgs = [rec.getMessage() for rec in caplog.records if "name: crash;" in rec.getMessage()]
+    assert tracer_msgs
+    assert all("ph: I;" in msg and "cat: crash;" in msg for msg in tracer_msgs)
+    assert all("\n" not in msg and "Traceback" not in msg for msg in tracer_msgs)

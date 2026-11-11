@@ -17,6 +17,7 @@ from litdata.streaming.dataloader import StreamingDataLoader
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import TokensLoader
 from litdata.streaming.parallel import ParallelStreamingDataset
+from litdata.streaming.temporal import TemporalArrayLoader
 
 __all__ = [
     "Cache",
@@ -24,5 +25,6 @@ __all__ = [
     "CombinedStreamingDataset",
     "StreamingDataLoader",
     "TokensLoader",
+    "TemporalArrayLoader",
     "ParallelStreamingDataset",
 ]

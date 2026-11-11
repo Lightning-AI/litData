@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 from contextlib import suppress
@@ -40,7 +41,10 @@ class LocalDownloaderNoLockCleanup(LocalDownloader):
 
 
 @pytest.mark.skipif(not _ZSTD_AVAILABLE, reason="Requires: ['zstd']")
-def test_reader_lock_cleanup_with_nonlocal_like_downloader(tmpdir):
+def test_reader_lock_cleanup_with_nonlocal_like_downloader(tmpdir, caplog):
+    # Enable debug logging so _apply_delete diagnostics appear in CI output
+    caplog.set_level(logging.DEBUG, logger="litdata.streaming.reader")
+
     cache_dir = os.path.join(tmpdir, "cache_dir")
     remote_dir = os.path.join(tmpdir, "remote_dir")
     os.makedirs(cache_dir, exist_ok=True)
@@ -74,8 +78,15 @@ def test_reader_lock_cleanup_with_nonlocal_like_downloader(tmpdir):
             chunk_idx = ChunkedIndex(index=idx[0], chunk_index=idx[1], is_last_index=(i == 9))
             reader.read(chunk_idx)
 
+        # Diagnostic: dump all files and captured logs before asserting
+        all_files = sorted(os.listdir(cache_dir))
+        print(f"\n[DIAG] All files in cache_dir: {all_files}")
+        print("[DIAG] Captured log messages:")
+        for record in caplog.records:
+            print(f"  [{record.levelname}] {record.message}")
+
         # At the end, no chunk-related lock files should remain
-        leftover_locks = [f for f in os.listdir(cache_dir) if f.endswith(".lock") and f.startswith("chunk-")]
-        assert leftover_locks == []
+        leftover_locks = [f for f in all_files if f.endswith(".lock") and f.startswith("chunk-")]
+        assert leftover_locks == [], f"Leftover locks: {leftover_locks}, all files: {all_files}"
     finally:
         unregister_downloader(prefix)

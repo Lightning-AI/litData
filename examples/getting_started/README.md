@@ -8,29 +8,26 @@ Here is an example with some random images.
 
 ```python
 import numpy as np
-from litdata import optimize
-from PIL import Image
+from litdata import Image, optimize
 
 
-# Store random images into the data chunks
 def random_images(index):
-    data = {
-        "index": index, # int data type
-        "image": Image.fromarray(np.random.randint(0, 256, (32, 32, 3), np.uint8)), # PIL image data type
-        "class": np.random.randint(10), # numpy array data type
+    array = np.random.randint(0, 256, (32, 32, 3), np.uint8)
+    return {
+        "index": index,
+        "image": Image(array=array, quality=95, format="jpeg"),
+        "class": np.random.randint(10),
     }
-    # The data is serialized into bytes and stored into data chunks by the optimize operator.
-    return data # The data is serialized into bytes and stored into data chunks by the optimize operator.
+
 
 if __name__ == "__main__":
     optimize(
-        fn=random_images,  # The function applied over each input.
-        inputs=list(range(1000)),  # Provide any inputs. The fn is applied on each item.
-        output_dir="my_optimized_dataset",  # The directory where the optimized data are stored.
-        num_workers=4,  # The number of workers. The inputs are distributed among them.
-        chunk_bytes="64MB"  # The maximum number of bytes to write into a data chunk.
+        fn=random_images,
+        inputs=list(range(1000)),
+        output_dir="my_optimized_dataset",
+        num_workers=4,
+        chunk_bytes="64MB",
     )
-
 ```
 
 The `optimize` operator supports any data structures and types. Serialize whatever you want. The optimized data is stored under the output directory `my_optimized_dataset`.
@@ -53,17 +50,18 @@ Then, the Streaming Dataset can read the data directly from [AWS S3](https://aws
 from litdata import StreamingDataset, StreamingDataLoader
 
 # Remote path where full dataset is stored
-input_dir = 's3://my-bucket/my_optimized_dataset'
+input_dir = "s3://my-bucket/my_optimized_dataset"
 
 # Create the Streaming Dataset
 dataset = StreamingDataset(input_dir, shuffle=True)
 
 # Access any elements of the dataset
 sample = dataset[50]
-img = sample['image']
-cls = sample['class']
+img = sample["image"]
+cls = sample["class"]
 
 # Create dataLoader and iterate over it to train your AI models.
+
 
 # Custom collate function to handle the batch (Optional)
 def collate_fn(batch):

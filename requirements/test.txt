@@ -1,18 +1,19 @@
 av >=14.0.0
-coverage ==7.12.*
-cryptography==45.0.7
-mosaicml-streaming==0.11.0
-pytest ==8.4.*
-pytest-asyncio>=1.0.0
-pytest-cov ==7.0.0
+coverage ==7.13.*
+cryptography==46.0.6
+mosaicml-streaming==0.13.0
+pytest ==9.1.*
+pytest-asyncio>=1.4.0
+pytest-cov ==7.1.0
 pytest-timeout ==2.4.0
 pytest-rerunfailures ==16.1
 pytest-random-order ==1.2.0
 pytest-xdist >=3.8.0
 pandas
-pyarrow >=20.0.0
-polars >1.0.0
+pyarrow >=25.0.1
+polars >=2.0.0
 lightning
 transformers >=4.51.0
 zstd; python_version < "3.14"
 soundfile >=0.13.0
+torchcodec >=0.1.0 # check compatibility table: https://github.com/meta-pytorch/torchcodec?tab=readme-ov-file#installing-torchcodec
