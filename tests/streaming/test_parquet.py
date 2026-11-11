@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
+from litdata.constants import _INDEX_FILENAME
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.item_loader import ParquetLoader, PyTreeLoader
 from litdata.streaming.writer import index_parquet_dataset
@@ -32,7 +32,6 @@ from litdata.utilities.parquet import (
 
 #! TODO: Fix test failing on windows
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Fails on windows and test gets cancelled")
-@pytest.mark.usefixtures("clean_pq_index_cache")
 @pytest.mark.parametrize(
     ("pq_dir_url"),
     [
@@ -92,7 +91,6 @@ def test_parquet_index_write(
 
 
 @pytest.mark.skipif(condition=sys.platform == "win32", reason="Fails on windows and test gets cancelled")
-@pytest.mark.usefixtures("clean_pq_index_cache")
 @patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 def test_index_hf_dataset(monkeypatch, tmp_path, huggingface_hub_fs_mock):
     with pytest.raises(ValueError, match="Invalid Hugging Face dataset URL"):
@@ -122,7 +120,6 @@ def test_resolve_hf_dataset_url(monkeypatch):
     )
 
 
-@pytest.mark.usefixtures("clean_pq_index_cache")
 def test_optimize_hf(tmp_path, write_pq_data, monkeypatch):
     pq_dir = tmp_path / "pq-dataset"
     files = [str(pq_dir / name) for name in sorted(os.listdir(pq_dir)) if name.endswith(".parquet")]
@@ -432,7 +429,6 @@ def test_cloud_parquet_dir_forwards_storage_options(tmp_path, monkeypatch, fsspe
     fsspec_mock.filesystem.assert_called_once_with("s3", **storage_options)
 
 
-@pytest.mark.usefixtures("clean_pq_index_cache")
 @patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
 @pytest.mark.parametrize(("pre_load_chunk"), [False, True])
@@ -465,7 +461,6 @@ def test_stream_hf_parquet_dataset(monkeypatch, huggingface_hub_fs_mock, pq_data
         assert _ds["height"] == pq_data["height"][idx]
 
 
-@pytest.mark.usefixtures("clean_pq_index_cache")
 @patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
 @pytest.mark.parametrize(
@@ -486,7 +481,6 @@ def test_input_dir_wildcard(monkeypatch, huggingface_hub_fs_mock, hf_url, length
         assert len(ds) == length  # 5 datasets for 5 loops
 
 
-@pytest.mark.usefixtures("clean_pq_index_cache")
 @patch("litdata.utilities.parquet._HF_HUB_AVAILABLE", True)
 @patch("litdata.streaming.downloader._HF_HUB_AVAILABLE", True)
 @pytest.mark.parametrize("default", [False, True])
@@ -496,7 +490,7 @@ def test_cache_dir_option(monkeypatch, huggingface_hub_fs_mock, default):
         ds = StreamingDataset(hf_url, cache_dir=None if default else tmpdir)
         assert ds.cache_dir.path == (None if default else os.path.realpath(tmpdir))
         assert ds.input_dir.path.startswith(
-            (_DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR) if default else os.path.realpath(tmpdir)
+            os.path.realpath(os.environ["LITDATA_CACHE_DIR"]) if default else os.path.realpath(tmpdir)
         )
         # check index file is sole file in chunk cache dir
         assert len(os.listdir(ds.input_dir.path)) == 1
