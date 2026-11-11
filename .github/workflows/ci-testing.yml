@@ -103,18 +103,7 @@ jobs:
         run: uv pip uninstall torchcodec
 
       - name: Run fast tests in parallel
-        run: |
-          # Ubuntu runners can take more xdist workers; keep macOS/Windows at 2 to
-          # avoid spawn/resource pressure from DataLoader multiprocessing tests.
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            XDIST_WORKERS=4
-          else
-            XDIST_WORKERS=2
-          fi
-          pytest tests \
-              --ignore=tests/processing \
-              --ignore=tests/raw \
-              -n "${XDIST_WORKERS}" --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+        run: bash .github/scripts/run-fast-tests.sh
 
       - name: Run processing tests sequentially
         run: |
