@@ -60,7 +60,7 @@
 
 &nbsp;
 
-<a target="_blank" href="https://lightning.ai/docs/overview/optimize-data/optimize-datasets">
+<a target="_blank" href="https://lightning.ai/docs/litdata/quick-start">
   <img src="https://pl-bolts-doc-images.s3.us-east-2.amazonaws.com/app-2/get-started-badge.svg" height="36px" alt="Get started"/>
 </a>
 
@@ -1211,6 +1211,10 @@ dataloader = StreamingDataLoader(dataset, num_workers=os.cpu_count(), batch_size
 if os.path.isfile("dataloader_state.pt"):
     state_dict = torch.load("dataloader_state.pt")
     dataloader.load_state_dict(state_dict)
+
+# If you resume from a checkpoint with a different dataset, use
+# StreamingDataLoader(..., dataset_change_policy="next_epoch") to skip the
+# remainder of the old epoch and start fresh on the new data.
 
 # Iterate over the data
 for batch_idx, batch in enumerate(dataloader):
@@ -2885,7 +2889,7 @@ Speed to stream Imagenet 1.2M from AWS S3:
   <summary> Benchmark details</summary>
 &nbsp;
 
-- [Imagenet-1.2M dataset](https://www.image-net.org/) contains `1,281,167 images`.
+- [Imagenet-1.2M dataset](https://arxiv.org/abs/1409.0575) contains `1,281,167 images`.
 - To align with other benchmarks, we measured the streaming speed (`images per second`) loaded from [AWS S3](https://aws.amazon.com/s3/) for several frameworks.
 
 </details>

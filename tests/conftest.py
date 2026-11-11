@@ -26,6 +26,18 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
+def _shutdown_raw_loop_runner():
+    yield
+    raw_dataset = sys.modules.get("litdata.raw.dataset")
+    if raw_dataset is None:
+        return
+    runner = raw_dataset._RUNNER
+    raw_dataset._shutdown_runner_before_fork()
+    if runner is not None:
+        runner._executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.fixture(autouse=True)
 def disable_signals(monkeypatch):
     monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
 
