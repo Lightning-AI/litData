@@ -901,6 +901,21 @@ def test_flat_chunk_uses_arrow_footer(tmp_path):
 
 
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
+def test_flat_chunk_reads_without_mmap_or_batch_decode(tmp_path, monkeypatch):
+    """Random access to an Arrow-footer chunk with POSIX-fast and batched decoding off."""
+    from litdata import optimize
+
+    monkeypatch.setenv("LITDATA_POSIX_FAST", "0")
+    out = tmp_path / "flat"
+    optimize(fn=_flat_arrow_sample, inputs=list(range(16)), output_dir=str(out), chunk_size=16, num_workers=1)
+    ds = StreamingDataset(str(out), batch_decode=0)
+    assert ds.posix_fast is None
+    assert ds[3] == {"text": "row 3", "label": 1}
+    assert ds[15] == {"text": "row 15", "label": 1}
+    assert ds[0] == {"text": "row 0", "label": 0}
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="Requires pyarrow")
 def test_flat_chunk_skips_file_zstd(tmp_path):
     """Flat str dicts use Arrow IPC zstd, not LitData whole-file Python inflate."""
     from litdata import optimize
