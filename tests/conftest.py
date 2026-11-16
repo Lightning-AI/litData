@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import signal
 import sys
@@ -40,6 +41,21 @@ def isolated_cache_dirs(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(root / "optimizer-chunks"))
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(root / "optimizer-data"))
+
+
+@pytest.fixture(autouse=True)
+def restore_multiprocessing_start_method():
+    """Undo the global start method change made by ``optimize()`` / ``map()``.
+
+    ``DataProcessor`` calls ``multiprocessing.set_start_method("spawn", force=True)``, which sticks for the rest
+    of the process. Without this, every later test in the same pytest worker spawns its dataloader workers
+    (re-importing torch and litdata in each one) even where the platform default is ``fork``, which makes
+    multi-worker tests take seconds per worker instead of milliseconds.
+    """
+    start_method = multiprocessing.get_start_method(allow_none=True)
+    yield
+    if multiprocessing.get_start_method(allow_none=True) != start_method:
+        multiprocessing.set_start_method(start_method, force=True)
 
 
 @pytest.fixture(autouse=True)
