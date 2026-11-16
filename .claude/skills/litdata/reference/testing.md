@@ -72,7 +72,7 @@ Use stdlib `unittest.mock` (`Mock`, `MagicMock`, `patch`) + the pytest `monkeypa
 
 ## Useful fixtures (`tests/conftest.py`)
 
-- **Autouse/session**: `teardown_process_group` (destroys torch.distributed group), `_thread_police` (fails a test leaking a non-daemon "zombie" thread — special-cases `PrepareChunksThread`, `QueueFeederThread`, `pytest_timeout`).
+- **Autouse/session**: `teardown_process_group` (destroys torch.distributed group), `short_dataloader_worker_join_on_macos` (macOS only: lowers torch's `MP_STATUS_CHECK_INTERVAL` to 0.5s in the test process, because `torch_shm_manager` keeps each dataloader worker's exit pipe open and the parent otherwise waits 5s per worker at shutdown), `_thread_police` (fails a test leaking a non-daemon "zombie" thread — special-cases `PrepareChunksThread`, `QueueFeederThread`, `pytest_timeout`).
 - **Autouse/per-test**: `isolated_cache_dirs` (points `LITDATA_CACHE_DIR`, `DATA_OPTIMIZER_CACHE_FOLDER` and `DATA_OPTIMIZER_DATA_CACHE_FOLDER` at a per-test temp dir and unsets `LITDATA_HF_CACHE_DIR`; drop the env var with `monkeypatch.delenv` to test defaults), `restore_multiprocessing_start_method` (resets the start method that `optimize()` / `map()` force to `spawn`, so later tests in the same process keep the platform default), `disable_signals` (no-ops `signal.signal` so worker signal handlers don't break tests).
 - **Data**: `mosaic_mds_index_data`, `prepare_combined_dataset` (two on-disk 50-item `Cache` datasets), `combined_dataset` (a `CombinedStreamingDataset`), `pq_data`, `write_pq_data` (5 polars parquet files).
 

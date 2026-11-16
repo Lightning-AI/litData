@@ -58,6 +58,28 @@ def restore_multiprocessing_start_method():
         multiprocessing.set_start_method(start_method, force=True)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def short_dataloader_worker_join_on_macos():
+    """Stop every dataloader worker from costing 5 seconds at shutdown on macOS.
+
+    On macOS a worker that sends tensors starts ``torch_shm_manager``, which inherits the pipe the parent
+    uses to detect the worker's exit and outlives the worker. ``DataLoader._shutdown_workers`` therefore
+    waits its full ``join`` timeout (``MP_STATUS_CHECK_INTERVAL``, 5 seconds) for each worker, although the
+    worker has already exited. This happens with plain ``torch.utils.data.DataLoader`` too. Only the parent
+    process is patched; spawned workers re-import torch and keep the default.
+    """
+    if sys.platform != "darwin":
+        yield
+        return
+
+    from torch.utils.data import _utils
+
+    original = _utils.MP_STATUS_CHECK_INTERVAL
+    _utils.MP_STATUS_CHECK_INTERVAL = 0.5
+    yield
+    _utils.MP_STATUS_CHECK_INTERVAL = original
+
+
 @pytest.fixture(autouse=True)
 def disable_signals(monkeypatch):
     monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
