@@ -11,7 +11,7 @@ pytest-random-order ==1.2.0
 pytest-xdist >=3.8.0
 pandas
 pyarrow >=25.0.1
-polars >1.0.0
+polars >=2.0.0
 lightning
 transformers >=4.51.0
 zstd; python_version < "3.14"
