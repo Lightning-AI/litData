@@ -13,11 +13,11 @@ pytest tests/streaming/ -v
 
 # How CI runs it (authoritative). Two phases because processing tests must be serial:
 pytest tests --ignore=tests/processing --ignore=tests/raw \
-    -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
+    -n 2 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 pytest tests/processing tests/raw --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
 ```
 
-**`--dist=loadgroup` is required, not optional, when running with `-n>1`.** `tests/conftest.py:165` (`pytest_collection_modifyitems`) pins every test using the `clean_pq_index_cache` fixture onto a single xdist worker via `xdist_group`, because that fixture `shutil.rmtree`s `~/.lightning/chunks` and would otherwise race across workers.
+Tests are safe to run under `-n>1`: the autouse `isolated_cache_dirs` fixture gives every test its own cache dirs, so parallel workers can't delete each other's chunks.
 
 The `Makefile test` target is stale (`--flake8` flag, points at `src`) — prefer the CI commands above.
 
@@ -75,8 +75,8 @@ Use stdlib `unittest.mock` (`Mock`, `MagicMock`, `patch`) + the pytest `monkeypa
 ## Useful fixtures (`tests/conftest.py`)
 
 - **Autouse/session**: `teardown_process_group` (destroys torch.distributed group), `_thread_police` (fails a test leaking a non-daemon "zombie" thread — special-cases `PrepareChunksThread`, `QueueFeederThread`, `pytest_timeout`).
-- **Autouse/per-test**: `disable_signals` (no-ops `signal.signal` so worker signal handlers don't break tests).
-- **Data**: `mosaic_mds_index_data`, `prepare_combined_dataset` (two on-disk 50-item `Cache` datasets), `combined_dataset` (a `CombinedStreamingDataset`), `pq_data`, `write_pq_data` (5 polars parquet files), `clean_pq_index_cache` (wipes the default cache dir — the one that triggers xdist grouping).
+- **Autouse/per-test**: `isolated_cache_dirs` (points `LITDATA_CACHE_DIR`, `DATA_OPTIMIZER_CACHE_FOLDER` and `DATA_OPTIMIZER_DATA_CACHE_FOLDER` at a per-test temp dir and unsets `LITDATA_HF_CACHE_DIR`; drop the env var with `monkeypatch.delenv` to test defaults), `disable_signals` (no-ops `signal.signal` so worker signal handlers don't break tests).
+- **Data**: `mosaic_mds_index_data`, `prepare_combined_dataset` (two on-disk 50-item `Cache` datasets), `combined_dataset` (a `CombinedStreamingDataset`), `pq_data`, `write_pq_data` (5 polars parquet files).
 
 Local idiom: most files define their own `seed_everything(seed)`. CLI tests use a `run_cli(args_list)` helper (patches `sys.argv`, captures stdout). `tests/streaming/utils.py` gives `filter_lock_files` / `get_lock_files` to assert on chunk dirs ignoring `.lock`/`.cnt` artifacts.
 
