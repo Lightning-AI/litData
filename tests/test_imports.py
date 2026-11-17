@@ -160,3 +160,29 @@ class TestRequires:
             result = fn()
             assert result == 42
             assert any("Required dependencies not available" in str(x.message) for x in w)
+
+
+# ---------------------------------------------------------------------------
+# import litdata
+# ---------------------------------------------------------------------------
+
+
+def test_import_litdata_does_not_import_lightning_sdk():
+    """Spawned workers import litdata, so the slow `lightning_sdk` import must stay lazy."""
+    import subprocess
+    import sys
+
+    code = "import sys, litdata; assert 'lightning_sdk' not in sys.modules, 'lightning_sdk imported eagerly'"
+    subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
+
+
+def test_litdata_machine_is_lazily_exported():
+    pytest.importorskip("lightning_sdk")
+    from lightning_sdk import Machine
+
+    import litdata
+
+    assert litdata.Machine is Machine
+    assert "Machine" in litdata.__all__
+    with pytest.raises(AttributeError):
+        litdata.does_not_exist

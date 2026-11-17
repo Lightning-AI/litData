@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import signal
 import sys
@@ -24,6 +25,18 @@ def teardown_process_group():
 
 
 @pytest.fixture(autouse=True)
+def _shutdown_raw_loop_runner():
+    yield
+    raw_dataset = sys.modules.get("litdata.raw.dataset")
+    if raw_dataset is None:
+        return
+    runner = raw_dataset._RUNNER
+    raw_dataset._shutdown_runner_before_fork()
+    if runner is not None:
+        runner._executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.fixture(autouse=True)
 def isolated_cache_dirs(tmp_path_factory, monkeypatch):
     """Isolate cache directories for each test to prevent cross-test interference.
 
@@ -40,6 +53,43 @@ def isolated_cache_dirs(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(root / "optimizer-chunks"))
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(root / "optimizer-data"))
+
+
+@pytest.fixture(autouse=True)
+def restore_multiprocessing_start_method():
+    """Undo the global start method change made by ``optimize()`` / ``map()``.
+
+    ``DataProcessor`` calls ``multiprocessing.set_start_method("spawn", force=True)``, which sticks for the rest
+    of the process. Without this, every later test in the same pytest worker spawns its dataloader workers
+    (re-importing torch and litdata in each one) even where the platform default is ``fork``, which makes
+    multi-worker tests take seconds per worker instead of milliseconds.
+    """
+    start_method = multiprocessing.get_start_method(allow_none=True)
+    yield
+    if multiprocessing.get_start_method(allow_none=True) != start_method:
+        multiprocessing.set_start_method(start_method, force=True)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def short_dataloader_worker_join_on_macos():
+    """Stop every dataloader worker from costing 5 seconds at shutdown on macOS.
+
+    On macOS a worker that sends tensors starts ``torch_shm_manager``, which inherits the pipe the parent
+    uses to detect the worker's exit and outlives the worker. ``DataLoader._shutdown_workers`` therefore
+    waits its full ``join`` timeout (``MP_STATUS_CHECK_INTERVAL``, 5 seconds) for each worker, although the
+    worker has already exited. This happens with plain ``torch.utils.data.DataLoader`` too. Only the parent
+    process is patched; spawned workers re-import torch and keep the default.
+    """
+    if sys.platform != "darwin":
+        yield
+        return
+
+    from torch.utils.data import _utils
+
+    original = _utils.MP_STATUS_CHECK_INTERVAL
+    _utils.MP_STATUS_CHECK_INTERVAL = 0.5
+    yield
+    _utils.MP_STATUS_CHECK_INTERVAL = original
 
 
 @pytest.fixture(autouse=True)
