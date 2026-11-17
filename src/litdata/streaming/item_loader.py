@@ -1489,15 +1489,19 @@ class PyTreeLoader(BaseItemLoader):
 
 
 class TokensLoader(BaseItemLoader):
-    def __init__(self, block_size: int | None = None):
+    def __init__(self, block_size: int | None = None, *, stride: int | None = None):
         """The Tokens Loader is an optimizer item loader for NLP.
 
         Args:
             block_size: The context length to use during training.
+            stride: Distance in tokens between window starts within a chunk. Defaults to the block size.
 
         """
         super().__init__()
+        if stride is not None and (not isinstance(stride, int) or isinstance(stride, bool) or stride < 1):
+            raise ValueError("stride must be a positive integer")
         self._block_size = block_size
+        self._stride = block_size if stride is None else stride
         self._mmaps: dict[int, np.memmap] = {}
         self._buffers: dict[int, bytes] = {}
         # keeps track of number of readers for each chunk (can be more than 1 if multiple workers are reading)
@@ -1510,9 +1514,15 @@ class TokensLoader(BaseItemLoader):
 
     def state_dict(self) -> dict:
         assert self._block_size
-        return {
-            "block_size": self._block_size,
-        }
+        state = {"block_size": self._block_size}
+        if self._stride != self._block_size:
+            state["stride"] = self._stride
+        return state
+
+    def _num_blocks(self, num_tokens: int) -> int:
+        assert self._block_size
+        assert self._stride
+        return max(0, 1 + (num_tokens - self._block_size) // self._stride)
 
     def setup(
         self,
@@ -1543,7 +1553,7 @@ class TokensLoader(BaseItemLoader):
         end = 0
         for idx, chunk in enumerate(self._chunks):
             dim = chunk["dim"]  # number of tokens in the chunk
-            num_blocks = dim // self._block_size
+            num_blocks = self._num_blocks(dim)
             end += num_blocks
             start_idx, end_idx = begin, end
             if self.region_of_interest is not None:
@@ -1636,14 +1646,9 @@ class TokensLoader(BaseItemLoader):
             self._load_chunk(chunk_index, chunk_filepath)
             buffer = self._buffers[chunk_index]
 
-        # offset: how many bytes to skip to get to the item we want to load
-        #       -> if chunk begins at 5, and we want to load the item at index 7,
-        #       -> we need to skip 2 items, and each item has `self._block_size` tokens
-        #       -> and each token takes `self._dtype.itemsize` bytes
-        #
-        # Note: We have already accounted for offsets corresponding to starting bytes in `_load_chunk` function
-        # while creating the memory map.
-        offset = self._dtype.itemsize * (index - begin) * self._block_size
+        # The window index is relative to the start of this chunk.
+        assert self._stride
+        offset = self._dtype.itemsize * (index - begin) * self._stride
 
         # Copy out of the memmap. ``close()`` unmaps the previous chunk on the next sample, and
         # DataLoader may still be pickling the last items — a view into a closed mmap is SIGSEGV.

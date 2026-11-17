@@ -1234,3 +1234,20 @@ def test_pytree_loader_reuses_arrow_zstd_codec(tmp_path):
     _ = ds[0]
     assert loader._framed_decompressor is first
     assert loader._framed_inflate_buf is not None
+
+
+@pytest.mark.parametrize(("stride", "starts"), [(2, [0, 2, 4, 6]), (4, [0, 4]), (6, [0, 6])])
+def test_tokens_loader_stride(tmp_path, stride, starts):
+    cache = Cache(str(tmp_path), chunk_size=10, item_loader=TokensLoader(4))
+    for i in range(3):
+        cache[i] = torch.arange(i * 10, (i + 1) * 10, dtype=torch.int32)
+    cache.done()
+    cache.merge()
+
+    loader = TokensLoader(4, stride=stride)
+    dataset = StreamingDataset(str(tmp_path), item_loader=loader, shuffle=False)
+    expected = [list(range(offset + start, offset + start + 4)) for offset in (0, 10, 20) for start in starts]
+    assert len(dataset) == len(expected)
+    assert [dataset[i].tolist() for i in range(len(dataset))] == expected
+    assert [window.tolist() for window in dataset] == expected
+    assert (loader.state_dict() == TokensLoader(4).state_dict()) == (stride == 4)

@@ -1418,6 +1418,8 @@ for batch in tqdm(train_dataloader):
     pass
 ```
 
+For next-token training, `StreamingDataset(path, item_loader=TokensLoader(block_size=2049, stride=2048))` shares the last token of each window with the next window. A smaller stride provides overlapping context for evaluation. Windows stay within their source chunk and incomplete trailing windows are dropped. Omitting `stride` gives non-overlapping windows.
+
 </details>
 
 <details>
