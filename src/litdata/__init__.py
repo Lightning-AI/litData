@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
+from typing import Any
 
 from litdata.__about__ import *  # noqa: F403
 from litdata.constants import _LIGHTNING_SDK_AVAILABLE
@@ -86,6 +87,15 @@ __all__ = [
 ]
 
 if _LIGHTNING_SDK_AVAILABLE:
-    from lightning_sdk import Machine  # noqa: F401
-
     __all__.append("Machine")
+
+
+def __getattr__(name: str) -> Any:
+    # `lightning_sdk` is slow to import, and every spawned dataloader / optimize worker imports `litdata`,
+    # so `litdata.Machine` is resolved on first access instead of at import time.
+    if name == "Machine" and _LIGHTNING_SDK_AVAILABLE:
+        from lightning_sdk import Machine
+
+        globals()["Machine"] = Machine
+        return Machine
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
