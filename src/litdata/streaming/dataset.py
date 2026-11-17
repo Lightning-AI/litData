@@ -829,7 +829,7 @@ class StreamingDataset(IterableDataset):
             start, stop, step = index.indices(len(self))
             _my_indices = list(range(start, stop, step))
             _my_cache_indices = [ChunkedIndex(*self.cache._get_chunk_index_from_index(idx)) for idx in _my_indices]
-            return [self.cache[chnk_idx] for chnk_idx in _my_cache_indices]
+            return [self._apply_transform(self.cache[chnk_idx]) for chnk_idx in _my_cache_indices]
         tracing_sample = is_tracing(CAT_SAMPLE)
         if tracing_sample:
             emit_trace(
@@ -840,12 +840,7 @@ class StreamingDataset(IterableDataset):
                 index=getattr(index, "index", index),
             )
         item = self.cache[index]
-        if hasattr(self, "transform"):
-            if isinstance(self.transform, list):
-                for transform_fn in self.transform:
-                    item = transform_fn(item)
-            else:
-                item = self.transform(item)
+        item = self._apply_transform(item)
         if tracing_sample:
             emit_trace(
                 "sample",
@@ -855,6 +850,18 @@ class StreamingDataset(IterableDataset):
                 index=getattr(index, "index", index),
             )
 
+        return item
+
+    def _apply_transform(self, item: Any) -> Any:
+        """Apply the configured transform (if any) to a single item."""
+        transform = getattr(self, "transform", None)
+        if transform is None:
+            return item
+        if isinstance(transform, list):
+            for transform_fn in transform:
+                item = transform_fn(item)
+        else:
+            item = transform(item)
         return item
 
     @property
