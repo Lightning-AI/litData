@@ -348,7 +348,7 @@ def generate_roi(chunks: list[dict[str, Any]], item_loader: BaseItemLoader | Non
 
     if isinstance(item_loader, TokensLoader):
         for idx, chunk in enumerate(chunks):
-            roi.append((0, chunk["dim"] // item_loader._block_size))
+            roi.append((0, item_loader._num_blocks(chunk["dim"])))
     else:
         for i, chunk in enumerate(chunks):
             end = chunk["chunk_size"]
