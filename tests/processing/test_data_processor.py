@@ -32,6 +32,8 @@ from litdata.processing.data_processor import (
     _cache_local_path,
     _chunks_dir,
     _download_data_target,
+    _get_cache_data_dir,
+    _get_cache_dir,
     _get_item_filesizes,
     _is_local_write_through,
     _is_path,
@@ -1043,6 +1045,29 @@ def test_is_local_write_through_and_chunks_dir(tmp_path):
     assert _chunks_dir(remote) != remote.path
     assert _chunks_dir(lightning) != lightning.path
     assert os.path.isdir(local.path)
+
+
+@pytest.mark.parametrize(
+    ("get_dir", "env_var", "default_name"),
+    [
+        (_get_cache_dir, "DATA_OPTIMIZER_CACHE_FOLDER", "chunks"),
+        (_get_cache_data_dir, "DATA_OPTIMIZER_DATA_CACHE_FOLDER", "data"),
+    ],
+)
+def test_get_cache_dirs_defaults_and_env(monkeypatch, tmp_path, get_dir, env_var, default_name):
+    # conftest's isolated_cache_dirs sets the env var for every test; drop it to exercise the defaults
+    monkeypatch.delenv(env_var)
+
+    monkeypatch.setattr(data_processor_module, "_IS_IN_STUDIO", False)
+    assert get_dir() == f"{tempfile.gettempdir()}/{default_name}"
+    assert get_dir("/my/name") == os.path.join(f"{tempfile.gettempdir()}/{default_name}", "my/name")
+
+    monkeypatch.setattr(data_processor_module, "_IS_IN_STUDIO", True)
+    assert get_dir() == f"/cache/{default_name}"
+
+    monkeypatch.setenv(env_var, str(tmp_path))
+    assert get_dir() == str(tmp_path)
+    assert get_dir("name") == os.path.join(str(tmp_path), "name")
 
 
 def test_adaptive_download_concurrency_env_and_jobs(monkeypatch):
