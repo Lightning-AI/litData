@@ -319,6 +319,7 @@ def map(
     storage_options: dict[str, Any] = {},
     keep_data_ordered: bool | None = None,
     broadcast_paths: bool = False,
+    random_seed: int | None = 42,
 ) -> None:
     """Maps a callable over a collection of inputs, possibly in a distributed way.
 
@@ -349,6 +350,8 @@ def map(
             preserved. If True, each worker processes a static slice in order. ``None`` uses False.
         broadcast_paths: Broadcast resolved input/output dirs across multi-node ranks. Defaults to ``False``.
             Auto-enabled when ``input_dir`` or ``output_dir`` contains a ``{%strftime}`` time template.
+        random_seed: Seed for the local generator that shuffles the items assigned to each worker. It does not
+            seed the global ``random`` / NumPy / torch generators, so ``fn`` should seed its own randomness if needed.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -420,6 +423,7 @@ def map(
             storage_options=storage_options,
             keep_data_ordered=keep_data_ordered,
             broadcast_paths=should_broadcast_paths,
+            random_seed=random_seed,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
@@ -482,6 +486,7 @@ def optimize(
     verbose: bool = True,
     broadcast_paths: bool = False,
     key_fn: Callable[[Any], Any] | None = None,
+    random_seed: int | None = 42,
 ) -> None:
     """This function converts a dataset into chunks, possibly in a distributed way.
 
@@ -544,6 +549,8 @@ def optimize(
         key_fn: Optional callable ``sample -> key`` (str or int). When set, writes a ``keys/``
             sidecar mapping each key to its sample ``index`` (and chunk location) for
             ``dataset[key]`` / ``dataset_update``.
+        random_seed: Seed for the local generator that shuffles the items assigned to each worker. It does not
+            seed the global ``random`` / NumPy / torch generators, so ``fn`` should seed its own randomness if needed.
     """
     _check_version_and_prompt_upgrade(__version__)
 
@@ -667,6 +674,7 @@ def optimize(
             keep_data_ordered=keep_data_ordered,
             verbose=verbose,
             broadcast_paths=should_broadcast_paths,
+            random_seed=random_seed,
         )
 
         with optimize_dns_context(optimize_dns if optimize_dns is not None else False):
