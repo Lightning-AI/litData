@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Pair each subsampled chunk with its corresponding region of interest in `train_test_split`. ([#949](https://github.com/Lightning-AI/litData/pull/949))
+
 - Fix `len(StreamingDataLoader)` undercounting per-worker partial batches with whole-chunk window shuffling. ([#939](https://github.com/Lightning-AI/litData/pull/939))
 
 ## [0.2.76] - 2026-09-30

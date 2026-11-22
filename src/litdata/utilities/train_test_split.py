@@ -50,8 +50,7 @@ def train_test_split(
     # we need subsampled chunk filenames, original chunk file, and subsampled_roi
 
     dummy_streaming_dataset = deepcopy_dataset(streaming_dataset)
-    # Note: We make this a set to speed up the computation of subsampled_chunks.
-    dummy_subsampled_chunk_filename = set(dummy_streaming_dataset.subsampled_files)
+    dummy_subsampled_chunk_filename = list(dummy_streaming_dataset.subsampled_files)
     dummy_subsampled_roi = dummy_streaming_dataset.region_of_interest
     subsampled_chunks: list[dict[str, Any]] = []
 
@@ -64,11 +63,16 @@ def train_test_split(
     # load chunks from `index.json` file
     data = load_index_file(input_dir.path)
 
-    # subsample the chunks defined in the index file
+    # subsample the chunks defined in the index file, keeping the dataset's own
+    # chunk order so that every chunk is paired with its own region of interest
     original_chunks = data["chunks"]
-    subsampled_chunks = [
-        _org_chunk for _org_chunk in original_chunks if _org_chunk["filename"] in dummy_subsampled_chunk_filename
-    ]
+    chunk_by_filename = {_chunk["filename"]: _chunk for _chunk in original_chunks}
+    missing_chunk_filename = next(
+        (_filename for _filename in dummy_subsampled_chunk_filename if _filename not in chunk_by_filename), None
+    )
+    if missing_chunk_filename is not None:
+        raise ValueError(f"Couldn't find chunk file {missing_chunk_filename} in the index file.")
+    subsampled_chunks = [chunk_by_filename[_filename] for _filename in dummy_subsampled_chunk_filename]
 
     new_datasets = [deepcopy_dataset(streaming_dataset) for _ in splits]
 

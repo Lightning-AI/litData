@@ -165,3 +165,35 @@ def test_streaming_dataset_subset(tmpdir):
     assert len(sliced) == 10
     assert sliced[0] == 5
     assert sliced[9] == 14
+
+
+def test_split_a_shuffled_subsampled_dataset(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    ds = StreamingDataset(input_dir=str(tmpdir), subsample=0.45, shuffle=True, seed=1)
+
+    train, test = train_test_split(ds, [0.6, 0.4], shuffle=False)
+
+    # every split keeps the chunks and regions of interest of the dataset it splits
+    split_items = sorted([split[i] for split in (train, test) for i in range(len(split))])
+    dataset_items = sorted(ds[i] for i in range(len(ds)))
+    assert split_items == dataset_items
+
+
+def test_split_a_repeated_subsampled_dataset(tmpdir):
+    cache = Cache(str(tmpdir), chunk_size=10)
+    for i in range(100):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    # a subsample above 1 repeats chunks, so the same filename is sampled more than once
+    ds = StreamingDataset(input_dir=str(tmpdir), subsample=1.5)
+
+    train, test = train_test_split(ds, [0.5, 0.5])
+
+    assert len(train) + len(test) == len(ds) == 150
