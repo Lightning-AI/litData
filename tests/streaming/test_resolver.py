@@ -22,6 +22,11 @@ from lightning_sdk.lightning_cloud.openapi import (
 from litdata.streaming import resolver
 
 
+@pytest.fixture(autouse=True)
+def isolated_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr(login.Auth, "secrets_file", tmp_path / "credentials.json")
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="windows isn't supported")
 def test_resolve_data_connection(monkeypatch, lightning_cloud_mock):
     """Test the _resolve_data_connection helper function with caching."""
