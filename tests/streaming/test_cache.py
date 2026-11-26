@@ -19,7 +19,6 @@ from functools import partial
 import numpy as np
 import pytest
 import torch
-from lightning.pytorch.demos.boring_classes import RandomDataset
 from lightning_utilities.core.imports import RequirementCache
 from lightning_utilities.test.warning import no_warning_call
 from torch.utils.data import Dataset
@@ -53,6 +52,24 @@ def _image_arrays(original_path, cached_image):
     from torchvision.transforms import PILToTensor
 
     return PILToTensor()(Image.open(original_path)), PILToTensor()(Image.open(cached_image))
+
+
+class RandomDataset(Dataset):
+    """Local copy of Lightning's ``RandomDataset``.
+
+    Importing it from ``lightning.pytorch`` at module level made every spawned process (DDP ranks and their
+    dataloader workers) re-import the whole of ``lightning.pytorch`` when unpickling objects from this module.
+    """
+
+    def __init__(self, size, length):
+        self.len = length
+        self.data = torch.randn(length, size)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def __len__(self):
+        return self.len
 
 
 class ImageDataset(Dataset):
