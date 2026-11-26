@@ -15,6 +15,38 @@ from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
 
+# Modules every dataloader worker needs. The fork server imports them once; workers forked from it start with
+# them already loaded instead of importing them again.
+_FORKSERVER_PRELOAD = ["torch", "torch.utils.data", "litdata"]
+
+
+def _use_preloaded_forkserver() -> None:
+    """Start dataloader workers from a fork server that has already imported torch and litdata.
+
+    Where the default start method is not ``fork`` (macOS, and Linux from Python 3.14), each worker is a fresh
+    interpreter that imports torch and litdata before doing any work. That costs seconds per worker and makes
+    every multi-worker test slow. A fork server has the same semantics as ``spawn`` for the code under test
+    (nothing is inherited from the test process, everything sent to a worker is pickled), but it pays for the
+    imports once per pytest process. Code that asks for ``spawn`` explicitly, such as ``optimize()``, is
+    unaffected.
+
+    ``LITDATA_TEST_START_METHOD`` overrides the choice, e.g. ``spawn`` to reproduce the old behaviour or
+    ``forkserver`` to try this on Linux.
+    """
+    method = os.environ.get("LITDATA_TEST_START_METHOD")
+    if method is None:
+        if multiprocessing.get_start_method() == "fork":
+            return
+        if "forkserver" not in multiprocessing.get_all_start_methods():
+            return  # Windows only has spawn
+        method = "forkserver"
+    if method == "forkserver":
+        multiprocessing.set_forkserver_preload(_FORKSERVER_PRELOAD)
+    multiprocessing.set_start_method(method, force=True)
+
+
+_use_preloaded_forkserver()
+
 
 @pytest.fixture(autouse=True, scope="session")
 def teardown_process_group():
