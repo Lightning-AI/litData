@@ -102,6 +102,12 @@ jobs:
         if: matrix.torch-spec == needs.torch-support.outputs.minimum_spec
         run: uv pip uninstall torchcodec
 
+      # The first `import lightning` on a fresh runner compiles bytecode and makes matplotlib (pulled in through
+      # torchmetrics) build its font cache, which takes over a minute on macOS. Pay for it here, once, rather
+      # than inside whichever test imports lightning first, where it counts against that test's timeout.
+      - name: Warm up the lightning import
+        run: time python -c "import lightning.fabric"
+
       - name: Run tests in parallel
         run: |
           pytest tests \
