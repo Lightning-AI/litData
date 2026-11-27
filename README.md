@@ -3131,7 +3131,7 @@ Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scho
 ## Emeritus Maintainers
 
 * Luca Antiga ([lantiga](https://github.com/lantiga))
-* Justus Schock ([justusschock](https://github.com/justusschock))
+* Justus Schock ([justusperillieux](https://github.com/justusperillieux))
 * Jirka Borda ([Borda](https://github.com/Borda))
 
 <details>
