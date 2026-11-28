@@ -1,11 +1,9 @@
-import importlib
 import json
 import os
 from unittest import mock
 
 import pytest
 
-import litdata.constants
 import litdata.utilities
 import litdata.utilities.dataset_utilities
 from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME
@@ -44,7 +42,7 @@ def test_try_create_cache_dir():
 
     # the cache dir creating at /cache requires root privileges, so we need to mock `os.makedirs()`
     with (
-        mock.patch.dict("os.environ", {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}),
+        mock.patch.dict("os.environ", {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}, clear=True),
         mock.patch("litdata.streaming.dataset.os.makedirs") as makedirs_mock,
     ):
         cache_dir_1 = _try_create_cache_dir("")
@@ -64,7 +62,7 @@ def test_try_create_cache_dir_with_custom_cache_dir(tmpdir):
         ) in _try_create_cache_dir("any", cache_dir)
 
     with (
-        mock.patch.dict("os.environ", {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}),
+        mock.patch.dict("os.environ", {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}, clear=True),
         mock.patch("litdata.streaming.dataset.os.makedirs") as makedirs_mock,
     ):
         cache_dir_1 = _try_create_cache_dir("", cache_dir)
@@ -108,13 +106,11 @@ def test_get_default_cache_dir():
     with mock.patch.dict(os.environ, {}, clear=True):
         assert get_default_cache_dir() == _DEFAULT_CACHE_DIR
 
-    with mock.patch.dict(os.environ, {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}):
+    with mock.patch.dict(os.environ, {"LIGHTNING_CLUSTER_ID": "abc", "LIGHTNING_CLOUD_PROJECT_ID": "123"}, clear=True):
         assert get_default_cache_dir() == _DEFAULT_LIGHTNING_CACHE_DIR
 
     with mock.patch.dict(os.environ, {"LITDATA_CACHE_DIR": "/custom/cache/dir"}):
-        importlib.reload(litdata.constants)
-        importlib.reload(litdata.utilities.dataset_utilities)
-        assert litdata.utilities.dataset_utilities.get_default_cache_dir() == "/custom/cache/dir"
+        assert get_default_cache_dir() == "/custom/cache/dir"
 
 
 def test_read_updated_at_falls_back_on_truncated_local_index(tmp_path, monkeypatch):
