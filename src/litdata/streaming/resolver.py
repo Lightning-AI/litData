@@ -18,7 +18,7 @@ import shutil
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from time import sleep
@@ -42,7 +42,7 @@ class Dir:
     data_connection_id: str | None = None
 
 
-class CloudProvider(str, Enum):
+class CloudProvider(StrEnum):
     AWS = "aws"
     GCP = "gcp"
 
