@@ -8,7 +8,7 @@ Security fixes are applied to the latest released version of LitData. We recomme
 
 **Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
 
-Instead, report them privately by emailing [support@lightning.ai](mailto:support@lightning.ai) with the subject line `[Security] LitData: <short description>`. The report will be routed to the maintainers.
+Instead, report them privately by emailing [security@lightning.ai](mailto:security@lightning.ai) with the subject line `[Security] LitData: <short description>`. The report will be routed to the maintainers.
 
 Please include as much of the following as you can:
 

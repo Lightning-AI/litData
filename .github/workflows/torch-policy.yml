@@ -18,6 +18,7 @@ permissions: {}
 
 jobs:
   check-latest:
+    if: github.repository == 'Lightning-AI/litData'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -83,4 +84,4 @@ jobs:
           - [ ] Open a PR with the changes
 
           ---
-          *This issue was automatically created by [\`torch-policy.yml\`](.github/workflows/torch-policy.yml).*"
+          *This issue was automatically created by [\`torch-policy.yml\`](https://github.com/Lightning-AI/litData/blob/main/.github/workflows/torch-policy.yml).*"
