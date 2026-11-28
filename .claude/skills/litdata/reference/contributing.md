@@ -68,7 +68,7 @@ pytest tests/path/test_x.py::test_name -v --capture=no    # see testing.md
 **`ci-testing.yml`** — job `pytester` (matrix, `fail-fast: false`):
 
 - OS: `ubuntu-22.04`, `macos-14`, `windows-2022`. Python: `3.10–3.14` (windows excludes 3.13/3.14).
-- Two phases: fast tests parallel (`pytest tests --ignore=tests/processing --ignore=tests/raw -n 2 --dist=loadgroup ...`), then processing/raw sequential. `--dist=loadgroup` is **required** (see testing.md).
+- Two phases: fast tests parallel (`pytest tests --ignore=tests/processing --ignore=tests/raw -n 2 ...`), then processing/raw sequential.
 - `--timeout=120` per test; FFmpeg installed for video tests; `UV_TORCH_BACKEND=cpu`.
 - `testing-guardian` job is the required gate — fails the PR if any leg fails.
 
