@@ -17,7 +17,7 @@ import os
 import random
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import sleep, time
 from typing import Any
 
@@ -86,7 +86,7 @@ def _parse_reported_expiry(value: Any) -> float | None:
         logger.warning("Ignoring unparsable credential expiry %r from the control plane", value)
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp()
 
 
@@ -458,7 +458,7 @@ class S3Client:
         deadline = last + self._refetch_deadline
         if self._creds_expires_at is not None:
             deadline = min(deadline, self._creds_expires_at)
-        return datetime.fromtimestamp(deadline, tz=timezone.utc)
+        return datetime.fromtimestamp(deadline, tz=UTC)
 
     def _create_initial_client(self) -> None:
         """Create the first client, waiting out a control plane that is briefly unavailable.

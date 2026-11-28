@@ -15,6 +15,7 @@ jobs:
     uses: Lightning-AI/utilities/.github/workflows/check-typing.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       actions-ref: main
+      python-version: "3.11"
 
   check-schema:
     uses: Lightning-AI/utilities/.github/workflows/check-schema.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
@@ -30,14 +31,14 @@ jobs:
       testing-matrix: |
         {
           "os": ["ubuntu-24.04", "macos-26", "windows-2025"],
-          "python-version": ["3.10", "3.11"]
+          "python-version": ["3.11", "3.12"]
         }
 
   check-docs:
     uses: Lightning-AI/utilities/.github/workflows/check-docs.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
     with:
       requirements-file: "requirements/docs.txt"
-      python-version: "3.10"
+      python-version: "3.11"
 
   check-md-links:
     uses: Lightning-AI/utilities/.github/workflows/check-md-links.yml@86fe1b20b4609835ba9e8c8739cd39707ba76868 # v0.15.3
