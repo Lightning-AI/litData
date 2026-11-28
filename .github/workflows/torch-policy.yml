@@ -18,6 +18,7 @@ permissions: {}
 
 jobs:
   check-latest:
+    if: github.repository == 'Lightning-AI/litData'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
