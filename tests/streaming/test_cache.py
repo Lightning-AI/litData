@@ -160,7 +160,7 @@ def _fabric_cache_for_image_dataset(fabric, num_workers, tmpdir):
 
 
 @pytest.mark.skipif(
-    condition=not _PIL_AVAILABLE or sys.platform == "win32" or not _LIGHTNING_AVAILABLE,
+    condition=not _PIL_AVAILABLE or sys.platform in ("win32", "darwin") or not _LIGHTNING_AVAILABLE,
     reason="Requires: 'pil'",
 )
 @pytest.mark.parametrize("num_workers", [2])

@@ -15,6 +15,83 @@ from litdata.constants import _POLARS_AVAILABLE
 from litdata.streaming.cache import Cache
 from litdata.streaming.reader import PrepareChunksThread
 
+# Modules every dataloader worker needs. The fork server imports them once; workers forked from it start with
+# them already loaded instead of importing them again.
+_FORKSERVER_PRELOAD = ["torch", "torch.utils.data", "litdata"]
+
+
+def _use_preloaded_forkserver() -> None:
+    """Start dataloader workers from a fork server that has already imported torch and litdata.
+
+    Where the default start method is not ``fork`` (macOS, and Linux from Python 3.14), each worker is a fresh
+    interpreter that imports torch and litdata before doing any work. That costs seconds per worker and makes
+    every multi-worker test slow. A fork server has the same semantics as ``spawn`` for the code under test
+    (nothing is inherited from the test process, everything sent to a worker is pickled), but it pays for the
+    imports once per test (see ``fresh_forkserver_per_test``). Code that asks for ``spawn`` explicitly, such as
+    ``optimize()``, is unaffected.
+
+    ``LITDATA_TEST_START_METHOD`` overrides the choice, e.g. ``spawn`` to reproduce the old behaviour or
+    ``forkserver`` to try this on Linux.
+    """
+    method = os.environ.get("LITDATA_TEST_START_METHOD")
+    if method is None:
+        if multiprocessing.get_start_method() == "fork":
+            return
+        if "forkserver" not in multiprocessing.get_all_start_methods():
+            return  # Windows only has spawn
+        method = "forkserver"
+    if method == "forkserver":
+        multiprocessing.set_forkserver_preload(_FORKSERVER_PRELOAD)
+    multiprocessing.set_start_method(method, force=True)
+
+
+_use_preloaded_forkserver()
+
+
+# Fork servers ``fresh_forkserver_per_test`` let go of and has not reaped yet.
+_released_forkservers: list[int] = []
+
+
+@pytest.fixture(autouse=True)
+def fresh_forkserver_per_test():
+    """Stop the fork server after each test, so the next test's workers come from a new one.
+
+    A worker forked from the fork server gets the server's environment and the server's already-imported
+    modules, not the test's. A server left running by an earlier test would therefore hand out workers that
+    miss everything the current test set up through the environment: the isolated cache directories from
+    ``isolated_cache_dirs``, flags such as ``LITDATA_TEST_FLAKY_REMOTE``, and constants litdata reads from the
+    environment at import time (``MAX_WAIT_TIME``, ...). Tests would keep passing without exercising what they
+    claim to. The server starts lazily with the first worker, so a test must set its environment before it
+    starts workers, exactly as with ``spawn``, and tests that start no workers pay nothing.
+
+    The server is let go rather than stopped with ``ForkServer._stop()``: that waits for the server to exit,
+    and the server only exits once every worker it started is gone, so a test that leaves workers behind
+    (an iterator it did not exhaust, persistent workers) would block the teardown.
+    """
+    yield
+    if multiprocessing.get_start_method(allow_none=True) != "forkserver":
+        return
+    from multiprocessing import forkserver
+
+    server = forkserver._forkserver
+    with server._lock:
+        if server._forkserver_pid is not None:
+            # Closing our end of the "alive" pipe tells the server to exit once its last worker has.
+            os.close(server._forkserver_alive_fd)
+            _released_forkservers.append(server._forkserver_pid)
+            # With these cleared, ``ensure_running`` starts a new server for the next worker.
+            server._forkserver_alive_fd = None
+            server._forkserver_pid = None
+            server._forkserver_address = None
+    # Reap the servers that have exited by now, so they do not pile up as zombies.
+    for pid in list(_released_forkservers):
+        try:
+            exited = os.waitpid(pid, os.WNOHANG)[0] != 0
+        except ChildProcessError:
+            exited = True
+        if exited:
+            _released_forkservers.remove(pid)
+
 
 @pytest.fixture(autouse=True, scope="session")
 def teardown_process_group():
