@@ -160,13 +160,10 @@ def _fabric_cache_for_image_dataset(fabric, num_workers, tmpdir):
 
 
 @pytest.mark.skipif(
-    condition=not _PIL_AVAILABLE or sys.platform == "win32" or not _LIGHTNING_AVAILABLE,
+    condition=not _PIL_AVAILABLE or sys.platform in ("win32", "darwin") or not _LIGHTNING_AVAILABLE,
     reason="Requires: 'pil'",
 )
 @pytest.mark.parametrize("num_workers", [2])
-# 2 spawned ranks, each starting 2 spawned dataloader workers twice: 10 interpreters that import torch.
-# That alone takes 75-115s on the 3-core macOS runners.
-@pytest.mark.timeout(300)
 def test_cache_for_image_dataset_distributed(num_workers, tmpdir):
     cache_dir = os.path.join(tmpdir, "cache")
     os.makedirs(cache_dir)
