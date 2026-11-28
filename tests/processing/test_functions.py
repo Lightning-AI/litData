@@ -2,12 +2,13 @@ import glob
 import io
 import json
 import math
+import multiprocessing
 import os
 import random
 import shutil
 import sys
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Queue
 from pathlib import Path
 from unittest import mock
 
@@ -847,9 +848,12 @@ def simple_optimize_fn(index):
 @pytest.mark.parametrize("num_workers", [1, 2])
 def test_optimize_with_queues_as_input(tmpdir, num_workers):
     output_dir = str(tmpdir / "output_dir")
-    q = Queue(maxsize=100)
+    # optimize() starts its workers with "spawn", and a queue can only be shared with processes
+    # started from the same multiprocessing context it was created in.
+    ctx = multiprocessing.get_context("spawn")
+    q = ctx.Queue(maxsize=100)
 
-    producer = Process(target=data_producer, args=(q,))
+    producer = ctx.Process(target=data_producer, args=(q,))
     producer.start()
 
     optimize(
