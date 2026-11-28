@@ -102,19 +102,10 @@ jobs:
         if: matrix.torch-spec == needs.torch-support.outputs.minimum_spec
         run: uv pip uninstall torchcodec
 
-      - name: Run fast tests in parallel
+      - name: Run tests in parallel
         run: |
           pytest tests \
-              --ignore=tests/processing \
-              --ignore=tests/raw \
-              -n 2 --dist=loadgroup --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
-
-      - name: Run processing tests sequentially
-        run: |
-          # note that the listed test should match ignored in the previous step
-          pytest \
-            tests/processing tests/raw \
-            --cov=litdata --cov-append --durations=0 --timeout=120 --capture=no --verbose
+              -n 4 --cov=litdata --durations=0 --timeout=120 --capture=no --verbose
 
       - name: Statistics
         continue-on-error: true
